@@ -280,6 +280,700 @@
       ],
       "historical_provider_summary_digest": "e6ef8dabaa85e0ddd39887647eec58a89d5572bb5b69fc28411d79f0247e670d",
       "current_safety_harness_path": "tests/pre-enrollment-registered-repository-current-safety.py"
+    },
+    {
+      "admission_schema_version": "1.3",
+      "repository": "SecPal/.github",
+      "delivery_issue": 948,
+      "pull_request": 953,
+      "head_sha": "fbe21a7889f0083275d1556846db5b79724aad5e",
+      "tree_sha": "8355355fa83f053db049e79998ec8aa93cf9758a",
+      "parent_sha": "97ec1ce4c4ddb68706dd1fe55707261ecdd1f79a",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "historical_validation_receipt_digest": "e689d85694e2cd3bc75e7384da811984f867bd550290da2ebfa158e70cbe3928",
+      "historical_package_status": "UNAVAILABLE",
+      "historical_final_attestation_digest": null,
+      "historical_bytes_reconstructed": false,
+      "observed_pre_enrollment_history": [
+        {
+          "sequence": 1,
+          "kind": "PR_CREATED_DRAFT",
+          "observed_at": "2026-09-16T19:12:53Z",
+          "head_sha": "97ec1ce4c4ddb68706dd1fe55707261ecdd1f79a",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 2,
+          "kind": "DRAFT_TO_READY_OBSERVED",
+          "observed_at": "2026-09-16T19:17:21Z",
+          "head_sha": "97ec1ce4c4ddb68706dd1fe55707261ecdd1f79a",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 3,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-09-16T19:36:37Z",
+          "head_sha": "fbe21a7889f0083275d1556846db5b79724aad5e",
+          "reviewed_head_sha": null
+        }
+      ],
+      "intended_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 1,
+        "cycle_3_absent": true,
+        "draft": false,
+        "ready": true,
+        "ready_transition_count": 1,
+        "ready_history": [
+          {
+            "sequence": 1,
+            "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": "4fbd0b466b876e3f76b10026385480702c47cffae3c150077918ad705fcece53"
+          }
+        ],
+        "exceptional_recovery_count": 0,
+        "exceptional_recovery_history": [],
+        "exceptional_continuation_count": 0,
+        "exceptional_continuation_history": []
+      },
+      "feedback_digest": "0111c6795ce12c8c5dca0eeb38c24aadf41843b3941884f4ff6bd1d1bf875df2",
+      "technical_decisions": [
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDOQFR1MM8AAAABU--NwA",
+          "source_digest": "92c541b3bc02521624f9576ea3f501b291046646e1547e900b38bf99875f8210",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "37aa493d187d708a4480ef68b130d76377135563277e139f2f2952d8a6f2c182"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOQFR1MM8AAAABN5K8bg",
+          "source_digest": "16cd0d2f85dcac2d097a0dc0cdf664348a65d081e75db7e2047cda7c13f2f737",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "7d338559c6bf47ec75f1a22421d29c14119d89c262ccae7c4ca88fca0d5b1dfc"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOQFR1MM8AAAABN5KbNw",
+          "source_digest": "768e991216f1772279da9e41a610123db06db8968139c9431f3ca45ab8c78588",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "91a3663385fb9b049bd19ed6d3ea660f6945687739346568422f43ead3b4a2dc"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wM6qV",
+          "source_digest": "2ea700647dfcc9e94556344353f3b44529be4bb7c28d945d3b1fac971f53539d",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "2a7dba28aeae6ddc710cd501f62445bc99dad08c667dbf56766f642f693a5aa8"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wM6qg",
+          "source_digest": "0fa7bacf6e2ee0cb67ece656a1ed1d5ad373a451cde32a4edf488824fca0b7d1",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "92f9faceb085a2754f5fa75c3bf75400ce392ec5d194a7357ce4b5baf81028aa"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wM6ql",
+          "source_digest": "23dcafba0d0eaf8eb5131a7653e34582ea21a0b0e4e4ea4a256e480b9fe95e1e",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "6ca22a52280047f3b5822444691573a53c90bc71d2947ee0b779409b82fdd89f"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wM8od",
+          "source_digest": "c6b1eb08821efc67d04cbc1eeee82c0e2e8725af8e873a6bf0961b174bf94061",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "d51fbedf24f27785c4ef628c440b8169ca0dbc490d871750ff2673afa463ad45"
+        }
+      ],
+      "historical_provider_summary_digest": "92c541b3bc02521624f9576ea3f501b291046646e1547e900b38bf99875f8210",
+      "current_safety_harness_path": "tests/pre-enrollment-github-948-current-safety.py"
+    },
+    {
+      "admission_schema_version": "1.2",
+      "repository": "SecPal/.github",
+      "delivery_issue": 711,
+      "pull_request": 951,
+      "head_sha": "a158d6f5755ce1eecb7fada3a1c71722a21c5988",
+      "tree_sha": "c7f5e38cb982dbd196316d0d45908de38d89854e",
+      "parent_sha": "946122e965f71d9c86433a91f2a9b8d67efd9d91",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "historical_package_status": "UNAVAILABLE",
+      "historical_final_attestation_digest": null,
+      "historical_bytes_reconstructed": false,
+      "observed_pre_enrollment_history": [
+        {
+          "sequence": 1,
+          "kind": "PR_CREATED_DRAFT",
+          "observed_at": "2026-09-16T18:11:53Z",
+          "head_sha": "415fb7e8ab45cf5388898054bb00bd0ca6409c71",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 2,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T18:14:30Z",
+          "head_sha": "9c07c40951fb15a3a229c023ecf2b228b557353e",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 3,
+          "kind": "DRAFT_TO_READY_OBSERVED",
+          "observed_at": "2026-09-16T18:38:03Z",
+          "head_sha": "9c07c40951fb15a3a229c023ecf2b228b557353e",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 4,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-09-16T18:56:41Z",
+          "head_sha": "255ec810b343cd85a1a4e6ada947fe8b1929a527",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 5,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T19:21:26Z",
+          "head_sha": "76b9561098ad4ae34228cd106c8bf2f083206496",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 6,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T19:26:02Z",
+          "head_sha": "13e70d6bf1593a14c0a91f73c1142e3c5f2fc261",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 7,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T19:54:33Z",
+          "head_sha": "ff7995db37f9a2f842ce3b2474ce499c481795d8",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 8,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T19:55:02Z",
+          "head_sha": "c84d8bc0c4fa78e8f4a5e88f78a640a8457109c7",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 9,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T20:26:12Z",
+          "head_sha": "4b88d585501b9f3f0cb272a200a52a75e35ef901",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 10,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T20:49:56Z",
+          "head_sha": "946122e965f71d9c86433a91f2a9b8d67efd9d91",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 11,
+          "kind": "HEAD_ADVANCED_OBSERVED",
+          "observed_at": "2026-09-16T20:54:27Z",
+          "head_sha": "a158d6f5755ce1eecb7fada3a1c71722a21c5988",
+          "reviewed_head_sha": null
+        }
+      ],
+      "intended_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 1,
+        "cycle_3_absent": true,
+        "draft": false,
+        "ready": true,
+        "ready_transition_count": 1,
+        "ready_history": [
+          {
+            "sequence": 1,
+            "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": "f45627109717221365c0f25d401fd6c901fdfe3646537615243d96c2068214ea"
+          }
+        ],
+        "exceptional_recovery_count": 0,
+        "exceptional_recovery_history": [],
+        "exceptional_continuation_count": 0,
+        "exceptional_continuation_history": []
+      },
+      "feedback_digest": "7907b75a1e2f0185e9dac526f1932150ad08056a25ed02f334375ec56bd0a9ed",
+      "technical_decisions": [
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDOQFR1MM8AAAABU-etiA",
+          "source_digest": "8597e0cc0bf44f984847ad293b8c8a937f448fa3ea29c7f590f6c21c6e0ecfa8",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "0f4417c3780dfd619f7040021795f1926151fa18a6881ff3c6912d8289a3b091"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOQFR1MM8AAAABN4yY2g",
+          "source_digest": "9a68f622f3dec0babae5f334cb0251ec3b079f24c988ba11e4ef6c99512e2f73",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "6b2cf1db39a7adbb56ebedb0f67f41cf758b29529b69e4a3b65de19c52a893e1"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOQFR1MM8AAAABN41QKg",
+          "source_digest": "1145b3b4e8ab3075f222ae613db6265e5009a7396fe9a6103144fb1b9c1db6ff",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "15bbcbb0c0da1be5b5962636246ae60c658b391d265a87b7dddd0548ac85819c"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLpez",
+          "source_digest": "7e5a57d33c89230f4f659296489dc1e2220ac2ecfa722c31ed26a02d72acdae2",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "85abf0c61609e70755174476993d059f85608cc5fa523d9146c5e07964c71496"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLpfk",
+          "source_digest": "9bae4e840820d05b6846f139e7ea5e98a9940bf6cf7e7a13f6c5188396d95298",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "08b3312ff86a72cb49f5ac02819628a08f1d050c986b9c5cff271a056c22701c"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLpf4",
+          "source_digest": "826747f92fb1b5ffdf92148fadd43a8758e2f9a927071c77e073fefff512ba46",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "c3fbae825d7f2a9b9d3b7f577bb451c6c78ecbb64f7baec1967fafa9fc2b7656"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLpgc",
+          "source_digest": "7e20e6329a7027b1293d64f9ecd4bf7efb4bfe04e2e80d8cc4169085760d4dc6",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "dffea23b4a41b3921c103cb4fd192a20d9ddad8b8248e9de8380b0cc29b7b188"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLy8z",
+          "source_digest": "704b744dd8d6fbcc969921ca9ab181d842d0f48c6a2e11d919e9849491d3c252",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "201ae40dcdc16ddbc9edb974221af122574731a41963e00def92c99bd42206b7"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLy8-",
+          "source_digest": "4fef7c627292f84fdfe8da5a84c0f50a5539b3adbc0bafe7c18988f83c938b44",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "43748208f0352a2866cbb13db7f8801bbdc50c3fc5d9c1221a1035bbad32687f"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLy9C",
+          "source_digest": "bb2862bf3d8b996eb52417b17e62cfa83384fde356432658c5e4a33dae1f4295",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "c444f48712e67e60f909392d6702089ee176fa6f38187ed6585c57f8d50eb8b3"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLy9K",
+          "source_digest": "f5c49cd0dab6661743b52ac39078ecb59f6d279f288933ef1399e24aca0b9570",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "e2bf3390b4e16ad435dbaa8f085a12ec78fd30511380d1652b98f6ef5c9da2ba"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLy9T",
+          "source_digest": "50af516b86637b85c68875b5db90a8a041103c292fae937142f2a9aedf02d7ba",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "514ccb808b11ff481c6a1890487e63ad78b4ed17b0ab62e55ea6c5ae1710ba7a"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7wLy9b",
+          "source_digest": "35e456414cc05ca7d28f4d4e7f8187ffa60f7977bf5c55593e7101c0b197f0fc",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "d94f909f1896b96b4bc0dfbb91e63ca0aec5a402250ff61ebce0c3e4b6548a5b"
+        }
+      ],
+      "historical_provider_summary_digest": "8597e0cc0bf44f984847ad293b8c8a937f448fa3ea29c7f590f6c21c6e0ecfa8",
+      "current_safety_harness_path": "tests/pre-enrollment-github-711-current-safety.py",
+      "registered_validation_projection": {
+        "provenance": "ACCEPTED_RECOVERY_RECORD_EXACT_SOURCE",
+        "repository": "SecPal/.github",
+        "head_sha": "a158d6f5755ce1eecb7fada3a1c71722a21c5988",
+        "tree_sha": "c7f5e38cb982dbd196316d0d45908de38d89854e",
+        "files": [
+          {
+            "path": "tests/secpal-trivy-repository-scan-unit.py",
+            "mode": "100644",
+            "blob_oid": "3a07b035b105e75f725a51543f904b13216695e9",
+            "size": 30439
+          },
+          {
+            "path": "tests/fixtures/trivy-repository-scan/malformed.txt",
+            "mode": "100644",
+            "blob_oid": "81a9e65929e48f13ac3128db23f10653134b1040",
+            "size": 16
+          },
+          {
+            "path": "tests/fixtures/trivy-repository-scan/stale-database.json",
+            "mode": "100644",
+            "blob_oid": "87196705f782aeb6bc6dbbade589c9130eed8962",
+            "size": 237
+          }
+        ]
+      }
+    },
+    {
+      "admission_schema_version": "1.2",
+      "repository": "SecPal/deployment",
+      "delivery_issue": 119,
+      "pull_request": 250,
+      "head_sha": "be8d579f2ad96d8e94599c818de37e53fb3b2b3f",
+      "tree_sha": "bbb1cd0bfe0a7286bdf75a2bfeb80d5815a2b2b6",
+      "parent_sha": "7e7a6e316007de919166c2d296e6918cfd353063",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "historical_package_status": "UNAVAILABLE",
+      "historical_final_attestation_digest": null,
+      "historical_bytes_reconstructed": false,
+      "observed_pre_enrollment_history": [
+        {
+          "sequence": 1,
+          "kind": "PR_CREATED_DRAFT",
+          "observed_at": "2026-09-07T23:07:30Z",
+          "head_sha": "7e7a6e316007de919166c2d296e6918cfd353063",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 2,
+          "kind": "DRAFT_TO_READY_OBSERVED",
+          "observed_at": "2026-09-07T23:07:48Z",
+          "head_sha": "7e7a6e316007de919166c2d296e6918cfd353063",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 3,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-09-07T23:46:12Z",
+          "head_sha": "be8d579f2ad96d8e94599c818de37e53fb3b2b3f",
+          "reviewed_head_sha": null
+        }
+      ],
+      "intended_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 1,
+        "cycle_3_absent": true,
+        "draft": false,
+        "ready": true,
+        "ready_transition_count": 1,
+        "ready_history": [
+          {
+            "sequence": 1,
+            "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": "23438f7526ac85e97ff18ec592add63ac107f1b67cbbfc7025f445a0fb09d557"
+          }
+        ],
+        "exceptional_recovery_count": 0,
+        "exceptional_recovery_history": [],
+        "exceptional_continuation_count": 0,
+        "exceptional_continuation_history": []
+      },
+      "feedback_digest": "436b7744425ae07c37f48e1101fa49aff0acaa98e05adb822b5a3d21c068cd78",
+      "technical_decisions": [
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDOTqT8Oc8AAAABTGLC2g",
+          "source_digest": "120fbe650dff00c5da8655134b485fa9d2f8518f49a3fe5cb85f08ce916d1ce6",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "f14278205ff73640c507ebe8b88135b35a275e7d4aa4ca339094948e568b3b6c"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOTqT8Oc8AAAABMh0ZZA",
+          "source_digest": "63d2c396558d4f424a552aeb5c4c720fdc5535a7ffa17292eb806d9548f3798b",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "9237a8231051bec3b204155d77496cd587fe2ca22ce42f346cc3b98159fe86d3"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOTqT8Oc8AAAABMhyWEg",
+          "source_digest": "b8a11629dccaee791589decb5cec9a9a541bfa2184d1540bc7da91b90f8ff5a4",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "f638e03f58ef883fef0411e6ea580dee04530de581c016af999eb2e10c7c3e15"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7rnsYu",
+          "source_digest": "a0f7598b62ab05951fd4e03241e2541854ef2eaff6b12b96270024a76cc547f9",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "490911489a36e40336441fda8b25ecd55c827ca76df051ff2f3f9dd650f27d16"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7rnzgL",
+          "source_digest": "1fde66f0b7b6d2d369a2072e39507a1a259a76b11c34eff59d784dc9ffbd425c",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "ec3a75aeeb40e66f3c98893817c098411f17761ea020d4d9a8d25c1e7957112a"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7rnzgU",
+          "source_digest": "0b804817606c79d64c1a408a48414657c61e0875ef69076dfbadbd6a0edff285",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "f25c971c9392abcae88b8e37f755c2040a9098c1c3338c5fbf76634deef54889"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOTqT8Oc7rnzgX",
+          "source_digest": "2ba33cd9ff697d3b1fe20703568cd45472329606b76b220fa8a02fc2aa49e499",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "7fb012ebaada560af6bc1d9bb3f2d0b90cf38abb3ff6c720ae5a886da6d05f38"
+        }
+      ],
+      "historical_provider_summary_digest": "120fbe650dff00c5da8655134b485fa9d2f8518f49a3fe5cb85f08ce916d1ce6",
+      "current_safety_harness_path": "tests/pre-enrollment-deployment-119-current-safety.py",
+      "registered_validation_projection": {
+        "provenance": "ACCEPTED_RECOVERY_RECORD_EXACT_SOURCE",
+        "repository": "SecPal/deployment",
+        "head_sha": "be8d579f2ad96d8e94599c818de37e53fb3b2b3f",
+        "tree_sha": "bbb1cd0bfe0a7286bdf75a2bfeb80d5815a2b2b6",
+        "files": [
+          {
+            "path": "tests/ci-cloud-workload-evidence.py",
+            "mode": "100755",
+            "blob_oid": "5be7d72960cefade60a08c4292d690e6217655f3",
+            "size": 272261
+          },
+          {
+            "path": "tests/fixtures/podman-5.4.2-rootless-userns.json",
+            "mode": "100644",
+            "blob_oid": "288c156c3bcfeed22d89e426a1311545c6e0c178",
+            "size": 1234
+          }
+        ]
+      }
+    },
+    {
+      "admission_schema_version": "1.2",
+      "repository": "SecPal/secpal.app",
+      "pull_request": 353,
+      "head_sha": "e8278afee25dc6b8290349eaef067437ec0b0053",
+      "historical_provider_summary_digest": "d77dfa1bb683477404062ebd1bfdb990d867e3d77951eb402e99d8c37270431e",
+      "observed_pre_enrollment_history": [
+        {
+          "sequence": 1,
+          "kind": "PR_CREATED_DRAFT",
+          "observed_at": "2026-09-29T20:20:10Z",
+          "head_sha": "44a4a4cdf8440278d7b086329826e5abe7d1cee5",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 2,
+          "kind": "DRAFT_TO_READY_OBSERVED",
+          "observed_at": "2026-09-29T20:20:45Z",
+          "head_sha": "44a4a4cdf8440278d7b086329826e5abe7d1cee5",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 3,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-09-29T20:25:38Z",
+          "head_sha": "0dbc15899577bf8f327befa4959d68b85d132350",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 4,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-09-30T17:57:32Z",
+          "head_sha": "e8278afee25dc6b8290349eaef067437ec0b0053",
+          "reviewed_head_sha": null
+        }
+      ],
+      "intended_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 2,
+        "cycle_3_absent": true,
+        "draft": false,
+        "ready": true,
+        "ready_transition_count": 1,
+        "ready_history": [
+          {
+            "sequence": 1,
+            "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": "5661bd50340837c67bdcc3603ea8dcd65281f64a8a48083cffefa02937848dfb"
+          }
+        ],
+        "exceptional_recovery_count": 0,
+        "exceptional_recovery_history": [],
+        "exceptional_continuation_count": 0,
+        "exceptional_continuation_history": []
+      },
+      "delivery_issue": 352,
+      "tree_sha": "7b96eb34020fbcf61e03b4678d5156a6d6e720c8",
+      "parent_sha": "0dbc15899577bf8f327befa4959d68b85d132350",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "historical_package_status": "UNAVAILABLE",
+      "historical_final_attestation_digest": null,
+      "historical_bytes_reconstructed": false,
+      "feedback_digest": "638da6536ad802a5d3588178d2e03d7de269b6c9e266acc4e71c21b4cdb203ee",
+      "technical_decisions": [
+        {
+          "source_id": "REVIEW:PRR_kwDORn9WD88AAAABP1xSjA",
+          "source_digest": "5d805dfde0a146bb1e9c35a64430d8a7685048df04ed06ea9dff2472affb3afe",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "4c5473d16fa5e0df8f1ada678dbbcd4b7821004a64a05185090dff2d0599d32c"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDORn9WD88AAAABP1y0ig",
+          "source_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "167c2f2765a8dbc0985b3237c614d2b27e8fea042816234397bf3f973b8648f3"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDORn9WD88AAAABQA8_ow",
+          "source_digest": "58046eb4313fab56072afec2b533e08f56b1db5d9ff60ed1d7bb08506d7baae4",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "53501f7d577b49ed388aad2eaf94cf58b383a75dc753f8c8152f0db23986a3d0"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDORn9WD88AAAABQBTisQ",
+          "source_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "a2de481ff436dec4da0fa0cf6770827b7f6a6dcb302d255e64b6faa9811849fb"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDORn9WD88AAAABX40cyQ",
+          "source_digest": "619c9f9f66a93f7e7ea60049aa147d2cf183fb706a71e11a710216ed2ba19d92",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "b88f69d5f64adf0b52dea2900789c9bd5a31505c0baaf93d6547c43f2ebea02d"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDORn9WD88AAAABX40mHw",
+          "source_digest": "d77dfa1bb683477404062ebd1bfdb990d867e3d77951eb402e99d8c37270431e",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "db8cea55c6dc98e65ce7401a51992bb1953fb6215d10f00c83e8b6b9584f2964"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDORn9WD88AAAABYKIY1Q",
+          "source_digest": "7750379659fbba413136c8bf4f500a59f1e03f0c36c0ab16b0a2475eb13ecb1a",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "815f8e1cca30e32745a560425042782f05ee231a87ff937c6162e216f7e6144a"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDORn9WD88AAAABYKIiRw",
+          "source_digest": "f8831ff13591b5a038c6882d37e6b3c2ecd84b365bb9e7a04fd8f8a060b22097",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "0969c20afeaed34e5f3a5b4af131fc3261593d3ebec36a20b4aac2d8c7f15a0f"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDORn9WD88AAAABYKMskw",
+          "source_digest": "39ae8d0b7331a019056861f39f164eed7e4d57c8ab8990721f60d5dd2e67de2d",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "f3879fa07e35652035ff0f22c6bcf96974c4b0657d161b894a7199f40e584328"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDORn9WD88AAAABYKR8Jw",
+          "source_digest": "23eeb90a9c13d480a0dd97f059ac56527172c30716da1d59fde0b84d00a5e0cd",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "cf930dbaa3f7f104f25605b76166bdfaca7190da0735ee88dd0bac1664369f7b"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDORn9WD872pDhS",
+          "source_digest": "603a8e721cae1db6ba6a8951d9dafecde00b95f5c49683220ded58faeaf0d6cc",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "f3b91bedb684cd113d48e6830305785fadd2877408984b1d6365eb39106d7455"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDORn9WD872pIIs",
+          "source_digest": "b695a6903f1f1564b529b2b9ce37eef9bfa33769c5233407fc6cca784ae14dae",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "f60f687e14335bc34c698cc8a5bfebc09dc9ae16abd53f91d43199e475833e60"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDORn9WD873NKDG",
+          "source_digest": "96788e19bf271941469793effebc41e25719824f168dd328541b58172d6fc2a5",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "81c63236b1c010898a956149791c0528fed26f6eff78398d92882e5d3ad75987"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDORn9WD873OWYr",
+          "source_digest": "2bca6d131331355ade02b726d51246fd692556ba6b3d16a94897f7c795f9bb08",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "8490cdbf95a78853bfc58d92eab2faa67e919d5af21d1999c512e66d976e55aa"
+        }
+      ],
+      "current_safety_harness_path": "tests/pre-enrollment-secpal-app-352-current-safety.py",
+      "registered_validation_projection": {
+        "provenance": "ACCEPTED_RECOVERY_RECORD_EXACT_SOURCE",
+        "repository": "SecPal/secpal.app",
+        "head_sha": "e8278afee25dc6b8290349eaef067437ec0b0053",
+        "tree_sha": "7b96eb34020fbcf61e03b4678d5156a6d6e720c8",
+        "files": [
+          {
+            "path": "tests/android-distribution.test.mjs",
+            "mode": "100644",
+            "blob_oid": "1f0c7efdaa19ca515494855175007d4b98a89480",
+            "size": 22211
+          },
+          {
+            "path": "tests/cta-section.test.mjs",
+            "mode": "100644",
+            "blob_oid": "e6b2c88256c7cfdad7728cca7af97e01144a6490",
+            "size": 6185
+          },
+          {
+            "path": "tests/development-status.test.mjs",
+            "mode": "100644",
+            "blob_oid": "8d330f23f23acdd4e43c7a3607bf1ee542b4a8ff",
+            "size": 7442
+          },
+          {
+            "path": "tests/features-section.test.mjs",
+            "mode": "100644",
+            "blob_oid": "6bfdc9d7402026d7768bb48fca93de8d63211def",
+            "size": 3930
+          },
+          {
+            "path": "tests/locale-redirect.test.mjs",
+            "mode": "100644",
+            "blob_oid": "df6f61f7229b8cd20bc388dea3b884ef3fd4c7a7",
+            "size": 1040
+          },
+          {
+            "path": "tests/mobile-safe-area.test.mjs",
+            "mode": "100644",
+            "blob_oid": "1c661ff4a86f5d979975eef91977dbb6e1cbf821",
+            "size": 11377
+          },
+          {
+            "path": "tests/navigation-structure.test.mjs",
+            "mode": "100644",
+            "blob_oid": "22263ba5d399e28922c1c45836a23c0c106a0d10",
+            "size": 8905
+          },
+          {
+            "path": "tests/outcomes-section.test.mjs",
+            "mode": "100644",
+            "blob_oid": "9e0114bd15c231f794ba5798fe14e01df5644f8a",
+            "size": 6353
+          },
+          {
+            "path": "tests/preflight-changed-files.test.mjs",
+            "mode": "100644",
+            "blob_oid": "52fc11208f9ebe21b3a5580c7acff8b6b357aebb",
+            "size": 5957
+          },
+          {
+            "path": "tests/preflight-large-pr.test.mjs",
+            "mode": "100644",
+            "blob_oid": "4b98ff747cd2901b32101afa1d380c889e967630",
+            "size": 3466
+          },
+          {
+            "path": "tests/privacy-pages.test.mjs",
+            "mode": "100644",
+            "blob_oid": "4aa564e465f75026fa8feb4d2cd4fb343b8efc1d",
+            "size": 10932
+          },
+          {
+            "path": "tests/retired-domain.test.mjs",
+            "mode": "100644",
+            "blob_oid": "ef94820eae032b6f877c1d981efdb3862a51bb2f",
+            "size": 4361
+          },
+          {
+            "path": "tests/roadmap-copy.test.mjs",
+            "mode": "100644",
+            "blob_oid": "8e5febba8a021e1c5a234ff18a619c204e87d7b8",
+            "size": 2927
+          },
+          {
+            "path": "tests/workflow-action-pins.test.mjs",
+            "mode": "100644",
+            "blob_oid": "acd9a2b4fb54ac41d4ab23d5f3cd187393b97c05",
+            "size": 8658
+          },
+          {
+            "path": "tests/workflow-section.test.mjs",
+            "mode": "100644",
+            "blob_oid": "ab9075ef5cba311fcc2f46871ab5f064f91c488c",
+            "size": 4994
+          }
+        ]
+      }
     }
   ]
 }

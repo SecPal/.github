@@ -250,6 +250,60 @@
         "admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
+    "preEnrollmentAdoptionAuthenticationSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "subtype",
+        "repository",
+        "delivery_issue",
+        "pull_request",
+        "source_head_sha",
+        "source_tree_sha",
+        "source_parent_sha",
+        "validation_receipt_digest",
+        "final_attestation_digest",
+        "source_signer_identity",
+        "implementation_path",
+        "implementation_blob_oid",
+        "entrypoint",
+        "purpose",
+        "source_pr_state",
+        "source_pr_draft",
+        "source_base_ref",
+        "policy_source",
+        "admission_digest"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "kind": { "const": "BOOTSTRAP_SOURCE_ADMISSION" },
+        "subtype": { "const": "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION_SOURCE" },
+        "repository": { "const": "SecPal/.github" },
+        "delivery_issue": { "const": 1014 },
+        "pull_request": { "const": 1015 },
+        "source_head_sha": { "const": "b0f60b83d70188dde1e43aaaf201521864bd3b3a" },
+        "source_tree_sha": { "const": "e1b28bc3daf0b791b0ec511f52c6d978f222df25" },
+        "source_parent_sha": { "const": "7bd8bcfccb0aa71a195985a432c21e90b7ac2a8e" },
+        "validation_receipt_digest": {
+          "const": "9277afd5f80c0b434e8949fa7d9400f1f697890b0292e60f8a8822f022f3f630"
+        },
+        "final_attestation_digest": {
+          "const": "86e7da78186244fa05e93acbbb4472903ca20079604858fefba299c11eff60fa"
+        },
+        "source_signer_identity": { "const": "aroviqen@secpal.app" },
+        "implementation_path": { "const": "scripts/secpal_pr_review/fast_path.py" },
+        "implementation_blob_oid": { "const": "a070833bd135daf99d5919e954cbf5e84d3eb5a3" },
+        "entrypoint": { "const": "authenticate_pre_enrollment_adoption" },
+        "purpose": { "const": "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION" },
+        "source_pr_state": { "const": "OPEN" },
+        "source_pr_draft": { "const": false },
+        "source_base_ref": { "const": "main" },
+        "policy_source": { "const": "ACCEPTED_MAIN_REPOSITORY_REGISTRY" },
+        "admission_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
     "preEnrollmentDraftIntegrationSource": {
       "type": "object",
       "additionalProperties": false,
@@ -364,6 +418,12 @@
     "repository": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "required": ["governance_only_validation"] },
+          "then": { "properties": { "repository": { "const": "SecPal/api" } } }
+        }
+      ],
       "required": [
         "repository",
         "default_branch",
@@ -397,9 +457,48 @@
         },
         "focused_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
         "required_local_validation": { "type": "array", "items": { "$ref": "#/$defs/command" } },
+        "governance_only_validation": { "const": "API_RUNTIME_INSTRUCTIONS" },
+        "complete_validation_preparation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "working_directory", "package_manifest", "lockfile"],
+          "properties": {
+            "kind": { "const": "NPM_CI_LOCKED" },
+            "working_directory": {
+              "type": "string",
+              "pattern": "^(?:\\.|[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*)$"
+            },
+            "package_manifest": { "const": "package.json" },
+            "lockfile": { "const": "package-lock.json" }
+          }
+        },
         "final_eligibility_absence_recoveries": {
           "type": "array",
           "items": { "$ref": "#/$defs/final_eligibility_absence_recovery" }
+        },
+        "qualified_remediation_successor_evidence_loss_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "admission_digest"],
+          "properties": {
+            "path": {
+              "const": "policies/qualified-remediation-successor-evidence-loss.json"
+            },
+            "admission_digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "governance_amendment_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "kind", "purpose"],
+          "properties": {
+            "path": { "const": "policies/governance-amendment-bootstrap.json" },
+            "kind": { "const": "SECPAL_GOVERNANCE_AMENDMENT_AUTHORIZATION" },
+            "purpose": { "const": "EXACT_ZERO_RECEIPT_PRE_ENROLLMENT_BOOTSTRAP" }
+          }
         },
         "signature_policy": { "type": "object" },
         "lifecycle_authority_policy": {
@@ -407,6 +506,9 @@
         },
         "pre_enrollment_integration_policy": {
           "$ref": "#/$defs/pre_enrollment_integration_policy"
+        },
+        "enrolled_draft_integration_policy": {
+          "$ref": "#/$defs/enrolled_draft_integration_policy"
         },
         "check_policy": { "type": "object" },
         "manual_gates": { "type": "array", "items": { "type": "string", "minLength": 1 } },
@@ -449,6 +551,50 @@
         "working_directory": { "type": "string", "minLength": 1 },
         "purpose": { "type": "string", "minLength": 1 },
         "execution_policy": { "enum": ["always", "focused-only"] }
+      }
+    },
+    "enrolled_draft_integration_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "command",
+        "topology_kind",
+        "allowed_mutation",
+        "maximum_candidates",
+        "maximum_pushes",
+        "force_push",
+        "automatic_retry",
+        "merge_pull_request"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "1.0"
+        },
+        "command": {
+          "const": "integrate-enrolled-draft"
+        },
+        "topology_kind": {
+          "const": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION"
+        },
+        "allowed_mutation": {
+          "const": "NON_FORCE_PUSH_EXACT_PR_BRANCH"
+        },
+        "maximum_candidates": {
+          "const": 1
+        },
+        "maximum_pushes": {
+          "const": 1
+        },
+        "force_push": {
+          "const": false
+        },
+        "automatic_retry": {
+          "const": false
+        },
+        "merge_pull_request": {
+          "const": false
+        }
       }
     },
     "pre_enrollment_integration_policy": {
@@ -655,7 +801,8 @@
             "oneOf": [
               { "$ref": "#/$defs/firstReadyExecutorBootstrapSource" },
               { "$ref": "#/$defs/prReviewEvidenceHelperSource" },
-              { "$ref": "#/$defs/preEnrollmentDraftIntegrationSource" }
+              { "$ref": "#/$defs/preEnrollmentDraftIntegrationSource" },
+              { "$ref": "#/$defs/preEnrollmentAdoptionAuthenticationSource" }
             ]
           }
         },

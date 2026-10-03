@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 name: 🐛 Bug Report
@@ -74,7 +74,7 @@ body:
         - Browser: [e.g., Chrome 120]
         - Version: [e.g., 1.0.0]
         - PHP: [e.g., 8.4]
-        - Node: [e.g., 22.x]
+        - Node: [e.g., 26.x]
     validations:
       required: false
 

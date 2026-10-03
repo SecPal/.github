@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
-
 FOLLOW_UP_HELPER = Path(__file__).resolve().with_name("follow_up.py")
 EVIDENCE_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
 CENTRAL_REGISTRY_ROOT = Path(__file__).resolve().parents[2]
@@ -150,10 +149,15 @@ VALIDATION_REGISTRY_ENTRY_FIELDS = frozenset(
         "reviewer_identities",
         "focused_validation",
         "required_local_validation",
+        "complete_validation_preparation",
+        "governance_only_validation",
         "final_eligibility_absence_recoveries",
+        "qualified_remediation_successor_evidence_loss_policy",
+        "governance_amendment_policy",
         "signature_policy",
         "lifecycle_authority_policy",
         "pre_enrollment_integration_policy",
+        "enrolled_draft_integration_policy",
         "check_policy",
         "manual_gates",
         "unsupported_operations",
@@ -191,6 +195,10 @@ CODEX_REACTION_PROVIDER = {
     "login": "chatgpt-codex-connector[bot]",
     "node_id": "BOT_kgDOC98s_g",
     "database_id": 199175422,
+}
+CODEX_REVIEW_PROVIDER = {
+    **CODEX_REACTION_PROVIDER,
+    "login": CODEX_PROVIDER_LOGIN,
 }
 CODEX_REVIEW_SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
 CODEX_REVIEW_STATUS = re.compile(
@@ -401,6 +409,46 @@ READY_INTEGRATION_KEYS = frozenset(
 )
 READY_INTEGRATION_V12_KEYS = READY_INTEGRATION_KEYS | {"reviewed_head_sha"}
 
+# Immutable family authority. Historical rows retain their issued meanings.
+# The collision inventory reads these closed declarations without execution.
+READY_INTEGRATION_KEYS_BY_VERSION = {
+    "1.1": READY_INTEGRATION_KEYS,
+    "1.2": READY_INTEGRATION_V12_KEYS,
+    "1.3": READY_INTEGRATION_V12_KEYS | {"path_classifications"},
+}
+READY_INTEGRATION_ATTESTATION_BY_VERSION = {
+    ("1.1", False): ("1.1", "READY_INTEGRATION_VALIDATION_ATTESTATION"),
+    ("1.1", True): ("1.2", "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"),
+    ("1.2", False): ("1.1", "READY_INTEGRATION_VALIDATION_ATTESTATION"),
+    ("1.2", True): ("1.2", "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"),
+    ("1.3", False): ("1.3", "READY_INTEGRATION_VALIDATION_ATTESTATION"),
+    ("1.3", True): ("1.4", "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"),
+}
+
+
+def ready_integration_attestation_matches(
+    attestation: Any, integration: Any, *, eligibility_bound: bool,
+) -> bool:
+    """Select the same immutable identity at every admission boundary."""
+    if not isinstance(attestation, dict) or not isinstance(integration, dict):
+        return False
+    version = integration.get("schema_version")
+    if not isinstance(version, str):
+        return False
+    return READY_INTEGRATION_ATTESTATION_BY_VERSION.get((version, eligibility_bound)) == (
+        attestation.get("schema_version"), attestation.get("kind"),
+    )
+
+
+def ready_integration_has_preservation(version: str) -> bool:
+    if not isinstance(version, str):
+        raise SecurityBlocker("Ready integration topology kind or version is unsupported")
+    keys = READY_INTEGRATION_KEYS_BY_VERSION.get(version)
+    if keys is None:
+        raise SecurityBlocker("Ready integration topology kind or version is unsupported")
+    return "path_classifications" in keys
+
+
 READY_INTEGRATION_PRIOR_AUTHORITY_KEYS = frozenset(
     {
         "schema_version",
@@ -431,6 +479,9 @@ READY_INTEGRATION_RECOVERY_PUBLICATION_KEYS = frozenset(
 READY_INTEGRATION_ADOPTED_PRIOR_AUTHORITY_KEYS = frozenset(
     READY_INTEGRATION_PRIOR_AUTHORITY_KEYS
     | {"source_authority_mode", "source_authority", "historical_companions"}
+)
+READY_INTEGRATION_RECOVERED_ADOPTED_PRIOR_AUTHORITY_KEYS = (
+    READY_INTEGRATION_ADOPTED_PRIOR_AUTHORITY_KEYS | {"recovery_publication"}
 )
 
 
@@ -609,6 +660,14 @@ def validation_registry_projection(entry: Any) -> dict[str, Any]:
             ]
         ),
     }
+    if "complete_validation_preparation" in entry:
+        binding["complete_validation_preparation"] = copy.deepcopy(
+            entry["complete_validation_preparation"]
+        )
+    if "governance_only_validation" in entry:
+        if entry["repository"] != "SecPal/api" or entry["governance_only_validation"] != "API_RUNTIME_INSTRUCTIONS":
+            raise SecurityBlocker("unsupported governance-only validation policy")
+        binding["governance_only_validation"] = entry["governance_only_validation"]
     if "pre_enrollment_integration_policy" in entry:
         if not isinstance(entry["pre_enrollment_integration_policy"], dict):
             raise SecurityBlocker(
@@ -616,6 +675,10 @@ def validation_registry_projection(entry: Any) -> dict[str, Any]:
             )
         binding["pre_enrollment_integration_policy"] = copy.deepcopy(
             entry["pre_enrollment_integration_policy"]
+        )
+    if "enrolled_draft_integration_policy" in entry:
+        binding["enrolled_draft_integration_policy"] = copy.deepcopy(
+            entry["enrolled_draft_integration_policy"]
         )
     return binding
 
@@ -974,10 +1037,16 @@ def load_immutable_delivery_registry_binding(
             if exact_central_delivery and candidate == normalized_delivery_head:
                 raise
             continue
+        command_sets = [binding["validation"]]
+        if (
+            binding.get("repository") == "SecPal/api"
+            and binding.get("governance_only_validation") == "API_RUNTIME_INSTRUCTIONS"
+        ):
+            command_sets.append(governance_validation_commands())
         binding_matches = (
             digest_json(binding) == expected_registry_digest
-            and digest_json(binding["validation"])
-            == expected_command_set_digest
+            and any(digest_json(commands) == expected_command_set_digest
+                    for commands in command_sets)
         )
         if exact_central_delivery and candidate == normalized_delivery_head:
             if not binding_matches:
@@ -1013,6 +1082,33 @@ def _require_string(value: Any, label: str) -> str:
     return value
 
 
+def _require_github_timestamp(value: Any, label: str) -> str:
+    matched = (
+        re.fullmatch(
+            r"([0-9]{4})-([0-9]{2})-([0-9]{2})T"
+            r"([0-9]{2}):([0-9]{2}):([0-9]{2})Z",
+            value,
+        )
+        if isinstance(value, str)
+        else None
+    )
+    if matched is None:
+        raise SecurityBlocker(f"{label} is not a canonical GitHub timestamp")
+    year, month, day, hour, minute, second = map(int, matched.groups())
+    leap_year = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    month_days = (31, 29 if leap_year else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    if (
+        year < 1
+        or month not in range(1, 13)
+        or day not in range(1, month_days[month - 1] + 1)
+        or hour not in range(24)
+        or minute not in range(60)
+        or second not in range(60)
+    ):
+        raise SecurityBlocker(f"{label} is not a canonical GitHub timestamp")
+    return value
+
+
 def _require_oid(value: Any, label: str) -> str:
     if not isinstance(value, str) or not OID.fullmatch(value):
         raise SecurityBlocker(f"{label} is not a complete commit OID")
@@ -1029,6 +1125,477 @@ def _require_positive_integer(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise SecurityBlocker(f"{label} is not a positive integer")
     return value
+
+
+# Bound authenticated candidate blob content before Git emits it.
+MAX_INTEGRATION_CONFLICT_CONTENT_BYTES = 4 * 1024 * 1024
+
+
+def _integration_tree_delta(
+    repository_root: Path,
+    mechanical_tree: str,
+    validated_tree: str,
+    *, run_git: Callable[..., Any],
+) -> list[dict[str, str]]:
+    result = run_git(
+        repository_root,
+        [
+            "diff-tree",
+            "--raw",
+            "-r",
+            "--no-abbrev",
+            "-z",
+            "--no-renames",
+            mechanical_tree,
+            validated_tree,
+        ],
+        allow_failure=True,
+    )
+    if result.returncode != 0:
+        raise SecurityBlocker(
+            "mechanical integration tree is unavailable or invalid"
+        )
+    fields = result.stdout.split("\x00")
+    if fields and fields[-1] == "":
+        fields.pop()
+    if len(fields) % 2:
+        raise SecurityBlocker(
+            "mechanical integration tree delta is malformed"
+        )
+    delta: list[dict[str, str]] = []
+    for index in range(0, len(fields), 2):
+        header = fields[index]
+        path = fields[index + 1]
+        parts = header[1:].split() if header.startswith(":") else []
+        if len(parts) != 5:
+            raise SecurityBlocker(
+                "mechanical integration tree delta is malformed"
+            )
+        old_mode, new_mode, old_oid, new_oid, status = parts
+        delta.append(
+            {
+                "path": path,
+                "status": status,
+                "old_mode": old_mode,
+                "new_mode": new_mode,
+                "old_oid": old_oid.lower(),
+                "new_oid": new_oid.lower(),
+            }
+        )
+    return sorted(delta, key=lambda item: item["path"])
+
+
+def _mechanical_integration_result(
+    repository_root: Path,
+    ordered_parents: list[str],
+    *, run_git: Callable[..., Any],
+) -> tuple[str, list[str]]:
+    result = run_git(
+        repository_root,
+        [
+            "merge-tree",
+            "--write-tree",
+            "--no-messages",
+            "--name-only",
+            "-z",
+            *ordered_parents,
+        ],
+        allow_failure=True,
+    )
+    fields = result.stdout.split("\x00")
+    if fields and fields[-1] == "":
+        fields.pop()
+    if (
+        result.returncode not in {0, 1}
+        or not fields
+        or not OID.fullmatch(fields[0])
+    ):
+        raise SecurityBlocker(
+            "mechanical integration tree cannot be derived from the authorized parents"
+        )
+    conflict_paths = fields[1:]
+    if (
+        (result.returncode == 0 and conflict_paths)
+        or (result.returncode == 1 and not conflict_paths)
+        or conflict_paths != sorted(conflict_paths)
+        or len(conflict_paths) != len(set(conflict_paths))
+    ):
+        raise SecurityBlocker(
+            "mechanical integration conflict evidence is malformed"
+        )
+    return fields[0].lower(), conflict_paths
+
+
+def _reject_integration_conflict_markers(
+    repository_root: Path,
+    validated_tree: str,
+    conflict_paths: list[str],
+    *, run_git: Callable[..., Any],
+) -> None:
+    # Bulk observations preserve the same exact entries, aggregate byte bound,
+    # and marker grammar without one process per path or blob.
+    try:
+        states = _integration_path_states(
+            repository_root, validated_tree, conflict_paths, run_git=run_git,
+        )
+        blob_oids = []
+        for state in states.values():
+            if state is None or state[:2] == ("160000", "commit"):
+                continue
+            if state[1] != "blob":
+                raise SecurityBlocker("integration marker path is not a blob")
+            blob_oids.append(state[2])
+        contents = _integration_blob_contents(repository_root, blob_oids, run_git=run_git)
+    except SecurityBlocker as exc:
+        raise SecurityBlocker(
+            "resolved integration conflict content cannot be authenticated: " + str(exc)
+        ) from exc
+    for raw_content in contents:
+        # Match Git's established binary-file sniff: a NUL in the initial
+        # 8,000-byte inspection window excludes the blob from text scanning.
+        if b"\x00" in raw_content[:8000]:
+            continue
+        content = raw_content.decode("utf-8", "replace")
+        state = "OUTSIDE"
+        for line in content.split("\n"):
+            marker = _integration_conflict_marker_kind(line)
+            if marker is None:
+                continue
+            if state == "OUTSIDE":
+                if marker == "OPEN":
+                    state = "OURS"
+                elif marker == "BASE":
+                    state = "TRUNCATED_BASE"
+                elif marker == "SEPARATOR":
+                    state = "TRUNCATED_THEIRS"
+                continue
+            if state == "TRUNCATED_BASE":
+                if marker == "BASE":
+                    continue
+                if marker == "SEPARATOR":
+                    state = "TRUNCATED_THEIRS"
+                    continue
+            elif state == "TRUNCATED_THEIRS":
+                if marker == "SEPARATOR":
+                    continue
+                if marker == "CLOSE":
+                    raise SecurityBlocker(
+                        "resolved integration tree retains Git conflict markers"
+                    )
+            if state == "OURS":
+                if marker == "BASE":
+                    state = "BASE"
+                    continue
+                if marker == "SEPARATOR":
+                    state = "THEIRS"
+                    continue
+            elif state == "BASE" and marker == "SEPARATOR":
+                state = "THEIRS"
+                continue
+            elif state == "THEIRS" and marker == "CLOSE":
+                raise SecurityBlocker(
+                    "resolved integration tree retains Git conflict markers"
+                )
+            raise SecurityBlocker(
+                "resolved integration tree retains Git conflict markers"
+            )
+        if state in {"OURS", "BASE", "THEIRS"}:
+            raise SecurityBlocker(
+                "resolved integration tree retains Git conflict markers"
+            )
+
+
+def _integration_conflict_marker_kind(line: str) -> str | None:
+    line = line.removesuffix("\r")
+    for character, kind in (("<", "OPEN"), ("|", "BASE"), (">", "CLOSE")):
+        run_length = len(line) - len(line.lstrip(character))
+        if run_length >= 7 and (
+            run_length == len(line) or line[run_length] == " "
+        ):
+            return kind
+    if len(line) >= 7 and not line.strip("="):
+        return "SEPARATOR"
+    return None
+
+
+
+def _integration_chunks(values: list[str]) -> list[list[str]]:
+    """Bound both item count and command/input bytes per Git observation."""
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    size = 0
+    for value in values:
+        encoded_size = len(value.encode("utf-8")) + 16
+        if encoded_size > 32768:
+            raise SecurityBlocker("integration observation item exceeds the size bound")
+        if current and (len(current) == 128 or size + encoded_size > 32768):
+            chunks.append(current)
+            current, size = [], 0
+        current.append(value)
+        size += encoded_size
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _integration_path_states(
+    repository_root: Path, tree: str, paths: list[str], *, run_git: Callable[..., Any],
+) -> dict[str, tuple[str, str, str] | None]:
+    states: dict[str, tuple[str, str, str] | None] = dict.fromkeys(paths)
+    for chunk in _integration_chunks(paths):
+        result = run_git(repository_root, ["ls-tree", "-z", "-t", "--full-tree", tree,
+                        "--", *(f":(literal){path}" for path in chunk)], allow_failure=True)
+        if result.returncode != 0 or not isinstance(result.stdout, str):
+            raise SecurityBlocker("integration path state is unavailable")
+        if not result.stdout:
+            continue
+        if not result.stdout.endswith("\x00"):
+            raise SecurityBlocker("integration path state is malformed")
+        observed_paths = set()
+        for record in result.stdout[:-1].split("\x00"):
+            metadata, separator, path = record.partition("\t")
+            parts = metadata.split()
+            if (separator != "\t" or path in observed_paths or len(parts) != 3):
+                raise SecurityBlocker("integration path state is malformed")
+            mode, kind, oid = parts
+            if (mode, kind) not in {
+                ("100644", "blob"), ("100755", "blob"), ("120000", "blob"),
+                ("160000", "commit"), ("040000", "tree"),
+            } or not OID.fullmatch(oid):
+                raise SecurityBlocker("integration path mode, type or object is malformed")
+            observed_paths.add(path)
+            if path in chunk:
+                states[path] = (mode, kind, oid)
+            elif (mode, kind) != ("040000", "tree") or not any(
+                requested.startswith(path + "/") for requested in chunk
+            ):
+                raise SecurityBlocker("integration path state includes an unexpected entry")
+            # -t includes traversed ancestor trees. Authenticate their shape,
+            # but only requested exact paths contribute to the observation.
+    return states
+
+
+def _integration_blob_contents(
+    repository_root: Path, blob_oids: list[str], *, run_git: Callable[..., Any],
+) -> list[bytes]:
+    chunks = _integration_chunks(sorted(set(blob_oids)))
+    sizes: dict[str, int] = {}
+    for chunk in chunks:
+        result = run_git(repository_root,
+            ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+            allow_failure=True, raw_output=True,
+            input_data=("\n".join(chunk) + "\n").encode("ascii"))
+        if result.returncode != 0 or not isinstance(result.stdout, bytes):
+            raise SecurityBlocker("integration blob sizes are unavailable")
+        records = result.stdout.splitlines()
+        if len(records) != len(chunk) or not result.stdout.endswith(b"\n"):
+            raise SecurityBlocker("integration blob sizes are malformed")
+        for oid, record in zip(chunk, records):
+            prefix = (oid + " blob ").encode("ascii")
+            size = record.removeprefix(prefix)
+            if not record.startswith(prefix) or not size.isdigit():
+                raise SecurityBlocker("integration blob size or identity is malformed")
+            sizes[oid] = int(size)
+    # Count repeated path contents as before, even though each object is read once.
+    if sum(sizes[oid] for oid in blob_oids) > MAX_INTEGRATION_CONFLICT_CONTENT_BYTES:
+        raise SecurityBlocker("integration conflict content exceeds the authenticated size bound")
+    contents = []
+    for chunk in chunks:
+        result = run_git(repository_root, ["cat-file", "--batch"],
+            allow_failure=True, raw_output=True,
+            input_data=("\n".join(chunk) + "\n").encode("ascii"))
+        if result.returncode != 0 or not isinstance(result.stdout, bytes):
+            raise SecurityBlocker("integration blob contents are unavailable")
+        offset = 0
+        for oid in chunk:
+            header = f"{oid} blob {sizes[oid]}\n".encode("ascii")
+            if result.stdout[offset:offset + len(header)] != header:
+                raise SecurityBlocker("integration blob content identity is malformed")
+            start = offset + len(header)
+            end = start + sizes[oid]
+            if result.stdout[end:end + 1] != b"\n":
+                raise SecurityBlocker("integration blob content length is malformed")
+            contents.append(result.stdout[start:end])
+            offset = end + 1
+        if offset != len(result.stdout):
+            raise SecurityBlocker("integration blob content has extra records")
+    return contents
+
+
+def classify_ready_integration_delta(
+    delta: list[dict[str, str]], conflict_paths: list[str],
+    path_states: dict[str, tuple[Any, Any, Any, Any, Any]],
+    *, preservation: bool,
+) -> list[dict[str, str]]:
+    """Pure admission: conflict membership wins; preservation is exact equality.
+
+    Observations are ordered base, parent 1, parent 2, mechanical, candidate.
+    A caller's claimed classification is never an input to this decision.
+    """
+    paths = [item["path"] for item in delta]
+    if not preservation:
+        if not conflict_paths and delta:
+            raise SecurityBlocker("clean mechanical integration cannot authorize a manual delta")
+        if paths != conflict_paths:
+            raise SecurityBlocker("every unresolved mechanical conflict must be explicitly resolved")
+    elif not set(conflict_paths).issubset(paths):
+        raise SecurityBlocker("every unresolved mechanical conflict must be explicitly resolved")
+    classifications = []
+    for path in paths:
+        if path in conflict_paths:
+            classification = "CONFLICT_RESOLUTION"
+        else:
+            states = path_states.get(path)
+            if not preservation or states is None:
+                raise SecurityBlocker("integration preservation observations are missing")
+            base, parent1, parent2, mechanical, candidate = states
+            if (candidate != parent2 or parent1 == base or parent2 == base
+                    or mechanical == candidate):
+                raise SecurityBlocker("integration delta is not exact dual-change parent-2 preservation")
+            classification = "EXACT_PARENT2_PRESERVATION"
+        classifications.append({"path": path, "classification": classification})
+    return classifications
+
+
+def derive_ready_integration_tree_evidence(
+    repository_root: Path, ordered_parents: list[str], validated_tree: str,
+    *, schema_version: str, kind: str = READY_INTEGRATION_KIND,
+    run_git: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
+    """Produce tree evidence from Git; callers cannot choose paths or classes."""
+    if kind == "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION":
+        if schema_version != "1.0" or not isinstance(ordered_parents, list) or len(ordered_parents) != 2:
+            raise SecurityBlocker("enrolled Draft integration topology/version is unsupported")
+        for parent in ordered_parents:
+            _require_oid(parent, "integration parent")
+        _require_oid(validated_tree, "integration candidate tree")
+        return _derive_isolated_enrolled_draft_tree_evidence(repository_root, ordered_parents, validated_tree)
+    return _derive_ready_integration_tree_evidence(
+        repository_root, ordered_parents, validated_tree,
+        schema_version=schema_version, kind=kind, run_git=run_git,
+    )
+
+
+def _derive_isolated_enrolled_draft_tree_evidence(repository_root, parents, tree):
+    """Import immutable objects; candidate merge config never derives authority."""
+    from . import lifecycle_publication as publication
+    packed = publication._run_git(repository_root, ["pack-objects", "--stdout", "--revs"],
+                                  input_bytes=("\n".join([*parents, tree]) + "\n").encode("ascii"))
+    if packed.returncode != 0:
+        raise SecurityBlocker("integration tree object closure is unavailable")
+    with tempfile.TemporaryDirectory(prefix="secpal-enrolled-draft-tree-") as directory:
+        isolated = Path(directory)
+        if publication._run_git(isolated, ["init", "--bare", "."]).returncode != 0 or publication._run_git(isolated, ["index-pack", "--stdin"], input_bytes=packed.stdout).returncode != 0:
+            raise SecurityBlocker("isolated integration tree objects are unavailable")
+        def closed_git(root, arguments, *, raw_output=False, input_data=None, allow_failure=False):
+            result = publication._run_git(root, arguments, input_bytes=input_data)
+            if result.returncode != 0 and not allow_failure:
+                raise SecurityBlocker("isolated integration tree observation failed")
+            if not raw_output:
+                result.stdout = result.stdout.decode("utf-8", "replace")
+                result.stderr = result.stderr.decode("utf-8", "replace")
+            return result
+        return _derive_ready_integration_tree_evidence(isolated, parents, tree,
+            schema_version="1.0", kind="ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION", run_git=closed_git)
+
+
+def _derive_ready_integration_tree_evidence(
+    repository_root: Path, ordered_parents: list[str], validated_tree: str,
+    *, schema_version: str, kind: str = READY_INTEGRATION_KIND,
+    run_git: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
+    """Shared mechanical algorithm; historical family behavior is unchanged."""
+    if run_git is None:
+        run_git = _run_integration_tree_git
+    version = schema_version
+    if kind not in {
+        READY_INTEGRATION_KIND, "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+        "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+    }:
+        raise SecurityBlocker("integration evidence family is unsupported")
+    # The Draft family shares only historical conflict mechanics, never the
+    # Ready version namespace or preservation authority.
+    preservation = (
+        False if kind == "PRE_ENROLLMENT_DRAFT_INTEGRATION"
+        else True if kind == "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION"
+        else ready_integration_has_preservation(version)
+    )
+    if kind == "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION" and version != "1.0":
+        raise SecurityBlocker("enrolled Draft integration version is unsupported")
+    parents = ordered_parents
+    if (not isinstance(parents, list) or len(parents) != 2
+            or any(not isinstance(parent, str) or not OID.fullmatch(parent) for parent in parents)
+            or parents[0] == parents[1]):
+        raise SecurityBlocker("Ready integration requires two distinct ordered parents")
+    _require_oid(validated_tree, "integration candidate tree")
+    merge_base = None
+    if preservation:
+        result = run_git(repository_root, ["merge-base", "--all", *parents], allow_failure=True)
+        bases = result.stdout.splitlines()
+        if result.returncode != 0 or len(bases) != 1 or not OID.fullmatch(bases[0]):
+            raise SecurityBlocker("Ready integration requires one unambiguous merge base")
+        merge_base = bases[0]
+    mechanical, conflicts = _mechanical_integration_result(repository_root, parents, run_git=run_git)
+    delta = _ready_integration_delta(_integration_tree_delta(
+        repository_root, mechanical, validated_tree, run_git=run_git,
+    ))
+    observations = {}
+    if preservation:
+        paths = [item["path"] for item in delta if item["path"] not in conflicts]
+        tree_states = [
+            _integration_path_states(repository_root, tree, paths, run_git=run_git)
+            for tree in (merge_base, *parents, mechanical, validated_tree)
+        ]
+        observations = {path: tuple(states[path] for states in tree_states) for path in paths}
+    classes = classify_ready_integration_delta(delta, conflicts, observations, preservation=preservation)
+    _reject_integration_conflict_markers(
+        repository_root, validated_tree, [item["path"] for item in delta], run_git=run_git,
+    )
+    result = {
+        "mechanical_merge_tree_sha": mechanical,
+        "mechanical_conflict_paths": conflicts,
+        "manual_conflict_resolution_delta": delta,
+    }
+    if preservation:
+        result["path_classifications"] = classes
+    return result
+
+
+def verify_ready_integration_tree(
+    repository_root: Path, integration_evidence: dict[str, Any], validated_tree: str,
+    *, run_git: Callable[..., Any] | None = None,
+) -> None:
+    """Read-back consumes the producer's exact independently derived contract."""
+    kind = (
+        integration_evidence["kind"] if "kind" in integration_evidence
+        else READY_INTEGRATION_KIND
+    )
+    observed = derive_ready_integration_tree_evidence(
+        repository_root, integration_evidence["ordered_parent_shas"], validated_tree,
+        schema_version=integration_evidence["schema_version"],
+        kind=kind, run_git=run_git,
+    )
+    messages = {
+        "mechanical_merge_tree_sha": "mechanical integration tree does not match the authorized parents",
+        "mechanical_conflict_paths": "mechanical integration conflict paths are not authenticated",
+        "manual_conflict_resolution_delta": "integration manual conflict-resolution delta is not authenticated",
+        "path_classifications": "integration path classifications are not independently derived",
+    }
+    for key, value in observed.items():
+        if integration_evidence.get(key) != value:
+            raise SecurityBlocker(messages[key])
+
+
+def _run_integration_tree_git(
+    repository_root: Path, arguments: list[str], *, allow_failure: bool = False,
+    raw_output: bool = False, input_data: bytes | None = None,
+) -> Any:
+    result = _run_integration_commit_git(
+        repository_root, arguments, raw_output=raw_output, input_data=input_data,
+    )
+    if result.returncode != 0 and not allow_failure:
+        raise SecurityBlocker("integration tree observation failed")
+    return result
 
 
 def _ready_integration_delta(value: Any) -> list[dict[str, str]]:
@@ -1119,6 +1686,9 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         else "ADOPTED"
         if schema_version == "1.2"
         and keys == READY_INTEGRATION_ADOPTED_PRIOR_AUTHORITY_KEYS
+        else "ADOPTED_RECOVERED"
+        if schema_version == "1.2"
+        and keys == READY_INTEGRATION_RECOVERED_ADOPTED_PRIOR_AUTHORITY_KEYS
         else None
     )
     if authority_mode is None:
@@ -1153,7 +1723,12 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "exceptional_continuations",
         "cycle_3",
     }
-    if authority_mode == "ADOPTED":
+    source_mode = value.get("source_authority_mode")
+    recovered_root = (
+        authority_mode == "ADOPTED_RECOVERED"
+        and source_mode == "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT"
+    )
+    if authority_mode in {"ADOPTED", "ADOPTED_RECOVERED"}:
         lifecycle_keys |= {
             "ready_transition_count",
             "ready_history",
@@ -1195,18 +1770,28 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         or not 0 <= continuations <= 1
     ):
         raise SecurityBlocker("Ready integration prior lifecycle authority is invalid")
-    if authority_mode == "ADOPTED":
+    if authority_mode in {"ADOPTED", "ADOPTED_RECOVERED"}:
         ready_history = lifecycle.get("ready_history")
-        source_mode = value.get("source_authority_mode")
         ready_history_keys = (
             {"sequence", "transition_kind", "event_authorization_digest"}
-            if source_mode == "EXACT_STATE_ADOPTION_V3"
+            if source_mode in {
+                "EXACT_STATE_ADOPTION_V3",
+                "EXISTING_AUTHORITY_COMPOSITION",
+            }
             else {"sequence", "transition_kind", "observation_digest"}
-            if source_mode == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS"
+            if source_mode in {
+                "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
+                "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
+            }
             else None
         )
         if (
-            lifecycle.get("historical_proof_mode") != "exact_state_adoption"
+            lifecycle.get("historical_proof_mode")
+            != (
+                "native_lifecycle"
+                if source_mode == "EXISTING_AUTHORITY_COMPOSITION"
+                else "exact_state_adoption"
+            )
             or isinstance(lifecycle.get("ready_transition_count"), bool)
             or lifecycle.get("ready_transition_count") != 1
             or not isinstance(ready_history, list)
@@ -1218,7 +1803,10 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             or not _require_digest(
                 ready_history[0].get(
                     "event_authorization_digest"
-                    if source_mode == "EXACT_STATE_ADOPTION_V3"
+                    if source_mode in {
+                        "EXACT_STATE_ADOPTION_V3",
+                        "EXISTING_AUTHORITY_COMPOSITION",
+                    }
                     else "observation_digest"
                 ),
                 "Ready integration transition authorization",
@@ -1245,15 +1833,22 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "pull_request_number": _require_positive_integer(value.get("pull_request_number"), "prior authority pull request"),
         "prior_delivery_head_sha": _require_oid(value.get("prior_delivery_head_sha"), "prior authority head"),
         "prior_delivery_tree_sha": _require_oid(value.get("prior_delivery_tree_sha"), "prior authority tree"),
-        "prior_validation_receipt_digest": _require_digest(value.get("prior_validation_receipt_digest"), "prior validation receipt"),
+        "prior_validation_receipt_digest": (
+            None
+            if (source_mode == "EXISTING_AUTHORITY_COMPOSITION" or recovered_root)
+            and value.get("prior_validation_receipt_digest") is None
+            else _require_digest(
+                value.get("prior_validation_receipt_digest"),
+                "prior validation receipt",
+            )
+        ),
         "prior_final_attestation_digest": (
             _require_digest(
                 value.get("prior_final_attestation_digest"),
                 "prior final attestation",
             )
-            if authority_mode != "ADOPTED"
-            or value.get("source_authority_mode")
-            == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS"
+            if authority_mode not in {"ADOPTED", "ADOPTED_RECOVERED"}
+            or source_mode == "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS"
             else value.get("prior_final_attestation_digest")
         ),
         "expected_signer": {"kind": signer_kind, "identity": signer_identity},
@@ -1271,7 +1866,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     }
     if authority_mode == "ORDINARY":
         return normalized
-    if authority_mode == "RECOVERED":
+    if authority_mode in {"RECOVERED", "ADOPTED_RECOVERED"}:
         recovery = value.get("recovery_publication")
         if (
             not isinstance(recovery, dict)
@@ -1311,8 +1906,16 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             ),
             "historical_bytes_reconstructed": False,
         }
-        return normalized
-    source_mode = value.get("source_authority_mode")
+        if authority_mode == "RECOVERED":
+            return normalized
+        if not recovered_root:
+            raise SecurityBlocker("recovered adopted Ready source mode is unsupported")
+    if source_mode == "EXISTING_AUTHORITY_COMPOSITION":
+        return _normalize_existing_authority_composition_ready_source(
+            normalized,
+            value.get("source_authority"),
+            value.get("historical_companions"),
+        )
     if (
         source_mode == "EXACT_STATE_ADOPTION_V3"
         and normalized["prior_final_attestation_digest"] is not None
@@ -1322,14 +1925,19 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         )
     if source_mode not in {
         "EXACT_STATE_ADOPTION_V3",
+        "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
         "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
     }:
         raise SecurityBlocker("adopted Ready source authority mode is unsupported")
     companions = value.get("historical_companions")
     expected_companions = {
         "reviewed_state_bytes": "UNAVAILABLE",
-        "validation_receipt_bytes": "UNAVAILABLE",
-        "final_attestation_bytes": "UNAVAILABLE",
+        "validation_receipt_bytes": (
+            "ABSENT_NEVER_ISSUED" if recovered_root else "UNAVAILABLE"
+        ),
+        "final_attestation_bytes": (
+            "ABSENT_NEVER_ISSUED" if recovered_root else "UNAVAILABLE"
+        ),
         "historical_bytes_reconstructed": False,
     }
     if companions != expected_companions:
@@ -1360,6 +1968,8 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "enrollment_publication",
         "ready_transition",
     }
+    if recovered_root:
+        source_keys.add("historical_evidence")
     if not isinstance(source, dict) or set(source) != source_keys:
         raise SecurityBlocker("adopted Ready source authority is malformed")
     enrollment = source.get("enrollment_publication")
@@ -1368,10 +1978,10 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     }:
         raise SecurityBlocker("adopted Ready enrollment publication is malformed")
     transition = source.get("ready_transition")
-    if not isinstance(transition, dict) or set(transition) != {
+    if not recovered_root and (not isinstance(transition, dict) or set(transition) != {
         "event_id", "event_digest", "predecessor_authority_digest",
         "predecessor_head_sha", "resulting_head_sha",
-    }:
+    }):
         raise SecurityBlocker("adopted Ready transition authority is malformed")
     head_advanced_count = source.get("head_advanced_count")
     if (
@@ -1409,6 +2019,24 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     _require_digest(
         enrollment.get("publication_digest"), "adopted enrollment publication"
     )
+    if recovered_root:
+        historical = normalize_exact_state_adoption_historical_evidence(
+            source["historical_evidence"]
+        )
+        if (
+            transition is not None
+            or enrollment != normalized["publication"]
+            or historical["state"] != "ABSENT_NEVER_ISSUED"
+            or normalized["prior_validation_receipt_digest"] is not None
+            or normalized["prior_final_attestation_digest"] is not None
+        ):
+            raise SecurityBlocker("recovered adoption root historical identity is invalid")
+        normalized.update(
+            source_authority_mode=source_mode,
+            source_authority=copy.deepcopy(source),
+            historical_companions=copy.deepcopy(companions),
+        )
+        return normalized
     _require_string(transition.get("event_id"), "adopted Ready transition")
     for field, label in (
         ("event_digest", "adopted Ready event"),
@@ -1422,6 +2050,140 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             raise SecurityBlocker("adopted Ready transition changed the source head")
     normalized.update(
         source_authority_mode="EXACT_STATE_ADOPTION_V3",
+        source_authority=copy.deepcopy(source),
+        historical_companions=copy.deepcopy(companions),
+    )
+    return normalized
+
+
+def _normalize_existing_authority_composition_ready_source(
+    normalized: dict[str, Any],
+    source: Any,
+    companions: Any,
+) -> dict[str, Any]:
+    """Normalize PR_REBOUND + qualified-loss Ready authority composition."""
+
+    source_keys = {
+        "composition",
+        "source_parent_shas",
+        "source_signer_identity",
+        "replaced_pull_request_number",
+        "replacement_pull_request_number",
+        "qualified_loss_admission_digest",
+        "qualified_loss_qualification_id",
+        "qualified_loss_head_evidence",
+        "rebound",
+        "historical_evidence",
+    }
+    if not isinstance(source, dict) or set(source) != source_keys:
+        raise SecurityBlocker("composed Ready source authority is malformed")
+    if source.get("composition") != [
+        "PR_REBOUND",
+        "QUALIFIED_REMEDIATION_SUCCESSOR_LOSS",
+        "READY_INTEGRATION_PRIOR_AUTHORITY",
+    ]:
+        raise SecurityBlocker("composed Ready source authority is unsupported")
+    replaced = _require_positive_integer(
+        source.get("replaced_pull_request_number"), "replaced pull request"
+    )
+    replacement = _require_positive_integer(
+        source.get("replacement_pull_request_number"), "replacement pull request"
+    )
+    if replaced == replacement or replacement != normalized["pull_request_number"]:
+        raise SecurityBlocker("composed Ready pull-request identity is invalid")
+    if (
+        normalized["prior_validation_receipt_digest"] is not None
+        or normalized["prior_final_attestation_digest"] is not None
+        or _require_string(
+            source.get("source_signer_identity"), "composed source signer"
+        )
+        != normalized["expected_signer"]["identity"]
+    ):
+        raise SecurityBlocker("composed Ready historical identity is invalid")
+    source_parents = source.get("source_parent_shas")
+    if (
+        not isinstance(source_parents, list)
+        or len(source_parents) != 2
+        or source_parents[0] == source_parents[1]
+        or any(
+            _require_oid(parent, "composed source parent")
+            == normalized["prior_delivery_head_sha"]
+            for parent in source_parents
+        )
+    ):
+        raise SecurityBlocker("composed Ready source topology is invalid")
+    _require_digest(
+        source.get("qualified_loss_admission_digest"),
+        "qualified loss admission",
+    )
+    _require_string(
+        source.get("qualified_loss_qualification_id"),
+        "qualified loss identity",
+    )
+    head_evidence = source.get("qualified_loss_head_evidence")
+    if not isinstance(head_evidence, dict) or set(head_evidence) != {
+        "validation_receipt_digest",
+        "source_validation_evidence_digest",
+        "final_attestation_digest",
+    }:
+        raise SecurityBlocker("qualified loss head evidence is malformed")
+    for field, label in (
+        ("validation_receipt_digest", "qualified loss current receipt"),
+        ("source_validation_evidence_digest", "qualified loss current safety"),
+        ("final_attestation_digest", "qualified loss admission binding"),
+    ):
+        _require_digest(head_evidence.get(field), label)
+    if (
+        head_evidence["final_attestation_digest"]
+        != source["qualified_loss_admission_digest"]
+    ):
+        raise SecurityBlocker("qualified loss admission binding changed")
+    rebound = source.get("rebound")
+    if not isinstance(rebound, dict) or set(rebound) != {
+        "event_id",
+        "event_digest",
+        "predecessor_authority_digest",
+        "predecessor_publication",
+        "successor_publication",
+    }:
+        raise SecurityBlocker("composed Ready rebound authority is malformed")
+    _require_string(rebound.get("event_id"), "PR rebound event")
+    _require_digest(rebound.get("event_digest"), "PR rebound event")
+    _require_digest(
+        rebound.get("predecessor_authority_digest"),
+        "PR rebound predecessor authority",
+    )
+    for label in ("predecessor_publication", "successor_publication"):
+        publication = rebound.get(label)
+        if not isinstance(publication, dict) or set(publication) != {
+            "object_oid", "publication_digest"
+        }:
+            raise SecurityBlocker("composed Ready rebound publication is malformed")
+        _require_oid(publication.get("object_oid"), "PR rebound publication")
+        _require_digest(
+            publication.get("publication_digest"), "PR rebound publication"
+        )
+    if rebound["successor_publication"] != normalized["publication"]:
+        raise SecurityBlocker("composed Ready rebound successor is not CURRENT")
+    historical = normalize_exact_state_adoption_historical_evidence(
+        source.get("historical_evidence")
+    )
+    if (
+        historical["state"] != "ABSENT_NEVER_ISSUED"
+        or historical["validation_receipt_digest"]
+        != normalized["prior_validation_receipt_digest"]
+    ):
+        raise SecurityBlocker("composed Ready historical receipt identity changed")
+    expected_companions = {
+        "reviewed_state_bytes": "UNAVAILABLE",
+        "validation_receipt_bytes": "ABSENT_NEVER_ISSUED",
+        "final_attestation_bytes": "ABSENT_NEVER_ISSUED",
+        "historical_bytes_reconstructed": False,
+    }
+    if companions != expected_companions:
+        raise SecurityBlocker("composed Ready historical companion status is invalid")
+    normalized.update(
+        source_authority_mode="EXISTING_AUTHORITY_COMPOSITION",
         source_authority=copy.deepcopy(source),
         historical_companions=copy.deepcopy(companions),
     )
@@ -1537,6 +2299,45 @@ def _normalize_legacy_enrolled_ready_source(
     return normalized
 
 
+def normalize_exact_state_adoption_historical_evidence(
+    value: Any,
+) -> dict[str, Any]:
+    """Normalize the closed schema-aware historical receipt identity."""
+
+    fields = {
+        "state",
+        "validation_receipt_digest",
+        "source_validation_evidence_digest",
+        "final_attestation_digest",
+        "bytes_reconstructed",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise SecurityBlocker("exact-state historical evidence is malformed")
+    result = copy.deepcopy(value)
+    state = result["state"]
+    if (
+        state not in {"PRESENT", "UNAVAILABLE", "ABSENT_NEVER_ISSUED"}
+        or result["bytes_reconstructed"] is not False
+    ):
+        raise SecurityBlocker("exact-state historical evidence state is unknown")
+    receipt = result["validation_receipt_digest"]
+    source = result["source_validation_evidence_digest"]
+    attestation = result["final_attestation_digest"]
+    if state == "ABSENT_NEVER_ISSUED":
+        if any(item is not None for item in (receipt, source, attestation)):
+            raise SecurityBlocker("absent historical evidence cannot claim a digest")
+    else:
+        _require_digest(receipt, "historical validation receipt")
+        _require_digest(source, "historical source validation")
+        if state == "PRESENT":
+            _require_digest(attestation, "historical final attestation")
+        elif attestation is not None:
+            raise SecurityBlocker(
+                "unavailable historical evidence cannot claim an attestation"
+            )
+    return result
+
+
 def normalize_ready_integration_evidence(
     value: Any,
     *,
@@ -1552,14 +2353,12 @@ def normalize_ready_integration_evidence(
     if any(SECRET_VALUE.search(item) for item in _all_strings(value)):
         raise SecurityBlocker("Ready integration evidence contains secret-like text")
     schema_version = value.get("schema_version")
-    expected_keys = (
-        READY_INTEGRATION_V12_KEYS
-        if schema_version == "1.2"
-        else READY_INTEGRATION_KEYS
-    )
+    if not isinstance(schema_version, str):
+        raise SecurityBlocker("Ready integration topology kind or version is unsupported")
+    expected_keys = READY_INTEGRATION_KEYS_BY_VERSION.get(schema_version)
     if set(value) != expected_keys:
         raise SecurityBlocker("Ready integration evidence is malformed or ambiguous")
-    if schema_version not in {"1.1", "1.2"} or value.get("kind") != READY_INTEGRATION_KIND:
+    if expected_keys is None or value.get("kind") != READY_INTEGRATION_KIND:
         raise SecurityBlocker("Ready integration topology kind or version is unsupported")
     normalized_repository = _require_string(value.get("repository"), "integration repository")
     if normalized_repository != repository or reviewed_state.repository != repository:
@@ -1580,7 +2379,7 @@ def normalize_ready_integration_evidence(
     )
     reviewed_head = (
         prior_head
-        if schema_version == "1.1"
+        if "reviewed_head_sha" not in expected_keys
         else _require_oid(value.get("reviewed_head_sha"), "integration reviewed head")
     )
     if reviewed_head != reviewed_state.head_sha:
@@ -1776,8 +2575,26 @@ def normalize_ready_integration_evidence(
         },
         "eligibility": copy.deepcopy(eligibility),
     }
-    if schema_version == "1.2":
+    if "reviewed_head_sha" in expected_keys:
         normalized["reviewed_head_sha"] = reviewed_head
+    if ready_integration_has_preservation(schema_version):
+        classifications = value.get("path_classifications")
+        delta = normalized["manual_conflict_resolution_delta"]
+        if (
+            not isinstance(classifications, list)
+            or len(classifications) != len(delta)
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {"path", "classification"}
+                or item.get("path") != change["path"]
+                or item.get("classification") not in {
+                    "CONFLICT_RESOLUTION", "EXACT_PARENT2_PRESERVATION",
+                }
+                for item, change in zip(classifications, delta)
+            )
+        ):
+            raise SecurityBlocker("integration path classifications are malformed")
+        normalized["path_classifications"] = copy.deepcopy(classifications)
     return normalized
 
 
@@ -2342,7 +3159,11 @@ def _actor(value: Any, label: str, *, allow_deleted: bool = False) -> dict[str, 
         raise SecurityBlocker(f"{label} actor login is missing")
     if not isinstance(actor["node_id"], str) or not actor["node_id"]:
         raise SecurityBlocker(f"{label} actor node identity is missing")
-    if not isinstance(actor["database_id"], int) or actor["database_id"] < 1:
+    if (
+        isinstance(actor["database_id"], bool)
+        or not isinstance(actor["database_id"], int)
+        or actor["database_id"] < 1
+    ):
         raise SecurityBlocker(f"{label} actor database identity is missing")
     return actor
 
@@ -2390,18 +3211,23 @@ def _feedback_projection(payload: dict[str, Any]) -> dict[str, Any]:
     for item in requests_value:
         if not isinstance(item, dict):
             raise SecurityBlocker("provider review request is malformed")
+        requested_reviewer = _actor(
+            item.get("requested_reviewer"), "requested review provider"
+        )
+        if requested_reviewer != COPILOT_REVIEW_PROVIDER:
+            raise SecurityBlocker(
+                "provider review request does not identify the captured provider"
+            )
         provider_review_requests.append(
             {
                 "node_id": _require_string(
                     item.get("node_id"), "provider review request identity"
                 ),
-                "created_at": _require_string(
+                "created_at": _require_github_timestamp(
                     item.get("created_at"), "provider review request chronology"
                 ),
                 "actor": _actor(item.get("actor"), "provider review request"),
-                "requested_reviewer": _actor(
-                    item.get("requested_reviewer"), "requested review provider"
-                ),
+                "requested_reviewer": requested_reviewer,
             }
         )
 
@@ -2681,9 +3507,9 @@ class VerifiedOrdinaryReadyProviderGrowth:
     resulting_state_digest: str
     resulting_feedback_digest: str
     provider_head_sha: str
-    provider_request_node_id: str
-    provider_review_node_id: str
-    provider_review_body_digest: str
+    assessment_head_sha: str
+    provider_request_node_id: str | None
+    provider_review_bindings: tuple[tuple[str, int | None, str, str, int, str, str, str, str], ...]
     thread_ids: tuple[str, ...]
     finding_ids: tuple[str, ...]
     source_bindings: tuple[tuple[str, str, str, str | None], ...]
@@ -2884,8 +3710,9 @@ def _actual_signature_fingerprint(
 
 
 def _run_integration_commit_git(
-    repository_root: Path, arguments: list[str]
-) -> subprocess.CompletedProcess[str]:
+    repository_root: Path, arguments: list[str], *, raw_output: bool = False,
+    input_data: bytes | None = None,
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
     evidence = _load_evidence_helper()
     try:
         git_executable = evidence.resolve_trusted_executable("git")
@@ -2899,11 +3726,12 @@ def _run_integration_commit_git(
             [git_executable, *arguments],
             cwd=repository_root,
             check=False,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if input_data is None else None,
+            input=input_data,
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            text=not raw_output,
+            encoding=None if raw_output else "utf-8",
+            errors=None if raw_output else "replace",
             env=environment,
             timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
         )
@@ -3261,6 +4089,7 @@ def _verify_successor_transport(
     rejected_candidate: bool = False,
     reanchored_classified_review: bool = False,
     require_codex_provider_transport: bool = False,
+    bounded_first_fallback: bool = False,
 ) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
     if not isinstance(value, list):
         raise SecurityBlocker("successor provider transport evidence is malformed")
@@ -3358,7 +4187,7 @@ def _verify_successor_transport(
                 raise SecurityBlocker("Codex review result transport is invalid")
             admitted_additions.add(key)
         elif role == "CODEX_REVIEW":
-            if rejected_candidate or reanchored_classified_review:
+            if rejected_candidate or reanchored_classified_review or bounded_first_fallback:
                 reviewed_commit = f"**Reviewed commit:** `{resulting_head_sha[:10]}`"
                 review_kind = (
                     "SECURITY_REVIEW"
@@ -3382,7 +4211,7 @@ def _verify_successor_transport(
                     raise SecurityBlocker(
                         "Codex findings review transport is not head-bound"
                     )
-                if reanchored_classified_review and review_kind != "CODE_REVIEW":
+                if (reanchored_classified_review or bounded_first_fallback) and review_kind != "CODE_REVIEW":
                     raise SecurityBlocker(
                         "classified Codex review transport is not a Code Review"
                     )
@@ -3439,7 +4268,7 @@ def _verify_successor_transport(
                     "CODEX_SECURITY_REVIEW_REQUEST",
                 }
             )
-        elif reanchored_classified_review:
+        elif reanchored_classified_review or bounded_first_fallback:
             required = REQUIRED_CODEX_CLASSIFIED_REVIEW_ROLES
         else:
             required = REQUIRED_CODEX_SUCCESSOR_ROLES
@@ -3466,7 +4295,7 @@ def _verify_successor_transport(
                 and not rejected_results_complete
             )
             or (
-                reanchored_classified_review
+                (reanchored_classified_review or bounded_first_fallback)
                 and not classified_review_complete
             )
         ):
@@ -4718,11 +5547,14 @@ def verify_ordinary_ready_remediation_provider_growth(
     provider_head_sha: str,
     predecessor_eligibility_evidence: Any,
     eligibility_evidence: Any,
+    provider_summary_body: str | None = None,
+    review_database_ids: Any = None,
+    first_fallback_acquisitions: Any = None,
 ) -> VerifiedOrdinaryReadyProviderGrowth:
     """Derive one complete same-assessment provider delta for ordinary remediation.
 
     The caller supplies no delta or finding subset.  The exact added provider
-    review and threads are derived from the two canonical Stable Feedback
+    reviews and threads are derived from the two canonical Stable Feedback
     states, while the existing eligibility boundary supplies only the ordinary
     corrected/material decision for every derived thread.
     """
@@ -4766,16 +5598,13 @@ def verify_ordinary_ready_remediation_provider_growth(
         )
 
     provider_requests = current.feedback.get("provider_review_requests", [])
-    if len(provider_requests) != 1:
+    if len(provider_requests) > 1:
         raise SecurityBlocker(
             "ordinary Ready provider request lineage is missing or ambiguous"
         )
-    provider_request = provider_requests[0]
-    provider_request_key = (
-        "PROVIDER_REVIEW_REQUEST",
-        provider_request["node_id"],
-    )
-    if (
+    provider_request = provider_requests[0] if provider_requests else None
+    provider_request_key = ("PROVIDER_REVIEW_REQUEST", provider_request["node_id"]) if provider_request else None
+    if provider_request is not None and (
         provider_request.get("requested_reviewer") != COPILOT_REVIEW_PROVIDER
         or not isinstance(provider_request.get("node_id"), str)
         or not IDENTITY.fullmatch(provider_request["node_id"])
@@ -4792,25 +5621,121 @@ def verify_ordinary_ready_remediation_provider_growth(
         for item in current.feedback["reviews"]
         if ("REVIEW", item["node_id"]) in added_keys
     ]
-    if len(added_reviews) != 1:
+    if not added_reviews:
         raise SecurityBlocker(
             "ordinary Ready provider review is missing or ambiguous"
         )
-    provider_review = added_reviews[0]
-    provider_review_key = ("REVIEW", provider_review["node_id"])
-    if (
-        provider_review.get("actor") != COPILOT_REVIEW_PROVIDER
-        or not isinstance(provider_review.get("node_id"), str)
-        or not IDENTITY.fullmatch(provider_review["node_id"])
-        or provider_review.get("state") != "COMMENTED"
-        or provider_review.get("commit_oid") != provider_head_sha
-        or not isinstance(provider_review.get("submitted_at"), str)
-        or provider_request["created_at"] >= provider_review["submitted_at"]
-        or provider_review.get("reactions") != []
-    ):
-        raise SecurityBlocker(
-            "ordinary Ready provider review is not bound to the consumed assessment"
+    assessment_heads = {item.get("commit_oid") for item in added_reviews}
+    # The original #954 form captured a late single Copilot review of H0. A
+    # Ready-head assessment instead comprises every new provider review of H1.
+    legacy_h0 = len(added_reviews) == 1 and assessment_heads == {provider_head_sha}
+    assessment_head_sha = provider_head_sha if legacy_h0 else current.head_sha
+    if assessment_heads != {assessment_head_sha}:
+        raise SecurityBlocker("ordinary Ready provider review set mixes assessed heads")
+    captured_review_ids: dict[str, int] = {}
+    if not legacy_h0:
+        if not isinstance(review_database_ids, list):
+            raise SecurityBlocker("ordinary Ready review database identities are missing")
+        current_review_ids = {
+            item["node_id"] for item in current.feedback["reviews"]
+        }
+        for item in review_database_ids:
+            if not isinstance(item, dict) or set(item) != {"node_id", "database_id"}:
+                raise SecurityBlocker("ordinary Ready review database identity is malformed")
+            node_id = item["node_id"]
+            database_id = item["database_id"]
+            if (
+                not isinstance(node_id, str)
+                or node_id not in current_review_ids
+                or node_id in captured_review_ids
+                or not isinstance(database_id, int)
+                or isinstance(database_id, bool)
+                or database_id < 1
+                or database_id in captured_review_ids.values()
+            ):
+                raise SecurityBlocker("ordinary Ready review database identity is unbound")
+            captured_review_ids[node_id] = database_id
+    review_by_id: dict[str, dict[str, Any]] = {}
+    provider_logins: set[str] = set()
+    review_bindings: list[tuple[str, int | None, str, str, int, str, str, str, str]] = []
+    for provider_review in added_reviews:
+        actor = provider_review.get("actor")
+        review_id = provider_review.get("node_id")
+        database_id = captured_review_ids.get(review_id)
+        submitted_at = _require_github_timestamp(
+            provider_review.get("submitted_at"), "provider review submission"
         )
+        if (
+            actor not in (COPILOT_REVIEW_PROVIDER, CODEX_REVIEW_PROVIDER)
+            or (legacy_h0 and actor != COPILOT_REVIEW_PROVIDER)
+            or not isinstance(review_id, str)
+            or not IDENTITY.fullmatch(review_id)
+            or provider_review.get("state") != "COMMENTED"
+            or (provider_request is not None and provider_request["created_at"] >= submitted_at)
+            or provider_review.get("reactions") != []
+            or (
+                not legacy_h0
+                and (not isinstance(database_id, int) or isinstance(database_id, bool) or database_id < 1)
+            )
+            or actor["login"] in provider_logins
+            or review_id in review_by_id
+        ):
+            raise SecurityBlocker(
+                "ordinary Ready provider review is not bound to the consumed assessment"
+            )
+        provider_logins.add(actor["login"])
+        review_by_id[review_id] = provider_review
+        review_bindings.append(
+            (
+                review_id,
+                database_id,
+                actor["login"],
+                actor["node_id"],
+                actor["database_id"],
+                assessment_head_sha,
+                provider_review["state"],
+                submitted_at,
+                provider_review["body_digest"],
+            )
+        )
+    codex_only = COPILOT_REVIEW_PROVIDER["login"] not in provider_logins
+    acquisitions = None
+    if codex_only:
+        from . import provider_acquisition
+
+        acquisitions = provider_acquisition.require_verified_acquisitions(
+            first_fallback_acquisitions, current
+        )
+        if legacy_h0 or provider_logins != {CODEX_REVIEW_PROVIDER["login"]}:
+            raise SecurityBlocker("ordinary Ready bounded fallback provider was substituted")
+        if captured_review_ids != dict(acquisitions.review_database_ids):
+            raise SecurityBlocker("ordinary Ready bounded fallback review database identity was substituted")
+    elif provider_request is None:
+        raise SecurityBlocker("ordinary Ready Copilot request lineage is missing")
+    elif first_fallback_acquisitions is not None:
+        raise SecurityBlocker("ordinary Ready Copilot assessment received another acquisition form")
+
+    summary_key: tuple[str, str] | None = None
+    admitted_updates: set[tuple[str, str]] = set()
+    if not legacy_h0:
+        verify_codex_provider_summary(
+            provider_summary_body,
+            head_sha=assessment_head_sha,
+            repository=current.repository,
+            pull_request_number=current.pull_request_number,
+        )
+        summary_candidates = [
+            item for item in current.feedback["conversation_comments"]
+            if item.get("actor") == CODEX_REVIEW_PROVIDER
+            and item.get("body_digest") == digest_text(provider_summary_body)
+        ]
+        if len(summary_candidates) != 1:
+            raise SecurityBlocker("ordinary Ready Codex summary source is ambiguous")
+        summary_key = ("CONVERSATION_COMMENT", summary_candidates[0]["node_id"])
+        if summary_key in reviewed_sources:
+            if reviewed_sources[summary_key][0] == current_sources[summary_key][0]:
+                raise SecurityBlocker("ordinary Ready Codex summary did not advance")
+            admitted_updates.add(summary_key)
 
     reviewed_thread_ids = {
         item["node_id"] for item in reviewed.feedback["threads"]
@@ -4832,16 +5757,72 @@ def verify_ordinary_ready_remediation_provider_growth(
             digest_json(provider_request),
             None,
         ),
-        (
-            "REVIEW",
-            provider_review["node_id"],
-            provider_review["body_digest"],
-            None,
+    ] if provider_request is not None else []
+    source_bindings.extend(
+        ("REVIEW", item["node_id"], item["body_digest"], None)
+        for item in added_reviews
+    )
+    admitted_additions = {("REVIEW", item["node_id"]) for item in added_reviews}
+    if acquisitions is not None:
+        conversation_bodies = dict(acquisitions.conversation_bodies)
+        review_bodies = dict(acquisitions.review_bodies)
+        if summary_candidates[0]["updated_at"] <= max(
+            item.request_created_at for item in acquisitions.acquisitions
+        ):
+            raise SecurityBlocker("ordinary Ready terminal summary predates the first fallbacks")
+        for label in ("Code Review", "Security Review"):
+            row = next(line for line in provider_summary_body.splitlines() if f"**{label}**" in line)
+            commit_cell = row.split("|")[3].strip()
+            if (
+                not re.fullmatch(r"`[0-9a-f]{7,40}`", commit_cell)
+                or not assessment_head_sha.startswith(commit_cell[1:-1])
+            ):
+                raise SecurityBlocker("ordinary Ready bounded fallback terminal row has the wrong head")
+        transport = [
+            {"role": "CODEX_SUMMARY_UPDATE", "kind": "CONVERSATION_COMMENT",
+             "node_id": summary_key[1], "body": provider_summary_body},
+        ]
+        for acquisition in acquisitions.acquisitions:
+            role = "CODEX_REVIEW_REQUEST" if acquisition.review_type == "CODE" else "CODEX_SECURITY_REVIEW_REQUEST"
+            transport.append({"role": role, "kind": "CONVERSATION_COMMENT",
+                              "node_id": acquisition.request_node_id,
+                              "body": conversation_bodies[acquisition.request_node_id]})
+        code_request = acquisitions.acquisitions[0]
+        security_request = acquisitions.acquisitions[1]
+        for review in added_reviews:
+            if review["submitted_at"] <= code_request.request_created_at:
+                raise SecurityBlocker("ordinary Ready Codex review predates its first fallback")
+            transport.append({"role": "CODEX_REVIEW", "kind": "REVIEW",
+                              "node_id": review["node_id"], "body": review_bodies[review["node_id"]]})
+        for comment in current.feedback["conversation_comments"]:
+            body = conversation_bodies[comment["node_id"]]
+            if body.lstrip().startswith("### 🛡️ Codex Security Review"):
+                if comment["updated_at"] <= security_request.request_created_at:
+                    raise SecurityBlocker("ordinary Ready Security result predates its first fallback")
+                transport.append({"role": "CODEX_SECURITY_REVIEW_RESULT", "kind": "CONVERSATION_COMMENT",
+                                  "node_id": comment["node_id"], "body": body})
+        transport_additions, transport_updates = _verify_successor_transport(
+            transport, reviewed_sources=reviewed_sources, current_sources=current_sources,
+            resulting_head_sha=assessment_head_sha, bounded_first_fallback=True,
         )
-    ]
-    admitted_additions = {provider_review_key}
+        admitted_additions.update(transport_additions)
+        admitted_updates.update(transport_updates)
+        source_bindings.extend(
+            (kind, node_id, current_sources[(kind, node_id)][0], None)
+            for kind, node_id in sorted(transport_additions)
+            if kind != "REVIEW" and (kind, node_id) != summary_key
+        )
     if provider_request_key in added_keys:
         admitted_additions.add(provider_request_key)
+    if summary_key in added_keys:
+        admitted_additions.add(summary_key)
+        source_bindings.append(
+            (summary_key[0], summary_key[1], current_sources[summary_key][0], None)
+        )
+    elif summary_key is not None:
+        source_bindings.append(
+            (summary_key[0], summary_key[1], current_sources[summary_key][0], None)
+        )
     eligible_by_thread = {
         item["thread_id"]: item for item in eligibility["eligible_threads"]
     }
@@ -4872,9 +5853,10 @@ def verify_ordinary_ready_remediation_provider_growth(
         comment_id = comment.get("node_id")
         comment_digest = comment.get("body_digest")
         comment_key = ("THREAD_COMMENT", comment_id)
+        parent_review = review_by_id.get(comment.get("review_id"))
         if (
-            comment.get("actor") != COPILOT_REVIEW_PROVIDER
-            or comment.get("review_id") != provider_review["node_id"]
+            parent_review is None
+            or comment.get("actor") != parent_review["actor"]
             or comment.get("reply_to_id") is not None
             or comment.get("reactions") != []
             or not isinstance(comment_id, str)
@@ -4909,7 +5891,7 @@ def verify_ordinary_ready_remediation_provider_growth(
             item["thread_id"]
             for item in predecessor_eligibility["eligible_threads"]
         },
-        admitted_updates=set(),
+        admitted_updates=admitted_updates,
     )
     if len(finding_ids) != len(set(finding_ids)):
         raise SecurityBlocker(
@@ -4929,23 +5911,32 @@ def verify_ordinary_ready_remediation_provider_growth(
         "predecessor_feedback_digest": reviewed.feedback_digest,
         "resulting_state_digest": current.state_digest,
         "resulting_feedback_digest": current.feedback_digest,
-        "provider_request_node_id": provider_request["node_id"],
-        "provider_review_node_id": provider_review["node_id"],
-        "provider_review_body_digest": provider_review["body_digest"],
+        "provider_request_node_id": provider_request["node_id"] if provider_request else None,
         "thread_ids": list(ordered_threads),
         "finding_ids": list(ordered_findings),
         "source_bindings": [list(item) for item in ordered_sources],
         "eligibility_evidence_digest": eligibility_digest,
     }
+    if legacy_h0:
+        projection["provider_review_node_id"] = added_reviews[0]["node_id"]
+        projection["provider_review_body_digest"] = added_reviews[0]["body_digest"]
+    else:
+        projection["domain"] = "secpal.ordinary-ready-provider-growth/v2"
+        projection["assessment_head_sha"] = assessment_head_sha
+        projection["provider_review_bindings"] = [
+            list(item) for item in sorted(review_bindings)
+        ]
+        if acquisitions is not None:
+            projection["first_fallback_acquisition_digest"] = acquisitions._seal.digest
     return VerifiedOrdinaryReadyProviderGrowth(
         predecessor_state_digest=reviewed.state_digest,
         predecessor_feedback_digest=reviewed.feedback_digest,
         resulting_state_digest=current.state_digest,
         resulting_feedback_digest=current.feedback_digest,
         provider_head_sha=provider_head_sha,
-        provider_request_node_id=provider_request["node_id"],
-        provider_review_node_id=provider_review["node_id"],
-        provider_review_body_digest=provider_review["body_digest"],
+        assessment_head_sha=assessment_head_sha,
+        provider_request_node_id=provider_request["node_id"] if provider_request else None,
+        provider_review_bindings=tuple(sorted(review_bindings)),
         thread_ids=ordered_threads,
         finding_ids=ordered_findings,
         source_bindings=ordered_sources,
@@ -5589,6 +6580,123 @@ def validate_manual_gate_evidence(
     return normalized
 
 
+def governance_validation_commands() -> list[dict[str, Any]]:
+    """Portable closed command identity for API instruction-only validation."""
+    return [
+        {"argv": argv, "working_directory": ".", "purpose": purpose}
+        for argv, purpose in (
+            (["./scripts/validate-ai-instructions.sh"],
+             "Validate API runtime instructions under canonical governance"),
+            (["./node_modules/.bin/markdownlint", "--config", ".markdownlint.json",
+              "AGENTS.md", "CONTRIBUTING.md", ".github/copilot-instructions.md",
+              ".github/instructions/org-shared.instructions.md"],
+             "Lint the complete allowed governance surface"),
+            (["reuse", "lint"], "Validate complete repository REUSE metadata"),
+        )
+    ]
+
+
+def governance_tree_delta_allowed(
+    registry: dict[str, Any],
+    base_sha: Any,
+    tree_sha: Any,
+    raw_diff: Any,
+) -> bool:
+    """Classify the complete base-to-tree delta for the closed API policy."""
+    if (
+        registry.get("repository") != "SecPal/api"
+        or registry.get("governance_only_validation") != "API_RUNTIME_INSTRUCTIONS"
+        or not isinstance(base_sha, str) or not OID.fullmatch(base_sha)
+        or not isinstance(tree_sha, str) or not OID.fullmatch(tree_sha)
+        or not isinstance(raw_diff, str)
+    ):
+        return False
+    allowed = {
+        "AGENTS.md", "CONTRIBUTING.md", ".github/copilot-instructions.md",
+        ".github/instructions/org-shared.instructions.md",
+    }
+    records = raw_diff.split("\0")
+    if records[-1] != "" or not 2 <= len(records) - 1 <= 2 * len(allowed):
+        return False
+    for index in range(0, len(records) - 1, 2):
+        metadata, path = records[index:index + 2]
+        fields = metadata.split()
+        if (
+            len(fields) != 5 or fields[0] not in {":100644", ":000000"}
+            or fields[1] != "100644" or fields[4] not in {"A", "M"}
+            or path not in allowed
+        ):
+            return False
+    return True
+
+
+def validation_commands_for_evidence(
+    registry: dict[str, Any], evidence_value: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Derive actual commands from a signed digest and closed bound policy."""
+    application = registry["validation"]
+    command_digest = evidence_value.get("command_set_digest")
+    if command_digest == digest_json(application):
+        return copy.deepcopy(application)
+    governance = governance_validation_commands()
+    if (
+        registry.get("repository") == "SecPal/api"
+        and registry.get("governance_only_validation") == "API_RUNTIME_INSTRUCTIONS"
+        and command_digest == digest_json(governance)
+        and not any(key in evidence_value for key in (
+            "integration_evidence_digest", "exceptional_recovery_evidence_digest",
+            "exceptional_continuation_evidence_digest",
+        ))
+    ):
+        return governance
+    raise SecurityBlocker("validation command set is not authorized by bound policy")
+
+
+def create_enrolled_draft_validation_receipt(integration_evidence: dict[str, Any]) -> dict[str, Any]:
+    """Typed receipt owned here; trusted issuance follows Complete Validation."""
+    fields = {
+        "schema_version": "1.0",
+        "kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION_VALIDATION_RECEIPT",
+        "repository": integration_evidence["repository"], "delivery_issue": integration_evidence["delivery_issue"],
+        "pull_request": integration_evidence["pull_request"], "lifecycle_id": integration_evidence["lifecycle_id"],
+        "current_publication_oid": integration_evidence["current_publication_oid"],
+        "current_publication_digest": integration_evidence["current_publication_digest"],
+        "predecessor_authority_digest": integration_evidence["predecessor_authority_digest"],
+        "ordered_parent_shas": copy.deepcopy(integration_evidence["ordered_parent_shas"]),
+        "validated_tree_sha": integration_evidence["validated_tree_sha"],
+        "current_main": copy.deepcopy(integration_evidence["current_main"]),
+        "integration_evidence_digest": digest_json(integration_evidence),
+        "registry_digest": integration_evidence["registry_digest"],
+        "command_set_digest": integration_evidence["command_set_digest"],
+        "expected_signer": integration_evidence["expected_signer"], "successful_result": True,
+        "manual_gate_evidence": copy.deepcopy(integration_evidence["manual_gate_evidence"]),
+    }
+    return {**fields, "receipt_digest": digest_json(fields)}
+
+
+def create_enrolled_draft_final_attestation(
+    integration_evidence: dict[str, Any], receipt: dict[str, Any], *,
+    candidate_head_sha: str, signature_fingerprint: str,
+) -> dict[str, Any]:
+    """Exact typed attestation; authorization and actual commit are verified separately."""
+    if receipt != create_enrolled_draft_validation_receipt(integration_evidence):
+        raise SecurityBlocker("enrolled Draft validation receipt mismatch")
+    if not isinstance(signature_fingerprint, str) or not re.fullmatch(r"SHA256:[A-Za-z0-9+/]+", signature_fingerprint):
+        raise SecurityBlocker("enrolled Draft signer fingerprint is malformed")
+    fields = {
+        "schema_version": "1.0",
+        "kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION_FINAL_ATTESTATION",
+        "candidate_head_sha": _require_oid(candidate_head_sha, "integrated candidate"),
+        "candidate_tree_sha": integration_evidence["validated_tree_sha"],
+        "ordered_parent_shas": copy.deepcopy(integration_evidence["ordered_parent_shas"]),
+        "signature_fingerprint": signature_fingerprint,
+        "expected_signer": integration_evidence["expected_signer"],
+        "integration_evidence_digest": digest_json(integration_evidence),
+        "validation_receipt_digest": receipt["receipt_digest"],
+    }
+    return {**fields, "attestation_digest": digest_json(fields)}
+
+
 def create_validation_receipt(
     *,
     repository: str,
@@ -5790,13 +6898,10 @@ def create_ready_integration_attestation(
         raise SecurityBlocker("validation receipt does not bind the Ready integration evidence")
     eligibility_digest = ordinary.get("eligibility_evidence_digest")
     eligibility_bound = eligibility_digest is not None
+    attestation_version, attestation_kind = READY_INTEGRATION_ATTESTATION_BY_VERSION[(normalized["schema_version"], eligibility_bound)]
     fields = {
-        "schema_version": "1.2" if eligibility_bound else "1.1",
-        "kind": (
-            "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
-            if eligibility_bound
-            else "READY_INTEGRATION_VALIDATION_ATTESTATION"
-        ),
+        "schema_version": attestation_version,
+        "kind": attestation_kind,
         "repository": normalized["repository"],
         "delivery_issue_number": normalized["delivery_issue_number"],
         "pull_request_number": normalized["pull_request_number"],
@@ -5827,6 +6932,8 @@ def create_ready_integration_attestation(
         "eligibility": copy.deepcopy(normalized["eligibility"]),
         "successful_result": True,
     }
+    if "path_classifications" in normalized:
+        fields["path_classifications"] = copy.deepcopy(normalized["path_classifications"])
     if eligibility_bound:
         fields["manual_gate_evidence"] = copy.deepcopy(
             ordinary["manual_gate_evidence"]
@@ -5856,9 +6963,9 @@ def verify_eligibility_bound_ready_integration_attestation(
 
     if (
         not isinstance(attestation, dict)
-        or attestation.get("schema_version") != "1.2"
-        or attestation.get("kind")
-        != "ELIGIBILITY_BOUND_READY_INTEGRATION_VALIDATION_ATTESTATION"
+        or not ready_integration_attestation_matches(
+            attestation, integration_evidence, eligibility_bound=True,
+        )
         or not isinstance(attestation.get("eligibility_evidence_digest"), str)
         or not DIGEST.fullmatch(attestation["eligibility_evidence_digest"])
     ):
@@ -5974,6 +7081,7 @@ def _verify_ready_integration_attestation_unsealed(
         signature_policy=signature_policy,
     ):
         raise SecurityBlocker("authenticated integration commit is required")
+    verify_ready_integration_tree(Path(repository_root), normalized, commit_tree_sha)
     return _unregistered_validation_evidence(
         repository=normalized["repository"],
         delivery_issue_number=normalized["delivery_issue_number"],
@@ -6008,6 +7116,10 @@ def _verify_validation_attestation_unsealed(
         raise SecurityBlocker("validated commit parent does not match reviewed head")
     if not isinstance(attestation, dict):
         raise SecurityBlocker("validation attestation is missing")
+    # Ordinary governance evidence selects only the exact compiled command set.
+    # Historical ordinary evidence retains its original application identity.
+    if registry.get("governance_only_validation") is not None:
+        command_set = validation_commands_for_evidence(registry, attestation)
     receipt = create_validation_receipt(
         repository=repository,
         head_sha=reviewed_state.head_sha,
@@ -6171,6 +7283,53 @@ def verify_validation_attestation(
     return _seal_validation_evidence(result, provenance)
 
 
+def verify_enrolled_draft_validation_evidence(
+    authorization: dict[str, Any], *, repository_root: Path | str,
+) -> VerifiedValidationEvidence:
+    """Re-authenticate the exact signed Draft package, topology and derived tree."""
+    from . import enrolled_draft_integration as integration
+    from . import lifecycle_authority, lifecycle_execution
+
+    selected = integration.normalize_authorization(authorization)
+    integration_evidence = selected["evidence"]
+    root = Path(repository_root).resolve(strict=True)
+    head = selected["final_attestation"]["candidate_head_sha"]
+    policy = lifecycle_authority._load_lifecycle_trust_policy(integration_evidence["repository"])
+    signature_policy = lifecycle_execution._source_signature_policy(policy)
+    commit = authenticate_integration_commit(
+        repository_root=root, repository=integration_evidence["repository"], head_sha=head,
+        expected_signer={"kind": "SSH_PRINCIPAL", "identity": integration_evidence["expected_signer"]},
+        signature_policy=signature_policy,
+    )
+    if (
+        commit.tree_sha != integration_evidence["validated_tree_sha"]
+        or list(commit.parent_shas) != integration_evidence["ordered_parent_shas"]
+        or commit.signature_fingerprint != selected["final_attestation"]["signature_fingerprint"]
+        or commit.signature_fingerprint not in {
+            lifecycle_execution._ssh_public_key_fingerprint(key)
+            for key in policy.signers[integration_evidence["expected_signer"]].ssh_public_keys
+        }
+    ):
+        raise SecurityBlocker("enrolled Draft validation candidate topology or signer changed")
+    observed = derive_ready_integration_tree_evidence(root, integration_evidence["ordered_parent_shas"], integration_evidence["validated_tree_sha"], schema_version="1.0", kind=integration.KIND)
+    if observed != integration_evidence["tree_evidence"]:
+        raise SecurityBlocker("enrolled Draft validation tree differs from mechanical integration")
+    raw = _run_integration_commit_git(root, ["cat-file", "commit", head])
+    for name, expected in zip(integration.TRAILERS, (digest_json(integration_evidence), selected["validation_receipt"]["receipt_digest"])):
+        if raw.returncode != 0 or re.findall(rf"^{re.escape(name)}: ([0-9a-f]{{64}})$", raw.stdout, re.MULTILINE) != [expected]:
+            raise SecurityBlocker("enrolled Draft validation signed trailers differ")
+    result = _unregistered_validation_evidence(
+        repository=integration_evidence["repository"], pull_request_number=integration_evidence["pull_request"],
+        head_sha=head, tree_sha=integration_evidence["validated_tree_sha"],
+        validation_receipt_digest=selected["validation_receipt"]["receipt_digest"],
+        final_attestation_digest=selected["final_attestation"]["attestation_digest"],
+        source_validation_evidence_digest=digest_json(integration_evidence), delivery_issue_number=integration_evidence["delivery_issue"],
+    )
+    return _seal_validation_evidence(result, {
+        "kind": integration.KIND, "authorization": selected, "repository_root": str(root),
+    })
+
+
 def is_verified_validation_evidence(value: Any) -> bool:
     """Re-verify canonical provenance instead of trusting caller-held authority."""
 
@@ -6186,11 +7345,11 @@ def is_verified_validation_evidence(value: Any) -> bool:
             or canonical_json_bytes(provenance).decode("utf-8") != raw
         ):
             return False
-        reviewed_state = StableFeedbackState.from_payload(
-            provenance["reviewed_state"]
-        )
         kind = provenance.get("kind")
         if kind == "ORDINARY":
+            reviewed_state = StableFeedbackState.from_payload(
+                provenance["reviewed_state"]
+            )
             verified = _verify_validation_attestation_unsealed(
                 provenance["attestation"],
                 repository=provenance["repository"],
@@ -6206,6 +7365,9 @@ def is_verified_validation_evidence(value: Any) -> bool:
                 delivery_issue_number=provenance.get("delivery_issue_number"),
             )
         elif kind == "READY_INTEGRATION":
+            reviewed_state = StableFeedbackState.from_payload(
+                provenance["reviewed_state"]
+            )
             verified = _verify_ready_integration_attestation_unsealed(
                 provenance["attestation"],
                 repository=provenance["repository"],
@@ -6226,6 +7388,14 @@ def is_verified_validation_evidence(value: Any) -> bool:
                 repository_root=provenance["repository_root"],
                 signature_policy=provenance["signature_policy"],
             )
+        elif kind == "QUALIFIED_REMEDIATION_SUCCESSOR_LOSS":
+            verified = qualified_remediation_successor_loss_validation_evidence(
+                provenance["admission"], provenance["safety_facts"]
+            )
+        elif kind == "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION":
+            verified = verify_enrolled_draft_validation_evidence(
+                provenance["authorization"], repository_root=provenance["repository_root"]
+            )
         else:
             return False
         return _validation_evidence_binding(verified) == _validation_evidence_binding(
@@ -6241,6 +7411,26 @@ def is_verified_validation_evidence(value: Any) -> bool:
         ValueError,
     ):
         return False
+
+
+def verified_ready_integration_review_context(
+    value: Any,
+) -> tuple[StableFeedbackState, str | None]:
+    """Project an authenticated Ready integration's predecessor review context.
+
+    This grants no ordinary candidate-validation authority. Reverification uses
+    the existing integration verifier, including the signed source and tree.
+    """
+
+    if not is_verified_validation_evidence(value):
+        raise SecurityBlocker("validation evidence is not verifier-authenticated")
+    provenance = json.loads(value._verification_seal.provenance_json)
+    if provenance.get("kind") != "READY_INTEGRATION":
+        raise SecurityBlocker("Ready integration validation evidence is required")
+    return (
+        StableFeedbackState.from_payload(provenance["reviewed_state"]),
+        provenance["attestation"].get("eligibility_evidence_digest"),
+    )
 
 
 def verified_validation_review_context(
@@ -6290,7 +7480,7 @@ def verify_commit_signatures(
 ) -> list[dict[str, Any]]:
     if not isinstance(commits, list) or not commits:
         raise SecurityBlocker("commit signature evidence is missing")
-    policy = signature_policy or {"accepted_formats": ["ssh", "openpgp"]}
+    policy = signature_policy or {"accepted_formats": ["ssh"]}
     accepted_formats = policy.get("accepted_formats") if isinstance(policy, dict) else None
     if (
         not isinstance(accepted_formats, list)
@@ -6453,9 +7643,21 @@ def derive_ready_source_recovery_safety_facts(
     parents = tuple(
         _require_oid(item, "Ready-source recovery parent") for item in parent_shas
     ) if isinstance(parent_shas, (list, tuple)) else ()
-    if len(parents) != 1:
+    qualified_loss = (
+        registry.get("qualified_remediation_successor_evidence_loss")
+        if isinstance(registry, dict)
+        else None
+    )
+    if qualified_loss is not None:
+        from . import qualified_remediation_successor_loss as successor_loss
+
+        try:
+            qualified_loss = successor_loss.verify_admission(qualified_loss)
+        except successor_loss.QualifiedRemediationSuccessorLossError as exc:
+            raise SecurityBlocker(str(exc)) from exc
+    if len(parents) != (2 if qualified_loss is not None else 1):
         raise SecurityBlocker(
-            "Ready-source recovery requires the exact sole-parent delivery topology"
+            "Ready-source recovery delivery topology is not admitted"
         )
     base_ref = _require_string(
         expected_base_ref, "Ready-source recovery target base"
@@ -6711,7 +7913,7 @@ def derive_ready_source_recovery_safety_facts(
             raise SecurityBlocker(
                 "Ready-source recovery current-safety profile is invalid"
             )
-        schema_version = "1.1"
+        schema_version = "1.2" if qualified_loss is not None else "1.1"
         validation_execution_origin = (
             "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY"
         )
@@ -6760,7 +7962,13 @@ def derive_ready_source_recovery_safety_facts(
         "fresh_validation_receipt_digest": expected_receipt["receipt_digest"],
         "validation_execution_origin": validation_execution_origin,
     }
-    return {**facts, "safety_facts_digest": digest_json(facts)}
+    result = {**facts, "safety_facts_digest": digest_json(facts)}
+    if qualified_loss is not None:
+        try:
+            successor_loss.verify_safety_binding(qualified_loss, result)
+        except successor_loss.QualifiedRemediationSuccessorLossError as exc:
+            raise SecurityBlocker(str(exc)) from exc
+    return result
 
 
 def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
@@ -6789,6 +7997,7 @@ def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
     origins = {
         "1.0": "MAINTAINED_REGISTERED_EXECUTION",
         "1.1": "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY",
+        "1.2": "ACCEPTED_MAIN_EXACT_SOURCE_CURRENT_SAFETY",
     }
     if (
         version not in origins
@@ -6812,13 +8021,48 @@ def verify_ready_source_recovery_safety_facts(value: Any) -> dict[str, Any]:
         registry=value["policy_binding"], command_set=value["command_set"],
         current_safety_profile=(
             value["policy_binding"].get("ready_source_recovery_current_safety")
-            if version == "1.1" and isinstance(value["policy_binding"], dict)
+            if version in {"1.1", "1.2"}
+            and isinstance(value["policy_binding"], dict)
             else None
         ),
     )
     if derived != value:
         raise SecurityBlocker("Ready-source recovery safety facts are inconsistent")
     return derived
+
+
+def qualified_remediation_successor_loss_validation_evidence(
+    admission: Any, safety_facts: Any,
+) -> VerifiedValidationEvidence:
+    """Seal current evidence only after re-verifying the exact accepted loss case."""
+
+    from . import qualified_remediation_successor_loss as successor_loss
+
+    try:
+        record = successor_loss.verify_admission(admission)
+        safety = verify_ready_source_recovery_safety_facts(safety_facts)
+        successor_loss.verify_safety_binding(record, safety)
+    except successor_loss.QualifiedRemediationSuccessorLossError as exc:
+        raise SecurityBlocker(str(exc)) from exc
+    result = VerifiedValidationEvidence(
+        repository=record["repository"],
+        delivery_issue_number=record["delivery_issue"],
+        pull_request_number=record["pull_request"],
+        head_sha=record["successor"]["head_sha"],
+        tree_sha=record["successor"]["tree_sha"],
+        validation_receipt_digest=safety["fresh_validation_receipt_digest"],
+        source_validation_evidence_digest=safety["safety_facts_digest"],
+        final_attestation_digest=record["admission_digest"],
+        _verification_seal=None,
+    )
+    return _seal_validation_evidence(
+        result,
+        {
+            "kind": "QUALIFIED_REMEDIATION_SUCCESSOR_LOSS",
+            "admission": copy.deepcopy(record),
+            "safety_facts": copy.deepcopy(safety),
+        },
+    )
 
 
 def _verify_classified_findings(

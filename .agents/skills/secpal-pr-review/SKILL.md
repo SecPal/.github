@@ -31,9 +31,15 @@ signed validation receipt and final attestation for the fix commit. The command
 rejects a swapped state file, a non-matching local commit,
 and stale, missing, incomplete, unauthenticated, or differently bound evidence
 before any GitHub read.
+The reviewed state may contain canonical `provider_review_requests`; the
+resolver admits that optional category only through the shared closed Stable
+Feedback verifier. Recovered Ready capture must reauthenticate protected
+`CURRENT` and derive the provider head through the maintained Ready-source
+binding; it never accepts a caller-selected provider head.
 For an eligibility-bound typed Ready integration, also supply the canonical
-integration evidence. The resolver accepts only the closed version-1.2
-integration-resolution attestation and verifies its ordered two-parent
+integration evidence. The resolver requires the eligibility-bound attestation
+selected by the canonical Ready-integration mapping in `fast_path.py` and
+verifies its ordered two-parent
 topology, tree, receipt and integration trailers, signer, reviewed state, and
 eligibility digest through the integration-specific verifier. Never treat a
 historical integration attestation as an ordinary sole-parent attestation.
@@ -135,8 +141,10 @@ only through `scripts/secpal-resolve-fixed-threads.py` with
 `--late-classification-evidence` and `--late-classification-signature`, and the
 same `--integration-evidence` for a Ready-integration source. The
 resolver independently verifies the same
-final evidence, requires the detached SSH/OpenPGP signer to equal the verified
-delivery signer, and fails closed on any artifact, classification, action,
+final evidence, requires the detached SSH signer to equal the verified
+delivery signer for new SecPal artifacts (historical OpenPGP verification
+compatibility grants no new signing authority), and fails closed on any
+artifact, classification, action,
 head, thread, top-level comment, body, reply, resolved, or outdated-state drift.
 The disposition creator computes the classification-evidence digest from the
 verified canonical classification artifact; caller-provided digests and
@@ -146,6 +154,19 @@ for that input shape and read
 [references/late-disposition.schema.json](references/late-disposition.schema.json)
 for the exact artifact shape. This exception consumes no review/remediation
 counter and has no commit, push, CI, Ready, or merge authority.
+
+The exact Issue #1048 unchanged-head external-prerequisite cases are a closed
+member of this late-disposition family, not a general bypass. For only
+`deployment-281` and `operations-51`, use
+`scripts/secpal-create-exact-prerequisite-disposition.py` to reauthenticate the
+original finding, unchanged GitHub-Verified SSH-signed HEAD/TREE, and the exact
+canonical anchor now present on accepted `.github/main`. Its detached SSH
+classification and schema-1.8 disposition bind the authenticated source digest
+and the one named thread. The resolver's `--exact-prerequisite-case` mode accepts
+only that exact signed tuple and repeats the source and thread checks before its
+single named resolution. It grants no commit, push, CI, Ready, review,
+remediation, counter, or merge authority; it does not substitute for ordinary
+commit-bound eligibility or apply to another finding.
 
 For a historical schema-1.1 Ready integration, supply its exact original
 validation receipt as `--final-validation-receipt` to both producers and as
@@ -178,9 +199,9 @@ starting:
 - a clean worktree on the current topic branch with its upstream configured;
 - matching local, remote, and PR head OIDs;
 - an open pull request, an understood base, and an exact explained commit set;
-- locally verified SSH or OpenPGP signatures for user-authored commits, as
-  permitted by the repository registry, plus valid GitHub verification metadata
-  when the registry requires it;
+- locally verified SSH signatures for new SecPal user-authored commits, plus
+  valid GitHub verification metadata when the registry requires it; immutable
+  historical/provider verification compatibility grants no OpenPGP authority;
 - GitHub `verified: true`, `reason: valid` metadata for GitHub-generated
   commits; and
 - one canonical stable-feedback read containing no Required Check results.
@@ -294,8 +315,8 @@ review or rewrite that capture. The maintained ordinary Ready provider-growth
 verifier derives the complete additive delta from the first remediation's
 sealed reviewed state and the candidate remediation's sealed reviewed state.
 It requires protected CURRENT at Review 1/1 and Remediation 1/2, exact H0 to H1
-ordinary lineage, Ready true, Cycle 3 absent, the unique Copilot request and
-review chronology, comment-to-review identity, the first remediation's bound
+ordinary lineage, Ready true, Cycle 3 absent, the complete bounded provider
+assessment, comment-to-review identity, the first remediation's bound
 eligibility for predecessor resolutions, and complete existing ordinary
 eligibility for every added provider thread. Only
 `issue_ready_remediation_provider_growth_authorization` may turn that sealed
@@ -309,13 +330,26 @@ Capture its H1 state only through the read-only
 head from the verifier-created ephemeral projection of protected CURRENT, and
 the authority verifier independently repeats the same capture before issuance.
 
+For a new ordinary Ready delivery whose authenticated CURRENT is still at
+Review 0/1, capture complete terminal provider feedback and invoke
+`python3 scripts/secpal-publish-review-consumption.py --repository OWNER/REPOSITORY --delivery-issue ISSUE --apply`.
+Require independent CURRENT read-back at Review 1/1 before ordinary
+remediation. The publisher consumes one bounded assessment containing every
+qualifying review object, or an authenticated terminal Code/Security provider
+summary when a clean assessment emits no review object. It requests no review.
+When CURRENT is already Review 1/1, preserve that consumed cycle and skip the
+publisher. Historical
+signed review-before-Ready chains remain verification inputs only.
+
 ## Run the finite invocation
 
 The following state machine applies only to the full feedback-remediation path.
 
 1. Create a mode-`0700` temporary session directory. Capture stable feedback
    once with `resolve-batch --capture-reviewed-state`; do not create a Package
-   2.1 or Package 2.2 snapshot in normal mode.
+   2.1 or Package 2.2 snapshot in normal mode. On a new Ready Review 0/1
+   lifecycle, publish and read back `UNRESTRICTED_REVIEW_CONSUMED` through the
+   maintained publisher above before proceeding to remediation.
 2. Split compound comments into stable logical findings and classify every item
    from source, tests, and repository context. Preserve each finding's source
    identity/digest, optional unresolved thread, classification, disposition,

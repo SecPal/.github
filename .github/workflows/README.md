@@ -84,7 +84,7 @@ jobs:
   prettier:
     uses: SecPal/.github/.github/workflows/reusable-prettier.yml@<trusted-commit-sha>
     with:
-      node-version: "22.x" # optional, default: '22.x'
+      node-version: "26.x" # optional, default: '26.x'
       files: "**/*.{md,yml,yaml,json}" # optional
       require-lockfile: false # optional, default: false
 ```
@@ -114,7 +114,7 @@ jobs:
   test:
     uses: SecPal/.github/.github/workflows/reusable-node-test.yml@<trusted-commit-sha>
     with:
-      node-version: "22.x" # optional, default: '22.x'
+      node-version: "26.x" # optional, default: '26.x'
       install-command: "npm ci" # optional
       test-command: "npm test" # optional
 ```
@@ -130,7 +130,7 @@ jobs:
   lint:
     uses: SecPal/.github/.github/workflows/reusable-node-lint.yml@<trusted-commit-sha>
     with:
-      node-version: "22.x" # optional, default: '22.x'
+      node-version: "26.x" # optional, default: '26.x'
       lint-command: "npm run lint" # optional
 ```
 
@@ -145,7 +145,7 @@ jobs:
   build:
     uses: SecPal/.github/.github/workflows/reusable-node-build.yml@<trusted-commit-sha>
     with:
-      node-version: "22.x" # optional, default: '22.x'
+      node-version: "26.x" # optional, default: '26.x'
       build-command: "npm run build" # optional
 ```
 
@@ -212,7 +212,7 @@ jobs:
     uses: SecPal/.github/.github/workflows/reusable-openapi-lint.yml@<trusted-commit-sha>
     with:
       openapi-file: "openapi.yaml" # optional, default: 'openapi.yaml'
-      node-version: "22.x" # optional, default: '22.x'
+      node-version: "26.x" # optional, default: '26.x'
       require-lockfile: false # optional, default: false
 ```
 

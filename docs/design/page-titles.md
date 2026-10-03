@@ -20,14 +20,14 @@ Use the product-name-only fallback when the current route, document, or preview 
 ## Examples
 
 - `Dashboard – SecPal`
-- `Security Briefings – GuardGuide by SecPal`
 - `Acme Security GmbH – Customers – SecPal`
-- `Work Instruction 42 – Instructions – GuardGuide by SecPal`
+- `Incident 42 – Incidents – SecPal`
 - `SecPal`
-- `GuardGuide by SecPal`
 
 ## Product Names
 
-Use the public product name documented in the brand standards. Do not shorten `GuardGuide by SecPal` to `GuardGuide` in browser titles unless the owning product repository documents a route-specific exception.
+Use the exact current public product name documented in the brand standards.
+Short specialist-product references are allowed only where the SecPal
+relationship remains unambiguous.
 
 Avoid adding slogans, environment names, release channels, or tenant names to the global title pattern unless the owning repository has a specific operational reason and keeps the content readable.

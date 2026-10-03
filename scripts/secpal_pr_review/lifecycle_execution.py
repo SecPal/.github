@@ -1,17 +1,18 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Fail-closed execution of authenticated Ready/Draft lifecycle decisions.
+"""Fail-closed execution of Ready/Draft and post-Ready review publication.
 
 Lifecycle orchestration remains the decision authority, lifecycle_authority
 remains the state-machine authority, and lifecycle_publication remains the
 CURRENT/CAS writer.  This module only composes their existing decisions with
-one exact GitHub Ready/Draft mutation and bounded convergence verification.
+one exact GitHub Ready/Draft mutation, review publication, and bounded convergence.
 """
 
 from __future__ import annotations
 
 import base64
 import copy
+from datetime import datetime
 from dataclasses import dataclass
 import hashlib
 import json
@@ -34,7 +35,7 @@ LIVE_PULL_REQUEST_QUERY = r"""
 query LifecycleExecutionPullRequest($owner:String!, $name:String!, $number:Int!) {
   repository(owner:$owner, name:$name) {
     nameWithOwner
-    pullRequest(number:$number) { number state isDraft headRefOid }
+    pullRequest(number:$number) { number state isDraft headRefOid author { login } }
   }
 }
 """
@@ -67,6 +68,7 @@ class LivePullRequest:
     state: str
     head_sha: str
     draft: bool
+    author_login: str | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,300 @@ class LifecycleExecutionResult:
     current_target_verified: bool
     publication_oid: str | None
     publication_digest: str | None
+
+
+def execute_invalid_review_consumption_correction(
+    authorization: Mapping[str, Any],
+    signers: SigningAuthorities,
+) -> publication.VerifiedLifecyclePublication:
+    """Append and publish the one authorized correction without a GitHub write."""
+
+    current = publication.verify_invalid_review_consumption_correction(authorization)
+    raw = current.serialized_lifecycle_evidence
+    if not isinstance(raw, bytes):
+        raise LifecycleExecutionError("authenticated CURRENT evidence is unavailable")
+    try:
+        parsed = authority._load_canonical_json(raw, "CURRENT lifecycle evidence")
+        bundle = (
+            parsed.get("lifecycle_evidence")
+            if isinstance(parsed, dict)
+            and parsed.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
+            else parsed
+        )
+        if not isinstance(bundle, dict):
+            raise authority.LifecycleAuthorityError(
+                "CURRENT lifecycle evidence bundle is malformed"
+            )
+        events = bundle.get("transition_authorizations")
+        snapshots = bundle.get("authority_chain")
+        if not isinstance(events, list) or not isinstance(snapshots, list):
+            raise authority.LifecycleAuthorityError(
+                "CURRENT lifecycle evidence chain is malformed"
+            )
+        policy = authority._load_lifecycle_trust_policy(current.lifecycle.repository)
+        snapshot = authority.issue_lifecycle_authority(
+            predecessor_chain=snapshots,
+            transition_authorizations=events,
+            authorization=authorization,
+            signer_identity=signers.authority_identity,
+            authority_signer=signers.authority_signer,
+            accepted_event_signers=policy.transition_signer_identities,
+            accepted_authority_signers=policy.authority_signer_identities,
+            signature_verifier=authority._policy_signature_verifier(policy),
+        )
+        events.append(copy.deepcopy(dict(authorization)))
+        snapshots.append(snapshot)
+        successor_raw = canonical_json_bytes(parsed)
+        admitted = bundle.get("delivery_initialization")
+        if not isinstance(admitted, dict):
+            raise authority.LifecycleAuthorityError(
+                "native CURRENT initialization is unavailable"
+            )
+        verified = authority._verify_lifecycle_authority_for_journal(
+            successor_raw, admitted_initialization=admitted
+        )
+        expected = copy.deepcopy(current.lifecycle.state)
+        expected["unrestricted_review_count"] = 0
+        if verified.state != expected:
+            raise authority.LifecycleAuthorityError(
+                "correction changed preserved lifecycle state"
+            )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleExecutionError(
+            "exact invalid-review correction could not be derived"
+        ) from exc
+    return publication.advance_current_terminal(
+        successor_raw,
+        signer_identity=signers.publication_identity,
+        signer=signers.publication_signer,
+    )
+
+
+def _current_has_exact_ready_correction(
+    current: publication.VerifiedLifecyclePublication,
+    authorization: Mapping[str, Any],
+) -> bool:
+    raw = current.serialized_lifecycle_evidence
+    if not isinstance(raw, bytes):
+        return False
+    try:
+        parsed = authority._load_canonical_json(raw, "CURRENT lifecycle evidence")
+        bundle = (
+            parsed.get("lifecycle_evidence")
+            if isinstance(parsed, dict)
+            and parsed.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
+            else parsed
+        )
+        events = bundle.get("transition_authorizations")
+    except (authority.LifecycleAuthorityError, AttributeError):
+        return False
+    return (
+        isinstance(events, list)
+        and bool(events)
+        and events[-1] == dict(authorization)
+        and current.lifecycle.state.get("unrestricted_review_count") == 0
+        and current.lifecycle.state.get("draft") is True
+        and current.lifecycle.state.get("ready") is False
+        and current.lifecycle.state.get("ready_transition_count") == 0
+        and current.lifecycle.state.get("ready_history") == []
+    )
+
+
+def _derive_invalid_review_ready_correction_successor(
+    current: publication.VerifiedLifecyclePublication,
+    authorization: Mapping[str, Any],
+    signers: SigningAuthorities,
+) -> bytes:
+    raw = current.serialized_lifecycle_evidence
+    if not isinstance(raw, bytes):
+        raise LifecycleExecutionError("authenticated CURRENT evidence is unavailable")
+    try:
+        parsed = authority._load_canonical_json(raw, "CURRENT lifecycle evidence")
+        bundle = (
+            parsed.get("lifecycle_evidence")
+            if isinstance(parsed, dict)
+            and parsed.get("kind") == authority.PUBLICATION_EVIDENCE_KIND
+            else parsed
+        )
+        if not isinstance(bundle, dict):
+            raise authority.LifecycleAuthorityError(
+                "CURRENT lifecycle evidence bundle is malformed"
+            )
+        events = bundle.get("transition_authorizations")
+        snapshots = bundle.get("authority_chain")
+        if not isinstance(events, list) or not isinstance(snapshots, list):
+            raise authority.LifecycleAuthorityError(
+                "CURRENT lifecycle evidence chain is malformed"
+            )
+        policy = authority._load_lifecycle_trust_policy(current.lifecycle.repository)
+        snapshot = authority.issue_lifecycle_authority(
+            predecessor_chain=snapshots,
+            transition_authorizations=events,
+            authorization=authorization,
+            signer_identity=signers.authority_identity,
+            authority_signer=signers.authority_signer,
+            accepted_event_signers=policy.transition_signer_identities,
+            accepted_authority_signers=policy.authority_signer_identities,
+            signature_verifier=authority._policy_signature_verifier(policy),
+        )
+        events.append(copy.deepcopy(dict(authorization)))
+        snapshots.append(snapshot)
+        successor_raw = canonical_json_bytes(parsed)
+        admitted = bundle.get("delivery_initialization")
+        if not isinstance(admitted, dict):
+            raise authority.LifecycleAuthorityError(
+                "native CURRENT initialization is unavailable"
+            )
+        verified = authority._verify_lifecycle_authority_for_journal(
+            successor_raw, admitted_initialization=admitted
+        )
+        expected = copy.deepcopy(current.lifecycle.state)
+        expected.update(
+            unrestricted_review_count=0,
+            draft=True,
+            ready=False,
+            ready_transition_count=0,
+            ready_history=[],
+        )
+        if verified.state != expected:
+            raise authority.LifecycleAuthorityError(
+                "Ready correction changed preserved lifecycle state"
+            )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleExecutionError(
+            "exact invalid-review-derived Ready correction could not be derived"
+        ) from exc
+    return successor_raw
+
+
+def execute_invalid_review_derived_ready_correction(
+    authorization: Mapping[str, Any],
+    signers: SigningAuthorities,
+    *,
+    ready_correction_conversion: publication.VerifiedReadyCorrectionConversion | None = None,
+) -> publication.VerifiedLifecyclePublication:
+    """Converge one exact unauthorized Ready to Draft, then append compensation."""
+
+    if not isinstance(authorization, Mapping):
+        raise LifecycleExecutionError("Ready correction authorization is malformed")
+    repository = authority._require_repository(authorization.get("repository"))
+    issue = authority._require_positive_int(
+        authorization.get("delivery_issue"), "delivery issue"
+    )
+    current = publication.verify_current_lifecycle_authority(repository, issue)
+    live = _read_live_github(repository, authorization["pull_request"])
+    timeline = publication._observe_pull_request_lifecycle_timeline(
+        repository, authorization["pull_request"]
+    )
+
+    conversion = ready_correction_conversion
+    if live.draft is False and conversion is not None:
+        raise LifecycleExecutionError(
+            "Draft conversion evidence cannot bypass a live Ready correction"
+        )
+    if live.draft is True:
+        try:
+            reconstructed = publication._reconstruct_ready_correction_conversion(
+                authorization, timeline
+            )
+            if conversion is not None:
+                publication._require_ready_correction_conversion(
+                    conversion, authorization, timeline
+                )
+            conversion = reconstructed
+        except publication.LifecyclePublicationError as exc:
+            raise LifecycleExecutionError(str(exc)) from exc
+
+    if _current_has_exact_ready_correction(current, authorization):
+        if (
+            live.repository != repository
+            or live.pull_request != authorization["pull_request"]
+            or live.state != "OPEN"
+            or live.head_sha != authorization["resulting_head_sha"]
+            or live.draft is not True
+        ):
+            raise LifecycleExecutionError(
+                "corrected CURRENT and GitHub Draft state do not converge"
+            )
+        return current
+
+    eligible = publication.verify_invalid_review_derived_ready_correction(
+        authorization, conversion=conversion
+    )
+    if not _same_publication(current, eligible):
+        raise LifecycleExecutionError("CURRENT changed before Ready correction")
+    if (
+        live.repository != repository
+        or live.pull_request != authorization["pull_request"]
+        or live.state != "OPEN"
+        or live.head_sha != authorization["resulting_head_sha"]
+        or not isinstance(live.draft, bool)
+    ):
+        raise LifecycleExecutionError("GitHub is not the exact unauthorized Ready target")
+    if conversion is None:
+        before = timeline
+        publication._require_bound_github_ready_event(before, authorization)
+        try:
+            outcome = _write_live_github(
+                repository, authorization["pull_request"], "READY_TO_DRAFT"
+            )
+        except Exception:
+            outcome = "AMBIGUOUS"
+        if outcome not in {"SUCCESS", "AMBIGUOUS"}:
+            raise LifecycleExecutionError("GitHub mutation returned unknown semantics")
+
+        live_after = _read_live_github(repository, authorization["pull_request"])
+        after = publication._observe_pull_request_lifecycle_timeline(
+            repository, authorization["pull_request"]
+        )
+        if (
+            live_after.repository != repository
+            or live_after.pull_request != authorization["pull_request"]
+            or live_after.state != "OPEN"
+            or live_after.head_sha != authorization["resulting_head_sha"]
+            or live_after.draft is not True
+        ):
+            raise LifecycleExecutionError(
+                "GitHub Draft correction read-back is incomplete"
+            )
+        try:
+            conversion = publication._authenticate_ready_correction_conversion(
+                authorization=authorization, before=before, after=after
+            )
+        except publication.LifecyclePublicationError as exc:
+            raise LifecycleExecutionError(str(exc)) from exc
+
+    current = publication.verify_current_lifecycle_authority(repository, issue)
+    if not _same_publication(current, eligible):
+        raise LifecycleExecutionError("CURRENT changed before correction publication")
+    successor = _derive_invalid_review_ready_correction_successor(
+        current, authorization, signers
+    )
+    published = publication.advance_current_terminal(
+        successor,
+        signer_identity=signers.publication_identity,
+        signer=signers.publication_signer,
+        ready_correction_conversion=conversion,
+    )
+    observed = publication.verify_current_lifecycle_authority(repository, issue)
+    if not _same_publication(published, observed):
+        raise LifecycleExecutionError(
+            "correction publication response differs from verified CURRENT"
+        )
+    final_live = _read_live_github(repository, authorization["pull_request"])
+    final_timeline = publication._observe_pull_request_lifecycle_timeline(
+        repository, authorization["pull_request"]
+    )
+    if (
+        final_live.repository != repository
+        or final_live.pull_request != authorization["pull_request"]
+        or final_live.state != "OPEN"
+        or final_live.head_sha != authorization["resulting_head_sha"]
+        or final_live.draft is not True
+        or final_timeline != conversion.before + (conversion.event,)
+    ):
+        raise LifecycleExecutionError("final GitHub/CURRENT correction is not exact")
+    return observed
 
 
 CurrentReader = Callable[[str, int], publication.VerifiedLifecyclePublication]
@@ -165,6 +461,181 @@ def _validate_live_pull_request(
     ):
         raise LifecycleExecutionError("live GitHub pull-request identity or state changed")
     return observed
+
+
+def _review_consumption_scope(
+    current: publication.VerifiedLifecyclePublication,
+    live: LivePullRequest,
+    feedback: fast_path.StableFeedbackState,
+    timeline: tuple[publication.GitHubPullRequestTimelineEvent, ...],
+    *,
+    provider_summary_body: str | None = None,
+) -> dict[str, Any]:
+    """Bind the sole independent post-Ready review to authenticated CURRENT."""
+
+    lifecycle = current.lifecycle
+    try:
+        authority.require_forward_transition(
+            lifecycle.state, "UNRESTRICTED_REVIEW_CONSUMED", "0" * 64,
+            allow_adopted_observations=(
+                lifecycle.historical_proof_mode == authority.EXACT_ADOPTION_PROOF_MODE
+            ),
+        )
+        author = authority._require_github_login(live.author_login, "PR author")
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecycleExecutionError("review consumption is not eligible") from exc
+    if (
+        live.repository != lifecycle.repository
+        or live.pull_request != lifecycle.pull_request
+        or live.state != "OPEN"
+        or live.draft is not False
+        or live.head_sha != lifecycle.head_sha
+        or feedback.repository != lifecycle.repository
+        or feedback.pull_request_number != lifecycle.pull_request
+        or feedback.head_sha != lifecycle.head_sha
+        or feedback.pr_state != "OPEN"
+    ):
+        raise LifecycleExecutionError("review consumption does not match live Ready CURRENT")
+    ready_events = [item for item in timeline if item.kind == "READY_FOR_REVIEW"]
+    draft_events = [item for item in timeline if item.kind == "CONVERT_TO_DRAFT"]
+    raw = current.serialized_lifecycle_evidence
+    try:
+        if not isinstance(raw, bytes):
+            raise LifecycleExecutionError("CURRENT evidence is unavailable")
+        parsed = authority._load_canonical_json(raw, "CURRENT lifecycle evidence")
+        bundle = parsed.get("lifecycle_evidence", parsed)
+        events = bundle["transition_authorizations"]
+        correction_count = sum(
+            event["transition_kind"] == "INVALID_REVIEW_DERIVED_READY_CORRECTED"
+            for event in events
+        )
+    except (KeyError, TypeError, authority.LifecycleAuthorityError) as exc:
+        raise LifecycleExecutionError("CURRENT Ready correction history is malformed") from exc
+    if (
+        not ready_events
+        or len(ready_events)
+        != lifecycle.state["ready_transition_count"] + correction_count
+    ):
+        raise LifecycleExecutionError("review consumption has no exact Ready chronology")
+    try:
+        ready_at = datetime.fromisoformat(ready_events[-1].created_at.replace("Z", "+00:00"))
+        if ready_at.tzinfo is None:
+            raise ValueError("Ready timestamp lacks timezone")
+        if draft_events:
+            draft_at = datetime.fromisoformat(
+                draft_events[-1].created_at.replace("Z", "+00:00")
+            )
+            if draft_at.tzinfo is None or draft_at >= ready_at:
+                raise LifecycleExecutionError("review consumption has no current Ready event")
+        requests = feedback.feedback.get("provider_review_requests", [])
+        if len(requests) > 1:
+            raise LifecycleExecutionError("review cycle spans multiple provider requests")
+        if requests:
+            requested_at = datetime.fromisoformat(
+                requests[0]["created_at"].replace("Z", "+00:00")
+            )
+            if requested_at.tzinfo is None or requested_at <= ready_at:
+                raise LifecycleExecutionError("review request is outside the Ready cycle")
+        reviews = []
+        for review in feedback.feedback["reviews"]:
+            submitted_at = review.get("submitted_at")
+            if not isinstance(submitted_at, str):
+                if review.get("state") in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}:
+                    raise LifecycleExecutionError("submitted review lacks chronology")
+                continue
+            submitted = datetime.fromisoformat(submitted_at.replace("Z", "+00:00"))
+            actor = review.get("actor")
+            login = actor.get("login") if isinstance(actor, dict) else None
+            if submitted.tzinfo is None:
+                raise ValueError("review timestamp lacks timezone")
+            if submitted <= ready_at:
+                continue
+            if review.get("state") not in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}:
+                continue
+            # Stable Feedback still binds every observed review. Only an
+            # independent review of this Ready head belongs to the finite
+            # lifecycle review cycle.
+            if review.get("commit_oid") != lifecycle.head_sha or login == author:
+                continue
+            if not isinstance(login, str):
+                raise LifecycleExecutionError("review cycle has no reviewer identity")
+            authority._require_github_login(login, "reviewer")
+            reviews.append(review)
+    except (ValueError, TypeError, authority.LifecycleAuthorityError) as exc:
+        raise LifecycleExecutionError("review chronology is malformed") from exc
+    if any(
+        item.get("transition_kind") == "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED"
+        for item in events
+    ):
+        raise LifecycleExecutionError("one bounded independent Ready-head review cycle is required")
+    summary_cycle: dict[str, Any] | None = None
+    if not reviews:
+        if provider_summary_body is None or requests:
+            raise LifecycleExecutionError(
+                "one bounded independent Ready-head review cycle is required"
+            )
+        fast_path.verify_codex_provider_summary(
+            provider_summary_body,
+            head_sha=lifecycle.head_sha,
+            repository=lifecycle.repository,
+            pull_request_number=lifecycle.pull_request,
+        )
+        matching_summaries = [
+            comment
+            for comment in feedback.feedback["conversation_comments"]
+            if comment["body_digest"] == fast_path.digest_text(provider_summary_body)
+            and comment["actor"]["login"] == "chatgpt-codex-connector"
+        ]
+        if len(matching_summaries) != 1:
+            raise LifecycleExecutionError(
+                "terminal provider summary is not bound to Stable Feedback"
+            )
+        try:
+            summary_at = datetime.fromisoformat(
+                matching_summaries[0]["updated_at"].replace("Z", "+00:00")
+            )
+            if summary_at.tzinfo is None or summary_at <= ready_at:
+                raise ValueError("provider summary predates Ready")
+        except (TypeError, ValueError) as exc:
+            raise LifecycleExecutionError(
+                "terminal provider summary is outside the Ready cycle"
+            ) from exc
+        summary_cycle = {
+            "kind": "TERMINAL_PROVIDER_ASSESSMENT",
+            "comment_node_id": matching_summaries[0]["node_id"],
+            "body_digest": matching_summaries[0]["body_digest"],
+            "updated_at": matching_summaries[0]["updated_at"],
+        }
+    if requests and not any(
+        review["actor"] == requests[0]["requested_reviewer"]
+        and datetime.fromisoformat(review["submitted_at"].replace("Z", "+00:00"))
+        > requested_at
+        for review in reviews
+    ):
+        raise LifecycleExecutionError("requested provider has no later Ready-head review")
+    if len({review["node_id"] for review in reviews}) != len(reviews):
+        raise LifecycleExecutionError("review cycle repeats a review identity")
+    cycle = [
+        {
+            "node_id": review["node_id"],
+            "body_digest": review["body_digest"],
+            "actor": review["actor"],
+            "state": review["state"],
+            "commit_oid": review["commit_oid"],
+            "submitted_at": review["submitted_at"],
+        }
+        for review in sorted(reviews, key=lambda item: (item["submitted_at"], item["node_id"]))
+    ]
+    if summary_cycle is not None:
+        cycle.append(summary_cycle)
+    return {
+        "pull_request": lifecycle.pull_request,
+        "head_sha": lifecycle.head_sha,
+        "ready_event_node_id": ready_events[-1].node_id,
+        "review_cycle": cycle,
+        "review_cycle_digest": authority.digest_json(cycle),
+        "feedback_state_digest": feedback.state_digest,
+    }
 
 
 def _is_exact_predecessor(
@@ -246,10 +717,14 @@ def _validate_transition_delta(
             serialized_authorization,
             event_id=transition.event_id,
             operation=authorization["operation"],
-            expected_scope={
-                "pull_request": authorization["pull_request"],
-                "head_sha": authorization["head_sha"],
-            },
+            expected_scope=(
+                authorization["scope"]
+                if authorization["operation"] == "UNRESTRICTED_REVIEW_CONSUMED"
+                else {
+                    "pull_request": authorization["pull_request"],
+                    "head_sha": authorization["head_sha"],
+                }
+            ),
             observed=predecessor,
             lifecycle=predecessor.lifecycle,
             verifier=orchestration._verify_user_authorization,
@@ -428,7 +903,7 @@ def _append_successor_evidence(
         )
     except authority.LifecycleAuthorityError as exc:
         raise LifecycleExecutionError("exact lifecycle successor could not be derived") from exc
-    expected_state = _derive_transition_state(
+    expected_state = _authorize_transition_state(
         predecessor.lifecycle, authorization["operation"], event["event_digest"]
     )
     if (
@@ -462,6 +937,21 @@ def _derive_transition_state(
         transition_kind,
         event_digest,
         allow_adopted_observations=adopted,
+    )
+
+
+def _authorize_transition_state(
+    lifecycle: authority.VerifiedLifecycleAuthority,
+    transition_kind: str,
+    event_digest: str,
+) -> dict[str, Any]:
+    adopted = lifecycle.historical_proof_mode == authority.EXACT_ADOPTION_PROOF_MODE
+    return authority.require_forward_transition(
+        lifecycle.state,
+        transition_kind,
+        event_digest,
+        allow_adopted_observations=adopted,
+        adoption_review_submitted=lifecycle.adoption_review_submitted,
     )
 
 
@@ -659,6 +1149,10 @@ def _read_live_github(repository: str, pull_request: int) -> LivePullRequest:
         state=observed_pr.get("state"),
         head_sha=observed_pr.get("headRefOid"),
         draft=observed_pr.get("isDraft"),
+        author_login=(
+            observed_pr.get("author", {}).get("login")
+            if isinstance(observed_pr.get("author"), dict) else None
+        ),
     )
 
 
@@ -840,6 +1334,8 @@ def _authenticate_source_commit(
     repository: str,
     head_sha: str,
     signer_identity: str,
+    *,
+    repository_root: Path | str = Path.cwd(),
 ) -> fast_path.AuthenticatedIntegrationCommit:
     try:
         policy = authority._load_lifecycle_trust_policy(repository)
@@ -863,7 +1359,7 @@ def _authenticate_source_commit(
     for expected_signer in expected:
         try:
             candidate = fast_path.authenticate_integration_commit(
-                repository_root=Path.cwd(),
+                repository_root=repository_root,
                 repository=repository,
                 head_sha=head_sha,
                 expected_signer=expected_signer,
@@ -1580,6 +2076,100 @@ def _execute_lifecycle_transition(
         publication_attempts=publication_attempts,
         github_verified=True, current_verified=True, current=final_current,
     )
+
+
+def publish_review_consumption(
+    repository: str, delivery_issue: int
+) -> publication.VerifiedLifecyclePublication:
+    """Publish the authenticated independent review after ordinary Ready."""
+
+    repository = authority._require_repository(repository)
+    delivery_issue = authority._require_positive_int(delivery_issue, "delivery issue")
+    current = publication.verify_current_lifecycle_authority(repository, delivery_issue)
+    lifecycle = current.lifecycle
+    live = _read_live_github(repository, lifecycle.pull_request)
+    feedback = orchestration._capture_current_stable_feedback(
+        repository, lifecycle.pull_request, capture_provider_summary=True
+    )
+    timeline = publication._observe_pull_request_lifecycle_timeline(
+        repository, lifecycle.pull_request
+    )
+    scope = _review_consumption_scope(
+        current, live, feedback, timeline,
+        provider_summary_body=getattr(feedback, "provider_summary_body", None),
+    )
+
+    policy = authority._load_lifecycle_trust_policy(repository)
+    signer_identity = _single_role_identity(
+        policy.transition_signer_identities, "transition signer role"
+    )
+    signers = _production_signing_authorities(repository, signer_identity)
+    authorization_raw = orchestration.create_user_authorization(
+        authorization_id=f"review:{scope['review_cycle_digest']}",
+        repository=repository,
+        delivery_issue=delivery_issue,
+        lifecycle=lifecycle,
+        publication_oid=current.publication_oid,
+        publication_digest=current.publication_digest,
+        operation="UNRESTRICTED_REVIEW_CONSUMED",
+        reason="Record the authenticated independent post-Ready review",
+        scope=scope,
+        signer_identity=signers.transition_identity,
+        signer=signers.transition_signer,
+    )
+    authorization = orchestration._verify_user_authorization(
+        authorization_raw, current, lifecycle
+    )
+    successor = _append_successor_evidence(current, authorization, signers)
+
+    before = publication.verify_current_lifecycle_authority(repository, delivery_issue)
+    latest_feedback = orchestration._capture_current_stable_feedback(
+        repository, lifecycle.pull_request, capture_provider_summary=True
+    )
+    latest_scope = _review_consumption_scope(
+        before,
+        _read_live_github(repository, lifecycle.pull_request),
+        latest_feedback,
+        publication._observe_pull_request_lifecycle_timeline(
+            repository, lifecycle.pull_request
+        ),
+        provider_summary_body=getattr(latest_feedback, "provider_summary_body", None),
+    )
+    if not _same_publication(before, current) or latest_scope != scope:
+        raise LifecycleExecutionError("review or CURRENT changed before publication")
+    publication_failure: publication.LifecyclePublicationAmbiguousWrite | None = None
+    try:
+        published = publication.advance_current_terminal(
+            successor,
+            signer_identity=signers.publication_identity,
+            signer=signers.publication_signer,
+        )
+    except publication.LifecyclePublicationAmbiguousWrite as exc:
+        # A protected CAS can succeed even when the transport reports failure.
+        # The same exact-successor proof used by Ready/Draft execution decides
+        # whether this one-shot review publication completed.
+        published = None
+        publication_failure = exc
+    readback = publication.verify_current_lifecycle_authority(repository, delivery_issue)
+    if _same_publication(readback, before):
+        if publication_failure is not None:
+            raise LifecycleExecutionError(
+                "review publication remains pending"
+            ) from publication_failure
+        raise LifecycleExecutionError("review publication remains pending")
+    transition = _authenticate_target(
+        readback, authorization_raw, authorization,
+        publication._verify_historical_lifecycle_transition,
+    )
+    if (
+        (published is not None and not _same_publication(published, readback))
+        or transition.successor.serialized_lifecycle_evidence != successor
+        or readback.lifecycle.state["unrestricted_review_count"] != 1
+        or readback.lifecycle.state["ready"] is not True
+        or readback.lifecycle.head_sha != lifecycle.head_sha
+    ):
+        raise LifecycleExecutionError("review publication read-back is not exact")
+    return readback
 
 
 def execute_lifecycle_transition(

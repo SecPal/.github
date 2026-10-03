@@ -5,7 +5,10 @@ SPDX-License-Identifier: CC0-1.0
 
 # Navigation
 
-SecPal and GuardGuide use top navigation as the default application shell. Navigation should help users understand product location, current context, available modules, and next actions without creating repository-specific routing rules in these shared standards.
+SecPal-family application surfaces use top navigation as the default shell.
+Navigation should help users understand product location, current context,
+available modules, and next actions without creating repository-specific routing
+rules in these shared standards.
 
 ## Desktop Pattern
 

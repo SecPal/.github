@@ -55,9 +55,14 @@ bad_internal_domain="cache.${domain_namespace}.internal"
 bad_development_suffix="${domain_namespace}.dev.example"
 bad_direct_development="foo.${domain_namespace}.dev"
 approved_public_io="${domain_namespace}.io"
+approved_repository_remote="https://github.com/SecPal/${domain_namespace}.app.git"
 approved_reverse_identifier="io.${domain_namespace}.polyscope.preview"
 bad_reverse_identifier="dev.${domain_namespace}.polyscope.preview"
 reverse_identifier_as_host="io.${domain_namespace}.attacker.example"
+lifecycle_config_identifier="${domain_namespace}.lifecycleSigningCredential"
+pre_enrollment_protocol_identifier="${domain_namespace}.pre-enrollment-current-safety"
+libre_application_identifier="app.${domain_namespace}.libre"
+dpc_application_identifier="io.${domain_namespace}.dpc"
 
 if [ ! -f "$SCRIPT" ]; then
   echo "Missing scripts/check-domains.sh" >&2
@@ -193,6 +198,8 @@ EOF
 printf '%s\n' \
   "Owned public domain: https://$approved_public_io" \
   "Approved reverse-DNS identifier: $approved_reverse_identifier" \
+  "Global Git key: \`$lifecycle_config_identifier\`" \
+  "Current-safety execution identity: \`$pre_enrollment_protocol_identifier/v1\`" \
   >>"$workspace/guardguide.md"
 
 set +e
@@ -253,6 +260,39 @@ assert_domain_policy_case() {
   fi
 }
 
+# ADR-026 application identities are identifiers, never newly approved hosts.
+for application_identifier in "$libre_application_identifier" "$dpc_application_identifier"; do
+  assert_domain_policy_case "an inline application identity" accept "$application_identifier" \
+    "| USER/WORK | \`$application_identifier\` |"
+  assert_domain_policy_case "an application identity beside an approved URL" accept "$application_identifier" \
+    "Use \`$application_identifier\` with https://secpal.io"
+  assert_domain_policy_case "an application identity without identifier context" reject "$application_identifier" \
+    "Bad: $application_identifier"
+  assert_domain_policy_case "an application identity with an unclosed code span" reject "$application_identifier" \
+    "Bad: \`$application_identifier"
+  assert_domain_policy_case "an inline application identity beside a raw occurrence" reject "$application_identifier" \
+    "Mixed: \`$application_identifier\` and $application_identifier"
+  assert_domain_policy_case "an application identity used as a URL inside code" reject "$application_identifier" \
+    "Bad application ID: \`https://$application_identifier\`"
+  assert_domain_policy_case "an unapproved application-identity suffix" reject "$application_identifier.example" \
+    "Bad: \`$application_identifier.example\`"
+
+  rm "$workspace/domain-policy-case.md"
+  printf '%s\n' "value=\`$application_identifier\`" >"$workspace/domain-policy-case.sh"
+  set +e
+  (cd "$workspace" && bash scripts/check-domains.sh >output.txt 2>&1)
+  application_code_exit=$?
+  set -e
+  if [ "$application_code_exit" -eq 0 ] || ! grep -Fq "$application_identifier" "$workspace/output.txt"; then
+    cat "$workspace/output.txt"
+    echo "check-domains.sh must reject application inline-code syntax outside Markdown" >&2
+    domain_policy_regression_failures=$((domain_policy_regression_failures + 1))
+  fi
+  rm "$workspace/domain-policy-case.sh"
+done
+assert_domain_policy_case "an explicitly contextual DPC application ID" accept "$dpc_application_identifier" \
+  "Android application ID: $dpc_application_identifier"
+
 assert_domain_policy_case \
   "secpal.dev with an appended suffix" \
   reject \
@@ -278,6 +318,71 @@ assert_domain_policy_case \
   reject \
   "$bad_reverse_identifier" \
   "Bad identifier: $bad_reverse_identifier"
+assert_domain_policy_case \
+  "the lifecycle config identifier used as a web host" \
+  reject \
+  "$lifecycle_config_identifier" \
+  "Bad: https://$lifecycle_config_identifier"
+assert_domain_policy_case \
+  "the lifecycle config identifier after an unclosed inline-code delimiter" \
+  reject \
+  "$lifecycle_config_identifier" \
+  "Bad: \`$lifecycle_config_identifier"
+assert_domain_policy_case \
+  "a valid inline identifier followed by an unclosed occurrence" \
+  reject \
+  "$lifecycle_config_identifier" \
+  "Mixed: \`$lifecycle_config_identifier\` and \`$lifecycle_config_identifier"
+assert_domain_policy_case \
+  "a complete inline identifier beside an unrelated approved URL" \
+  accept \
+  "$lifecycle_config_identifier" \
+  "Use \`$lifecycle_config_identifier\` with https://secpal.io"
+assert_domain_policy_case \
+  "the exact GitHub repository remote used by lifecycle publication" \
+  accept \
+  "$approved_repository_remote" \
+  "publication_remote_url: $approved_repository_remote"
+assert_domain_policy_case \
+  "a lookalike repository remote suffix" \
+  reject \
+  "${domain_namespace}.app.git.evil" \
+  "publication_remote_url: ${approved_repository_remote}.evil"
+for suffix in /evil '?ref=evil' '#evil'; do
+  assert_domain_policy_case \
+    "a repository remote with a URI continuation" \
+    reject \
+    "${domain_namespace}.app.git" \
+    "publication_remote_url: ${approved_repository_remote}${suffix}"
+done
+assert_domain_policy_case \
+  "an unrelated repository remote beside the approved one" \
+  reject \
+  "${domain_namespace}.app.git" \
+  "publication_remote_url: $approved_repository_remote https://example.invalid/SecPal/${domain_namespace}.app.git"
+
+printf '%s\n' "credential=\`$lifecycle_config_identifier\`" \
+  >"$workspace/domain-policy-case.sh"
+rm "$workspace/domain-policy-case.md"
+set +e
+(
+  cd "$workspace"
+  bash scripts/check-domains.sh >output.txt 2>&1
+)
+non_markdown_exit_code=$?
+set -e
+if [ "$non_markdown_exit_code" -eq 0 ] \
+  || ! grep -Fq "$lifecycle_config_identifier" "$workspace/output.txt"; then
+  cat "$workspace/output.txt"
+  echo "check-domains.sh must reject inline-code syntax outside Markdown" >&2
+  domain_policy_regression_failures=$((domain_policy_regression_failures + 1))
+fi
+rm "$workspace/domain-policy-case.sh"
+assert_domain_policy_case \
+  "the pre-enrollment protocol identifier without identifier context" \
+  reject \
+  "$pre_enrollment_protocol_identifier" \
+  "Bad: $pre_enrollment_protocol_identifier"
 assert_domain_policy_case \
   "a reverse-DNS identifier used as a public URL" \
   reject \

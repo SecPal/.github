@@ -44,6 +44,15 @@
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/.github"],
       "reviewer_identities": [],
+      "qualified_remediation_successor_evidence_loss_policy": {
+        "path": "policies/qualified-remediation-successor-evidence-loss.json",
+        "admission_digest": "6dda7969b7f064548c6474abd895322b697ba5f2f22d960351db43318df45f94"
+      },
+      "governance_amendment_policy": {
+        "path": "policies/governance-amendment-bootstrap.json",
+        "kind": "SECPAL_GOVERNANCE_AMENDMENT_AUTHORIZATION",
+        "purpose": "EXACT_ZERO_RECEIPT_PRE_ENROLLMENT_BOOTSTRAP"
+      },
       "focused_validation": [
         {
           "argv": ["python3", "-m", "unittest", "tests/secpal-resolve-fixed-threads-unit.py"],
@@ -74,6 +83,11 @@
           "argv": ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
           "working_directory": ".",
           "purpose": "Run persistent lifecycle-authority unit tests"
+        },
+        {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-app-352-loss-admission-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run exact secpal.app admission current-safety regressions"
         },
         {
           "argv": ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
@@ -124,6 +138,11 @@
           "argv": ["./tests/secpal-pr-review-skill-integration.sh"],
           "working_directory": ".",
           "purpose": "Run fake-GitHub and temporary-HOME integration tests"
+        },
+        {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-enrolled-draft-integration-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run enrolled initial Draft current-main integration regressions"
         }
       ],
       "required_local_validation": [
@@ -158,6 +177,12 @@
           "purpose": "Validate REUSE metadata"
         }
       ],
+      "complete_validation_preparation": {
+        "kind": "NPM_CI_LOCKED",
+        "working_directory": ".",
+        "package_manifest": "package.json",
+        "lockfile": "package-lock.json"
+      },
       "final_eligibility_absence_recoveries": [
         {
           "schema_version": "1.0",
@@ -182,7 +207,7 @@
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "pre_enrollment_integration_policy": {
         "schema_version": "1.0",
@@ -197,7 +222,7 @@
       },
       "lifecycle_authority_policy": {
         "schema_version": "1.0",
-        "accepted_formats": ["ssh", "openpgp"],
+        "accepted_formats": ["ssh"],
         "signers": [
           {
             "identity": "aroviqen@secpal.app",
@@ -372,6 +397,29 @@
             ],
             "validation_result_digest": "dc9895751a3922a3396b50e8e0e0333e2afd6e993e799ba86925c374e5e701fc",
             "admission_digest": "23171459163f9e9b3bd8b4299ec141395b74cdddf6bd9b2691e1e06de8bde93b"
+          },
+          {
+            "schema_version": "1.0",
+            "kind": "BOOTSTRAP_SOURCE_ADMISSION",
+            "subtype": "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION_SOURCE",
+            "repository": "SecPal/.github",
+            "delivery_issue": 1014,
+            "pull_request": 1015,
+            "source_head_sha": "b0f60b83d70188dde1e43aaaf201521864bd3b3a",
+            "source_tree_sha": "e1b28bc3daf0b791b0ec511f52c6d978f222df25",
+            "source_parent_sha": "7bd8bcfccb0aa71a195985a432c21e90b7ac2a8e",
+            "validation_receipt_digest": "9277afd5f80c0b434e8949fa7d9400f1f697890b0292e60f8a8822f022f3f630",
+            "final_attestation_digest": "86e7da78186244fa05e93acbbb4472903ca20079604858fefba299c11eff60fa",
+            "source_signer_identity": "aroviqen@secpal.app",
+            "implementation_path": "scripts/secpal_pr_review/fast_path.py",
+            "implementation_blob_oid": "a070833bd135daf99d5919e954cbf5e84d3eb5a3",
+            "entrypoint": "authenticate_pre_enrollment_adoption",
+            "purpose": "PRE_ENROLLMENT_ADOPTION_AUTHENTICATION",
+            "source_pr_state": "OPEN",
+            "source_pr_draft": false,
+            "source_base_ref": "main",
+            "policy_source": "ACCEPTED_MAIN_REPOSITORY_REGISTRY",
+            "admission_digest": "d9dcc088442fda8b190c05660b0d8ba9d04aa653cecef535bde6f72489833b26"
           }
         ],
         "historical_compatibility_publications": [
@@ -461,10 +509,22 @@
       "maximum_items": 10000,
       "maximum_threads": 500,
       "maximum_comments": 200,
-      "maximum_reactions": 50
+      "maximum_reactions": 50,
+      "enrolled_draft_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-enrolled-draft",
+        "topology_kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      }
     },
     {
       "repository": "SecPal/api",
+      "governance_only_validation": "API_RUNTIME_INSTRUCTIONS",
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/api"],
       "reviewer_identities": [],
@@ -484,7 +544,7 @@
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "check_policy": {
         "require_ruleset_evidence": true,
@@ -583,7 +643,7 @@
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "check_policy": {
         "require_ruleset_evidence": true,
@@ -631,10 +691,43 @@
           "purpose": "Run documented contract lint and formatting validation"
         }
       ],
+      "lifecycle_authority_policy": {
+        "schema_version": "1.0",
+        "accepted_formats": ["ssh"],
+        "signers": [
+          {
+            "identity": "aroviqen@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDDKiPWdlHKFaHJL+GQ3EQRs9St95lITw217D17rZ2qB"
+            ],
+            "openpgp_fingerprints": []
+          },
+          {
+            "identity": "lifecycle-legacy-adoption@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH2v+HkwUVduXOuLQONPPHAfEUT+NmEVMtp7JZMrnzrn"
+            ],
+            "openpgp_fingerprints": []
+          }
+        ],
+        "transition_signer_identities": ["aroviqen@secpal.app"],
+        "authority_signer_identities": ["aroviqen@secpal.app"],
+        "publication_signer_identities": ["aroviqen@secpal.app"],
+        "genesis_admission_signer_identities": ["aroviqen@secpal.app"],
+        "legacy_adoption_signer_identities": ["lifecycle-legacy-adoption@secpal.app"],
+        "publication_branch": "refs/heads/secpal-lifecycle-publications",
+        "publication_remote_url": "https://github.com/SecPal/contracts.git",
+        "publication_ruleset_id": 23668089,
+        "publication_required_rules": ["deletion", "non_fast_forward"],
+        "bootstrap_genesis_repairs": [],
+        "bootstrap_source_admissions": [],
+        "historical_compatibility_publications": [],
+        "delivery_initializations": []
+      },
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "check_policy": {
         "require_ruleset_evidence": true,
@@ -704,7 +797,7 @@
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "check_policy": {
         "require_ruleset_evidence": true,
@@ -715,130 +808,6 @@
         "Native Gradle compilation is required when affected but remains a manual gate because local Android toolchain availability is environment-dependent.",
         "Do not sync Capacitor, access devices, build signed artifacts, deploy, or run live WebView tests."
       ],
-      "unsupported_operations": [
-        "REVIEW_REQUEST",
-        "READY_TRANSITION",
-        "LABEL",
-        "ISSUE",
-        "REVIEW_SUBMISSION",
-        "MERGE",
-        "AUTO_MERGE",
-        "COMMENT_DELETE",
-        "REVIEW_DISMISSAL",
-        "BRANCH_WRITE"
-      ],
-      "maximum_api_calls": 200,
-      "maximum_items": 10000,
-      "maximum_threads": 500,
-      "maximum_comments": 200,
-      "maximum_reactions": 50
-    },
-    {
-      "repository": "SecPal/GuardGuide",
-      "default_branch": "main",
-      "allowed_base_repositories": ["SecPal/GuardGuide"],
-      "reviewer_identities": [],
-      "focused_validation": [
-        {
-          "argv": ["npm", "run", "test:frontend"],
-          "working_directory": ".",
-          "purpose": "Run frontend unit tests"
-        }
-      ],
-      "required_local_validation": [
-        {
-          "argv": ["composer", "ci:check"],
-          "working_directory": ".",
-          "purpose": "Run the documented PHP and frontend static CI checks"
-        },
-        {
-          "argv": ["npm", "run", "test"],
-          "working_directory": ".",
-          "purpose": "Run frontend tests and production build"
-        }
-      ],
-      "signature_policy": {
-        "require_github_verified": true,
-        "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
-      },
-      "check_policy": {
-        "require_ruleset_evidence": true,
-        "require_branch_protection_evidence": true,
-        "expected_skipped": "block"
-      },
-      "manual_gates": [
-        "Select focused Laravel tests from the finding when backend behavior changes.",
-        "Do not run setup migrations, serve processes, queues, deployment, or environment-connected validation."
-      ],
-      "unsupported_operations": [
-        "REVIEW_REQUEST",
-        "READY_TRANSITION",
-        "LABEL",
-        "ISSUE",
-        "REVIEW_SUBMISSION",
-        "MERGE",
-        "AUTO_MERGE",
-        "COMMENT_DELETE",
-        "REVIEW_DISMISSAL",
-        "BRANCH_WRITE"
-      ],
-      "maximum_api_calls": 200,
-      "maximum_items": 10000,
-      "maximum_threads": 500,
-      "maximum_comments": 200,
-      "maximum_reactions": 50
-    },
-    {
-      "repository": "SecPal/guardguide.de",
-      "default_branch": "main",
-      "allowed_base_repositories": ["SecPal/guardguide.de"],
-      "reviewer_identities": [],
-      "focused_validation": [
-        {
-          "argv": ["npm", "run", "test"],
-          "working_directory": ".",
-          "purpose": "Run deterministic Node tests"
-        }
-      ],
-      "required_local_validation": [
-        {
-          "argv": ["npm", "run", "format:check"],
-          "working_directory": ".",
-          "purpose": "Check formatting"
-        },
-        {
-          "argv": ["npm", "run", "check"],
-          "working_directory": ".",
-          "purpose": "Run Astro checks"
-        },
-        {
-          "argv": ["npm", "run", "lint"],
-          "working_directory": ".",
-          "purpose": "Run ESLint"
-        },
-        {
-          "argv": ["npm", "run", "test"],
-          "working_directory": ".",
-          "purpose": "Run deterministic tests"
-        },
-        {
-          "argv": ["npm", "run", "build"],
-          "working_directory": ".",
-          "purpose": "Build the static site"
-        }
-      ],
-      "signature_policy": {
-        "require_github_verified": true,
-        "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
-      },
-      "check_policy": {
-        "require_ruleset_evidence": true,
-        "require_branch_protection_evidence": true,
-        "expected_skipped": "block"
-      },
-      "manual_gates": ["Do not deploy or validate against a live site."],
       "unsupported_operations": [
         "REVIEW_REQUEST",
         "READY_TRANSITION",
@@ -896,10 +865,43 @@
           "purpose": "Build the static site"
         }
       ],
+      "lifecycle_authority_policy": {
+        "schema_version": "1.0",
+        "accepted_formats": ["ssh"],
+        "signers": [
+          {
+            "identity": "aroviqen@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDDKiPWdlHKFaHJL+GQ3EQRs9St95lITw217D17rZ2qB"
+            ],
+            "openpgp_fingerprints": []
+          },
+          {
+            "identity": "lifecycle-legacy-adoption@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH2v+HkwUVduXOuLQONPPHAfEUT+NmEVMtp7JZMrnzrn"
+            ],
+            "openpgp_fingerprints": []
+          }
+        ],
+        "transition_signer_identities": ["aroviqen@secpal.app"],
+        "authority_signer_identities": ["aroviqen@secpal.app"],
+        "publication_signer_identities": ["aroviqen@secpal.app"],
+        "genesis_admission_signer_identities": ["aroviqen@secpal.app"],
+        "legacy_adoption_signer_identities": ["lifecycle-legacy-adoption@secpal.app"],
+        "publication_branch": "refs/heads/secpal-lifecycle-publications",
+        "publication_remote_url": "https://github.com/SecPal/secpal.app.git",
+        "publication_ruleset_id": 24267563,
+        "publication_required_rules": ["deletion", "non_fast_forward"],
+        "bootstrap_genesis_repairs": [],
+        "bootstrap_source_admissions": [],
+        "historical_compatibility_publications": [],
+        "delivery_initializations": []
+      },
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "check_policy": {
         "require_ruleset_evidence": true,
@@ -930,6 +932,17 @@
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/deployment"],
       "reviewer_identities": [],
+      "pre_enrollment_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-pre-enrollment-draft",
+        "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      },
       "focused_validation": [
         {
           "argv": ["./scripts/local-integration.sh"],
@@ -948,11 +961,11 @@
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
-        "accepted_formats": ["ssh", "openpgp"]
+        "accepted_formats": ["ssh"]
       },
       "lifecycle_authority_policy": {
         "schema_version": "1.0",
-        "accepted_formats": ["ssh", "openpgp"],
+        "accepted_formats": ["ssh"],
         "signers": [
           {
             "identity": "aroviqen@secpal.app",
@@ -1007,7 +1020,18 @@
       "maximum_items": 10000,
       "maximum_threads": 500,
       "maximum_comments": 200,
-      "maximum_reactions": 50
+      "maximum_reactions": 50,
+      "enrolled_draft_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-enrolled-draft",
+        "topology_kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      }
     }
   ]
 }

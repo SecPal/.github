@@ -45,15 +45,34 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--expected-head", required=True)
     parser.add_argument("--final-reviewed-state", required=True)
     parser.add_argument("--expected-final-reviewed-state-digest", required=True)
-    parser.add_argument("--final-validation-evidence", required=True)
+    parser.add_argument("--final-validation-evidence")
     parser.add_argument("--final-validation-receipt")
     parser.add_argument("--final-eligibility-evidence")
     parser.add_argument("--integration-evidence")
+    parser.add_argument("--ready-source-recovery-publication")
     parser.add_argument("--classification-evidence", required=True)
     parser.add_argument("--classification-signature", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--signature-output", required=True)
     arguments = parser.parse_args(argv)
+    if arguments.ready_source_recovery_publication is not None:
+        if any(
+            value is not None
+            for value in (
+                arguments.final_validation_evidence,
+                arguments.final_validation_receipt,
+                arguments.final_eligibility_evidence,
+                arguments.integration_evidence,
+            )
+        ):
+            parser.error(
+                "--ready-source-recovery-publication rejects incompatible source evidence"
+            )
+        return arguments
+    if arguments.final_validation_evidence is None:
+        parser.error(
+            "--final-validation-evidence is required without Ready-source recovery"
+        )
     if (
         arguments.integration_evidence is not None
         and arguments.final_eligibility_evidence is None
@@ -96,6 +115,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             integration_evidence_path=arguments.integration_evidence,
             integration_validation_receipt_path=(
                 arguments.final_validation_receipt
+            ),
+            ready_source_recovery_publication_oid=(
+                arguments.ready_source_recovery_publication
             ),
         )
     except resolver.ResolutionError as exc:

@@ -28,7 +28,7 @@ assert_payload_has_context() {
   local payload="$1"
   local expected="$2"
 
-  if ! jq -e --arg expected "$expected" '.strict == false and (.checks | any(.context == $expected))' >/dev/null <<<"$payload"; then
+  if ! jq -e --arg expected "$expected" '(.checks | any(.context == $expected))' >/dev/null <<<"$payload"; then
     echo "Expected payload to require '$expected'" >&2
     echo "$payload" >&2
     exit 1
@@ -38,9 +38,10 @@ assert_payload_has_context() {
 assert_payload_contexts_equal() {
   local payload="$1"
   local expected="$2"
+  local expected_strict="$3"
 
-  if ! jq -e --argjson expected "$expected" '
-    .strict == false and
+  if ! jq -e --argjson expected "$expected" --argjson expected_strict "$expected_strict" '
+    .strict == $expected_strict and
     (.checks | length) == ($expected | length) and
     ([.checks[].context] | length) == ([.checks[].context] | unique | length) and
     ($expected | length) == ($expected | unique | length) and
@@ -71,7 +72,7 @@ duplicate_payload='{
   ]
 }'
 duplicate_contexts='["duplicate", "duplicate"]'
-if (assert_payload_contexts_equal "$duplicate_payload" "$duplicate_contexts") >/dev/null 2>&1; then
+if (assert_payload_contexts_equal "$duplicate_payload" "$duplicate_contexts" false) >/dev/null 2>&1; then
   echo "Exact payload assertion must reject duplicate payload and expected contexts" >&2
   exit 1
 fi
@@ -220,7 +221,9 @@ declare -A payloads
 for expected_repo in "${expected_repositories[@]}"; do
   payloads["$expected_repo"]="$(bash "$SYNC_SCRIPT" --repo "$expected_repo" --print-payload)"
   expected_contexts="$(jq -c --arg repo "$expected_repo" '.[$repo]' <<<"$EXPECTED_CONTEXTS_JSON")"
-  assert_payload_contexts_equal "${payloads[$expected_repo]}" "$expected_contexts"
+  expected_strict=false
+  [[ "$expected_repo" == ".github" ]] && expected_strict=true
+  assert_payload_contexts_equal "${payloads[$expected_repo]}" "$expected_contexts" "$expected_strict"
 done
 
 # The bare 'CodeQL' context is only emitted by .github (its CodeQL Applicability
@@ -490,7 +493,7 @@ remediation_failures=0
 expected_status_endpoint='repos/SecPal/.github/branches/main/protection/required_status_checks'
 expected_status_payload="$(
   jq -c '{
-    strict: false,
+    strict: true,
     checks: [
       .checks[]
       | {
@@ -503,7 +506,7 @@ expected_status_payload="$(
 expected_status_log="$(printf 'GET\t%s\t-\nPATCH\t%s\t%s' \
   "$expected_status_endpoint" "$expected_status_endpoint" "$expected_status_payload")"
 if [[ "$(<"$status_log")" != "$expected_status_log" ]]; then
-  echo "FAIL-FIRST F1: status apply must GET live state and PATCH only strict while preserving mixed bindings" >&2
+  echo "FAIL-FIRST F1: status apply must preserve .github strict mode and mixed check bindings" >&2
   cat "$status_log" >&2
   remediation_failures=$((remediation_failures + 1))
 fi

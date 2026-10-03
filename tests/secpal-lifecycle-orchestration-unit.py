@@ -10,6 +10,7 @@ import copy
 import base64
 import hashlib
 import inspect
+import importlib.util
 import json
 import subprocess
 import sys
@@ -837,13 +838,17 @@ class CurrentIdentityFixtures(unittest.TestCase):
                 replacement_pull_request=None, initialization_evidence_digest=initialization["initialization_digest"],
                 signer_identity=self.identity, signer=self.sign,
             )
-            snapshot = authority.issue_lifecycle_authority(
-                predecessor_chain=snapshots, transition_authorizations=events, authorization=event,
-                signer_identity=self.identity, authority_signer=self.sign,
-                accepted_event_signers=self.policy.transition_signer_identities,
-                accepted_authority_signers=self.policy.authority_signer_identities,
-                signature_verifier=authority._policy_signature_verifier(self.policy),
-            )
+            # Reconstruct this accepted historical recovery chain exactly.
+            with mock.patch.object(
+                authority, "require_forward_transition", side_effect=authority.derive_state
+            ):
+                snapshot = authority.issue_lifecycle_authority(
+                    predecessor_chain=snapshots, transition_authorizations=events, authorization=event,
+                    signer_identity=self.identity, authority_signer=self.sign,
+                    accepted_event_signers=self.policy.transition_signer_identities,
+                    accepted_authority_signers=self.policy.authority_signer_identities,
+                    signature_verifier=authority._policy_signature_verifier(self.policy),
+                )
             events.append(event)
             snapshots.append(snapshot)
             head = resulting
@@ -1694,6 +1699,121 @@ def ordinary_ready_provider_growth() -> tuple[
     return reviewed, current, predecessor_eligibility, eligibility
 
 
+def multi_provider_ready_growth() -> tuple[
+    fast_path.StableFeedbackState,
+    fast_path.StableFeedbackState,
+    dict[str, object],
+    dict[str, object],
+    str,
+]:
+    """Model the two actual H1 review providers and four parented findings."""
+
+    reviewed, current, predecessor_eligibility, eligibility = (
+        ordinary_ready_provider_growth()
+    )
+    reviewed.head_sha = "ff85970362d3cd889e6418ba34b69930506e9b0d"
+    current.head_sha = "79f0467d70ec0933f063fb3587144b49483bfefd"
+    reviewed.pull_request_number = current.pull_request_number = 1041
+    summary = (
+        '<!-- codex-pull-request-review-summary -->\n'
+        '<!-- codex-security-review:v1 {"headSha":"'
+        + current.head_sha
+        + '","pullRequestNumber":1041,"repository":"SecPal/.github",'
+        '"status":"completed"} -->\n'
+        '| Review | Status | Commit | Review trigger |\n'
+        '| --- | --- | --- | --- |\n'
+        '| 📝 **Code Review** | **Completed** | `79f0467` | Ready |\n'
+        '| 🔒 **Security Review** | **Completed** | `79f0467` | Ready |'
+    )
+    summary_id = current.feedback["conversation_comments"][0]["node_id"]
+    current.feedback["conversation_comments"][0].update(
+        body_digest=fast_path.digest_text(summary),
+        updated_at="2026-10-01T16:25:59Z",
+    )
+    current.feedback["provider_review_requests"][0]["created_at"] = (
+        "2026-10-01T16:16:20Z"
+    )
+    copilot = copy.deepcopy(fast_path.COPILOT_REVIEW_PROVIDER)
+    codex = {
+        "login": fast_path.CODEX_PROVIDER_LOGIN,
+        "node_id": "BOT_kgDOC98s_g",
+        "database_id": 199175422,
+    }
+    review_specs = (
+        ("PRR_kwDOQFR1MM8AAAABQM7SJA", 5382263332, copilot, "2026-10-01T16:21:50Z"),
+        ("PRR_kwDOQFR1MM8AAAABQM8Q6g", 5382279402, codex, "2026-10-01T16:23:11Z"),
+    )
+    current.feedback["reviews"] = [
+        {
+            "node_id": review_id,
+            "body_digest": fast_path.digest_text(review_id),
+            "actor": actor,
+            "state": "COMMENTED",
+            "commit_oid": current.head_sha,
+            "submitted_at": submitted_at,
+            "reactions": [],
+        }
+        for review_id, database_id, actor, submitted_at in review_specs
+    ]
+    findings = (
+        ("PRRT_kwDOQFR1MM6oCOfs", "PRRC_kwDOQFR1MM730xZk", 0),
+        ("PRRT_kwDOQFR1MM6oCQoX", "PRRC_kwDOQFR1MM7300qJ", 1),
+        ("PRRT_kwDOQFR1MM6oCQof", "PRRC_kwDOQFR1MM7300qQ", 1),
+        ("PRRT_kwDOQFR1MM6oCQos", "PRRC_kwDOQFR1MM7300qh", 1),
+    )
+    current.feedback["threads"] = [current.feedback["threads"][0]] + [
+        {
+            "node_id": thread_id,
+            "is_resolved": False,
+            "is_outdated": False,
+            "comments": [
+                {
+                    "node_id": comment_id,
+                    "body_digest": fast_path.digest_text(comment_id),
+                    "actor": copy.deepcopy(review_specs[review_index][2]),
+                    "review_id": review_specs[review_index][0],
+                    "reply_to_id": None,
+                    "reactions": [],
+                }
+            ],
+        }
+        for thread_id, comment_id, review_index in findings
+    ]
+    reviewed.refresh_digests()
+    current.refresh_digests()
+    current.review_database_ids = [
+        {"node_id": review_id, "database_id": database_id}
+        for review_id, database_id, _actor, _submitted_at in review_specs
+    ]
+    predecessor_eligibility.update(
+        pull_request_number=1041,
+        reviewed_head_sha=reviewed.head_sha,
+        reviewed_state_digest=reviewed.state_digest,
+    )
+    eligibility.update(
+        pull_request_number=1041,
+        reviewed_head_sha=current.head_sha,
+        reviewed_state_digest=current.state_digest,
+        eligible_threads=[
+            {
+                "thread_id": thread_id,
+                "classification": "VALID_ACTIONABLE",
+                "disposition": "CORRECTED_AND_VERIFIED",
+                "finding_ids": [comment_id],
+                "evidence_digest": f"{index:x}" * 64,
+                "follow_up": None,
+            }
+            for index, (thread_id, comment_id, _review_index) in enumerate(
+                findings, 1
+            )
+        ],
+    )
+    assert summary_id in {
+        item["node_id"] for item in reviewed.feedback["conversation_comments"]
+    }
+    return reviewed, current, predecessor_eligibility, eligibility, summary
+
+
 def _provider_terminal_summary(head_sha: str) -> str:
     return (
         "<!-- codex-pull-request-review-summary -->\n"
@@ -1823,7 +1943,574 @@ def _provider_feedback_response(
             }
         }
     }
+def first_fallback_growth():
+    """Replay the live GitHub timeline shape with an exact current-head review."""
+    reviewed, current, predecessor, eligibility, summary = multi_provider_ready_growth()
+    current.feedback["reviews"] = [v for v in current.feedback["reviews"] if v["actor"] == fast_path.CODEX_REVIEW_PROVIDER]
+    review = current.feedback["reviews"][0]
+    review["body_digest"] = fast_path.digest_text("### 💡 Codex Review\n\n**Reviewed commit:** `" + current.head_sha[:10] + "`")
+    current.review_database_ids = [v for v in current.review_database_ids if v["node_id"] == review["node_id"]]
+    current.feedback["threads"] = [current.feedback["threads"][0]] + current.feedback["threads"][2:]
+    eligibility["eligible_threads"] = eligibility["eligible_threads"][1:]
+    summary = summary.replace("| Ready |", "| Manual request |")
+    summary_id = current.feedback["conversation_comments"][0]["node_id"]
+    current.feedback["conversation_comments"][0]["body_digest"] = fast_path.digest_text(summary)
+    actor = {"__typename": "User", "login": "aroviqen", "id": "U_kgDOD9_SfQ", "databaseId": 266326653}
+    codex = {"__typename": "Bot", "login": fast_path.CODEX_REVIEW_PROVIDER["login"], "id": fast_path.CODEX_REVIEW_PROVIDER["node_id"], "databaseId": fast_path.CODEX_REVIEW_PROVIDER["database_id"]}
+    def comment(node, database, body, created, updated, author):
+        return {"__typename": "IssueComment", "id": node, "databaseId": database, "body": body,
+                "createdAt": created, "updatedAt": updated, "author": copy.deepcopy(author), "userContentEdits": {"nodes": [], "pageInfo": {"hasNextPage": False}}}
+    nodes = [
+        {"__typename": "PullRequestCommit", "id": "PURC_H0", "commit": {"oid": reviewed.head_sha, "committedDate": "2026-10-01T14:00:00Z"}},
+        {"__typename": "ReadyForReviewEvent", "id": "RFRE_READY", "createdAt": "2026-10-01T15:00:00Z", "actor": actor},
+        comment(summary_id, 1, summary, "2026-10-01T15:01:00Z", "2026-10-01T16:25:59Z", codex),
+        {"__typename": "PullRequestCommit", "id": "PURC_H1", "commit": {"oid": current.head_sha, "committedDate": "2026-10-01T15:02:00Z"}},
+        comment("IC_CODE_FIRST", 2, "@codex review", "2026-10-01T16:00:00Z", "2026-10-01T16:00:00Z", actor),
+        comment("IC_SECURITY_FIRST", 3, "@codex security review", "2026-10-01T16:01:00Z", "2026-10-01T16:01:00Z", actor),
+        {"__typename": "PullRequestReview", "id": review["node_id"], "databaseId": current.review_database_ids[0]["database_id"],
+         "body": "### 💡 Codex Review\n\n**Reviewed commit:** `" + current.head_sha[:10] + "`",
+         "submittedAt": review["submitted_at"], "state": "COMMENTED", "commit": {"oid": current.head_sha}, "author": codex},
+        comment("IC_SECURITY_RESULT", 4, "### 🛡️ Codex Security Review\n\nNo security issues were found in this pull request.\n\n**Reviewed commit:** `" + current.head_sha[:10] + "`", "2026-10-01T16:24:00Z", "2026-10-01T16:24:00Z", codex),
+    ]
+    summary_node = nodes[2]
+    original = summary.replace(current.head_sha, reviewed.head_sha).replace(current.head_sha[:7], reviewed.head_sha[:7])
+    summary_node["userContentEdits"]["nodes"] = [
+        {"id": "UCE_FINAL", "editedAt": summary_node["updatedAt"], "deletedAt": None, "diff": summary, "editor": codex},
+        {"id": "UCE_ORIGINAL", "editedAt": summary_node["createdAt"], "deletedAt": None, "diff": original, "editor": codex},
+    ]
+    raw = {"data": {"repository": {"nameWithOwner": current.repository, "pullRequest": {
+        "number": current.pull_request_number, "state": "OPEN", "isDraft": False,
+        "headRefOid": current.head_sha, "headRefName": "topic", "author": actor,
+        "timelineItems": {"nodes": nodes, "pageInfo": {"hasNextPage": False}},
+    }}}}
+    first_fallback_feedback(current, raw)
+    eligibility["reviewed_state_digest"] = current.state_digest
+    current.provider_summary_body = summary
+    lifecycle = current_lifecycle(head_sha=current.head_sha, remediation_cycles=1, pull_request=current.pull_request_number, delivery_issue=1072)
+    publication_context = publication.VerifiedLifecyclePublication("1" * 40, "2" * 64, "refs/heads/secpal-lifecycle-publications", None, None, lifecycle)
+    return reviewed, current, predecessor, eligibility, summary, publication_context, raw
+
+
+def first_fallback_feedback(current, raw):
+    """Normalize test transport independently through the Stable Feedback seam."""
+    pull = raw["data"]["repository"]["pullRequest"]
+    current.feedback["conversation_comments"] = [
+        {"node_id": v["id"], "body_digest": fast_path.digest_text(v["body"]),
+         "actor": {"login": v["author"]["login"], "node_id": v["author"]["id"], "database_id": v["author"]["databaseId"]},
+         "updated_at": v["updatedAt"], "reactions": []}
+        for v in pull["timelineItems"]["nodes"] if v["__typename"] == "IssueComment"
+    ]
+    for node in pull["timelineItems"]["nodes"]:
+        if node["__typename"] == "IssueComment" and node.get("userContentEdits", {}).get("nodes"):
+            latest = max(node["userContentEdits"]["nodes"], key=lambda v: v["editedAt"])
+            if latest["editedAt"] == node["updatedAt"]:
+                latest["diff"] = node["body"]
+    current.refresh_digests()
+
+
+def first_fallback_push(raw):
+    pull = raw["data"]["repository"]["pullRequest"]
+    return {"id": "123456", "type": "PushEvent", "created_at": "2026-10-01T15:02:00Z", "repo": {"name": raw["data"]["repository"]["nameWithOwner"], "id": 42}, "actor": {"login": pull["author"]["login"], "id": pull["author"]["databaseId"]}, "payload": {"repository_id": 42, "push_id": 123456, "ref": "refs/heads/" + pull["headRefName"], "head": pull["headRefOid"], "before": "a" * 40}}
+
+
+def first_fallback_observation(raw):
+    from scripts.secpal_pr_review import provider_acquisition as acquisition
+    observed = acquisition._normalize_observation(raw)
+    observed["head_publication"] = acquisition._select_head_publication([first_fallback_push(raw)], observed)
+    return observed
+
+
+class FirstFallbackAcquisitionTests(TestCase):
+    def test_read_only_first_fallback_owner_exists_without_replacement_interface(self):
+        from scripts.secpal_pr_review import provider_acquisition
+
+        self.assertEqual(provider_acquisition.PROVIDER_OBSERVATION_WINDOW.total_seconds(), 1800)
+        for name in ("authenticate_claim_eligibility", "write_claimed_replacement", "reconcile_claimed_replacement"):
+            self.assertFalse(hasattr(provider_acquisition, name))
+
+
+    def authenticate(self, current, publication_context, raw, review_type=None):
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        observed = first_fallback_observation(raw)
+        with mock.patch.object(acquisition, "_observe", return_value=observed), mock.patch.object(
+            publication, "verify_current_lifecycle_authority", return_value=publication_context
+        ), mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=current):
+            if review_type is not None:
+                return acquisition.authenticate_first_fallback_acquisition(publication_context, current, review_type)
+            return acquisition.authenticate_first_fallback_acquisitions(publication_context, current)
+
+    def growth(self, fixture, acquired):
+        reviewed, current, predecessor, eligibility, summary, _, _ = fixture
+        return fast_path.verify_ordinary_ready_remediation_provider_growth(
+            reviewed, current, provider_head_sha=reviewed.head_sha,
+            predecessor_eligibility_evidence=predecessor, eligibility_evidence=eligibility,
+            provider_summary_body=summary, review_database_ids=current.review_database_ids,
+            first_fallback_acquisitions=acquired,
+        )
+
+    def test_server_head_arrival_starts_the_window(self):
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        _, current, _, _, _, context, raw = first_fallback_growth()
+        observed = first_fallback_observation(raw)
+        observed["head_publication"]["created_at"] = "2026-10-01T15:59:00Z"
+        with mock.patch.object(acquisition, "_observe", return_value=observed), mock.patch.object(publication, "verify_current_lifecycle_authority", return_value=context), mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=current), self.assertRaises(fast_path.SecurityBlocker):
+            acquisition.authenticate_first_fallback_acquisitions(context, current)
+
+    def test_historical_summary_startup_cannot_hide_behind_late_completion(self):
+        _, current, _, _, summary, context, raw = first_fallback_growth()
+        nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+        comment = next(v for v in nodes if fast_path.CODEX_REVIEW_SUMMARY_MARKER in v.get("body", ""))
+        nodes.remove(comment)
+        comment["createdAt"] = "2026-10-01T15:03:00Z"
+        nodes.insert(3, comment)
+        comment["userContentEdits"] = {"nodes": [
+            {"id": "UCE_FINAL", "editedAt": comment["updatedAt"], "deletedAt": None, "diff": summary, "editor": comment["author"]},
+            {"id": "UCE_ORIGINAL", "editedAt": comment["createdAt"], "deletedAt": None, "diff": summary.replace("Completed", "Running"), "editor": comment["author"]},
+        ], "pageInfo": {"hasNextPage": False}}
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.authenticate(current, context, raw)
+
+    def test_edited_earlier_request_remains_consumed(self):
+        _, current, _, _, _, context, raw = first_fallback_growth()
+        nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+        earlier = copy.deepcopy(next(v for v in nodes if v["id"] == "IC_CODE_FIRST"))
+        earlier.update(id="IC_EARLIER", databaseId=99, body="withdrawn", createdAt="2026-10-01T15:50:00Z", updatedAt="2026-10-01T15:55:00Z")
+        earlier["userContentEdits"] = {"nodes": [
+            {"id": "UCE_WITHDRAWN", "editedAt": earlier["updatedAt"], "deletedAt": None, "diff": "withdrawn", "editor": earlier["author"]},
+            {"id": "UCE_REQUEST", "editedAt": earlier["createdAt"], "deletedAt": None, "diff": "@codex review", "editor": earlier["author"]},
+        ], "pageInfo": {"hasNextPage": False}}
+        nodes.insert(4, earlier)
+        first_fallback_feedback(current, raw)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.authenticate(current, context, raw)
+
+    def test_database_ids_are_scoped_to_resource_type(self):
+        _, current, _, _, _, context, raw = first_fallback_growth()
+        nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+        next(v for v in nodes if v["id"] == "IC_CODE_FIRST")["databaseId"] = current.review_database_ids[0]["database_id"]
+        self.authenticate(current, context, raw)
+
+    def test_complete_full_timeline_page_is_accepted(self):
+        _, current, _, _, _, context, raw = first_fallback_growth()
+        nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+        prototype = copy.deepcopy(next(v for v in nodes if v["id"] == "IC_CODE_FIRST"))
+        extras = [{**copy.deepcopy(prototype), "id": f"IC_OTHER_{i}", "databaseId": 100+i, "body": "ordinary discussion", "createdAt": "2026-10-01T14:30:00Z", "updatedAt": "2026-10-01T14:30:00Z"} for i in range(100-len(nodes))]
+        nodes[1:1] = extras
+        first_fallback_feedback(current, raw)
+        self.authenticate(current, context, raw)
+
+    def test_head_publication_observation_fails_closed_and_is_read_only(self):
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        _, _, _, _, _, _, raw = first_fallback_growth()
+        observed = acquisition._normalize_observation(raw)
+        push = first_fallback_push(raw)
+        for change in (lambda v: v["repo"].update(name="SecPal/api"), lambda v: v["actor"].update(id=99), lambda v: v.update(created_at="not-a-timestamp"), lambda v: v["payload"].update(push_id=True)):
+            altered = copy.deepcopy(push)
+            change(altered)
+            with self.assertRaises(fast_path.SecurityBlocker):
+                acquisition._select_head_publication([altered], observed)
+        for change in (lambda v: v["payload"].update(ref="refs/heads/other"), lambda v: v["payload"].update(head="f" * 40)):
+            altered = copy.deepcopy(push)
+            change(altered)
+            self.assertIsNone(acquisition._select_head_publication([altered], observed))
+        with self.assertRaises(fast_path.SecurityBlocker):
+            acquisition._select_head_publication([push, copy.deepcopy(push)], observed)
+        response = SimpleNamespace(returncode=0, stdout="[]")
+        with mock.patch.object(publication, "_run_gh", return_value=response) as run, self.assertRaises(fast_path.SecurityBlocker):
+            acquisition._observe_head_publication(observed)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0][:4], ["api", "--hostname", "github.com", "repos/SecPal/.github/events?per_page=100&page=1"])
+        full_page = [{"type": "WatchEvent"} for _ in range(100)]
+        with mock.patch.object(publication, "_run_gh", side_effect=[SimpleNamespace(returncode=0, stdout=json.dumps(full_page)), SimpleNamespace(returncode=0, stdout=json.dumps([push]))]) as run:
+            result = acquisition._observe_head_publication(observed)
+        self.assertEqual(result["created_at"], push["created_at"])
+        self.assertEqual(run.call_count, 2)
+
+    def test_incomplete_deleted_or_substituted_content_history_rejects(self):
+        for label in ("truncated", "missing original", "deleted", "null content", "wrong editor", "wrong latest", "duplicate edit"):
+            with self.subTest(label=label):
+                _, current, _, _, _, context, raw = first_fallback_growth()
+                nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+                comment = next(v for v in nodes if v.get("userContentEdits", {}).get("nodes"))
+                history = comment["userContentEdits"]
+                if label == "truncated": history["pageInfo"]["hasNextPage"] = True
+                elif label == "missing original": history["nodes"].pop()
+                elif label == "deleted": history["nodes"][1]["deletedAt"] = "2026-10-01T15:30:00Z"
+                elif label == "null content": history["nodes"][1]["diff"] = None
+                elif label == "wrong editor": history["nodes"][1]["editor"] = copy.deepcopy(raw["data"]["repository"]["pullRequest"]["author"])
+                elif label == "wrong latest": history["nodes"][0]["diff"] = "substituted"
+                else: history["nodes"].append(copy.deepcopy(history["nodes"][0]))
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    self.authenticate(current, context, raw)
+
+    def test_initial_code_only_summary_version_does_not_invent_security_startup(self):
+        _, current, _, _, _, context, raw = first_fallback_growth()
+        comment = next(v for v in raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"] if v.get("userContentEdits", {}).get("nodes"))
+        original = comment["userContentEdits"]["nodes"][-1]
+        original["diff"] = "\n".join(line for line in original["diff"].splitlines() if "**Security Review**" not in line)
+        self.authenticate(current, context, raw)
+
+    def test_both_first_fallbacks_admit_complete_codex_only_growth(self):
+        fixture = first_fallback_growth()
+        _, current, _, eligibility, _, context, raw = fixture
+        acquired = self.authenticate(current, context, raw)
+        self.assertEqual(tuple(v.review_type for v in acquired.acquisitions), ("CODE", "SECURITY"))
+        self.assertEqual(tuple(v.request_database_id for v in acquired.acquisitions), (2, 3))
+        growth = self.growth(fixture, acquired)
+        self.assertEqual(growth.finding_ids, tuple(sorted(v["finding_ids"][0] for v in eligibility["eligible_threads"])))
+        self.assertEqual(growth.assessment_head_sha, current.head_sha)
+        self.assertEqual(len(growth.provider_review_bindings), 1)
+
+    def test_each_first_acquisition_verifies_independently_at_the_exact_boundary(self):
+        for kind, node, other in (("CODE", "IC_CODE_FIRST", "IC_SECURITY_FIRST"), ("SECURITY", "IC_SECURITY_FIRST", "IC_CODE_FIRST")):
+            with self.subTest(kind=kind):
+                fixture = list(first_fallback_growth())
+                _, current, _, eligibility, _, context, raw = fixture
+                nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+                nodes[:] = [v for v in nodes if v["id"] != other]
+                request = next(v for v in nodes if v["id"] == node)
+                request.update(createdAt="2026-10-01T15:32:00Z", updatedAt="2026-10-01T15:32:00Z")
+                first_fallback_feedback(current, raw)
+                eligibility["reviewed_state_digest"] = current.state_digest
+                acquired = self.authenticate(current, context, raw, review_type=kind)
+                self.assertEqual(tuple(v.review_type for v in acquired.acquisitions), (kind,))
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    self.growth(fixture, acquired)
+
+    def test_real_codex_summary_fractional_result_timestamps_are_normalized(self):
+        _, current, _, _, summary, context, raw = first_fallback_growth()
+        summary = summary.replace("**Completed** | `", '✅ **Completed** <relative-time datetime="2026-10-01T16:23:11.487606Z">2026-10-01T16:23:11.487606Z</relative-time> | `')
+        nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+        next(v for v in nodes if fast_path.CODEX_REVIEW_SUMMARY_MARKER in v.get("body", ""))["body"] = summary
+        first_fallback_feedback(current, raw)
+        acquired = self.authenticate(current, context, raw)
+        self.assertEqual(tuple(v.review_type for v in acquired.acquisitions), ("CODE", "SECURITY"))
+
+    def test_public_observation_normalizes_live_representation_without_writes(self):
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        _, current, _, _, _, _, raw = first_fallback_growth()
+        with mock.patch.object(publication, "_run_gh", side_effect=[SimpleNamespace(returncode=0, stdout=json.dumps(raw)), SimpleNamespace(returncode=0, stdout=json.dumps([first_fallback_push(raw)]))]) as run:
+            observed = acquisition._observe(current.repository, current.pull_request_number)
+        self.assertEqual(observed, first_fallback_observation(raw))
+        command = run.call_args_list[0].args[0]
+        self.assertEqual(command[:4], ["api", "--hostname", "github.com", "graphql"])
+        self.assertNotIn("mutation", " ".join(command).lower())
+
+    def test_database_identity_substitution_and_arbitrary_transport_reject(self):
+        fixture = first_fallback_growth()
+        _, current, _, _, _, context, raw = fixture
+        acquired = self.authenticate(current, context, raw)
+        current.review_database_ids[0]["database_id"] += 1
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "database identity was substituted"):
+            self.growth(fixture, acquired)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.growth(first_fallback_growth(), None)
+
+    def test_current_and_complete_live_capture_are_independently_reauthenticated(self):
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        _, current, _, _, _, context, raw = first_fallback_growth()
+        observed = first_fallback_observation(raw)
+        for wrong in (replace(context, publication_oid="f" * 40), replace(context, publication_digest="f" * 64)):
+            with mock.patch.object(publication, "verify_current_lifecycle_authority", return_value=wrong), self.assertRaises(fast_path.SecurityBlocker):
+                acquisition.authenticate_first_fallback_acquisitions(context, current)
+        changed = copy.deepcopy(current)
+        changed.feedback["threads"].pop()
+        changed.refresh_digests()
+        with mock.patch.object(publication, "verify_current_lifecycle_authority", return_value=context), mock.patch.object(acquisition, "_observe", return_value=observed), mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=changed), self.assertRaises(fast_path.SecurityBlocker):
+            acquisition.authenticate_first_fallback_acquisitions(context, current)
+        with mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=[context, replace(context, publication_oid="f" * 40)]), mock.patch.object(acquisition, "_observe", return_value=observed), mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=current), self.assertRaises(fast_path.SecurityBlocker):
+            acquisition.authenticate_first_fallback_acquisitions(context, current)
+
+    def test_codex_only_form_does_not_fabricate_a_copilot_request(self):
+        fixture = list(first_fallback_growth())
+        reviewed, current, predecessor, eligibility, _, context, raw = fixture
+        reviewed.feedback.pop("provider_review_requests", None)
+        current.feedback.pop("provider_review_requests", None)
+        reviewed.refresh_digests()
+        current.refresh_digests()
+        predecessor["reviewed_state_digest"] = reviewed.state_digest
+        eligibility["reviewed_state_digest"] = current.state_digest
+        growth = self.growth(fixture, self.authenticate(current, context, raw))
+        self.assertIsNone(growth.provider_request_node_id)
+
+    def test_acquisition_rejects_chronology_identity_and_lifecycle_substitution(self):
+        def event(raw, node):
+            return next(v for v in raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"] if v["id"] == node)
+        def pull(raw):
+            return raw["data"]["repository"]["pullRequest"]
+        cases = (
+            ("early Code", lambda c, p, r: event(r, "IC_CODE_FIRST").update(createdAt="2026-10-01T15:31:59Z", updatedAt="2026-10-01T15:31:59Z")),
+            ("early Security", lambda c, p, r: event(r, "IC_SECURITY_FIRST").update(createdAt="2026-10-01T15:31:59Z", updatedAt="2026-10-01T15:31:59Z")),
+            ("Draft", lambda c, p, r: pull(r).update(isDraft=True)),
+            ("closed", lambda c, p, r: pull(r).update(state="CLOSED")),
+            ("cross repository", lambda c, p, r: r["data"]["repository"].update(nameWithOwner="SecPal/api")),
+            ("cross PR", lambda c, p, r: pull(r).update(number=9)),
+            ("wrong head", lambda c, p, r: pull(r).update(headRefOid="f" * 40)),
+            ("wrong trigger", lambda c, p, r: event(r, "IC_CODE_FIRST").update(body=" @codex review ")),
+            ("wrong actor", lambda c, p, r: event(r, "IC_SECURITY_FIRST")["author"].update(login="outsider", id="U_OUTSIDER", databaseId=99)),
+            ("edited request", lambda c, p, r: event(r, "IC_CODE_FIRST").update(updatedAt="2026-10-01T16:00:01Z")),
+            ("request node substitution", lambda c, p, r: event(r, "IC_CODE_FIRST").update(id="IC_SECURITY_FIRST")),
+            ("request database substitution", lambda c, p, r: event(r, "IC_CODE_FIRST").update(databaseId=3)),
+            ("missing Code", lambda c, p, r: pull(r)["timelineItems"]["nodes"].remove(event(r, "IC_CODE_FIRST"))),
+            ("missing Security", lambda c, p, r: pull(r)["timelineItems"]["nodes"].remove(event(r, "IC_SECURITY_FIRST"))),
+            ("duplicate Code", lambda c, p, r: pull(r)["timelineItems"]["nodes"].append({**copy.deepcopy(event(r, "IC_CODE_FIRST")), "id": "IC_DUP", "databaseId": 99})),
+            ("duplicate Security", lambda c, p, r: pull(r)["timelineItems"]["nodes"].append({**copy.deepcopy(event(r, "IC_SECURITY_FIRST")), "id": "IC_DUP", "databaseId": 99})),
+            ("incomplete chronology", lambda c, p, r: pull(r)["timelineItems"]["pageInfo"].update(hasNextPage=True)),
+            ("head not acquired", lambda c, p, r: event(r, "PURC_H1")["commit"].update(oid="f" * 40)),
+            ("Ready actor", lambda c, p, r: event(r, "RFRE_READY")["actor"].update(login="outsider")),
+            ("exhausted Remediation", lambda c, p, r: p.lifecycle.state.update(remediation_cycle_count=2)),
+            ("unconsumed Review", lambda c, p, r: p.lifecycle.state.update(unrestricted_review_count=0)),
+            ("second Review", lambda c, p, r: p.lifecycle.state.update(unrestricted_review_count=2)),
+            ("Cycle3", lambda c, p, r: p.lifecycle.state.update(cycle_3_absent=False)),
+            ("Recovery", lambda c, p, r: p.lifecycle.state.update(exceptional_recovery_count=1)),
+        )
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        for label, mutate in cases:
+            with self.subTest(label=label), self.assertRaises((fast_path.SecurityBlocker, authority.LifecycleAuthorityError)):
+                _, current, _, _, _, context, raw = first_fallback_growth()
+                mutate(current, context, raw)
+                first_fallback_feedback(current, raw)
+                self.authenticate(current, context, raw)
+
+    def test_unsealed_altered_or_replayed_acquisitions_reject(self):
+        fixture = first_fallback_growth()
+        _, current, _, _, _, context, raw = fixture
+        acquired = self.authenticate(current, context, raw)
+        for value in (None, {"provider": "CODEX"}, replace(acquired, delivery_issue=9), replace(acquired, assessment_head="f" * 40), replace(acquired, current_publication_oid="f" * 40), replace(acquired, lifecycle_id="lifecycle:" + "f" * 64), replace(acquired, acquisitions=acquired.acquisitions[:1])):
+            with self.subTest(value=value), self.assertRaises(fast_path.SecurityBlocker):
+                self.growth(fixture, value)
+        for option in ({"provider": "CODEX"}, {"request_node_id": "IC_CODE_FIRST"}, {"feedback_delta": []}):
+            with self.assertRaises(TypeError):
+                fast_path.verify_ordinary_ready_remediation_provider_growth(current, current, **option)
+
+    def test_authenticated_acquisition_does_not_substitute_for_terminal_results(self):
+        for label in ("missing Security result", "wrong Code review head", "malformed Code review body", "wrong Security result head", "wrong summary row head"):
+            with self.subTest(label=label), self.assertRaises(fast_path.SecurityBlocker):
+                fixture = list(first_fallback_growth())
+                _, current, _, eligibility, summary, context, raw = fixture
+                nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+                review = next(v for v in nodes if v["__typename"] == "PullRequestReview")
+                result = next(v for v in nodes if v["id"] == "IC_SECURITY_RESULT")
+                if label == "missing Security result":
+                    nodes.remove(result)
+                elif label == "wrong Code review head":
+                    review["commit"]["oid"] = "f" * 40
+                    current.feedback["reviews"][0]["commit_oid"] = "f" * 40
+                elif label == "malformed Code review body":
+                    review["body"] = "unbound review"
+                    current.feedback["reviews"][0]["body_digest"] = fast_path.digest_text(review["body"])
+                elif label == "wrong Security result head":
+                    result["body"] = result["body"].replace(current.head_sha[:10], "f" * 10)
+                else:
+                    fixture[4] = summary.replace(current.head_sha[:7], "f" * 7)
+                    next(v for v in nodes if fast_path.CODEX_REVIEW_SUMMARY_MARKER in v.get("body", ""))["body"] = fixture[4]
+                first_fallback_feedback(current, raw)
+                eligibility["reviewed_state_digest"] = current.state_digest
+                acquired = self.authenticate(current, context, raw)
+                self.growth(fixture, acquired)
+
+    def test_exact_finding_ids_terminal_summary_and_review_binding_remain_mandatory(self):
+        cases = (
+            ("semantic finding", lambda r,c,p,e,s: e["eligible_threads"][0].update(finding_ids=["Bind the live PR base"])),
+            ("finding subset", lambda r,c,p,e,s: e["eligible_threads"].pop()),
+            ("wrong parent review", lambda r,c,p,e,s: c.feedback["threads"][1]["comments"][0].update(review_id="PRR_OTHER")),
+            ("wrong finding node", lambda r,c,p,e,s: c.feedback["threads"][1]["comments"][0].update(node_id="PRRC_OTHER")),
+            ("missing database ID", lambda r,c,p,e,s: c.review_database_ids.clear()),
+            ("wrong-head review", lambda r,c,p,e,s: c.feedback["reviews"][0].update(commit_oid=r.head_sha)),
+            ("provider substitution", lambda r,c,p,e,s: c.feedback["reviews"][0]["actor"].update(login="outsider")),
+            ("missing summary", lambda r,c,p,e,s: ""),
+            ("nonterminal Code", lambda r,c,p,e,s: s.replace("📝 **Code Review** | **Completed**", "📝 **Code Review** | **Running**")),
+            ("nonterminal Security", lambda r,c,p,e,s: s.replace("🔒 **Security Review** | **Completed**", "🔒 **Security Review** | **Running**")),
+            ("wrong-head summary", lambda r,c,p,e,s: s.replace(c.head_sha,"f" * 40)),
+        )
+        for label, mutate in cases:
+            with self.subTest(label=label), self.assertRaises(fast_path.SecurityBlocker):
+                fixture = list(first_fallback_growth())
+                r,c,p,e,s,context,raw = fixture
+                acquired = self.authenticate(c,context,raw)
+                replacement = mutate(r,c,p,e,s)
+                if replacement is not None:
+                    fixture[4] = replacement
+                c.refresh_digests()
+                e["reviewed_state_digest"] = c.state_digest
+                self.growth(fixture, acquired)
+
+
 class LifecycleOrchestrationTests(TestCase):
+    def test_review_database_observation_preserves_historical_feedback_digest(
+        self,
+    ) -> None:
+        _reviewed, current, _predecessor, _eligibility = (
+            ordinary_ready_provider_growth()
+        )
+        enriched = copy.deepcopy(current.feedback)
+        enriched["reviews"][0]["database_id"] = 5382263332
+        replayed = fast_path.StableFeedbackState(
+            repository=current.repository,
+            pull_request_number=current.pull_request_number,
+            head_sha=current.head_sha,
+            base_ref=current.base_ref,
+            base_sha=current.base_sha,
+            pr_state=current.pr_state,
+            feedback=enriched,
+        )
+        self.assertEqual(replayed.feedback_digest, current.feedback_digest)
+        self.assertEqual(replayed.state_digest, current.state_digest)
+
+    def test_multi_provider_ready_growth_binds_four_h1_findings(self) -> None:
+        reviewed, current, predecessor_eligibility, eligibility, summary = (
+            multi_provider_ready_growth()
+        )
+        verified = fast_path.verify_ordinary_ready_remediation_provider_growth(
+            reviewed,
+            current,
+            provider_head_sha=reviewed.head_sha,
+            predecessor_eligibility_evidence=predecessor_eligibility,
+            eligibility_evidence=eligibility,
+            provider_summary_body=summary,
+            review_database_ids=current.review_database_ids,
+        )
+        self.assertEqual(
+            verified.thread_ids,
+            tuple(sorted(item["node_id"] for item in current.feedback["threads"][1:])),
+        )
+        self.assertEqual(len(verified.finding_ids), 4)
+        self.assertEqual(len(verified.provider_review_bindings), 2)
+        self.assertEqual(len(verified.source_bindings), 8)
+        self.assertRegex(verified.growth_digest, r"^[0-9a-f]{64}$")
+        repeated = fast_path.verify_ordinary_ready_remediation_provider_growth(
+            reviewed,
+            current,
+            provider_head_sha=reviewed.head_sha,
+            predecessor_eligibility_evidence=predecessor_eligibility,
+            eligibility_evidence=eligibility,
+            provider_summary_body=summary,
+            review_database_ids=current.review_database_ids,
+        )
+        self.assertEqual(verified.growth_digest, repeated.growth_digest)
+
+    def test_multi_provider_ready_growth_rejects_unbound_sources(self) -> None:
+        def reject(label, mutate):
+            reviewed, current, predecessor_eligibility, eligibility, summary = (
+                multi_provider_ready_growth()
+            )
+            with self.subTest(label=label), self.assertRaises(
+                fast_path.SecurityBlocker
+            ):
+                replacement = mutate(reviewed, current, eligibility, summary)
+                if replacement is not None:
+                    summary = replacement
+                reviewed.refresh_digests()
+                current.refresh_digests()
+                predecessor_eligibility["reviewed_state_digest"] = reviewed.state_digest
+                eligibility["reviewed_state_digest"] = current.state_digest
+                fast_path.verify_ordinary_ready_remediation_provider_growth(
+                    reviewed,
+                    current,
+                    provider_head_sha=reviewed.head_sha,
+                    predecessor_eligibility_evidence=predecessor_eligibility,
+                    eligibility_evidence=eligibility,
+                    provider_summary_body=summary,
+                    review_database_ids=current.review_database_ids,
+                )
+
+        def review(current, index):
+            return current.feedback["reviews"][index]
+
+        def thread(current, index):
+            return current.feedback["threads"][index + 1]
+
+        cases = (
+            ("mixed H0/H1 reviews", lambda r, c, e, s: review(c, 1).update(commit_oid=r.head_sha)),
+            ("unknown provider", lambda r, c, e, s: review(c, 1).update(actor={"login": "unknown", "node_id": "BOT_UNKNOWN", "database_id": 10})),
+            ("cross-PR review", lambda r, c, e, s: setattr(c, "pull_request_number", 1042)),
+            ("stale review", lambda r, c, e, s: review(c, 0).update(commit_oid="7" * 40)),
+            ("duplicate review node", lambda r, c, e, s: review(c, 1).update(node_id=review(c, 0)["node_id"])),
+            ("missing review database identity", lambda r, c, e, s: c.review_database_ids.__delitem__(-1)),
+            ("duplicate review database identity", lambda r, c, e, s: c.review_database_ids[1].update(database_id=c.review_database_ids[0]["database_id"])),
+            ("invented review database identity", lambda r, c, e, s: c.review_database_ids.append({"node_id": "PRR_INVENTED", "database_id": 1})),
+            ("omitted qualifying review", lambda r, c, e, s: c.feedback["reviews"].pop()),
+            ("caller-invented review", lambda r, c, e, s: c.feedback["reviews"].append({**copy.deepcopy(review(c, 1)), "node_id": "PRR_CALLER_INVENTED"})),
+            ("parent outside set", lambda r, c, e, s: thread(c, 1)["comments"][0].update(review_id="PRR_OTHER")),
+            ("Codex attributed to Copilot", lambda r, c, e, s: thread(c, 1)["comments"][0].update(actor=copy.deepcopy(fast_path.COPILOT_REVIEW_PROVIDER))),
+            ("Copilot attributed to Codex", lambda r, c, e, s: thread(c, 0)["comments"][0].update(actor=copy.deepcopy(review(c, 1)["actor"]))),
+            ("duplicate thread", lambda r, c, e, s: thread(c, 3).update(node_id=thread(c, 2)["node_id"])),
+            ("duplicate finding", lambda r, c, e, s: thread(c, 3)["comments"][0].update(node_id=thread(c, 2)["comments"][0]["node_id"])),
+            ("missing terminal summary", lambda r, c, e, s: ""),
+            ("nonterminal Code", lambda r, c, e, s: s.replace("📝 **Code Review** | **Completed**", "📝 **Code Review** | **Running**")),
+            ("nonterminal Security", lambda r, c, e, s: s.replace("🔒 **Security Review** | **Completed**", "🔒 **Security Review** | **Running**")),
+            ("predecessor deletion", lambda r, c, e, s: c.feedback["conversation_comments"].pop()),
+            ("unaccounted comment", lambda r, c, e, s: c.feedback["conversation_comments"].append({"node_id": "IC_UNRELATED", "body_digest": "a" * 64, "actor": review(c, 1)["actor"], "updated_at": "2026-10-01T17:00:00Z", "reactions": []})),
+            ("second assessment request", lambda r, c, e, s: c.feedback["provider_review_requests"].append({**copy.deepcopy(c.feedback["provider_review_requests"][0]), "node_id": "RRE_SECOND"})),
+            ("caller finding subset", lambda r, c, e, s: e["eligible_threads"].pop()),
+        )
+        for label, mutate in cases:
+            reject(label, mutate)
+
+    def test_multi_provider_assessment_uses_only_remaining_remediation_slot(self) -> None:
+        reviewed, current, predecessor_eligibility, eligibility, summary = (
+            multi_provider_ready_growth()
+        )
+        lifecycle = current_lifecycle(
+            remediation_cycles=1,
+            head_sha=current.head_sha,
+            pull_request=current.pull_request_number,
+            delivery_issue=1040,
+        )
+        before = copy.deepcopy(lifecycle.state)
+        growth = fast_path.verify_ordinary_ready_remediation_provider_growth(
+            reviewed,
+            current,
+            provider_head_sha=reviewed.head_sha,
+            predecessor_eligibility_evidence=predecessor_eligibility,
+            eligibility_evidence=eligibility,
+            provider_summary_body=summary,
+            review_database_ids=current.review_database_ids,
+        )
+        self.assertEqual(len(growth.provider_review_bindings), 2)
+        self.assertEqual(lifecycle.state, before)
+        after = authority.derive_state(
+            before, "REMEDIATION_COMPLETED", "a" * 64
+        )
+        self.assertEqual(after["unrestricted_review_count"], 1)
+        self.assertEqual(after["remediation_cycle_count"], 2)
+        self.assertTrue(after["ready"])
+
+    def test_one_ready_head_review_still_requires_terminal_provider_context(self) -> None:
+        reviewed, current, predecessor_eligibility, eligibility, summary = (
+            multi_provider_ready_growth()
+        )
+        current.feedback["reviews"] = [
+            item for item in current.feedback["reviews"]
+            if item["actor"] == fast_path.COPILOT_REVIEW_PROVIDER
+        ]
+        current.review_database_ids = [
+            item for item in current.review_database_ids
+            if item["node_id"] == current.feedback["reviews"][0]["node_id"]
+        ]
+        current.feedback["threads"] = current.feedback["threads"][:2]
+        current.refresh_digests()
+        eligibility["eligible_threads"] = eligibility["eligible_threads"][:1]
+        eligibility["reviewed_state_digest"] = current.state_digest
+        verified = fast_path.verify_ordinary_ready_remediation_provider_growth(
+            reviewed,
+            current,
+            provider_head_sha=reviewed.head_sha,
+            predecessor_eligibility_evidence=predecessor_eligibility,
+            eligibility_evidence=eligibility,
+            provider_summary_body=summary,
+            review_database_ids=current.review_database_ids,
+        )
+        self.assertEqual(len(verified.provider_review_bindings), 1)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            fast_path.verify_ordinary_ready_remediation_provider_growth(
+                reviewed,
+                current,
+                provider_head_sha=reviewed.head_sha,
+                predecessor_eligibility_evidence=predecessor_eligibility,
+                eligibility_evidence=eligibility,
+            )
+
     def test_post_capture_provider_growth_authorizes_remaining_ordinary_remediation(
         self,
     ) -> None:
@@ -1843,7 +2530,10 @@ class LifecycleOrchestrationTests(TestCase):
         self.assertEqual(verified.resulting_state_digest, current.state_digest)
         self.assertEqual(len(verified.thread_ids), 4)
         self.assertEqual(len(verified.finding_ids), 4)
-        self.assertRegex(verified.growth_digest, r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            verified.growth_digest,
+            "8ffa6fccfd0ea164225845a4d0dfde46b5ee0f3ec94ffb4433cf6232a507e599",
+        )
 
         current.base_sha = "f" * 40
         current.refresh_digests()
@@ -2131,6 +2821,42 @@ class LifecycleOrchestrationTests(TestCase):
                 predecessor_eligibility_evidence=predecessor_eligibility,
                 eligibility_evidence=eligibility,
             )
+        adopted_binding = replace(
+            provider_binding,
+            remediation_event_digests=(),
+            provider_binding_sources=(
+                publication.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION,
+            ),
+            adopted_remediation_observation_digest="e" * 64,
+        )
+        with (
+            mock.patch.object(
+                fast_path,
+                "verified_validation_review_context",
+                side_effect=[
+                    (reviewed, fast_path.digest_json(predecessor_eligibility)),
+                    (resulting, fast_path.digest_json(eligibility)),
+                ],
+            ),
+            mock.patch.object(
+                publication,
+                "derive_ready_source_recovery_provider_binding",
+                return_value=adopted_binding,
+            ),
+            mock.patch.object(
+                orchestration,
+                "_capture_current_stable_feedback",
+                return_value=resulting,
+            ),
+        ):
+            adopted = orchestration.verify_ready_remediation_provider_growth_authority(
+                current,
+                predecessor_validation=predecessor_validation,
+                candidate_validation=candidate_validation,
+                predecessor_eligibility_evidence=predecessor_eligibility,
+                eligibility_evidence=eligibility,
+            )
+        self.assertEqual(adopted.provider_head_sha, reviewed.head_sha)
         scope = orchestration.ordinary_ready_remediation_authorization_scope(
             verified
         )
@@ -2734,14 +3460,14 @@ class LifecycleOrchestrationTests(TestCase):
             current_binding = fast_path.validation_registry_projection(
                 current_entry
             )
-            self.assertEqual(len(current_binding["validation"]), 19)
+            self.assertEqual(len(current_binding["validation"]), 21)
             self.assertEqual(
                 fast_path.digest_json(current_binding),
-                "873fa3c4d55437f5e28c9f223eb69ab93d00e82dd0ce16bc02418768e9a1a222",
+                "5eb32c33aa354dc9ebda3d00bef1eba02409f6b98c4f073f418309ef993cec90",
             )
             self.assertEqual(
                 fast_path.digest_json(current_binding["validation"]),
-                "1bda1fbc4d46ef8272ac5f75fa8ec013256396cf0f385ae9cf78323be97cc61f",
+                "b37fd0a415a61e6c8d3925ca7e87783c4301ae50bfe481bc6e8d76002bb62936",
             )
             self.assertNotEqual(
                 fast_path.digest_json(collision_binding),
@@ -4166,10 +4892,14 @@ def historical_v12_fixture():
                 ):
                     importer.transfer(parent, "tree", import_blobs=False)
 
-    def test_collision_owner_model_matches_maintained_ready_declarations(self) -> None:
+    def test_collision_owner_model_preserves_historical_ready_declarations(self) -> None:
         from scripts.secpal_pr_review import version_collision
 
-        source = Path(fast_path.__file__).read_bytes()
+        # The legacy owner profile is immutable historical compatibility.
+        source = subprocess.run(
+            ["git", "show", "43e6e51ca20e6e7be4b1f5f19de240c682311533:" + version_collision.SOURCE_PATH],
+            cwd=Path(__file__).resolve().parents[1], check=True, capture_output=True,
+        ).stdout
         text = source.decode("utf-8", errors="strict")
         module = ast.parse(text)
         starts = [0]
@@ -6121,6 +6851,12 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
             )
             captured_provider_binding.update(json.loads(binding_path.read_text()))
             output.write_bytes(authority.canonical_json_bytes(reviewed))
+            summary = Path(command[command.index("--capture-provider-summary") + 1])
+            summary.write_bytes(
+                authority.canonical_json_bytes(
+                    {"body": "summary", "review_database_ids": []}
+                )
+            )
             return SimpleNamespace(returncode=0)
 
         with mock.patch.object(
@@ -6137,6 +6873,8 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
         command = call.call_args.args[0]
         options = call.call_args.kwargs
         self.assertEqual(captured.state_digest, reviewed["state_digest"])
+        self.assertEqual(captured.provider_summary_body, "summary")
+        self.assertEqual(captured.review_database_ids, [])
         self.assertIn("-I", command)
         self.assertIn("-B", command)
         root = str(REPO_ROOT.resolve())
@@ -10714,6 +11452,2125 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
         self.assertFalse(decision.transition_to_draft)
         self.assertFalse(decision.transition_to_ready)
         self.assertTrue(decision.stop_after_bounded_pass)
+
+
+class PostReadyValidationRemediationTests(TestCase):
+    def setUp(self) -> None:
+        self._reviewed_head = "f" * 40
+        patcher = mock.patch.object(
+            fast_path,
+            "verified_validation_review_context",
+            side_effect=lambda _validation: self._review_context(self._reviewed_head),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _repository(self) -> tuple[tempfile.TemporaryDirectory[str], Path, str, str, str, str]:
+        temporary = tempfile.TemporaryDirectory(prefix="post-ready-validation-")
+        root = Path(temporary.name)
+        subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.invalid"], check=True)
+        (root / ".github" / "workflows").mkdir(parents=True)
+        (root / "package.json").write_text(
+            '{"engines":{"node":"^24.21.0"}}\n', encoding="utf-8"
+        )
+        workflow = root / ".github" / "workflows" / "quality.yml"
+        workflow.write_text(
+            "name: Code Quality\njobs:\n  lint:\n    steps:\n      - name: Setup Node.js\n"
+            "        uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "--quiet", "-m", "predecessor"], check=True)
+        predecessor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        predecessor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        workflow.write_text(
+            "name: Code Quality\njobs:\n  lint:\n    steps:\n      - name: Setup Node.js\n"
+            "        uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24.21.0'\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "--quiet", "-m", "correction"], check=True)
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        return temporary, root, predecessor, predecessor_tree, successor, successor_tree
+
+    def _inputs(self):
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = self._repository()
+        lifecycle = replace(
+            current_lifecycle(
+                remediation_cycles=1,
+                head_sha=predecessor,
+                delivery_issue=970,
+                pull_request=971,
+            ),
+            tree_sha=predecessor_tree,
+            validation_receipt_digest="1" * 64,
+            adoption_source_evidence_digest="2" * 64,
+        )
+        self._reviewed_head = predecessor
+        current = publication.VerifiedLifecyclePublication(
+            publication_oid="3" * 40,
+            publication_digest="4" * 64,
+            publication_branch="refs/heads/secpal-lifecycle-publications",
+            journal_predecessor_oid="5" * 40,
+            predecessor_publication_oid="6" * 40,
+            lifecycle=lifecycle,
+            serialized_lifecycle_evidence=b"{}",
+        )
+        validation = fast_path._unregistered_validation_evidence(
+            repository=REPOSITORY,
+            delivery_issue_number=970,
+            pull_request_number=971,
+            head_sha=successor,
+            tree_sha=successor_tree,
+            validation_receipt_digest="7" * 64,
+            final_attestation_digest="8" * 64,
+            source_validation_evidence_digest="9" * 64,
+        )
+        commit_fields = {
+            "repository": REPOSITORY,
+            "head_sha": successor,
+            "tree_sha": successor_tree,
+            "parent_shas": [predecessor],
+            "signer_kind": "SSH_PRINCIPAL",
+            "signer_identity": "aroviqen@secpal.app",
+            "signature_fingerprint": "SHA256:fixture",
+            "signature_classification": "GOODSIG",
+            "signature_policy_digest": "a" * 64,
+        }
+        commit = fast_path.AuthenticatedIntegrationCommit(
+            **{**commit_fields, "parent_shas": (predecessor,)},
+            authentication_digest=fast_path.digest_json(commit_fields),
+        )
+        observation = {
+            "repository": REPOSITORY,
+            "pull_request": 971,
+            "head_sha": predecessor,
+            "pr_state": "OPEN",
+            "draft": False,
+            "workflow_name": "Code Quality",
+            "workflow_path": ".github/workflows/quality.yml",
+            "check_name": "Validate candidate",
+            "workflow_run_id": 100,
+            "check_run_id": 200,
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "attempt": 2,
+        }
+        return temporary, root, current, validation, commit, observation
+
+    def _reusable_repository(
+        self,
+        caller: str,
+        called: dict[str, str],
+        *,
+        correction_paths: tuple[str, ...] | None = None,
+    ) -> tuple[tempfile.TemporaryDirectory[str], Path, str, str, str, str]:
+        temporary = tempfile.TemporaryDirectory(prefix="post-ready-call-graph-")
+        root = Path(temporary.name)
+        subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.email", "test@example.invalid"],
+            check=True,
+        )
+        workflows = root / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        (root / "package.json").write_text(
+            '{"engines":{"node":"^24.21.0"}}\n', encoding="utf-8"
+        )
+        (workflows / "quality.yml").write_text(caller, encoding="utf-8")
+        for name, content in called.items():
+            (workflows / name).write_text(content, encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--quiet", "-m", "predecessor"],
+            check=True,
+        )
+        predecessor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        predecessor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        selected = correction_paths if correction_paths is not None else tuple(called)
+        for name in selected:
+            path = workflows / name
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "node-version: '24'", "node-version: '24.21.0'"
+                ),
+                encoding="utf-8",
+            )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--quiet", "--allow-empty", "-m", "correction"],
+            check=True,
+        )
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        return temporary, root, predecessor, predecessor_tree, successor, successor_tree
+
+    @staticmethod
+    def _review_context(head_sha):
+        return SimpleNamespace(
+            repository=REPOSITORY,
+            pull_request_number=971,
+            head_sha=head_sha,
+        ), None
+
+    @staticmethod
+    def _historical_failure_api_responses(
+        current,
+        validation,
+        *,
+        run_updates=None,
+        failure_count=1,
+        check_total=None,
+        check_id_delta=0,
+    ):
+        checks = [
+            {
+                "id": 200 + index + check_id_delta,
+                "name": f"Validate candidate{index or ''}",
+                "status": "completed",
+                "conclusion": "failure",
+                "details_url": (
+                    f"https://github.com/{REPOSITORY}/actions/runs/100/job/"
+                    f"{200 + index}"
+                ),
+                "app": {"slug": "github-actions"},
+            }
+            for index in range(failure_count)
+        ]
+        run = {
+            "id": 100,
+            "name": "Code Quality",
+            "path": ".github/workflows/quality.yml",
+            "event": "pull_request",
+            "head_sha": current.lifecycle.head_sha,
+            "status": "completed",
+            "conclusion": "failure",
+            "run_attempt": 2,
+            "repository": {"full_name": REPOSITORY},
+            "head_repository": {"full_name": REPOSITORY},
+            "pull_requests": [{
+                "number": 971,
+                "url": f"https://api.github.com/repos/{REPOSITORY}/pulls/971",
+            }],
+        }
+        run.update(run_updates or {})
+        jobs = [
+            {
+                "id": 200 + index,
+                "run_id": 100,
+                "head_sha": current.lifecycle.head_sha,
+                "status": "completed",
+                "conclusion": "failure",
+                "name": f"Validate candidate{index or ''}",
+            }
+            for index in range(failure_count)
+        ]
+        payloads = (
+            {
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefOid": validation.head_sha,
+                "headRepository": {"nameWithOwner": REPOSITORY},
+            },
+            [{
+                "total_count": len(checks) if check_total is None else check_total,
+                "check_runs": checks,
+            }],
+            [{"total_count": 1, "workflow_runs": [run]}],
+            [{"total_count": len(jobs), "jobs": jobs}],
+        )
+        return [
+            SimpleNamespace(returncode=0, stdout=json.dumps(payload).encode())
+            for payload in payloads
+        ]
+
+    def test_exact_current_failure_reader_keeps_check_and_job_ids_distinct(self) -> None:
+        temporary, _root, current, validation, _commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        responses = self._historical_failure_api_responses(
+            current,
+            validation,
+            check_id_delta=1000,
+        )
+        with mock.patch.object(publication, "_run_gh", side_effect=responses):
+            observed = orchestration._read_post_ready_failure(
+                REPOSITORY, 971, current.lifecycle.head_sha
+            )
+
+        self.assertEqual(observed, observation)
+
+    def test_setup_node_parser_accepts_named_and_shorthand_steps(self) -> None:
+        named = (
+            "steps:\n  - name: Setup Node.js\n    uses: actions/setup-node@immutable\n"
+            "    with:\n      node-version: '24.21.0'\n"
+        )
+        shorthand = (
+            "steps:\n  - uses: actions/setup-node@immutable\n"
+            "    with:\n      node-version: '24.21.0'\n"
+        )
+        self.assertEqual(
+            orchestration._setup_node_selectors(named), ("24.21.0",)
+        )
+        self.assertEqual(
+            orchestration._setup_node_selectors(shorthand), ("24.21.0",)
+        )
+
+    def test_workflow_call_parser_normalizes_supported_scalar_comments(self) -> None:
+        workflow = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  external:\n    name: REUSE Compliance # displayed caller\n"
+            "    uses: owner/repository/.github/workflows/reuse.yml@immutable # main\n"
+            "  single:\n    name: 'Single # hash' # trailing comment\n"
+            "    uses: './.github/workflows/single.yml' # local\n"
+            "  double:\n    name: \"Foo # Bar\" # trailing comment\n"
+            "    uses: \"./.github/workflows/double.yml\"\n"
+            "  embedded:\n    name: abc#def\n"
+            "    uses: owner/repository/.github/workflows/reuse.yml@immutable\n"
+            "  quotes:\n    name: Guard's \"quoted\" validation\n"
+            "    uses: ./.github/workflows/quotes.yml\n"
+        )
+
+        self.assertEqual(
+            orchestration._workflow_job_calls(workflow),
+            (
+                {
+                    "job_id": "external",
+                    "name": "REUSE Compliance",
+                    "uses": "owner/repository/.github/workflows/reuse.yml@immutable",
+                },
+                {
+                    "job_id": "single",
+                    "name": "Single # hash",
+                    "uses": "./.github/workflows/single.yml",
+                },
+                {
+                    "job_id": "double",
+                    "name": "Foo # Bar",
+                    "uses": "./.github/workflows/double.yml",
+                },
+                {
+                    "job_id": "embedded",
+                    "name": "abc#def",
+                    "uses": "owner/repository/.github/workflows/reuse.yml@immutable",
+                },
+                {
+                    "job_id": "quotes",
+                    "name": "Guard's \"quoted\" validation",
+                    "uses": "./.github/workflows/quotes.yml",
+                },
+            ),
+        )
+        self.assertEqual(
+            orchestration._workflow_name('name: "Foo # Bar" # trailing comment\n'),
+            "Foo # Bar",
+        )
+        self.assertEqual(
+            orchestration._workflow_name("name: OpenAPI Lint # trailing comment\n"),
+            "OpenAPI Lint",
+        )
+
+    def test_workflow_call_parser_rejects_unsupported_complex_scalars(self) -> None:
+        for label, value in (
+            ("anchor", "&source local.yml"),
+            ("alias", "*source"),
+            ("tag", "!source local.yml"),
+            ("literal block", "|"),
+            ("folded block", ">"),
+            ("unterminated quote", '"Foo # Bar'),
+            ("quoted suffix without comment", '"Foo" suffix'),
+        ):
+            workflow = (
+                "name: Quality\non:\n  pull_request:\njobs:\n  check:\n"
+                f"    name: {value}\n    uses: ./.github/workflows/check.yml\n"
+            )
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(
+                    orchestration.LifecycleOrchestrationError, "malformed"
+                ),
+            ):
+                orchestration._workflow_job_calls(workflow)
+
+    def test_authenticates_selector_defect_in_local_reusable_workflow(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        proof = orchestration._verify_node_selector_defect_correction(
+            root,
+            repository=REPOSITORY,
+            pull_request=971,
+            predecessor_head=predecessor,
+            predecessor_tree=predecessor_tree,
+            resulting_head=successor,
+            resulting_tree=successor_tree,
+            observed_workflow_name="Quality",
+            observed_workflow_path=".github/workflows/quality.yml",
+            observed_check_name="Reusable validation / Check generated schema",
+        )
+
+        self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_ignores_commented_external_siblings_for_local_reusable_failure(self) -> None:
+        caller = (
+            "name: Code Quality\non:\n  pull_request:\njobs:\n"
+            "  reuse:\n    name: REUSE Compliance\n"
+            "    uses: owner/governance/.github/workflows/reusable-reuse.yml@"
+            "1111111111111111111111111111111111111111 # main\n"
+            "  license:\n    name: License Compatibility\n"
+            "    uses: owner/governance/.github/workflows/reusable-license.yml@"
+            "2222222222222222222222222222222222222222 # main\n"
+            "  openapi:\n    name: OpenAPI Lint\n"
+            "    uses: ./.github/workflows/local-openapi-lint.yml\n"
+        )
+        called = (
+            "name: Local OpenAPI Lint\non:\n  workflow_call:\njobs:\n"
+            "  openapi-lint:\n    name: Validate OpenAPI Specification\n"
+            "    runs-on: ubuntu-latest\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(
+                caller, {"local-openapi-lint.yml": called}
+            )
+        )
+        self.addCleanup(temporary.cleanup)
+
+        proof = orchestration._verify_node_selector_defect_correction(
+            root,
+            repository=REPOSITORY,
+            pull_request=971,
+            predecessor_head=predecessor,
+            predecessor_tree=predecessor_tree,
+            resulting_head=successor,
+            resulting_tree=successor_tree,
+            observed_workflow_name="Code Quality",
+            observed_workflow_path=".github/workflows/quality.yml",
+            observed_check_name="OpenAPI Lint / Validate OpenAPI Specification",
+        )
+
+        self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_rejects_observed_external_reusable_failure(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  external:\n    name: Reusable validation\n"
+            "    uses: owner/repository/.github/workflows/schema.yml@immutable # main\n"
+            "  local:\n    name: Other validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Other check\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "remote"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Validate schema",
+            )
+
+    def test_rejects_observed_unnamed_external_reusable_failure(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  schema:\n"
+            "    uses: owner/repository/.github/workflows/schema.yml@immutable\n"
+            "  local:\n    name: schema\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "remote"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="schema / Check generated schema",
+            )
+
+    def test_authenticates_complete_reachable_reusable_violation_set(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  schema:\n    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+            "  format:\n    name: Reusable formatting\n"
+            "    uses: ./.github/workflows/format.yml\n"
+        )
+        called = {
+            name: (
+                f"name: {display}\non:\n  workflow_call:\njobs:\n  check:\n"
+                f"    name: {job}\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n"
+            )
+            for name, display, job in (
+                ("schema.yml", "Schema checks", "Check generated schema"),
+                ("format.yml", "Formatting checks", "Check formatting"),
+            )
+        }
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, called)
+        )
+        self.addCleanup(temporary.cleanup)
+
+        proof = orchestration._verify_node_selector_defect_correction(
+            root,
+            repository=REPOSITORY,
+            pull_request=971,
+            predecessor_head=predecessor,
+            predecessor_tree=predecessor_tree,
+            resulting_head=successor,
+            resulting_tree=successor_tree,
+            observed_workflow_name="Quality",
+            observed_workflow_path=".github/workflows/quality.yml",
+            observed_check_name="Reusable validation / Check generated schema",
+        )
+
+        self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_mixed_workflow_resolves_reusable_failure_before_direct_violation(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  direct:\n    name: Direct check\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+            "  schema:\n    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        proof = orchestration._verify_node_selector_defect_correction(
+            root,
+            repository=REPOSITORY,
+            pull_request=971,
+            predecessor_head=predecessor,
+            predecessor_tree=predecessor_tree,
+            resulting_head=successor,
+            resulting_tree=successor_tree,
+            observed_workflow_name="Quality",
+            observed_workflow_path=".github/workflows/quality.yml",
+            observed_check_name="Reusable validation / Check generated schema",
+        )
+
+        self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_rejects_remote_mapping_even_when_local_name_composition_matches(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n"
+            "  remote:\n    name: Reusable validation\n"
+            "    uses: other/repository/.github/workflows/schema.yml@main\n"
+            "  local:\n    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "remote"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Check generated schema",
+            )
+
+    def test_rejects_selector_violation_in_different_called_job(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n"
+            "  tests:\n    name: Run tests\n    steps:\n      - run: npm test\n"
+            "  baseline:\n    name: Node baseline\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, {"schema.yml": called})
+        )
+        self.addCleanup(temporary.cleanup)
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "violating local workflow"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Run tests",
+            )
+
+    def test_direct_failure_preserves_complete_repository_violation_set(self) -> None:
+        direct = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  check:\n"
+            "    name: Check quality\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        other = direct.replace("name: Quality", "name: Other quality")
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(direct, {"other.yml": other})
+        )
+        self.addCleanup(temporary.cleanup)
+        quality = root / ".github" / "workflows" / "quality.yml"
+        quality.write_text(
+            quality.read_text(encoding="utf-8").replace(
+                "node-version: '24'", "node-version: '24.21.0'"
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--amend", "--quiet", "--no-edit"],
+            check=True,
+        )
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+
+        proof = orchestration._verify_node_selector_defect_correction(
+            root,
+            repository=REPOSITORY,
+            pull_request=971,
+            predecessor_head=predecessor,
+            predecessor_tree=predecessor_tree,
+            resulting_head=successor,
+            resulting_tree=successor_tree,
+            observed_workflow_name="Quality",
+            observed_workflow_path=".github/workflows/quality.yml",
+            observed_check_name="Check quality",
+        )
+
+        self.assertRegex(proof, r"^[0-9a-f]{64}$")
+
+    def test_rejects_wrong_or_ambiguous_reusable_check_identity(self) -> None:
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        cases = (
+            (
+                "wrong caller name",
+                "  schema:\n    name: Reusable validation\n"
+                "    uses: ./.github/workflows/schema.yml\n",
+                "Other caller / Check generated schema",
+            ),
+            (
+                "wrong called name",
+                "  schema:\n    name: Reusable validation\n"
+                "    uses: ./.github/workflows/schema.yml\n",
+                "Reusable validation / Other check",
+            ),
+            (
+                "ambiguous caller mapping",
+                "  schema_one:\n    name: Reusable validation\n"
+                "    uses: ./.github/workflows/schema.yml\n"
+                "  schema_two:\n    name: Reusable validation\n"
+                "    uses: ./.github/workflows/schema.yml\n",
+                "Reusable validation / Check generated schema",
+            ),
+        )
+        for label, jobs, check_name in cases:
+            caller = "name: Quality\non:\n  pull_request:\njobs:\n" + jobs
+            temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+                self._reusable_repository(caller, {"schema.yml": called})
+            )
+            self.addCleanup(temporary.cleanup)
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(
+                    orchestration.LifecycleOrchestrationError, "one authenticated"
+                ),
+            ):
+                orchestration._verify_node_selector_defect_correction(
+                    root,
+                    repository=REPOSITORY,
+                    pull_request=971,
+                    predecessor_head=predecessor,
+                    predecessor_tree=predecessor_tree,
+                    resulting_head=successor,
+                    resulting_tree=successor_tree,
+                    observed_workflow_name="Quality",
+                    observed_workflow_path=".github/workflows/quality.yml",
+                    observed_check_name=check_name,
+                )
+
+    def test_rejects_unsupported_reusable_call_sources(self) -> None:
+        called = (
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24'\n"
+        )
+        cases = (
+            ("path traversal", "./.github/workflows/../schema.yml", "invalid"),
+            ("outside workflows", "./scripts/schema.yml", "invalid"),
+            (
+                "quoted hash changes source identity",
+                '"./.github/workflows/schema.yml # main"',
+                "invalid",
+            ),
+            ("dynamic", "${{ inputs.workflow }}", "dynamic"),
+            ("remote", "other/repository/.github/workflows/schema.yml@main", "remote"),
+        )
+        for label, uses, message in cases:
+            caller = (
+                "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+                f"    name: Reusable validation\n    uses: {uses}\n"
+            )
+            temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+                self._reusable_repository(caller, {"schema.yml": called})
+            )
+            self.addCleanup(temporary.cleanup)
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(orchestration.LifecycleOrchestrationError, message),
+            ):
+                orchestration._verify_node_selector_defect_correction(
+                    root,
+                    repository=REPOSITORY,
+                    pull_request=971,
+                    predecessor_head=predecessor,
+                    predecessor_tree=predecessor_tree,
+                    resulting_head=successor,
+                    resulting_tree=successor_tree,
+                    observed_workflow_name="Quality",
+                    observed_workflow_path=".github/workflows/quality.yml",
+                    observed_check_name="Reusable validation / Check generated schema",
+                )
+
+    def test_rejects_missing_workflow_call_and_ambiguous_called_job(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        cases = (
+            (
+                "missing workflow_call",
+                "name: Schema checks\non:\n  push:\njobs:\n  validate:\n"
+                "    name: Check generated schema\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n",
+                "workflow_call",
+            ),
+            (
+                "ambiguous called jobs",
+                "name: Schema checks\non:\n  workflow_call:\njobs:\n"
+                "  first:\n    name: Check generated schema\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n"
+                "  second:\n    name: Check generated schema\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n",
+                "one authenticated",
+            ),
+        )
+        for label, called, message in cases:
+            temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+                self._reusable_repository(caller, {"schema.yml": called})
+            )
+            self.addCleanup(temporary.cleanup)
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(orchestration.LifecycleOrchestrationError, message),
+            ):
+                orchestration._verify_node_selector_defect_correction(
+                    root,
+                    repository=REPOSITORY,
+                    pull_request=971,
+                    predecessor_head=predecessor,
+                    predecessor_tree=predecessor_tree,
+                    resulting_head=successor,
+                    resulting_tree=successor_tree,
+                    observed_workflow_name="Quality",
+                    observed_workflow_path=".github/workflows/quality.yml",
+                    observed_check_name="Reusable validation / Check generated schema",
+                )
+
+    def test_rejects_correction_of_unrelated_workflow(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        called = {
+            name: (
+                f"name: {name}\non:\n  workflow_call:\njobs:\n  check:\n"
+                "    name: Check generated schema\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n"
+                "          node-version: '24'\n"
+            )
+            for name in ("schema.yml", "unrelated.yml")
+        }
+        temporary, root, predecessor, predecessor_tree, successor, successor_tree = (
+            self._reusable_repository(caller, called)
+        )
+        self.addCleanup(temporary.cleanup)
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "unrelated"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Check generated schema",
+            )
+
+    def test_rejects_callee_bytes_available_only_from_resulting_head(self) -> None:
+        caller = (
+            "name: Quality\non:\n  pull_request:\njobs:\n  schema:\n"
+            "    name: Reusable validation\n"
+            "    uses: ./.github/workflows/schema.yml\n"
+        )
+        temporary, root, predecessor, predecessor_tree, _successor, _tree = (
+            self._reusable_repository(caller, {}, correction_paths=())
+        )
+        self.addCleanup(temporary.cleanup)
+        called = root / ".github" / "workflows" / "schema.yml"
+        called.write_text(
+            "name: Schema checks\non:\n  workflow_call:\njobs:\n  validate:\n"
+            "    name: Check generated schema\n    steps:\n"
+            "      - uses: actions/setup-node@immutable\n        with:\n"
+            "          node-version: '24.21.0'\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--amend", "--quiet", "--no-edit"],
+            check=True,
+        )
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "authenticated bytes"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=971,
+                predecessor_head=predecessor,
+                predecessor_tree=predecessor_tree,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Check generated schema",
+            )
+
+    def test_reusable_source_resolver_accepts_no_caller_mapping_artifact(self) -> None:
+        with self.assertRaisesRegex(TypeError, "unexpected keyword"):
+            orchestration._authenticated_selector_source_paths(
+                Path("."),
+                "f" * 40,
+                observed_workflow_name="Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+                observed_check_name="Reusable validation / Check generated schema",
+                violations=(),
+                called_workflow_path=".github/workflows/schema.yml",
+            )
+
+    def test_exact_current_failure_and_independent_proof_use_remaining_slot(self) -> None:
+        temporary, root, current, validation, commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        with (
+            mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+            mock.patch.object(
+                fast_path,
+                "verified_validation_review_context",
+                return_value=self._review_context(current.lifecycle.head_sha),
+            ),
+        ):
+            verified = orchestration._verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=validation,
+                authenticated_commit=commit,
+                repository_root=root,
+                failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+            )
+
+        self.assertEqual(verified.source_kind, "POST_READY_IN_CONTRACT_VALIDATION_DEFECT")
+        self.assertEqual(verified.classification, "IN_CONTRACT_DEFECT")
+        self.assertTrue(verified.technically_blocking)
+        self.assertEqual(verified.current_head_sha, current.lifecycle.head_sha)
+        self.assertEqual(verified.resulting_head_sha, validation.head_sha)
+        scope = orchestration.ordinary_ready_remediation_authorization_scope(verified)
+        self.assertEqual(scope["predecessor_head_sha"], current.lifecycle.head_sha)
+        self.assertEqual(scope["resulting_head_sha"], validation.head_sha)
+        self.assertEqual(scope["finding_ids"], [verified.finding_id])
+        self.assertEqual(scope["finding_authority_digest"], verified.finding_authority_digest)
+
+        live_correction = {
+            "repository": REPOSITORY,
+            "pull_request": 971,
+            "head_sha": validation.head_sha,
+            "pr_state": "OPEN",
+            "draft": False,
+        }
+        with (
+            mock.patch.object(
+                publication, "verify_current_lifecycle_authority", return_value=current
+            ) as reread_current,
+            mock.patch.object(
+                orchestration, "_read_live_post_ready_pr", return_value=live_correction
+            ) as reread_live,
+        ):
+            issued = orchestration.issue_post_ready_validation_remediation_authorization(
+                authorization_id="post-ready-validation-defect-1",
+                reason="Correct the independently reproduced current-delivery invariant",
+                current=current,
+                finding_authority=verified,
+                signer_identity="aroviqen@secpal.app",
+                signer=lambda _payload, _domain: {
+                    "format": "ssh",
+                    "signer_identity": "aroviqen@secpal.app",
+                    "value": "fixture-signature",
+                },
+            )
+        reread_current.assert_called_once_with(REPOSITORY, 970)
+        reread_live.assert_called_once_with(REPOSITORY, 971)
+        authorization = authority.loads_closed_json(issued)
+        self.assertEqual(authorization["operation"], "REMEDIATION_COMPLETED")
+        result = authority.derive_state(
+            current.lifecycle.state,
+            authorization["operation"],
+            authorization["authorization_digest"],
+        )
+        self.assertEqual(result["remediation_cycle_count"], 2)
+        self.assertEqual(result["unrestricted_review_count"], 1)
+        self.assertTrue(result["ready"])
+        self.assertFalse(result["draft"])
+        self.assertEqual(result["ready_transition_count"], 1)
+        self.assertEqual(result["exceptional_recovery_count"], 0)
+        self.assertEqual(result["exceptional_continuation_count"], 0)
+
+        for label, reread, reread_head in (
+            ("CURRENT moved", replace(current, publication_oid="e" * 40), validation.head_sha),
+            ("live PR moved", current, "e" * 40),
+        ):
+            changed_live = {**live_correction, "head_sha": reread_head}
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    publication,
+                    "verify_current_lifecycle_authority",
+                    return_value=reread,
+                ),
+                mock.patch.object(
+                    orchestration,
+                    "_read_live_post_ready_pr",
+                    return_value=changed_live,
+                ),
+                self.assertRaisesRegex(
+                    orchestration.LifecycleOrchestrationError,
+                    "changed before remediation authorization",
+                ),
+            ):
+                orchestration.issue_post_ready_validation_remediation_authorization(
+                    authorization_id="stale-post-ready-validation-defect",
+                    reason="Attempt stale authorization",
+                    current=current,
+                    finding_authority=verified,
+                    signer_identity="aroviqen@secpal.app",
+                    signer=lambda _payload, _domain: {
+                        "format": "ssh",
+                        "signer_identity": "aroviqen@secpal.app",
+                        "value": "fixture-signature",
+                    },
+                )
+
+    def test_public_entry_uses_bounded_live_github_failure_observation(self) -> None:
+        temporary, root, current, validation, commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        live_correction = {
+            "repository": REPOSITORY,
+            "pull_request": 971,
+            "head_sha": validation.head_sha,
+            "pr_state": "OPEN",
+            "draft": False,
+        }
+        with (
+            mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+            mock.patch.object(
+                fast_path,
+                "verified_validation_review_context",
+                return_value=self._review_context(current.lifecycle.head_sha),
+            ),
+            mock.patch.object(
+                orchestration,
+                "_authenticate_maintained_correction_commit",
+                return_value=commit,
+            ) as authenticate,
+            mock.patch.object(
+                orchestration,
+                "_read_post_ready_failure",
+                return_value=observation,
+            ) as failure_reader,
+            mock.patch.object(
+                orchestration,
+                "_read_live_post_ready_pr",
+                return_value=live_correction,
+            ) as live,
+            mock.patch.object(
+                publication,
+                "verify_current_lifecycle_authority",
+                return_value=current,
+            ) as current_reader,
+        ):
+            verified = orchestration.verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=validation,
+                repository_root=root,
+            )
+        self.assertEqual(verified.current_head_sha, current.lifecycle.head_sha)
+        authenticate.assert_called_once_with(
+            root, REPOSITORY, validation.head_sha
+        )
+        failure_reader.assert_called_once_with(
+            REPOSITORY, 971, current.lifecycle.head_sha
+        )
+        self.assertEqual(live.call_count, 2)
+        current_reader.assert_called_once_with(REPOSITORY, 970)
+
+    def test_exact_current_failure_reader_survives_live_pr_advancement(self) -> None:
+        temporary, _root, current, validation, _commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        check_pages = [{
+            "total_count": 1,
+            "check_runs": [{
+                "id": 200,
+                "name": "Validate candidate",
+                "status": "completed",
+                "conclusion": "failure",
+                "details_url": (
+                    f"https://github.com/{REPOSITORY}/actions/runs/100/job/200"
+                ),
+                "app": {"slug": "github-actions"},
+            }],
+        }]
+        run_pages = [{
+            "total_count": 1,
+            "workflow_runs": [{
+                "id": 100,
+                "name": "Code Quality",
+                "path": ".github/workflows/quality.yml",
+                "event": "pull_request",
+                "head_sha": current.lifecycle.head_sha,
+                "status": "completed",
+                "conclusion": "failure",
+                "run_attempt": 2,
+                "repository": {"full_name": REPOSITORY},
+                "head_repository": {"full_name": REPOSITORY},
+                "pull_requests": [{
+                    "number": 971,
+                    "url": f"https://api.github.com/repos/{REPOSITORY}/pulls/971",
+                    "head": {"sha": validation.head_sha},
+                }],
+            }],
+        }]
+        job_pages = [{
+            "total_count": 1,
+            "jobs": [{
+                "id": 200,
+                "run_id": 100,
+                "head_sha": current.lifecycle.head_sha,
+                "status": "completed",
+                "conclusion": "failure",
+                "name": "Validate candidate",
+            }],
+        }]
+        for label, live_head in (
+            ("direct current-head case", current.lifecycle.head_sha),
+            ("post-push correction case", validation.head_sha),
+        ):
+            responses = [
+                SimpleNamespace(returncode=0, stdout=json.dumps({
+                    "state": "OPEN",
+                    "isDraft": False,
+                    "headRefOid": live_head,
+                    "headRepository": {"nameWithOwner": REPOSITORY},
+                }).encode()),
+                SimpleNamespace(returncode=0, stdout=json.dumps(check_pages).encode()),
+                SimpleNamespace(returncode=0, stdout=json.dumps(run_pages).encode()),
+                SimpleNamespace(returncode=0, stdout=json.dumps(job_pages).encode()),
+            ]
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    publication, "_run_gh", side_effect=responses
+                ) as github,
+            ):
+                observed = orchestration._read_post_ready_failure(
+                    REPOSITORY, 971, current.lifecycle.head_sha
+                )
+
+            self.assertEqual(observed, observation)
+            self.assertEqual(github.call_count, 4)
+
+    def test_exact_current_failure_reader_rejects_substitution_and_ambiguity(self) -> None:
+        cases = (
+            ("wrong head", {"head_sha": "f" * 40}, 1, None),
+            ("push event", {"event": "push"}, 1, None),
+            (
+                "foreign PR",
+                {"pull_requests": [{
+                    "number": 972,
+                    "url": f"https://api.github.com/repos/{REPOSITORY}/pulls/972",
+                }]},
+                1,
+                None,
+            ),
+            ("ambiguous failures", {}, 2, None),
+            ("incomplete check pagination", {}, 1, 2),
+            ("no failed validation", {}, 0, None),
+        )
+        for label, run_updates, failure_count, check_total in cases:
+            temporary, _root, current, validation, _commit, _observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            responses = self._historical_failure_api_responses(
+                current,
+                validation,
+                run_updates=run_updates,
+                failure_count=failure_count,
+                check_total=check_total,
+            )
+            with (
+                self.subTest(label=label),
+                mock.patch.object(publication, "_run_gh", side_effect=responses),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration._read_post_ready_failure(
+                    REPOSITORY, 971, current.lifecycle.head_sha
+                )
+
+    def test_failure_reader_accepts_no_caller_selected_run_or_job(self) -> None:
+        with self.assertRaisesRegex(TypeError, "unexpected keyword"):
+            orchestration._read_post_ready_failure(
+                REPOSITORY,
+                971,
+                "f" * 40,
+                workflow_run_id=100,
+                check_run_id=200,
+            )
+
+    def test_public_entry_rejects_live_head_or_current_movement(self) -> None:
+        cases = (
+            ("live predecessor", "live", None),
+            ("live second successor", "live", "e" * 40),
+            ("CURRENT moved", "current", None),
+        )
+        for label, movement, moved_head in cases:
+            temporary, root, current, validation, commit, observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            live_head = (
+                current.lifecycle.head_sha
+                if movement == "live" and moved_head is None
+                else moved_head or validation.head_sha
+            )
+            live = {
+                "repository": REPOSITORY,
+                "pull_request": 971,
+                "head_sha": live_head,
+                "pr_state": "OPEN",
+                "draft": False,
+            }
+            reread = current
+            if movement == "current":
+                reread = replace(current, publication_oid="e" * 40)
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    fast_path, "is_verified_validation_evidence", return_value=True
+                ),
+                mock.patch.object(
+                    orchestration,
+                    "_read_post_ready_failure",
+                    return_value=observation,
+                ),
+                mock.patch.object(
+                    orchestration,
+                    "_authenticate_maintained_correction_commit",
+                    return_value=commit,
+                ),
+                mock.patch.object(
+                    orchestration, "_read_live_post_ready_pr", return_value=live
+                ),
+                mock.patch.object(
+                    publication,
+                    "verify_current_lifecycle_authority",
+                    return_value=reread,
+                ),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration.verify_post_ready_validation_defect_authority(
+                    current,
+                    candidate_validation=validation,
+                    repository_root=root,
+                )
+
+    def test_rejects_stale_validation_review_context(self) -> None:
+        temporary, root, current, validation, commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        with (
+            mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+            mock.patch.object(
+                fast_path,
+                "verified_validation_review_context",
+                return_value=self._review_context("f" * 40),
+            ),
+            self.assertRaisesRegex(
+                orchestration.LifecycleOrchestrationError, "reviewed head"
+            ),
+        ):
+            orchestration._verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=validation,
+                authenticated_commit=commit,
+                repository_root=root,
+                failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+            )
+
+    def test_rejects_same_name_workflow_from_another_path(self) -> None:
+        temporary, root, current, validation, _commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        observation["workflow_path"] = ".github/workflows/other.yml"
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "reproduced"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=current.lifecycle.pull_request,
+                predecessor_head=current.lifecycle.head_sha,
+                predecessor_tree=current.lifecycle.tree_sha,
+                resulting_head=validation.head_sha,
+                resulting_tree=validation.tree_sha,
+                observed_workflow_name=observation["workflow_name"],
+                observed_workflow_path=observation["workflow_path"],
+            )
+
+    def test_rejects_missing_or_unparseable_successor_selector(self) -> None:
+        for selector in (None, "${{ matrix.node }}"):
+            temporary, root, current, _validation, _commit, _observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            workflow = root / ".github" / "workflows" / "quality.yml"
+            suffix = "" if selector is None else f"          node-version: '{selector}'\n"
+            workflow.write_text(
+                "name: Code Quality\njobs:\n  lint:\n    steps:\n"
+                "      - uses: actions/setup-node@immutable\n        with:\n" + suffix,
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "--amend", "--no-edit", "--quiet"],
+                check=True,
+            )
+            successor = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+            ).strip()
+            successor_tree = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+            ).strip()
+            with (
+                self.subTest(selector=selector),
+                self.assertRaisesRegex(
+                    orchestration.LifecycleOrchestrationError, "selector"
+                ),
+            ):
+                orchestration._verify_node_selector_defect_correction(
+                    root,
+                    repository=REPOSITORY,
+                    pull_request=current.lifecycle.pull_request,
+                    predecessor_head=current.lifecycle.head_sha,
+                    predecessor_tree=current.lifecycle.tree_sha,
+                    resulting_head=successor,
+                    resulting_tree=successor_tree,
+                    observed_workflow_name="Code Quality",
+                    observed_workflow_path=".github/workflows/quality.yml",
+                )
+
+    def test_rejects_filename_only_toolchain_change(self) -> None:
+        temporary, root, current, _validation, _commit, _observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        payload = root / "scripts" / "node-backdoor.py"
+        payload.parent.mkdir(exist_ok=True)
+        payload.write_text("print('unrelated')\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "--amend", "--no-edit", "--quiet"],
+            check=True,
+        )
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "unrelated"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=current.lifecycle.pull_request,
+                predecessor_head=current.lifecycle.head_sha,
+                predecessor_tree=current.lifecycle.tree_sha,
+                resulting_head=successor,
+                resulting_tree=successor_tree,
+                observed_workflow_name="Code Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+            )
+
+    def test_rejects_every_other_lifecycle_shape(self) -> None:
+        cases = (
+            ("Draft", {"ready": False, "draft": True}),
+            ("review absent", {"unrestricted_review_count": 0}),
+            ("second review", {"unrestricted_review_count": 2}),
+            ("no consumed remediation", {"remediation_cycle_count": 0}),
+            ("ordinary remediation exhausted", {"remediation_cycle_count": 2}),
+            ("wrong Ready count", {"ready_transition_count": 2}),
+            ("Cycle 3 present", {"cycle_3_absent": False}),
+            (
+                "Recovery consumed",
+                {
+                    "exceptional_recovery_count": 1,
+                    "exceptional_recovery_history": [{
+                        "sequence": 1,
+                        "transition_kind": "EXCEPTIONAL_RECOVERY",
+                        "event_authorization_digest": "b" * 64,
+                    }],
+                },
+            ),
+            (
+                "Continuation consumed",
+                {
+                    "exceptional_continuation_count": 1,
+                    "exceptional_continuation_history": [{
+                        "sequence": 1,
+                        "transition_kind": "EXCEPTIONAL_CONTINUATION",
+                        "event_authorization_digest": "c" * 64,
+                    }],
+                },
+            ),
+        )
+        for label, updates in cases:
+            temporary, root, current, validation, commit, observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            changed_state = copy.deepcopy(current.lifecycle.state)
+            changed_state.update(updates)
+            changed = replace(current, lifecycle=replace(current.lifecycle, state=changed_state))
+            with (
+                self.subTest(label=label),
+                mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration._verify_post_ready_validation_defect_authority(
+                    changed,
+                    candidate_validation=validation,
+                    authenticated_commit=commit,
+                    repository_root=root,
+                    failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+                )
+
+    def test_rejects_stale_nonfailure_and_cross_identity_observations(self) -> None:
+        cases = (
+            ("wrong repository", "repository", "SecPal/other"),
+            ("wrong pull request", "pull_request", 999),
+            ("stale head", "head_sha", "f" * 40),
+            ("closed PR", "pr_state", "CLOSED"),
+            ("Draft PR", "draft", True),
+            ("pending check", "status", "IN_PROGRESS"),
+            ("successful check", "conclusion", "SUCCESS"),
+            ("cancelled infrastructure", "conclusion", "CANCELLED"),
+            ("unrelated failed workflow", "workflow_name", "Other Workflow"),
+            ("missing run", "workflow_run_id", 0),
+            ("missing job", "check_run_id", 0),
+            ("missing attempt", "attempt", 0),
+        )
+        for label, field, value in cases:
+            temporary, root, current, validation, commit, observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            observation[field] = value
+            with (
+                self.subTest(label=label),
+                mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration._verify_post_ready_validation_defect_authority(
+                    current,
+                    candidate_validation=validation,
+                    authenticated_commit=commit,
+                    repository_root=root,
+                    failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+                )
+
+    def test_rejects_stale_validation_wrong_topology_signer_and_unrelated_change(self) -> None:
+        cases = (
+            (
+                "stale receipt",
+                lambda current, validation, commit: (
+                    replace(
+                        validation,
+                        validation_receipt_digest=current.lifecycle.validation_receipt_digest,
+                    ),
+                    commit,
+                ),
+            ),
+            (
+                "stale attestation",
+                lambda current, validation, commit: (
+                    replace(
+                        validation,
+                        final_attestation_digest=current.lifecycle.adoption_source_evidence_digest,
+                    ),
+                    commit,
+                ),
+            ),
+            (
+                "wrong parent",
+                lambda _current, validation, commit: (
+                    validation,
+                    replace(commit, parent_shas=("f" * 40,)),
+                ),
+            ),
+            (
+                "wrong signer",
+                lambda _current, validation, commit: (
+                    validation,
+                    replace(commit, signer_identity="other@example.invalid"),
+                ),
+            ),
+        )
+        for label, mutate in cases:
+            temporary, root, current, validation, commit, observation = self._inputs()
+            self.addCleanup(temporary.cleanup)
+            changed_validation, changed_commit = mutate(current, validation, commit)
+            with (
+                self.subTest(label=label),
+                mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+                self.assertRaises(orchestration.LifecycleOrchestrationError),
+            ):
+                orchestration._verify_post_ready_validation_defect_authority(
+                    current,
+                    candidate_validation=changed_validation,
+                    authenticated_commit=changed_commit,
+                    repository_root=root,
+                    failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+                )
+
+        temporary, root, current, validation, _commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        (root / "README.md").write_text("unrelated\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "--amend", "--no-edit", "--quiet"], check=True)
+        successor = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        successor_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        changed_validation = replace(validation, head_sha=successor, tree_sha=successor_tree)
+        commit_fields = {
+            "repository": REPOSITORY,
+            "head_sha": successor,
+            "tree_sha": successor_tree,
+            "parent_shas": [current.lifecycle.head_sha],
+            "signer_kind": "SSH_PRINCIPAL",
+            "signer_identity": "aroviqen@secpal.app",
+            "signature_fingerprint": "SHA256:fixture",
+            "signature_classification": "GOODSIG",
+            "signature_policy_digest": "a" * 64,
+        }
+        changed_commit = fast_path.AuthenticatedIntegrationCommit(
+            **{**commit_fields, "parent_shas": (current.lifecycle.head_sha,)},
+            authentication_digest=fast_path.digest_json(commit_fields),
+        )
+        with (
+            mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True),
+            self.assertRaisesRegex(
+                orchestration.LifecycleOrchestrationError, "unrelated"
+            ),
+        ):
+            orchestration._verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=changed_validation,
+                authenticated_commit=changed_commit,
+                repository_root=root,
+                failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+            )
+
+        temporary, root, current, _validation, _commit, _observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        (root / "package.json").write_text(
+            '{"engines":{"node":"^24.0.0"}}\n', encoding="utf-8"
+        )
+        subprocess.run(["git", "-C", str(root), "add", "package.json"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "--amend", "--no-edit", "--quiet"], check=True)
+        weakened_head = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ).strip()
+        weakened_tree = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "engine contract"
+        ):
+            orchestration._verify_node_selector_defect_correction(
+                root,
+                repository=REPOSITORY,
+                pull_request=current.lifecycle.pull_request,
+                predecessor_head=current.lifecycle.head_sha,
+                predecessor_tree=current.lifecycle.tree_sha,
+                resulting_head=weakened_head,
+                resulting_tree=weakened_tree,
+                observed_workflow_name="Code Quality",
+                observed_workflow_path=".github/workflows/quality.yml",
+            )
+
+    def test_source_modes_are_not_substitutable_and_authorization_is_finite(self) -> None:
+        temporary, root, current, validation, commit, observation = self._inputs()
+        self.addCleanup(temporary.cleanup)
+        with mock.patch.object(fast_path, "is_verified_validation_evidence", return_value=True):
+            verified = orchestration._verify_post_ready_validation_defect_authority(
+                current,
+                candidate_validation=validation,
+                authenticated_commit=commit,
+                repository_root=root,
+                failure_reader=lambda _repository, _pull_request, _head: copy.deepcopy(observation),
+            )
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            orchestration.issue_ready_remediation_provider_growth_authorization(
+                authorization_id="wrong-source",
+                reason="Attempt source substitution",
+                current=current,
+                finding_authority=verified,
+                signer_identity="aroviqen@secpal.app",
+                signer=lambda _payload, _domain: {
+                    "format": "ssh",
+                    "signer_identity": "aroviqen@secpal.app",
+                    "value": "fixture-signature",
+                },
+            )
+        with self.assertRaisesRegex(
+            orchestration.LifecycleOrchestrationError, "maintained issuer"
+        ):
+            orchestration.create_user_authorization(
+                authorization_id="caller-selected-transition",
+                repository=REPOSITORY,
+                delivery_issue=current.lifecycle.delivery_issue,
+                lifecycle=current.lifecycle,
+                publication_oid=current.publication_oid,
+                publication_digest=current.publication_digest,
+                operation="HEAD_ADVANCED",
+                reason="Attempt caller-selected substitution",
+                scope=orchestration.ordinary_ready_remediation_authorization_scope(verified),
+                signer_identity="aroviqen@secpal.app",
+                signer=lambda _payload, _domain: {
+                    "format": "ssh",
+                    "signer_identity": "aroviqen@secpal.app",
+                    "value": "fixture-signature",
+                },
+            )
+        exhausted = authority.derive_state(
+            current.lifecycle.state, "REMEDIATION_COMPLETED", "d" * 64
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "budget is exhausted"
+        ):
+            authority.derive_state(exhausted, "REMEDIATION_COMPLETED", "e" * 64)
+
+
+class ReadyIntegrationRemediationTests(TestCase):
+    """Real signed integration, protected-journal read-back and ordinary candidate."""
+
+    @classmethod
+    def setUpClass(cls):
+        def load(name, filename):
+            spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "tests" / filename)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+            return module
+
+        cls.actions_fixture = load("ready_remediation_actions_fixture", "secpal-pr-review-actions-unit.py")
+        cls.publication_fixture = load("ready_remediation_publication_fixture", "secpal-lifecycle-publication-unit.py")
+
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.root, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def signed_commit(self, tree, parents, message):
+        args = ["commit-tree", "-S", tree]
+        for parent in parents:
+            args.extend(["-p", parent])
+        return self.git(*args, "-m", message)
+
+    def source_tree(self, parent_tree, path, body):
+        self.git("read-tree", parent_tree)
+        (self.root / path).write_text(body)
+        self.git("add", "--", path)
+        return self.git("write-tree")
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix="ready-remediation-source-")
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        key = self.root / "fixture-key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
+        allowed = self.root / "allowed-signers"
+        allowed.write_text("aroviqen " + key.with_suffix(".pub").read_text())
+        self.git("init", "-q")
+        for name, value in (("user.name", "Fixture"), ("user.email", "fixture@example.test"),
+                            ("gpg.format", "ssh"), ("user.signingkey", str(key)),
+                            ("gpg.ssh.allowedSignersFile", str(allowed))):
+            self.git("config", name, value)
+        self.git("remote", "add", "origin", "https://github.com/SecPal/.github.git")
+        empty = self.git("mktree")
+        baseline = self.source_tree(empty, "source.txt", "reviewed source\n")
+        base = self.signed_commit(baseline, [], "base")
+        h0 = self.signed_commit(baseline, [base], "reviewed source")
+        first_correction = self.source_tree(baseline, "source.txt", "first ordinary correction\n")
+        main_tree = self.source_tree(baseline, "main.txt", "accepted main\n")
+        main_parent = self.signed_commit(main_tree, [base], "current main")
+        self.acquisition_raw = None
+        if self._testMethodName.startswith("test_bounded_codex"):
+            self.reviewed, self.resulting, self.predecessor_eligibility, self.eligibility, summary, _, self.acquisition_raw = first_fallback_growth()
+        else:
+            self.reviewed, self.resulting, self.predecessor_eligibility, self.eligibility, summary = multi_provider_ready_growth()
+        self.reviewed.head_sha = h0
+        self.reviewed.base_sha = main_parent
+        self.reviewed.refresh_digests()
+        self.predecessor_eligibility.update(reviewed_head_sha=h0, reviewed_state_digest=self.reviewed.state_digest)
+        bound = self._testMethodName != "test_unbound_integration_without_predecessor_resolution"
+        if not bound:
+            self.predecessor_eligibility["eligible_threads"] = []
+            self.resulting.feedback["threads"][0] = copy.deepcopy(self.reviewed.feedback["threads"][0])
+        self.registry = self.actions_fixture.fast_registry()
+        prior_receipt = fast_path.create_validation_receipt(
+            repository=REPOSITORY, head_sha=h0, validated_tree_sha=first_correction,
+            registry=self.registry, command_set=self.registry["validation"],
+            successful_result=True, reviewed_state=self.reviewed, manual_gate_evidence=[],
+            eligibility_evidence_digest=fast_path.digest_json(self.predecessor_eligibility),
+        )
+        r0 = self.signed_commit(first_correction, [h0], "first ordinary correction\n\nSecPal-Validation-Receipt: " + prior_receipt["receipt_digest"])
+        prior_attestation = fast_path.create_validation_attestation(
+            repository=REPOSITORY, head_sha=r0, registry=self.registry,
+            command_set=self.registry["validation"], successful_result=True,
+            reviewed_state=self.reviewed, validation_receipt=prior_receipt,
+        )
+        prior_validation = fast_path.verify_validation_attestation(
+            prior_attestation, repository=REPOSITORY, head_sha=r0, registry=self.registry,
+            command_set=self.registry["validation"], reviewed_state=self.reviewed,
+            commit_parent_sha=h0, commit_tree_sha=first_correction,
+            commit_validation_receipt_digest=prior_receipt["receipt_digest"], delivery_issue_number=1070,
+        )
+        # Reuse only the hermetic journal transport and signature fixture.
+        pf = self.publication_fixture
+        journal = pf.LifecyclePublicationTests()
+        journal.setUp()
+        self.addCleanup(journal.tearDown)
+        chain = pf.Chain(1070, pull_request=self.reviewed.pull_request_number)
+        chain.initialization = authority.create_delivery_initialization(
+            repository=REPOSITORY, delivery_issue=1070, pull_request=self.reviewed.pull_request_number,
+            initial_head_sha=h0, validation_receipt_digest="1" * 64, final_attestation_digest="2" * 64,
+            signer_identity=pf.SIGNER, signer=pf.signer_for(),
+        )
+        chain.lifecycle_id = authority.delivery_initialization_lifecycle_id(chain.initialization["initialization_digest"])
+        chain.head = h0
+        for transition in ("INITIALIZED_DRAFT", "DRAFT_TO_READY", "UNRESTRICTED_REVIEW_CONSUMED"):
+            chain.append(transition, head=h0)
+        remediation = authority.create_transition_authorization(
+            event_id="first-remediation", repository=REPOSITORY, delivery_issue=1070,
+            lifecycle_id=chain.lifecycle_id, pull_request=self.reviewed.pull_request_number,
+            predecessor_authority_digest=chain.authorities[-1]["authority_digest"], predecessor_head_sha=h0,
+            resulting_head_sha=r0, transition_kind="REMEDIATION_COMPLETED", replacement_pull_request=None,
+            initialization_evidence_digest=chain.initialization["initialization_digest"],
+            signer_identity=pf.SIGNER, signer=pf.signer_for(),
+        )
+        snapshot = authority.issue_lifecycle_authority(
+            predecessor_chain=chain.authorities, transition_authorizations=chain.events,
+            authorization=remediation, signer_identity=pf.SIGNER, authority_signer=pf.signer_for(),
+            accepted_event_signers=frozenset({pf.SIGNER}), accepted_authority_signers=frozenset({pf.SIGNER}),
+            signature_verifier=pf.verify_signature, current_head_evidence=prior_validation,
+        )
+        chain.events.append(remediation)
+        chain.authorities.append(snapshot)
+        chain.head = r0
+        _, prior = journal.enroll(chain)
+        tree = self.git("merge-tree", "--write-tree", r0, main_parent)
+        self.integration = self.actions_fixture.ready_integration_evidence(
+            self.reviewed, validated_tree=tree, registry=self.registry,
+            exceptional_recoveries=int(self._testMethodName == "test_integration_finite_state_must_match_current"),
+        )
+        self.integration.update(schema_version="1.2", reviewed_head_sha=h0,
+                                prior_delivery_head_sha=r0, ordered_parent_shas=[r0, main_parent],
+                                delivery_issue_number=1070)
+        self.integration["eligibility"]["lifecycle_identity"] = chain.lifecycle_id
+        self.prior_authority = self.actions_fixture.ready_integration_prior_authority(
+            self.reviewed, exceptional_recoveries=0,
+        )
+        self.prior_authority.update(
+            delivery_issue_number=1070, prior_delivery_head_sha=r0,
+            prior_delivery_tree_sha=first_correction,
+            prior_validation_receipt_digest=prior_receipt["receipt_digest"],
+            prior_final_attestation_digest=prior_attestation["attestation_digest"],
+            publication={"object_oid": prior.publication_oid, "publication_digest": prior.publication_digest},
+        )
+        self.prior_authority["lifecycle"].update(
+            identity=chain.lifecycle_id, current_authority_digest=prior.lifecycle.authority_digest,
+            historical_proof_mode=prior.lifecycle.historical_proof_mode,
+        )
+        if self._testMethodName == "test_signed_integration_claiming_wrong_prior_authority_rejected":
+            self.prior_authority["delivery_issue_number"] = 9
+        if self._testMethodName == "test_signed_integration_claiming_wrong_prior_publication_rejected":
+            self.prior_authority["publication"]["object_oid"] = "a" * 40
+        if self._testMethodName == "test_signed_integration_claiming_wrong_prior_receipt_rejected":
+            self.prior_authority["prior_validation_receipt_digest"] = "a" * 64
+        self.integration["prior_authority_digest"] = fast_path.digest_json(self.prior_authority)
+        self.tag_ref = "refs/tags/secpal-ready-integration-prior-authority-1070-" + str(self.reviewed.pull_request_number) + "-" + r0
+        self.git("tag", "-s", self.tag_ref.removeprefix("refs/tags/"), r0,
+                 "-m", "Ready prior authority\n\nSecPal-Prior-Authority: " + self.integration["prior_authority_digest"])
+        self.integration["prior_authority_tag_object_sha"] = self.git("rev-parse", self.tag_ref + "^{tag}")
+        self.integration.update(fast_path.derive_ready_integration_tree_evidence(
+            self.root, [r0, main_parent], tree, schema_version="1.2",
+        ))
+        self.receipt = fast_path.create_validation_receipt(
+            repository=REPOSITORY, head_sha=r0, validated_tree_sha=tree,
+            registry=self.registry, command_set=self.registry["validation"],
+            successful_result=True, reviewed_state=self.reviewed, manual_gate_evidence=[],
+            integration_evidence_digest=fast_path.digest_json(self.integration),
+            eligibility_evidence_digest=fast_path.digest_json(self.predecessor_eligibility) if bound else None,
+        )
+        h1 = self.signed_commit(tree, [r0, main_parent],
+            "integrate main\n\nSecPal-Validation-Receipt: " + self.receipt["receipt_digest"]
+            + "\nSecPal-Ready-Integration: " + fast_path.digest_json(self.integration))
+        self.attestation = fast_path.create_ready_integration_attestation(
+            repository=REPOSITORY, head_sha=h1, registry=self.registry,
+            command_set=self.registry["validation"], reviewed_state=self.reviewed,
+            validation_receipt=self.receipt, integration_evidence=self.integration,
+        )
+        self.predecessor = fast_path.verify_ready_integration_attestation(
+            self.attestation, repository=REPOSITORY, head_sha=h1, registry=self.registry,
+            command_set=self.registry["validation"], reviewed_state=self.reviewed,
+            validation_receipt=self.receipt, integration_evidence=self.integration,
+            commit_parent_shas=[r0, main_parent], commit_tree_sha=tree,
+            commit_validation_receipt_digest=self.receipt["receipt_digest"],
+            commit_integration_evidence_digest=fast_path.digest_json(self.integration),
+            repository_root=self.root, signature_policy=self.registry["signature_policy"],
+        )
+        self.resulting.head_sha = h1
+        self.resulting.base_sha = main_parent
+        for review in self.resulting.feedback["reviews"]:
+            review["commit_oid"] = h1
+        summary = summary.replace(
+            "79f0467d70ec0933f063fb3587144b49483bfefd", h1).replace("79f0467", h1[:7])
+        self.resulting.provider_summary_body = summary
+        self.resulting.feedback["conversation_comments"][0]["body_digest"] = fast_path.digest_text(summary)
+        if self.acquisition_raw is not None:
+            pull = self.acquisition_raw["data"]["repository"]["pullRequest"]
+            pull["headRefOid"] = h1
+            for event in pull["timelineItems"]["nodes"]:
+                if event["__typename"] == "PullRequestCommit":
+                    event["commit"]["oid"] = h1 if event["id"] == "PURC_H1" else h0
+                elif event["__typename"] == "PullRequestReview":
+                    event["commit"]["oid"] = h1
+                    event["body"] = event["body"].replace("79f0467d70", h1[:10])
+                    self.resulting.feedback["reviews"][0]["body_digest"] = fast_path.digest_text(event["body"])
+                elif event["__typename"] == "IssueComment":
+                    event["body"] = event["body"].replace("79f0467d70ec0933f063fb3587144b49483bfefd", h1).replace("79f0467d70", h1[:10]).replace("79f0467", h1[:7])
+            first_fallback_feedback(self.resulting, self.acquisition_raw)
+        self.resulting.refresh_digests()
+        self.eligibility.update(reviewed_head_sha=h1, reviewed_state_digest=self.resulting.state_digest)
+        correction_tree = self.source_tree(tree, "source.txt", "correct the complete provider-growth finding set\n")
+        receipt = fast_path.create_validation_receipt(
+            repository=REPOSITORY, head_sha=h1, validated_tree_sha=correction_tree,
+            registry=self.registry, command_set=self.registry["validation"],
+            successful_result=True, reviewed_state=self.resulting, manual_gate_evidence=[],
+            eligibility_evidence_digest=fast_path.digest_json(self.eligibility),
+        )
+        h2 = self.signed_commit(correction_tree, [h1], "ordinary correction\n\nSecPal-Validation-Receipt: " + receipt["receipt_digest"])
+        attestation = fast_path.create_validation_attestation(
+            repository=REPOSITORY, head_sha=h2, registry=self.registry,
+            command_set=self.registry["validation"], successful_result=True,
+            reviewed_state=self.resulting, validation_receipt=receipt,
+        )
+        self.candidate = fast_path.verify_validation_attestation(
+            attestation, repository=REPOSITORY, head_sha=h2, registry=self.registry,
+            command_set=self.registry["validation"], reviewed_state=self.resulting,
+            commit_parent_sha=h1, commit_tree_sha=correction_tree,
+            commit_validation_receipt_digest=receipt["receipt_digest"], delivery_issue_number=1070,
+        )
+        event = authority.create_transition_authorization(
+            event_id="integration-head-advanced", repository=REPOSITORY, delivery_issue=1070,
+            lifecycle_id=chain.lifecycle_id, pull_request=self.reviewed.pull_request_number,
+            predecessor_authority_digest=prior.lifecycle.authority_digest, predecessor_head_sha=r0,
+            resulting_head_sha=h1, transition_kind="HEAD_ADVANCED", replacement_pull_request=None,
+            initialization_evidence_digest=chain.initialization["initialization_digest"],
+            signer_identity=pf.SIGNER, signer=pf.signer_for(),
+        )
+        snapshot = authority.issue_lifecycle_authority(
+            predecessor_chain=chain.authorities, transition_authorizations=chain.events,
+            authorization=event, signer_identity=pf.SIGNER, authority_signer=pf.signer_for(),
+            accepted_event_signers=frozenset({pf.SIGNER}), accepted_authority_signers=frozenset({pf.SIGNER}),
+            signature_verifier=pf.verify_signature, current_head_evidence=self.predecessor,
+        )
+        chain.events.append(event)
+        chain.authorities.append(snapshot)
+        self.current = publication.advance_current_terminal(chain.published(), signer_identity=pf.SIGNER, signer=pf.signer_for())
+
+    def verify(self, **updates):
+        arguments = dict(predecessor_validation=self.predecessor, candidate_validation=self.candidate,
+                         predecessor_eligibility_evidence=self.predecessor_eligibility,
+                         eligibility_evidence=self.eligibility,
+                         predecessor_prior_authority=self.prior_authority)
+        arguments.update(updates)
+        with mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=self.resulting):
+            return orchestration.verify_ready_remediation_provider_growth_authority(self.current, **arguments)
+
+    def test_authenticated_integration_predecessor_and_ordinary_candidate(self):
+        verified = self.verify()
+        self.assertEqual(verified.finding_ids, tuple(sorted(
+            finding for thread in self.eligibility["eligible_threads"] for finding in thread["finding_ids"])))
+        self.assertEqual(verified.current_head_sha, self.predecessor.head_sha)
+        self.assertEqual(verified.resulting_head_sha, self.candidate.head_sha)
+        self.assertEqual(json.loads(self.predecessor._verification_seal.provenance_json)["kind"], "READY_INTEGRATION")
+        result = authority.require_forward_transition(self.current.lifecycle.state, "REMEDIATION_COMPLETED", "d" * 64)
+        self.assertEqual(result["remediation_cycle_count"], 2)
+        self.assertEqual({k: v for k, v in result.items() if k != "remediation_cycle_count"},
+                         {k: v for k, v in self.current.lifecycle.state.items() if k != "remediation_cycle_count"})
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            authority.require_forward_transition(result, "REMEDIATION_COMPLETED", "e" * 64)
+
+    def test_bounded_codex_acquisition_composes_with_authenticated_integration_predecessor(self):
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        observed = first_fallback_observation(self.acquisition_raw)
+        acquired = acquisition._admit(self.current, self.resulting, observed)
+        with mock.patch.object(acquisition, "authenticate_first_fallback_acquisitions", return_value=acquired):
+            verified = self.verify()
+        self.assertEqual(verified.finding_ids, tuple(sorted(v["finding_ids"][0] for v in self.eligibility["eligible_threads"])))
+        self.assertEqual(verified.current_head_sha, self.predecessor.head_sha)
+        self.assertEqual(json.loads(self.predecessor._verification_seal.provenance_json)["kind"], "READY_INTEGRATION")
+        self.assertEqual(json.loads(self.candidate._verification_seal.provenance_json)["kind"], "ORDINARY")
+        after = authority.require_forward_transition(self.current.lifecycle.state, "REMEDIATION_COMPLETED", "d" * 64)
+        self.assertEqual(after["remediation_cycle_count"], 2)
+        self.assertEqual(after["unrestricted_review_count"], 1)
+
+    def test_integration_finite_state_must_match_current(self):
+        self.assertTrue(fast_path.is_verified_validation_evidence(self.predecessor))
+        self.assertEqual(self.current.lifecycle.state["exceptional_recovery_count"], 0)
+        self.assertEqual(self.integration["eligibility"]["exceptional_recoveries_after"], 1)
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify()
+
+    def test_claimed_prior_authority_requires_authentication(self):
+        self.assertTrue(fast_path.is_verified_validation_evidence(self.predecessor))
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify(predecessor_prior_authority=None)
+
+    def test_signed_integration_claiming_wrong_prior_authority_rejected(self):
+        self.assertTrue(fast_path.is_verified_validation_evidence(self.predecessor))
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify()
+
+    def test_signed_integration_claiming_wrong_prior_publication_rejected(self):
+        self.assertTrue(fast_path.is_verified_validation_evidence(self.predecessor))
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify()
+
+    def test_signed_integration_claiming_wrong_prior_receipt_rejected(self):
+        self.assertTrue(fast_path.is_verified_validation_evidence(self.predecessor))
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify()
+
+    def test_prior_authority_manifest_and_tag_substitution_rejected(self):
+        for field, value in (("repository", "SecPal/api"), ("delivery_issue_number", 9),
+                             ("pull_request_number", 9), ("prior_delivery_head_sha", "a" * 40),
+                             ("prior_delivery_tree_sha", "a" * 40),
+                             ("prior_validation_receipt_digest", "a" * 64),
+                             ("prior_final_attestation_digest", "a" * 64)):
+            changed = copy.deepcopy(self.prior_authority)
+            changed[field] = value
+            with self.subTest(field=field), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.verify(predecessor_prior_authority=changed)
+        self.git("update-ref", "-d", self.tag_ref)
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify()
+
+    def test_unbound_integration_without_predecessor_resolution(self):
+        reviewed, digest = fast_path.verified_ready_integration_review_context(self.predecessor)
+        self.assertEqual(reviewed.to_dict(), self.reviewed.to_dict())
+        self.assertIsNone(digest)
+        self.assertTrue(self.verify().finding_ids)
+        changed = copy.deepcopy(self.predecessor_eligibility)
+        changed["eligible_threads"] = [{
+            "thread_id": "PRRT_PREDECESSOR_FIXED", "classification": "VALID_ACTIONABLE",
+            "disposition": "CORRECTED_AND_VERIFIED", "finding_ids": ["PRRC_PREDECESSOR_FIXED"],
+            "evidence_digest": "5" * 64, "follow_up": None,
+        }]
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify(predecessor_eligibility_evidence=changed)
+
+    def test_raw_forged_and_substituted_validation_rejected(self):
+        cases = [self.integration, replace(self.predecessor, _verification_seal=None),
+                 replace(self.predecessor, _verification_seal=object())]
+        for field, value in (("repository", "SecPal/contracts"), ("delivery_issue_number", 1071),
+                             ("pull_request_number", 1042), ("head_sha", "a" * 40),
+                             ("tree_sha", "a" * 40), ("validation_receipt_digest", "a" * 64),
+                             ("final_attestation_digest", "a" * 64),
+                             ("source_validation_evidence_digest", "a" * 64)):
+            cases.append(replace(self.predecessor, **{field: value}))
+        for value in cases:
+            with self.subTest(value=str(type(value))), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.verify(predecessor_validation=value)
+
+    def test_provenance_and_integration_substitution_rejected(self):
+        original = json.loads(self.predecessor._verification_seal.provenance_json)
+        mutations = [
+            ("receipt", lambda p: p["validation_receipt"].update(receipt_digest="a" * 64)),
+            ("attestation", lambda p: p["attestation"].update(attestation_digest="a" * 64)),
+            ("integration", lambda p: p["integration_evidence"].update(authorization_id="substituted")),
+            ("parents", lambda p: p["commit_parent_shas"].reverse()),
+            ("main", lambda p: p["integration_evidence"]["target_base"].update(observed_sha="a" * 40)),
+            ("signer", lambda p: p["integration_evidence"]["expected_signer"].update(identity="other")),
+            ("signature policy", lambda p: p["signature_policy"].update(accepted_formats=[])),
+            ("reviewed state", lambda p: p["reviewed_state"].update(head_sha="a" * 40)),
+            ("reviewed malformed", lambda p: p.update(reviewed_state={})),
+            ("eligibility malformed", lambda p: p["attestation"].update(eligibility_evidence_digest=[])),
+            ("eligibility mismatch", lambda p: p["attestation"].update(eligibility_evidence_digest="a" * 64)),
+        ]
+        for kind in ("EXCEPTIONAL_RECOVERY", "EXCEPTIONAL_CONTINUATION",
+                     "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION", "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+                     "QUALIFIED_REMEDIATION_SUCCESSOR_LOSS", "UNKNOWN"):
+            mutations.append((kind, lambda p, kind=kind: p.update(kind=kind)))
+        for label, mutate in mutations:
+            provenance = copy.deepcopy(original)
+            mutate(provenance)
+            value = replace(self.predecessor, _verification_seal=fast_path._VerifiedValidationEvidenceSeal(
+                fast_path.canonical_json_bytes(provenance).decode()))
+            with self.subTest(label=label), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.verify(predecessor_validation=value)
+        for raw in ("{", "[]", "{}"):
+            with self.subTest(raw=raw), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.verify(predecessor_validation=replace(self.predecessor,
+                    _verification_seal=fast_path._VerifiedValidationEvidenceSeal(raw)))
+
+    def test_signature_substitution_rejected(self):
+        self.git("config", "gpg.ssh.allowedSignersFile", str(self.root / "missing-signers"))
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify()
+
+    def test_valid_integration_from_another_delivery_rejected(self):
+        provenance = json.loads(self.predecessor._verification_seal.provenance_json)
+        provenance.pop("kind")
+        provenance.pop("attestation")
+        integration = provenance["integration_evidence"]
+        integration["delivery_issue_number"] = 1071
+        receipt = fast_path.create_validation_receipt(
+            repository=REPOSITORY, head_sha=integration["prior_delivery_head_sha"],
+            validated_tree_sha=self.predecessor.tree_sha, registry=self.registry,
+            command_set=self.registry["validation"], successful_result=True,
+            reviewed_state=self.reviewed, manual_gate_evidence=[],
+            integration_evidence_digest=fast_path.digest_json(integration),
+            eligibility_evidence_digest=fast_path.digest_json(self.predecessor_eligibility),
+        )
+        head = self.signed_commit(self.predecessor.tree_sha, integration["ordered_parent_shas"],
+            "another delivery\n\nSecPal-Validation-Receipt: " + receipt["receipt_digest"]
+            + "\nSecPal-Ready-Integration: " + fast_path.digest_json(integration))
+        attestation = fast_path.create_ready_integration_attestation(
+            repository=REPOSITORY, head_sha=head, registry=self.registry,
+            command_set=self.registry["validation"], reviewed_state=self.reviewed,
+            validation_receipt=receipt, integration_evidence=integration,
+        )
+        provenance.update(head_sha=head, reviewed_state=self.reviewed, validation_receipt=receipt,
+                          commit_validation_receipt_digest=receipt["receipt_digest"],
+                          commit_integration_evidence_digest=fast_path.digest_json(integration))
+        authenticated = fast_path.verify_ready_integration_attestation(attestation, **provenance)
+        self.assertTrue(fast_path.is_verified_validation_evidence(authenticated))
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify(predecessor_validation=authenticated)
+
+    def test_candidate_remains_ordinary_only(self):
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify(candidate_validation=self.predecessor)
+        for family in ("exceptional_recovery_evidence_digest", "exceptional_continuation_evidence_digest"):
+            p = json.loads(self.candidate._verification_seal.provenance_json)
+            receipt = fast_path.create_validation_receipt(
+                repository=REPOSITORY, head_sha=self.resulting.head_sha, validated_tree_sha=self.candidate.tree_sha,
+                registry=self.registry, command_set=self.registry["validation"], successful_result=True,
+                reviewed_state=self.resulting, manual_gate_evidence=[],
+                eligibility_evidence_digest=fast_path.digest_json(self.eligibility), **{family: "a" * 64})
+            attestation = fast_path.create_validation_attestation(
+                repository=REPOSITORY, head_sha=self.candidate.head_sha, registry=self.registry,
+                command_set=self.registry["validation"], successful_result=True,
+                reviewed_state=self.resulting, validation_receipt=receipt)
+            p.pop("kind")
+            p.pop("attestation")
+            p["reviewed_state"] = self.resulting
+            p["commit_validation_receipt_digest"] = receipt["receipt_digest"]
+            value = fast_path.verify_validation_attestation(attestation, **p)
+            self.assertTrue(fast_path.is_verified_validation_evidence(value))
+            with self.subTest(family=family), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.verify(candidate_validation=value)
+            with self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.verify(predecessor_validation=value)
+
+    def test_current_and_finite_state_drift_rejected(self):
+        original = self.current
+        updates = [("unrestricted_review_count", 2), ("remediation_cycle_count", 0),
+                   ("remediation_cycle_count", 2), ("ready_transition_count", 2),
+                   ("cycle_3_absent", False), ("ready", False), ("draft", True),
+                   ("exceptional_recovery_count", 1), ("exceptional_continuation_count", 1)]
+        for field, value in updates:
+            state = {**original.lifecycle.state, field: value}
+            self.current = replace(original, lifecycle=replace(original.lifecycle, state=state))
+            with self.subTest(field=field, value=value), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.verify()
+        for field, value in (("head_sha", "a" * 40), ("tree_sha", "a" * 40),
+                             ("validation_receipt_digest", "a" * 64),
+                             ("adoption_source_evidence_digest", "a" * 64),
+                             ("source_validation_evidence_digest", "a" * 64)):
+            self.current = replace(original, lifecycle=replace(original.lifecycle, **{field: value}))
+            with self.subTest(field=field), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.verify()
+        self.current = replace(original, publication_oid="a" * 40)
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify()
+
+    def test_feedback_findings_and_eligibility_cannot_be_subsets(self):
+        for key in ("predecessor_eligibility_evidence", "eligibility_evidence"):
+            document = copy.deepcopy(self.predecessor_eligibility if key.startswith("predecessor") else self.eligibility)
+            document["eligible_threads"].pop()
+            with self.subTest(key=key), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.verify(**{key: document})
+        subset = copy.deepcopy(self.resulting)
+        subset.feedback["threads"].pop()
+        subset.refresh_digests()
+        with mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=subset):
+            with self.assertRaises(orchestration.LifecycleOrchestrationError):
+                orchestration.verify_ready_remediation_provider_growth_authority(
+                    self.current, predecessor_validation=self.predecessor, candidate_validation=self.candidate,
+                    predecessor_eligibility_evidence=self.predecessor_eligibility, eligibility_evidence=self.eligibility,
+                    predecessor_prior_authority=self.prior_authority)
+        scope = self.verify()
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            orchestration.ordinary_ready_remediation_authorization_scope(replace(scope, finding_ids=scope.finding_ids[:-1]))
 
 
 if __name__ == "__main__":

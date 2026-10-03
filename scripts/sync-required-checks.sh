@@ -160,21 +160,33 @@ ensure_known_repository() {
   fi
 }
 
-build_payload() {
+required_checks_strict() {
   local repo="$1"
 
   ensure_known_repository "$repo"
+  [[ "$repo" == ".github" ]] && printf 'true\n' || printf 'false\n'
+}
+
+build_payload() {
+  local repo="$1"
+  local strict
+
+  ensure_known_repository "$repo"
+  strict="$(required_checks_strict "$repo")"
 
   jq -n \
     --arg repo "$repo" \
     --argjson config "$REQUIRED_CONTEXTS_JSON" \
-    '{strict: false, checks: ($config[$repo] | map({context: ., app_id: -1}))}'
+    --argjson strict "$strict" \
+    '{strict: $strict, checks: ($config[$repo] | map({context: ., app_id: -1}))}'
 }
 
 build_live_preserving_payload() {
   local repo="$1"
   local live_state_file="$2"
-  local canonical_contexts live_contexts unexpected_contexts
+  local canonical_contexts live_contexts strict unexpected_contexts
+
+  strict="$(required_checks_strict "$repo")"
 
   if ! jq -e '
     type == "object" and
@@ -219,8 +231,8 @@ build_live_preserving_payload() {
     exit 1
   fi
 
-  jq --argjson canonical "$canonical_contexts" '{
-      strict: false,
+  jq --argjson canonical "$canonical_contexts" --argjson strict "$strict" '{
+      strict: $strict,
       checks: [
         $canonical[] as $context
         | ((.checks | map(select(.context == $context)) | first) // {

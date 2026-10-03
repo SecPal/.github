@@ -17,6 +17,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Sequence
 from unittest import TestCase, main, mock
 
@@ -145,6 +146,12 @@ class FakeGit:
                 )
             else:
                 stdout = f"[GNUPG:] VALIDSIG {self.signer_fingerprint} 2026-01-01\n"
+        elif call == ("merge-base", "--all", self.reviewed_head, self.second_parent):
+            stdout = "8" * 40 + "\n"
+        elif call == ("merge-tree", "--write-tree", "--no-messages", "--name-only", "-z", self.reviewed_head, self.second_parent):
+            stdout = self.tree + "\x00"
+        elif call == ("diff-tree", "--raw", "-r", "--no-abbrev", "-z", "--no-renames", self.tree, self.tree):
+            stdout = ""
         elif call == ("config", "--global", "--get", "gpg.format"):
             stdout = f"{self.signature_format}\n"
         elif call == ("config", "--global", "--get", "user.signingkey"):
@@ -184,6 +191,102 @@ def _current_registry_git_result(
         ROOT, arguments, allow_failure=allow_failure
     )
     return result.returncode, result.stdout
+
+
+def _synthetic_historical_registry(
+    repository: str,
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
+    registry = json.loads(MODULE.REGISTRY_PATH.read_text(encoding="utf-8"))
+    entry = next(
+        item
+        for item in registry["repositories"]
+        if item["repository"] == repository
+    )
+    if entry["focused_validation"]:
+        entry["focused_validation"] = entry["focused_validation"][:-1]
+    else:
+        entry["required_local_validation"] = entry[
+            "required_local_validation"
+        ][:-1]
+    schema = json.loads(
+        MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH.read_text(
+            encoding="utf-8"
+        )
+    )
+    registry["historical_fixture"] = True
+    schema["required"].append("historical_fixture")
+    schema["properties"]["historical_fixture"] = {"const": True}
+    schema_raw = json.dumps(schema)
+    return registry, schema_raw, MODULE._validation_registry_binding(entry)
+
+
+def _bounded_central_history(
+    *,
+    registry_raw: str,
+    schema_raw: str,
+    delivery_head: str,
+    history_commit: str,
+) -> Any:
+    central_tip = "c" * 40
+    newer_history_commit = "d" * 40
+    current_registry_raw = MODULE.REGISTRY_PATH.read_text(encoding="utf-8")
+    current_schema_raw = (
+        MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH.read_text(
+            encoding="utf-8"
+        )
+    )
+
+    def read(
+        arguments: list[str], *, allow_failure: bool = False
+    ) -> tuple[int, str]:
+        del allow_failure
+        call = tuple(arguments)
+        if call == ("remote", "get-url", "origin"):
+            return 0, "https://github.com/SecPal/.github.git\n"
+        if call == ("rev-parse", "HEAD"):
+            return 0, f"{central_tip}\n"
+        if call == ("cat-file", "-e", f"{delivery_head}^{{commit}}"):
+            return (0, "") if delivery_head == history_commit else (1, "")
+        if call == (
+            "merge-base",
+            "--is-ancestor",
+            delivery_head,
+            central_tip,
+        ):
+            return 0, ""
+        if call == (
+            "log",
+            "--format=%H",
+            central_tip,
+            "--",
+            MODULE.fast_path.DELIVERY_REGISTRY_PATH,
+        ):
+            return 0, f"{newer_history_commit}\n{history_commit}\n"
+        if call == (
+            "show",
+            f"{newer_history_commit}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
+        ):
+            return 0, current_registry_raw
+        if call == (
+            "show",
+            f"{newer_history_commit}:"
+            f"{MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}",
+        ):
+            return 0, current_schema_raw
+        if call == (
+            "show",
+            f"{history_commit}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
+        ):
+            return 0, registry_raw
+        if call == (
+            "show",
+            f"{history_commit}:"
+            f"{MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}",
+        ):
+            return 0, schema_raw
+        raise AssertionError(call)
+
+    return read
 
 
 def load_validation_evidence(*args: Any, **kwargs: Any) -> Any:
@@ -582,6 +685,40 @@ def reviewed_state_payload(
     }
 
 
+def add_provider_review_requests(
+    reviewed: dict[str, Any],
+    requests: list[dict[str, Any]],
+) -> dict[str, Any]:
+    value = copy.deepcopy(reviewed)
+    value["provider_review_requests"] = requests
+    feedback = {
+        key: value[key]
+        for key in (
+            "pull_request_reactions",
+            "provider_review_requests",
+            "reviews",
+            "conversation_comments",
+            "threads",
+        )
+    }
+    identity = {
+        key: value[key]
+        for key in (
+            "repository",
+            "pull_request_number",
+            "head_sha",
+            "base_ref",
+            "base_sha",
+            "pr_state",
+        )
+    }
+    value["feedback_digest"] = MODULE._digest_json(feedback)
+    value["state_digest"] = MODULE._digest_json(
+        {**identity, "feedback": feedback}
+    )
+    return value
+
+
 def validation_attestation_payload(
     reviewed: dict[str, Any],
     eligibility_evidence_digest: str = "e" * 64,
@@ -719,6 +856,7 @@ def integration_validation_payloads(
     *,
     expected_head: str,
     delivery_issue: int = 673,
+    version: str = "1.1",
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     binding = MODULE._validation_registry_binding(
         MODULE._load_repository_entry(reviewed["repository"])
@@ -774,9 +912,17 @@ def integration_validation_payloads(
             "cycle_3": False,
         },
     }
+    if version != "1.1":
+        integration["schema_version"] = version
+        integration["reviewed_head_sha"] = reviewed["head_sha"]
+        if version == "1.2":
+            integration["prior_delivery_head_sha"] = "9" * 40
+            integration["ordered_parent_shas"][0] = "9" * 40
+        else:
+            integration["path_classifications"] = []
     receipt = MODULE.fast_path.create_validation_receipt(
         repository=reviewed["repository"],
-        head_sha=reviewed["head_sha"],
+        head_sha=integration["prior_delivery_head_sha"],
         validated_tree_sha=tree,
         registry=binding,
         command_set=binding["validation"],
@@ -1418,7 +1564,879 @@ def final_eligibility_absence_fixture(
     return entry, reviewed, receipt, attestation
 
 
+def recovered_ready_source_fixture(
+    directory: str,
+    *,
+    thread_id: str = "PRRT_RECOVERED_READY_TARGET",
+    body: str = "Corrected finding.",
+) -> SimpleNamespace:
+    root = Path(directory)
+    delivery = root / "delivery"
+    output = root / "output"
+    delivery.mkdir()
+    output.mkdir()
+    reviewed = reviewed_state_payload(
+        thread_id,
+        [("PRRC_RECOVERED_READY_ROOT", body, None)],
+    )
+    reviewed["head_sha"] = "c" * 40
+    feedback = {
+        key: reviewed[key]
+        for key in (
+            "pull_request_reactions",
+            "reviews",
+            "conversation_comments",
+            "threads",
+        )
+    }
+    identity = {
+        key: reviewed[key]
+        for key in (
+            "repository",
+            "pull_request_number",
+            "head_sha",
+            "base_ref",
+            "base_sha",
+            "pr_state",
+        )
+    }
+    reviewed["state_digest"] = MODULE._digest_json(
+        {**identity, "feedback": feedback}
+    )
+    base_binding = MODULE._validation_registry_binding(
+        MODULE._load_repository_entry("SecPal/api")
+    )
+    current_safety_command_set = [
+        {
+            "argv": ["python3", "tests/ready-source-recovery-current-safety.py"],
+            "working_directory": ".",
+            "purpose": "Validate Ready-source recovery current safety",
+        }
+    ]
+    current_safety = {"validation_command_set": current_safety_command_set}
+    binding = {
+        **base_binding,
+        "ready_source_recovery_current_safety": current_safety,
+    }
+    stable = MODULE.fast_path.StableFeedbackState.from_payload(reviewed)
+    gates = [
+        {
+            "gate": gate,
+            "satisfied": True,
+            "evidence": f"Fixture gate {index}",
+        }
+        for index, gate in enumerate(binding["manual_gates"], start=1)
+    ]
+    receipt = MODULE.fast_path.create_validation_receipt(
+        repository="SecPal/api",
+        head_sha=reviewed["head_sha"],
+        validated_tree_sha="f" * 40,
+        registry=binding,
+        command_set=current_safety_command_set,
+        successful_result=True,
+        reviewed_state=stable,
+        manual_gate_evidence=gates,
+    )
+    state = {
+        "ready": True,
+        "draft": False,
+        "cycle_3_absent": True,
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 2,
+    }
+    expected_signer = {
+        "kind": "SSH_PRINCIPAL",
+        "identity": "fixture",
+    }
+    signature_binding = (
+        MODULE.lifecycle_publication.authority
+        .ready_source_recovery_commit_signature_binding_digest(
+            head_sha=reviewed["head_sha"],
+            expected_signer=expected_signer,
+            signature_format="ssh",
+        )
+    )
+    safety = {
+        "reviewed_state": reviewed,
+        "fresh_validation_receipt": receipt,
+        "policy_binding": binding,
+        "command_set": current_safety_command_set,
+    }
+    recovery = SimpleNamespace(
+        publication_oid="1" * 40,
+        publication_digest="2" * 64,
+        repository="SecPal/api",
+        delivery_issue=724,
+        pull_request=123,
+        head_sha=reviewed["head_sha"],
+        tree_sha="f" * 40,
+        parent_shas=("a" * 40,),
+        expected_commit_signer=expected_signer,
+        commit_signature_evidence_digest=signature_binding,
+        lifecycle_id="fixture-lifecycle",
+        current_authority_digest="4" * 64,
+        current_publication_oid="5" * 40,
+        current_publication_digest="6" * 64,
+        reviewed_state_digest=reviewed["state_digest"],
+        reviewed_feedback_digest=reviewed["feedback_digest"],
+        fresh_validation_receipt_digest=receipt["receipt_digest"],
+        historical_validation_receipt_digest="7" * 64,
+        lifecycle_state=state,
+        recovery_safety_facts=safety,
+    )
+    current = SimpleNamespace(
+        publication_oid=recovery.current_publication_oid,
+        publication_digest=recovery.current_publication_digest,
+        lifecycle=SimpleNamespace(
+            repository="SecPal/api",
+            delivery_issue=724,
+            pull_request=123,
+            head_sha=reviewed["head_sha"],
+            lifecycle_id=recovery.lifecycle_id,
+            authority_digest=recovery.current_authority_digest,
+            state=state,
+        ),
+    )
+    provider = mock.Mock()
+    provider.provider_head.return_value = "b" * 40
+    publication = SimpleNamespace(
+        verify_current_ready_source_recovery=mock.Mock(return_value=recovery),
+        verify_current_lifecycle_authority=mock.Mock(return_value=current),
+        derive_ready_source_recovery_current_head_trailers=mock.Mock(
+            return_value=(recovery.historical_validation_receipt_digest,)
+        ),
+        derive_ready_source_recovery_provider_binding=mock.Mock(
+            return_value=provider
+        ),
+        LifecyclePublicationError=ValueError,
+        authority=MODULE.lifecycle_publication.authority,
+    )
+    authenticated_commit = MODULE.fast_path.AuthenticatedIntegrationCommit(
+        repository="SecPal/api",
+        head_sha=reviewed["head_sha"],
+        tree_sha=recovery.tree_sha,
+        parent_shas=recovery.parent_shas,
+        signer_kind="SSH_PRINCIPAL",
+        signer_identity="fixture",
+        signature_fingerprint="SHA256:fixtureDeliverySigner",
+        signature_classification="LOCAL_SSH_VERIFIED",
+        signature_policy_digest=MODULE._digest_json(
+            MODULE._load_repository_entry("SecPal/api")["signature_policy"]
+        ),
+        authentication_digest="8" * 64,
+    )
+    git = FakeGit(
+        expected_head=reviewed["head_sha"],
+        reviewed_head=recovery.parent_shas[0],
+        tree=recovery.tree_sha,
+        receipt_digest=recovery.historical_validation_receipt_digest,
+    )
+    (delivery / "reviewed.json").write_text(
+        json.dumps(reviewed), encoding="utf-8"
+    )
+    return SimpleNamespace(
+        root=root,
+        delivery=delivery,
+        output=output,
+        reviewed=reviewed,
+        base_binding=base_binding,
+        binding=binding,
+        receipt=receipt,
+        recovery=recovery,
+        current=current,
+        provider=provider,
+        publication=publication,
+        authenticated_commit=authenticated_commit,
+        git=git,
+        thread_id=thread_id,
+        body=body,
+    )
+
+
 class ResolveFixedThreadsTests(TestCase):
+    def test_recovered_ready_ancestor_receipt_requires_exact_head_absence(self) -> None:
+        # Deployment #235's signed loss admission places 44a7bd5e... on an
+        # ancestor; its unchanged Ready head has no validation-receipt trailer.
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = recovered_ready_source_fixture(directory)
+            fixture.recovery.historical_validation_receipt_digest = (
+                "44a7bd5ebac363fe90a5c4296907385d02c0178076793f1fc4804b4dc056fdd5"
+            )
+            fixture.git.receipt_digest = ""
+            fixture.publication.derive_ready_source_recovery_current_head_trailers.return_value = ()
+            with (
+                mock.patch.object(MODULE, "lifecycle_publication", fixture.publication),
+                mock.patch.object(
+                    MODULE.fast_path,
+                    "verify_ready_source_recovery_safety_facts",
+                    return_value=fixture.recovery.recovery_safety_facts,
+                ),
+                mock.patch.object(
+                    MODULE, "_immutable_delivery_registry_binding",
+                    return_value=fixture.binding,
+                ),
+            ):
+                boundary = load_final_feedback_boundary(
+                    repository_root=fixture.delivery,
+                    repository="SecPal/api",
+                    delivery_issue=724,
+                    number=123,
+                    expected_head=fixture.reviewed["head_sha"],
+                    final_reviewed_state_path=fixture.delivery / "reviewed.json",
+                    expected_final_reviewed_state_digest=fixture.reviewed["state_digest"],
+                    final_validation_evidence_path=None,
+                    final_eligibility_evidence_path=None,
+                    ready_source_recovery_publication_oid=fixture.recovery.publication_oid,
+                )
+                with (
+                    mock.patch.object(MODULE, "_run_git", fixture.git),
+                    mock.patch.object(
+                        MODULE.fast_path,
+                        "authenticate_integration_commit",
+                        return_value=fixture.authenticated_commit,
+                    ),
+                ):
+                    MODULE.verify_local_fix_commit(
+                        fixture.delivery,
+                        "SecPal/api",
+                        fixture.reviewed["head_sha"],
+                        boundary.reviewed,
+                        boundary.validation,
+                    )
+                    for substituted in (
+                        fixture.recovery.historical_validation_receipt_digest,
+                        fixture.recovery.fresh_validation_receipt_digest,
+                    ):
+                        with self.subTest(substituted=substituted):
+                            fixture.git.receipt_digest = substituted
+                            with self.assertRaisesRegex(
+                                MODULE.ResolutionError,
+                                "fix commit validation-receipt trailer does not match evidence",
+                            ):
+                                MODULE.verify_local_fix_commit(
+                                    fixture.delivery,
+                                    "SecPal/api",
+                                    fixture.reviewed["head_sha"],
+                                    boundary.reviewed,
+                                    boundary.validation,
+                                )
+
+    def test_qualified_remediation_late_disposition_accepts_only_exact_boundary(
+        self,
+    ) -> None:
+        from secpal_pr_review import qualified_remediation_successor_loss as loss
+
+        record = loss.load_accepted_admission("SecPal/.github", 956)
+        reviewed_payload = {"reviewed": "exact qualified successor"}
+        reviewed = MODULE.ReviewedState(
+            head_sha=record["successor"]["head_sha"],
+            state_digest=record["qualification"]["reviewed_state_digest"],
+            feedback_digest=record["qualification"]["reviewed_feedback_digest"],
+            targets={},
+            thread_ids=frozenset(
+                item["thread_id"] for item in record["stable_thread_inventory"]
+            ),
+            payload=reviewed_payload,
+        )
+        receipt = {
+            "registry_digest": "a" * 64,
+            "command_set_digest": "b" * 64,
+        }
+        registry = {"authenticated": True}
+        safety = {
+            "reviewed_state": reviewed_payload,
+            "fresh_validation_receipt": receipt,
+            "policy_binding": registry,
+        }
+        evidence = SimpleNamespace(
+            head_sha=record["successor"]["head_sha"],
+            tree_sha=record["successor"]["tree_sha"],
+            validation_receipt_digest="c" * 64,
+            source_validation_evidence_digest="d" * 64,
+            final_attestation_digest=record["admission_digest"],
+        )
+
+        def current(*, publication_oid: str | None = None, state_delta: int = 0) -> Any:
+            state = copy.deepcopy(record["resulting_state"])
+            state["remediation_cycle_count"] += state_delta
+            return SimpleNamespace(
+                publication_oid=(
+                    record["predecessor"]["publication_oid"]
+                    if publication_oid is None
+                    else publication_oid
+                ),
+                publication_digest="e" * 64,
+                lifecycle=SimpleNamespace(
+                    head_sha=evidence.head_sha,
+                    tree_sha=evidence.tree_sha,
+                    validation_receipt_digest=evidence.validation_receipt_digest,
+                    source_validation_evidence_digest=(
+                        evidence.source_validation_evidence_digest
+                    ),
+                    adoption_source_evidence_digest=evidence.final_attestation_digest,
+                    state=state,
+                ),
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            safety_path = Path(directory) / "safety.json"
+            safety_path.write_text(json.dumps(safety), encoding="utf-8")
+
+            def load(
+                observed_current: Any,
+                observed_evidence: Any = evidence,
+                publication_oid: str = record["predecessor"]["publication_oid"],
+            ) -> Any:
+                with (
+                    mock.patch.object(MODULE, "load_reviewed_state", return_value=reviewed),
+                    mock.patch.object(
+                        MODULE.fast_path,
+                        "qualified_remediation_successor_loss_validation_evidence",
+                        return_value=observed_evidence,
+                    ),
+                    mock.patch.object(
+                        MODULE.lifecycle_publication,
+                        "verify_current_lifecycle_authority",
+                        return_value=observed_current,
+                    ),
+                    mock.patch.object(
+                        MODULE,
+                        "_immutable_delivery_registry_binding",
+                        return_value=registry,
+                    ),
+                ):
+                    return MODULE.load_final_feedback_boundary(
+                        repository_root=Path(directory),
+                        repository=record["repository"],
+                        delivery_issue=record["delivery_issue"],
+                        number=record["pull_request"],
+                        expected_head=record["successor"]["head_sha"],
+                        final_reviewed_state_path=Path(directory) / "reviewed.json",
+                        expected_final_reviewed_state_digest=reviewed.state_digest,
+                        final_validation_evidence_path=None,
+                        final_eligibility_evidence_path=None,
+                        qualified_remediation_publication_oid=(
+                            publication_oid
+                        ),
+                        qualified_remediation_safety_facts_path=safety_path,
+                    )
+
+            boundary = load(current())
+            self.assertEqual(
+                boundary.validation.kind,
+                "qualified-remediation-successor-loss",
+            )
+            self.assertEqual(
+                boundary.validation.qualified_remediation_admission, record
+            )
+
+            substitutions = {
+                "publication identity": current(publication_oid="0" * 40),
+                "lifecycle state": current(state_delta=-1),
+                "current evidence": current(),
+            }
+            for label, observed_current in substitutions.items():
+                observed_evidence = (
+                    SimpleNamespace(**{**vars(evidence), "head_sha": "0" * 40})
+                    if label == "current evidence"
+                    else evidence
+                )
+                with self.subTest(label=label), self.assertRaises(
+                    MODULE.ResolutionError
+                ):
+                    load(observed_current, observed_evidence)
+
+    def test_recovered_ready_source_authenticates_base_registry_separately(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = recovered_ready_source_fixture(directory)
+            with mock.patch.object(
+                MODULE.fast_path,
+                "load_immutable_delivery_registry_binding",
+                return_value=fixture.base_binding,
+            ) as load_binding:
+                binding = MODULE._immutable_delivery_registry_binding(
+                    fixture.reviewed["head_sha"],
+                    "SecPal/api",
+                    MODULE.fast_path.digest_json(fixture.binding),
+                    MODULE.fast_path.digest_json(
+                        fixture.recovery.recovery_safety_facts["command_set"]
+                    ),
+                    fixture.recovery.recovery_safety_facts,
+                )
+
+        self.assertEqual(binding, fixture.binding)
+        load_binding.assert_called_once_with(
+            repository="SecPal/api",
+            delivery_head_sha=fixture.reviewed["head_sha"],
+            expected_registry_digest=MODULE.fast_path.digest_json(
+                fixture.base_binding
+            ),
+            expected_command_set_digest=MODULE.fast_path.digest_json(
+                fixture.base_binding["validation"]
+            ),
+        )
+
+    def test_recovered_ready_source_derives_reviewed_ineligible_origin(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = recovered_ready_source_fixture(directory)
+            with (
+                mock.patch.object(
+                    MODULE,
+                    "lifecycle_publication",
+                    fixture.publication,
+                ),
+                mock.patch.object(
+                    MODULE.fast_path,
+                    "verify_ready_source_recovery_safety_facts",
+                    return_value=(
+                        fixture.recovery.recovery_safety_facts
+                    ),
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "_immutable_delivery_registry_binding",
+                    return_value=fixture.binding,
+                ),
+            ):
+                boundary = load_final_feedback_boundary(
+                    repository_root=fixture.delivery,
+                    repository="SecPal/api",
+                    delivery_issue=724,
+                    number=123,
+                    expected_head=fixture.reviewed["head_sha"],
+                    final_reviewed_state_path=fixture.delivery
+                    / "reviewed.json",
+                    expected_final_reviewed_state_digest=fixture.reviewed[
+                        "state_digest"
+                    ],
+                    final_validation_evidence_path=None,
+                    final_eligibility_evidence_path=None,
+                    ready_source_recovery_publication_oid=(
+                        fixture.recovery.publication_oid
+                    ),
+                )
+
+        self.assertEqual(
+            boundary.eligibility_mode,
+            MODULE.FinalEligibilityMode.NO_COMMIT_BOUND_RECOVERED_READY_ELIGIBILITY,
+        )
+        self.assertEqual(
+            MODULE.derive_post_freeze_origin(boundary, fixture.thread_id),
+            MODULE.late_disposition.REVIEWED_BUT_INELIGIBLE,
+        )
+        fixture.publication.verify_current_ready_source_recovery.assert_called_once_with(
+            "SecPal/api", 724,
+        )
+        fixture.provider.provider_head.assert_called_once_with(
+            repository="SecPal/api",
+            pull_request=123,
+            current_head_sha=fixture.reviewed["head_sha"],
+        )
+
+    def test_recovered_ready_source_requires_complete_detached_authority_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = recovered_ready_source_fixture(directory)
+            response = target_response(
+                fixture.thread_id,
+                head=fixture.reviewed["head_sha"],
+                comments=[
+                    (
+                        "PRRC_RECOVERED_READY_ROOT",
+                        fixture.body,
+                        None,
+                    )
+                ],
+            )
+            github = FakeGh([response, response, response, response, response])
+
+            def sign(
+                artifact: dict[str, Any],
+                artifact_output: Path,
+                signature_output: Path,
+                **_kwargs: Any,
+            ) -> None:
+                artifact_output.write_bytes(
+                    MODULE.late_disposition.canonical_json_bytes(artifact)
+                )
+                signature_output.write_text(
+                    "fixture signature", encoding="utf-8"
+                )
+
+            def verify_signature(
+                artifact_path: Path,
+                _signature_path: Path,
+                _expected_signer: Any,
+                **_kwargs: Any,
+            ) -> bytes:
+                return artifact_path.read_bytes()
+
+            with (
+                mock.patch.object(
+                    MODULE,
+                    "lifecycle_publication",
+                    fixture.publication,
+                ),
+                mock.patch.object(
+                    MODULE.fast_path,
+                    "verify_ready_source_recovery_safety_facts",
+                    return_value=fixture.recovery.recovery_safety_facts,
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "_immutable_delivery_registry_binding",
+                    return_value=fixture.binding,
+                ),
+                mock.patch.object(MODULE, "_run_git", fixture.git),
+                mock.patch.object(MODULE, "_run_gh", github),
+                mock.patch.object(
+                    MODULE.fast_path,
+                    "authenticate_integration_commit",
+                    return_value=fixture.authenticated_commit,
+                ),
+                mock.patch.object(
+                    MODULE, "_late_signing_key", return_value="/fixture/key"
+                ),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "sign_artifact",
+                    side_effect=sign,
+                ),
+                mock.patch.object(
+                    MODULE.late_disposition,
+                    "verify_detached_signature",
+                    side_effect=verify_signature,
+                ),
+            ):
+                classification = MODULE.create_late_classification_artifact(
+                    "SecPal/api",
+                    724,
+                    123,
+                    fixture.reviewed["head_sha"],
+                    repository_root=fixture.delivery,
+                    final_reviewed_state_path=fixture.delivery
+                    / "reviewed.json",
+                    expected_final_reviewed_state_digest=fixture.reviewed[
+                        "state_digest"
+                    ],
+                    final_validation_evidence_path=None,
+                    final_eligibility_evidence_path=None,
+                    thread_id=fixture.thread_id,
+                    finding_id="LF-RECOVERED-READY",
+                    finding_evidence_digest=hashlib.sha256(
+                        fixture.body.encode()
+                    ).hexdigest(),
+                    classification="VALID_ACTIONABLE",
+                    disposition="CORRECTED_AND_VERIFIED",
+                    technically_blocking=False,
+                    technical_blockers=(),
+                    output_path=fixture.output / "classification.json",
+                    signature_output_path=fixture.output
+                    / "classification.sig",
+                    ready_source_recovery_publication_oid=(
+                        fixture.recovery.publication_oid
+                    ),
+                )
+                disposition = MODULE.create_late_disposition_artifact(
+                    "SecPal/api",
+                    724,
+                    123,
+                    fixture.reviewed["head_sha"],
+                    repository_root=fixture.delivery,
+                    final_reviewed_state_path=fixture.delivery
+                    / "reviewed.json",
+                    expected_final_reviewed_state_digest=fixture.reviewed[
+                        "state_digest"
+                    ],
+                    final_validation_evidence_path=None,
+                    final_eligibility_evidence_path=None,
+                    classification_evidence_path=fixture.output
+                    / "classification.json",
+                    classification_signature_path=fixture.output
+                    / "classification.sig",
+                    output_path=fixture.output / "disposition.json",
+                    signature_output_path=fixture.output / "disposition.sig",
+                    ready_source_recovery_publication_oid=(
+                        fixture.recovery.publication_oid
+                    ),
+                )
+                result = MODULE.resolve_late_disposition_threads(
+                    "SecPal/api",
+                    724,
+                    123,
+                    fixture.reviewed["head_sha"],
+                    (fixture.thread_id,),
+                    apply=False,
+                    repository_root=fixture.delivery,
+                    final_reviewed_state_path=fixture.delivery
+                    / "reviewed.json",
+                    expected_final_reviewed_state_digest=fixture.reviewed[
+                        "state_digest"
+                    ],
+                    final_validation_evidence_path=None,
+                    final_eligibility_evidence_path=None,
+                    late_classification_evidence_path=fixture.output
+                    / "classification.json",
+                    late_classification_signature_path=fixture.output
+                    / "classification.sig",
+                    late_disposition_evidence_path=fixture.output
+                    / "disposition.json",
+                    late_disposition_signature_path=fixture.output
+                    / "disposition.sig",
+                    ready_source_recovery_publication_oid=(
+                        fixture.recovery.publication_oid
+                    ),
+                )
+
+        self.assertEqual(
+            classification["origin"],
+            MODULE.late_disposition.REVIEWED_BUT_INELIGIBLE,
+        )
+        self.assertEqual(
+            disposition["origin"],
+            MODULE.late_disposition.REVIEWED_BUT_INELIGIBLE,
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["mode"], "dry-run")
+        self.assertFalse(
+            any("mutation" in " ".join(call) for call in github.calls)
+        )
+
+        with self.assertRaises(SystemExit):
+            MODULE.parse_args(
+                [
+                    "--repo",
+                    "SecPal/api",
+                    "--pr",
+                    "123",
+                    "--repo-root",
+                    directory,
+                    "--expected-head",
+                    "c" * 40,
+                    "--reviewed-state",
+                    "reviewed.json",
+                    "--expected-reviewed-state-digest",
+                    "d" * 64,
+                    "--delivery-issue",
+                    "724",
+                    "--ready-source-recovery-publication",
+                    "1" * 40,
+                    "--thread-id",
+                    fixture.thread_id,
+                ]
+            )
+
+    def test_recovered_ready_source_rejects_commit_binding_substitution(
+        self,
+    ) -> None:
+        def wrong_tree(fixture: SimpleNamespace) -> Any:
+            return replace(
+                fixture.authenticated_commit,
+                tree_sha="9" * 40,
+            )
+
+        def wrong_parents(fixture: SimpleNamespace) -> Any:
+            return replace(
+                fixture.authenticated_commit,
+                parent_shas=("9" * 40,),
+            )
+
+        def wrong_signature_binding(fixture: SimpleNamespace) -> Any:
+            fixture.recovery.commit_signature_evidence_digest = "9" * 64
+            return fixture.authenticated_commit
+
+        for label, substitute in (
+            ("tree", wrong_tree),
+            ("parents", wrong_parents),
+            ("signature binding", wrong_signature_binding),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                fixture = recovered_ready_source_fixture(directory)
+                authenticated_commit = substitute(fixture)
+                with (
+                    mock.patch.object(
+                        MODULE,
+                        "lifecycle_publication",
+                        fixture.publication,
+                    ),
+                    mock.patch.object(
+                        MODULE.fast_path,
+                        "verify_ready_source_recovery_safety_facts",
+                        return_value=fixture.recovery.recovery_safety_facts,
+                    ),
+                    mock.patch.object(
+                        MODULE,
+                        "_immutable_delivery_registry_binding",
+                        return_value=fixture.binding,
+                    ),
+                ):
+                    boundary = load_final_feedback_boundary(
+                        repository_root=fixture.delivery,
+                        repository="SecPal/api",
+                        delivery_issue=724,
+                        number=123,
+                        expected_head=fixture.reviewed["head_sha"],
+                        final_reviewed_state_path=fixture.delivery
+                        / "reviewed.json",
+                        expected_final_reviewed_state_digest=fixture.reviewed[
+                            "state_digest"
+                        ],
+                        final_validation_evidence_path=None,
+                        final_eligibility_evidence_path=None,
+                        ready_source_recovery_publication_oid=(
+                            fixture.recovery.publication_oid
+                        ),
+                    )
+                    with (
+                        mock.patch.object(MODULE, "_run_git", fixture.git),
+                        mock.patch.object(
+                            MODULE.fast_path,
+                            "authenticate_integration_commit",
+                            return_value=authenticated_commit,
+                        ),
+                        self.assertRaisesRegex(
+                            MODULE.ResolutionError,
+                            "commit binding is invalid or stale",
+                        ),
+                    ):
+                        MODULE.verify_local_fix_commit(
+                            fixture.delivery,
+                            "SecPal/api",
+                            fixture.reviewed["head_sha"],
+                            boundary.reviewed,
+                            boundary.validation,
+                        )
+
+    def test_recovered_ready_source_substitution_matrix_fails_closed(
+        self,
+    ) -> None:
+        def wrong_publication(fixture: SimpleNamespace) -> None:
+            fixture.recovery.publication_oid = "9" * 40
+
+        def wrong_repository(fixture: SimpleNamespace) -> None:
+            fixture.recovery.repository = "SecPal/other"
+
+        def wrong_issue(fixture: SimpleNamespace) -> None:
+            fixture.recovery.delivery_issue = 725
+
+        def wrong_pr(fixture: SimpleNamespace) -> None:
+            fixture.recovery.pull_request = 124
+
+        def wrong_head(fixture: SimpleNamespace) -> None:
+            fixture.recovery.head_sha = "9" * 40
+
+        def wrong_tree(fixture: SimpleNamespace) -> None:
+            fixture.recovery.tree_sha = "9" * 40
+
+        def wrong_current(fixture: SimpleNamespace) -> None:
+            fixture.current.publication_oid = "9" * 40
+
+        def not_ready(fixture: SimpleNamespace) -> None:
+            fixture.recovery.lifecycle_state["ready"] = False
+
+        def cycle_three(fixture: SimpleNamespace) -> None:
+            fixture.recovery.lifecycle_state["cycle_3_absent"] = False
+
+        def reviewed_substitution(fixture: SimpleNamespace) -> None:
+            fixture.recovery.recovery_safety_facts["reviewed_state"] = {}
+
+        def fake_eligibility(fixture: SimpleNamespace) -> None:
+            fixture.recovery.recovery_safety_facts[
+                "fresh_validation_receipt"
+            ]["eligibility_evidence_digest"] = "9" * 64
+
+        def provider_substitution(fixture: SimpleNamespace) -> None:
+            fixture.provider.provider_head.return_value = "invalid"
+
+        cases = {
+            "wrong publication": wrong_publication,
+            "wrong repository": wrong_repository,
+            "wrong issue": wrong_issue,
+            "wrong PR": wrong_pr,
+            "wrong head": wrong_head,
+            "wrong tree": wrong_tree,
+            "wrong CURRENT": wrong_current,
+            "Ready false": not_ready,
+            "Cycle 3 present": cycle_three,
+            "reviewed state substitution": reviewed_substitution,
+            "caller-supplied fake eligibility": fake_eligibility,
+            "provider substitution": provider_substitution,
+        }
+        for label, mutate in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                fixture = recovered_ready_source_fixture(directory)
+                mutate(fixture)
+                with (
+                    mock.patch.object(
+                        MODULE,
+                        "lifecycle_publication",
+                        fixture.publication,
+                    ),
+                    mock.patch.object(
+                        MODULE.fast_path,
+                        "verify_ready_source_recovery_safety_facts",
+                        return_value=(
+                            fixture.recovery.recovery_safety_facts
+                        ),
+                    ),
+                    mock.patch.object(
+                        MODULE,
+                        "_immutable_delivery_registry_binding",
+                        return_value=fixture.binding,
+                    ),
+                    self.assertRaises(MODULE.ResolutionError),
+                ):
+                    load_final_feedback_boundary(
+                        repository_root=fixture.delivery,
+                        repository="SecPal/api",
+                        delivery_issue=724,
+                        number=123,
+                        expected_head=fixture.reviewed["head_sha"],
+                        final_reviewed_state_path=fixture.delivery
+                        / "reviewed.json",
+                        expected_final_reviewed_state_digest=(
+                            fixture.reviewed["state_digest"]
+                        ),
+                        final_validation_evidence_path=None,
+                        final_eligibility_evidence_path=None,
+                        ready_source_recovery_publication_oid="1" * 40,
+                    )
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = recovered_ready_source_fixture(directory)
+            with (
+                mock.patch.object(
+                    MODULE,
+                    "lifecycle_publication",
+                    fixture.publication,
+                ),
+                self.assertRaisesRegex(
+                    MODULE.ResolutionError,
+                    "rejects incompatible source evidence",
+                ),
+            ):
+                load_final_feedback_boundary(
+                    repository_root=fixture.delivery,
+                    repository="SecPal/api",
+                    delivery_issue=724,
+                    number=123,
+                    expected_head=fixture.reviewed["head_sha"],
+                    final_reviewed_state_path=fixture.delivery
+                    / "reviewed.json",
+                    expected_final_reviewed_state_digest=fixture.reviewed[
+                        "state_digest"
+                    ],
+                    final_validation_evidence_path=None,
+                    final_eligibility_evidence_path=fixture.delivery
+                    / "fake-eligibility.json",
+                    ready_source_recovery_publication_oid="1" * 40,
+                )
+
     def test_resolver_registry_projection_is_owned_by_fast_path(self) -> None:
         entry = copy.deepcopy(MODULE._load_repository_entry("SecPal/.github"))
         expected = {"canonical_projection": True}
@@ -1551,6 +2569,40 @@ class ResolveFixedThreadsTests(TestCase):
         )
 
     def setUp(self) -> None:
+        # Unit history must describe the tested candidate policy, not the
+        # unrelated live checkout's pre-commit HEAD. Production still reads
+        # authenticated immutable central history; no candidate fallback exists.
+        fixture_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(fixture_directory.cleanup)
+        fixture_root = Path(fixture_directory.name)
+        for path, source in (
+            (MODULE.fast_path.DELIVERY_REGISTRY_PATH, MODULE.REGISTRY_PATH),
+            (MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH,
+             MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH),
+        ):
+            target = fixture_root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+        for arguments in (
+            ["init", "-q"], ["remote", "add", "origin", "https://github.com/SecPal/.github.git"],
+            ["add", "."],
+            ["-c", "commit.gpgsign=false", "-c", "user.name=Fixture",
+             "-c", "user.email=fixture@example.test", "commit", "-qm", "Unit registry history"],
+        ):
+            REAL_SUBPROCESS_RUN(["git", *arguments], cwd=fixture_root, check=True,
+                                capture_output=True, text=True)
+        def fixture_git(repository_root, arguments, *, allow_failure=False):
+            if repository_root != ROOT:
+                raise AssertionError("unexpected central registry fixture root")
+            return REAL_SUBPROCESS_RUN(
+                ["git", *arguments], cwd=fixture_root, check=not allow_failure,
+                capture_output=True, text=True,
+            )
+        fixture_patch = mock.patch.object(
+            sys.modules[__name__], "_current_registry_git", side_effect=fixture_git,
+        )
+        fixture_patch.start()
+        self.addCleanup(fixture_patch.stop)
         self._central_registry_patch = mock.patch.object(
             MODULE.fast_path,
             "_central_git_result",
@@ -1561,7 +2613,7 @@ class ResolveFixedThreadsTests(TestCase):
         self._integration_git_patch = mock.patch.object(
             MODULE.fast_path,
             "_run_integration_commit_git",
-            side_effect=lambda root, arguments: MODULE._run_git(
+            side_effect=lambda root, arguments, **options: MODULE._run_git(
                 root, tuple(arguments), allow_failure=True
             ),
         )
@@ -4296,61 +5348,62 @@ class ResolveFixedThreadsTests(TestCase):
             )
 
     def test_eligibility_bound_ready_integration_authorizes_exact_thread(self) -> None:
-        thread_id = "PRRT_INTEGRATION_ELIGIBLE"
-        comment = ("PRRC_INTEGRATION_ROOT", "Intentional protocol body.", None)
-        reviewed = reviewed_state_payload(thread_id, [comment])
-        eligibility = eligibility_payload(reviewed, (thread_id,))
-        eligibility_digest = MODULE._digest_json(eligibility)
-        head = "c" * 40
-        integration, receipt, attestation = integration_validation_payloads(
-            reviewed, eligibility_digest, expected_head=head
-        )
-        github = FakeGh(
-            [
-                target_response(
-                    thread_id,
-                    head=head,
-                    comments=[comment],
-                )
-            ]
-        )
-        git = FakeGit(
-            expected_head=head,
-            reviewed_head=reviewed["head_sha"],
-            second_parent=reviewed["base_sha"],
-            tree=attestation["validated_tree_sha"],
-            receipt_digest=receipt["receipt_digest"],
-            integration_digest=MODULE.fast_path.digest_json(integration),
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for name, value in (
-                ("reviewed.json", reviewed),
-                ("validation.json", attestation),
-                ("eligibility.json", eligibility),
-                ("integration.json", integration),
-            ):
-                (root / name).write_text(json.dumps(value), encoding="utf-8")
-            with (
-                mock.patch.object(MODULE, "_run_git", git),
-                mock.patch.object(MODULE, "_run_gh", github),
-            ):
-                result = MODULE.resolve_threads(
-                    "SecPal/api",
-                    123,
-                    head,
-                    (thread_id,),
-                    apply=False,
-                    repository_root=root,
-                    reviewed_state_path=root / "reviewed.json",
-                    expected_reviewed_state_digest=reviewed["state_digest"],
-                    validation_evidence_path=root / "validation.json",
-                    eligibility_evidence_path=root / "eligibility.json",
-                    integration_evidence_path=root / "integration.json",
-                )
+        for version in ("1.1", "1.2", "1.3"):
+            thread_id = "PRRT_INTEGRATION_ELIGIBLE"
+            comment = ("PRRC_INTEGRATION_ROOT", "Intentional protocol body.", None)
+            reviewed = reviewed_state_payload(thread_id, [comment])
+            eligibility = eligibility_payload(reviewed, (thread_id,))
+            eligibility_digest = MODULE._digest_json(eligibility)
+            head = "c" * 40
+            integration, receipt, attestation = integration_validation_payloads(
+                reviewed, eligibility_digest, expected_head=head, version=version
+            )
+            github = FakeGh(
+                [
+                    target_response(
+                        thread_id,
+                        head=head,
+                        comments=[comment],
+                    )
+                ]
+            )
+            git = FakeGit(
+                expected_head=head,
+                reviewed_head=integration["prior_delivery_head_sha"],
+                second_parent=reviewed["base_sha"],
+                tree=attestation["validated_tree_sha"],
+                receipt_digest=receipt["receipt_digest"],
+                integration_digest=MODULE.fast_path.digest_json(integration),
+            )
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for name, value in (
+                    ("reviewed.json", reviewed),
+                    ("validation.json", attestation),
+                    ("eligibility.json", eligibility),
+                    ("integration.json", integration),
+                ):
+                    (root / name).write_text(json.dumps(value), encoding="utf-8")
+                with (
+                    mock.patch.object(MODULE, "_run_git", git),
+                    mock.patch.object(MODULE, "_run_gh", github),
+                ):
+                    result = MODULE.resolve_threads(
+                        "SecPal/api",
+                        123,
+                        head,
+                        (thread_id,),
+                        apply=False,
+                        repository_root=root,
+                        reviewed_state_path=root / "reviewed.json",
+                        expected_reviewed_state_digest=reviewed["state_digest"],
+                        validation_evidence_path=root / "validation.json",
+                        eligibility_evidence_path=root / "eligibility.json",
+                        integration_evidence_path=root / "integration.json",
+                    )
 
-        self.assertEqual(result["pending"], [thread_id])
-        self.assertEqual(result["status"], "success")
+            self.assertEqual(result["pending"], [thread_id])
+            self.assertEqual(result["status"], "success")
 
     def test_ready_integration_translates_recoverable_authenticator_failure(
         self,
@@ -5266,6 +6319,164 @@ class ResolveFixedThreadsTests(TestCase):
                     reviewed["state_digest"],
                     (),
                 )
+
+    def test_reviewed_loader_accepts_only_canonical_provider_request_projection(
+        self,
+    ) -> None:
+        requests = [
+            {
+                "node_id": "PRE_requested_review_1",
+                "created_at": "2024-02-29T00:00:00Z",
+                "actor": {
+                    "login": "aroviqen",
+                    "node_id": "U_author",
+                    "database_id": 1,
+                },
+                "requested_reviewer": {
+                    "login": "copilot-pull-request-reviewer",
+                    "node_id": "BOT_kgDOCnlnWA",
+                    "database_id": 175728472,
+                },
+            },
+            {
+                "node_id": "PRE_requested_review_2",
+                "created_at": "2026-09-16T19:01:00Z",
+                "actor": {
+                    "login": "aroviqen",
+                    "node_id": "U_author",
+                    "database_id": 7,
+                },
+                "requested_reviewer": {
+                    "login": "copilot-pull-request-reviewer",
+                    "node_id": "BOT_kgDOCnlnWA",
+                    "database_id": 175728472,
+                },
+            },
+        ]
+        reviewed = add_provider_review_requests(
+            reviewed_state_payload("PRRT_PROVIDER_REQUEST", []), requests
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reviewed.json"
+            path.write_text(json.dumps(reviewed), encoding="utf-8")
+            loaded = MODULE.load_reviewed_state(
+                path,
+                "SecPal/api",
+                123,
+                reviewed["state_digest"],
+                ("PRRT_PROVIDER_REQUEST",),
+            )
+        self.assertEqual(
+            loaded.payload["provider_review_requests"], requests
+        )
+
+        def unknown_field(value: dict[str, Any]) -> None:
+            value["provider_review_requests"][0]["provider_head"] = "a" * 40
+
+        def duplicate(value: dict[str, Any]) -> None:
+            value["provider_review_requests"][1] = copy.deepcopy(
+                value["provider_review_requests"][0]
+            )
+
+        def reorder(value: dict[str, Any]) -> None:
+            value["provider_review_requests"].reverse()
+
+        def malformed_chronology(value: dict[str, Any]) -> None:
+            value["provider_review_requests"][0]["created_at"] = None
+
+        def substituted_reviewer(value: dict[str, Any]) -> None:
+            value["provider_review_requests"][0]["requested_reviewer"] = {
+                "login": "arbitrary-reviewer",
+                "node_id": "BOT_arbitrary",
+                "database_id": 9,
+            }
+
+        for label, mutate, redigest in (
+            ("unknown field", unknown_field, True),
+            ("duplicate identity", duplicate, True),
+            ("noncanonical order", reorder, True),
+            ("malformed chronology", malformed_chronology, True),
+            (
+                "arbitrary requested reviewer",
+                substituted_reviewer,
+                True,
+            ),
+            ("feedback digest drift", lambda value: None, False),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                changed = copy.deepcopy(reviewed)
+                mutate(changed)
+                if redigest:
+                    changed = add_provider_review_requests(
+                        changed, changed["provider_review_requests"]
+                    )
+                else:
+                    changed["provider_review_requests"][0]["created_at"] = (
+                        "2026-09-16T19:02:00Z"
+                    )
+                path = Path(directory) / "reviewed.json"
+                path.write_text(json.dumps(changed), encoding="utf-8")
+                with self.assertRaises(MODULE.ResolutionError):
+                    MODULE.load_reviewed_state(
+                        path,
+                        "SecPal/api",
+                        123,
+                        changed["state_digest"],
+                        ("PRRT_PROVIDER_REQUEST",),
+                    )
+
+        for created_at in (
+            "not-a-timestamp",
+            "2026-02-29T19:00:00Z",
+            "2026-09-16T19:00:00+00:00",
+            "2026-09-16T19:00:00.000Z",
+        ):
+            with self.subTest(created_at=created_at), tempfile.TemporaryDirectory() as directory:
+                changed = copy.deepcopy(reviewed)
+                changed["provider_review_requests"][0]["created_at"] = created_at
+                changed = add_provider_review_requests(
+                    changed, changed["provider_review_requests"]
+                )
+                path = Path(directory) / "reviewed.json"
+                path.write_text(json.dumps(changed), encoding="utf-8")
+                with self.assertRaises(MODULE.ResolutionError):
+                    MODULE.load_reviewed_state(
+                        path,
+                        "SecPal/api",
+                        123,
+                        changed["state_digest"],
+                        ("PRRT_PROVIDER_REQUEST",),
+                    )
+
+        for identity_path in (
+            ("actor", "database_id"),
+            ("requested_reviewer", "database_id"),
+        ):
+            for database_id in (True, "7"):
+                with (
+                    self.subTest(
+                        identity_path=identity_path,
+                        database_id=database_id,
+                    ),
+                    tempfile.TemporaryDirectory() as directory,
+                ):
+                    changed = copy.deepcopy(reviewed)
+                    changed["provider_review_requests"][0][identity_path[0]][
+                        identity_path[1]
+                    ] = database_id
+                    changed = add_provider_review_requests(
+                        changed, changed["provider_review_requests"]
+                    )
+                    path = Path(directory) / "reviewed.json"
+                    path.write_text(json.dumps(changed), encoding="utf-8")
+                    with self.assertRaises(MODULE.ResolutionError):
+                        MODULE.load_reviewed_state(
+                            path,
+                            "SecPal/api",
+                            123,
+                            changed["state_digest"],
+                            ("PRRT_PROVIDER_REQUEST",),
+                        )
 
     def test_cycle2_final_boundary_rejects_duplicate_eligibility_json_keys(
         self,
@@ -9859,6 +11070,116 @@ class ResolveFixedThreadsTests(TestCase):
                     (thread_id,),
                 )
 
+    def test_api_governance_resolver_reconstructs_executed_commands(self) -> None:
+        payload = reviewed_state_payload("PRRT_GOVERNANCE_COMMANDS", [])
+        stable = MODULE.fast_path.StableFeedbackState.from_payload(payload)
+        reviewed = mock.Mock(
+            head_sha=stable.head_sha,
+            state_digest=stable.state_digest,
+            feedback_digest=stable.feedback_digest,
+            base_sha=stable.base_sha,
+            payload=payload,
+        )
+        binding = MODULE._validation_registry_binding(
+            MODULE._load_repository_entry("SecPal/api")
+        )
+        governance = list(MODULE.fast_path.governance_validation_commands())
+        self.assertNotEqual(governance, binding["validation"])
+        self.assertFalse(any("composer" in item["argv"] for item in governance))
+        gates = [
+            {"gate": gate, "satisfied": True,
+             "evidence": "Governance commands executed; no application PASS claim"}
+            for gate in binding["manual_gates"]
+        ]
+        registry_reader = _current_registry_git
+        scope_path = ["AGENTS.md"]
+        def scoped_git(root, arguments, *, allow_failure=False):
+            if tuple(arguments) == ("cat-file", "-t", stable.base_sha):
+                return subprocess.CompletedProcess(arguments, 0, "commit\n", "")
+            if tuple(arguments) == ("cat-file", "-t", "f" * 40):
+                return subprocess.CompletedProcess(arguments, 0, "tree\n", "")
+            if tuple(arguments) == (
+                "diff", "--no-ext-diff", "--no-renames", "--raw", "-z",
+                stable.base_sha, "f" * 40,
+            ):
+                return subprocess.CompletedProcess(
+                    arguments, 0,
+                    ":100644 100644 0000000 0000000 M\0" + scope_path[0] + "\0",
+                    "",
+                )
+            return registry_reader(root, arguments, allow_failure=allow_failure)
+        scope_patch = mock.patch.object(
+            sys.modules[__name__], "_current_registry_git", side_effect=scoped_git,
+        )
+        scope_patch.start()
+        self.addCleanup(scope_patch.stop)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "attestation.json"
+            for commands in (governance, binding["validation"]):
+                with self.subTest(commands=commands):
+                    receipt = MODULE.fast_path.create_validation_receipt(
+                        repository="SecPal/api", head_sha=stable.head_sha,
+                        validated_tree_sha="f" * 40, registry=binding,
+                        command_set=commands, successful_result=True,
+                        reviewed_state=stable, manual_gate_evidence=gates,
+                        eligibility_evidence_digest="e" * 64,
+                    )
+                    attestation = MODULE.fast_path.create_validation_attestation(
+                        repository="SecPal/api", head_sha="c" * 40,
+                        registry=binding, command_set=commands,
+                        successful_result=True, reviewed_state=stable,
+                        validation_receipt=receipt,
+                    )
+                    path.write_text(json.dumps(attestation), encoding="utf-8")
+                    loaded = load_validation_evidence(
+                        path, "SecPal/api", "c" * 40, reviewed,
+                    )
+                    if commands == governance:
+                        def application_tree(root, arguments, *, allow_failure=False):
+                            if tuple(arguments) == (
+                                "cat-file", "-t", stable.base_sha,
+                            ):
+                                return subprocess.CompletedProcess(arguments, 0, "commit\n", "")
+                            if tuple(arguments) == (
+                                "cat-file", "-t", receipt["validated_tree_sha"],
+                            ):
+                                return subprocess.CompletedProcess(arguments, 0, "tree\n", "")
+                            if tuple(arguments[:5]) == (
+                                "diff", "--no-ext-diff", "--no-renames", "--raw", "-z",
+                            ):
+                                return subprocess.CompletedProcess(
+                                    arguments, 0, ":100644 100644 0000000 0000000 M\0app.php\0", "",
+                                )
+                            return _current_registry_git(root, arguments, allow_failure=allow_failure)
+                        with mock.patch.object(MODULE, "_run_git", side_effect=application_tree):
+                            with self.assertRaisesRegex(MODULE.ResolutionError, "governance.*scope"):
+                                MODULE.load_validation_evidence(
+                                    path, "SecPal/api", "c" * 40, reviewed, repository_root=ROOT,
+                                )
+                    self.assertEqual(loaded.validation_receipt, receipt)
+                    self.assertEqual(loaded.attestation, attestation)
+                    git = FakeGit(
+                        expected_head="c" * 40, reviewed_head=stable.head_sha,
+                        tree=receipt["validated_tree_sha"],
+                        receipt_digest=receipt["receipt_digest"],
+                    )
+                    MODULE.verify_local_fix_commit(
+                        Path(directory), "SecPal/api", "c" * 40,
+                        reviewed, loaded, runner=git,
+                    )
+                    # Replacing the executed commands with the other validation
+                    # class cannot preserve the signed receipt's authority.
+                    substituted = copy.deepcopy(attestation)
+                    other = binding["validation"] if commands == governance else governance
+                    substituted["command_set_digest"] = MODULE._digest_json(other)
+                    substituted["attestation_digest"] = MODULE._digest_json({
+                        key: value for key, value in substituted.items()
+                        if key != "attestation_digest"
+                    })
+                    path.write_text(json.dumps(substituted), encoding="utf-8")
+                    with self.assertRaises(MODULE.ResolutionError):
+                        load_validation_evidence(path, "SecPal/api", "c" * 40, reviewed)
+
     def test_validation_attestation_binds_fix_head_and_reviewed_state(self) -> None:
         thread_id = "PRRT_exampleOne"
         payload = reviewed_state_payload(thread_id, [])
@@ -9886,36 +11207,12 @@ class ResolveFixedThreadsTests(TestCase):
 
     def test_historical_attestation_uses_bound_central_registry_history(self) -> None:
         thread_id = "PRRT_HISTORICAL_REGISTRY"
-        historical_head = "e78db9eeb0973d1f5853c4abfafa26e6cc8ab289"
-        historical_registry = json.loads(
-            REAL_SUBPROCESS_RUN(
-                [
-                    "git",
-                    "show",
-                    f"{historical_head}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
-                ],
-                cwd=ROOT,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout
-        )
-        historical_entry = next(
-            entry
-            for entry in historical_registry["repositories"]
-            if entry["repository"] == "SecPal/.github"
-        )
-        historical_binding = MODULE._validation_registry_binding(
-            historical_entry
-        )
-        self.assertEqual(
-            MODULE.fast_path.digest_json(historical_binding),
-            "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340",
-        )
-        self.assertEqual(
-            MODULE.fast_path.digest_json(historical_binding["validation"]),
-            "15d370f613fb13d39bcf5136ffb4ebae298eb78e0acfaf18635253571f9ff12a",
-        )
+        (
+            historical_registry,
+            historical_schema,
+            historical_binding,
+        ) = _synthetic_historical_registry("SecPal/.github")
+        historical_registry_raw = json.dumps(historical_registry)
         current_binding = MODULE._validation_registry_binding(
             MODULE._load_repository_entry("SecPal/.github")
         )
@@ -10052,13 +11349,28 @@ class ResolveFixedThreadsTests(TestCase):
             evidence_path = repository_root / "attestation.json"
             evidence_path.write_text(json.dumps(attestation), encoding="utf-8")
 
-            validation = load_validation_evidence(
-                evidence_path,
-                "SecPal/.github",
-                delivery_head,
-                reviewed,
-                repository_root=repository_root,
+            central_history = _bounded_central_history(
+                registry_raw=historical_registry_raw,
+                schema_raw=historical_schema,
+                delivery_head=delivery_head,
+                history_commit="b" * 40,
             )
+
+            def load_bound_evidence() -> Any:
+                with mock.patch.object(
+                    MODULE.fast_path,
+                    "_central_git_result",
+                    side_effect=central_history,
+                ):
+                    return load_validation_evidence(
+                        evidence_path,
+                        "SecPal/.github",
+                        delivery_head,
+                        reviewed,
+                        repository_root=repository_root,
+                    )
+
+            validation = load_bound_evidence()
 
             older_binding = copy.deepcopy(historical_binding)
             older_binding["validation"] = older_binding["validation"][:-1]
@@ -10089,13 +11401,7 @@ class ResolveFixedThreadsTests(TestCase):
                 MODULE.ResolutionError,
                 "immutable delivery validation registry binding is unavailable",
             ):
-                load_validation_evidence(
-                    evidence_path,
-                    "SecPal/.github",
-                    delivery_head,
-                    reviewed,
-                    repository_root=repository_root,
-                )
+                load_bound_evidence()
 
             digest_substitution = copy.deepcopy(attestation)
             digest_substitution["registry_digest"] = "0" * 64
@@ -10114,44 +11420,15 @@ class ResolveFixedThreadsTests(TestCase):
                 MODULE.ResolutionError,
                 "immutable delivery validation registry binding is unavailable",
             ):
-                load_validation_evidence(
-                    evidence_path,
-                    "SecPal/.github",
-                    delivery_head,
-                    reviewed,
-                    repository_root=repository_root,
-                )
+                load_bound_evidence()
 
         self.assertEqual(validation.validation_receipt, receipt)
         self.assertEqual(validation.attestation, attestation)
 
     def test_immutable_registry_rejects_invalid_maintained_structure(self) -> None:
-        historical_head = "e78db9eeb0973d1f5853c4abfafa26e6cc8ab289"
-        historical = json.loads(
-            REAL_SUBPROCESS_RUN(
-                [
-                    "git",
-                    "show",
-                    f"{historical_head}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
-                ],
-                cwd=ROOT,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout
+        historical, historical_schema, _ = _synthetic_historical_registry(
+            "SecPal/.github"
         )
-        historical_schema = REAL_SUBPROCESS_RUN(
-            [
-                "git",
-                "show",
-                f"{historical_head}:"
-                f"{MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH}",
-            ],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
 
         def load(registry_raw: str, schema_raw: str) -> None:
             head = "a" * 40
@@ -10341,38 +11618,97 @@ class ResolveFixedThreadsTests(TestCase):
     def test_immutable_registry_uses_historical_schema_from_central_history(
         self,
     ) -> None:
-        historical_head = "e78db9eeb0973d1f5853c4abfafa26e6cc8ab289"
-
-        binding = MODULE.fast_path.load_immutable_delivery_registry_binding(
-            repository="SecPal/.github",
-            delivery_head_sha=historical_head,
-            expected_registry_digest=(
-                "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340"
-            ),
-            expected_command_set_digest=(
-                "15d370f613fb13d39bcf5136ffb4ebae298eb78e0acfaf18635253571f9ff12a"
+        historical_head = "b" * 40
+        registry, schema_raw, expected = _synthetic_historical_registry(
+            "SecPal/.github"
+        )
+        self.assertNotEqual(
+            schema_raw,
+            MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH.read_text(
+                encoding="utf-8"
             ),
         )
-
-        self.assertEqual(binding["repository"], "SecPal/.github")
-        self.assertEqual(
-            MODULE.fast_path.digest_json(binding),
-            "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340",
+        with self.assertRaisesRegex(
+            MODULE.fast_path.SecurityBlocker,
+            "immutable delivery validation registry is invalid",
+        ):
+            MODULE.fast_path._validated_historical_registry_binding(
+                registry_raw=json.dumps(registry),
+                schema_raw=(
+                    MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH.read_text(
+                        encoding="utf-8"
+                    )
+                ),
+                repository="SecPal/.github",
+            )
+        central_history = _bounded_central_history(
+            registry_raw=json.dumps(registry),
+            schema_raw=schema_raw,
+            delivery_head=historical_head,
+            history_commit=historical_head,
         )
+
+        with mock.patch.object(
+            MODULE.fast_path,
+            "_central_git_result",
+            side_effect=central_history,
+        ):
+            binding = MODULE.fast_path.load_immutable_delivery_registry_binding(
+                repository="SecPal/.github",
+                delivery_head_sha=historical_head,
+                expected_registry_digest=MODULE.fast_path.digest_json(expected),
+                expected_command_set_digest=MODULE.fast_path.digest_json(
+                    expected["validation"]
+                ),
+            )
+
+        self.assertEqual(binding, expected)
 
     def test_cross_repository_registry_uses_central_history(self) -> None:
-        binding = MODULE.fast_path.load_immutable_delivery_registry_binding(
-            repository="SecPal/api",
-            delivery_head_sha="a" * 40,
-            expected_registry_digest=(
-                "0284e90a0d918f7baeb2d496d75cf1326858d7e0626c1bd8b72e05f2de2dc0ff"
-            ),
-            expected_command_set_digest=(
-                "d3f0d9498954210c1676533210e6bc34ed95468c3fe1db3454098ed7454e4227"
-            ),
+        delivery_head = "a" * 40
+        registry, schema_raw, expected = _synthetic_historical_registry(
+            "SecPal/api"
+        )
+        central_history = _bounded_central_history(
+            registry_raw=json.dumps(registry),
+            schema_raw=schema_raw,
+            delivery_head=delivery_head,
+            history_commit="b" * 40,
         )
 
-        self.assertEqual(binding["repository"], "SecPal/api")
+        with mock.patch.object(
+            MODULE.fast_path,
+            "_central_git_result",
+            side_effect=central_history,
+        ) as git_read:
+            binding = MODULE.fast_path.load_immutable_delivery_registry_binding(
+                repository="SecPal/api",
+                delivery_head_sha=delivery_head,
+                expected_registry_digest=MODULE.fast_path.digest_json(expected),
+                expected_command_set_digest=MODULE.fast_path.digest_json(
+                    expected["validation"]
+                ),
+            )
+
+        self.assertEqual(binding, expected)
+        current_candidate = mock.call(
+            [
+                "show",
+                f"{'d' * 40}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
+            ],
+            allow_failure=True,
+        )
+        historical_candidate = mock.call(
+            [
+                "show",
+                f"{'b' * 40}:{MODULE.fast_path.DELIVERY_REGISTRY_PATH}",
+            ],
+            allow_failure=True,
+        )
+        self.assertLess(
+            git_read.call_args_list.index(current_candidate),
+            git_read.call_args_list.index(historical_candidate),
+        )
 
     def test_attestation_rejects_forged_receipt_and_missing_manual_gates(
         self,

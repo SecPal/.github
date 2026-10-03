@@ -8,6 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/review-governance-suite.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 
+python3 -m unittest "$SCRIPT_DIR/secpal-governance-validation-unit.py"
+
 real_python3="$(command -v python3)"
 mkdir -p "$workspace/bin"
 cat >"$workspace/bin/python3" <<EOF
