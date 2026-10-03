@@ -288,6 +288,56 @@ def observation_inputs(value: dict[str, object]) -> dict[str, object]:
     }
 
 
+def reviewed_authorization() -> dict[str, object]:
+    value = authorization()
+    value["delivery_issue"] = 1053
+    value["pull_request"] = 1055
+    value["governance_path_prefixes"] = amendment.REVIEWED_READY_PATH_PREFIXES
+    value["human_authority_identity"] = amendment.REVIEWED_READY_AUTHORITY_IDENTITY
+    value["authorization_id"] = "governance-amendment:SecPal/.github:1053:1055"
+    value["current_validation"]["accepted_main_sha"] = "d" * 40
+    qualified = value["qualified_source"]
+    qualified.update(head_sha=HEAD, tree_sha=TREE,
+                     material_finding_ids=["finding-thread"])
+    qualified["qualification_digest"] = authority.digest_json({
+        "conversation_id": qualified["verifier_conversation_id"],
+        "workspace": qualified["verifier_workspace"],
+        "head_sha": HEAD, "tree_sha": TREE,
+        "result": "PASS", "material_finding_ids": ["finding-thread"],
+    })
+    value["feedback"]["material_finding_ids"] = ["finding-thread"]
+    observed = [
+        {"sequence": 1, "kind": "PR_CREATED_DRAFT",
+         "observed_at": "2026-09-18T10:00:00Z", "head_sha": HEAD,
+         "reviewed_head_sha": None},
+        {"sequence": 2, "kind": "DRAFT_TO_READY_OBSERVED",
+         "observed_at": "2026-09-18T10:30:00Z", "head_sha": HEAD,
+         "reviewed_head_sha": None},
+        {"sequence": 3, "kind": "REVIEW_SUBMITTED",
+         "observed_at": "2026-09-18T11:00:00Z", "head_sha": HEAD,
+         "reviewed_head_sha": HEAD},
+    ]
+    value["observed_pre_enrollment_history"] = observed
+    value["intended_state"] = authority.initial_state()
+    value["intended_state"].update(
+        unrestricted_review_count=1, draft=False, ready=True,
+        ready_transition_count=1,
+        ready_history=[{
+            "sequence": 1, "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": authority.digest_json(observed[1]),
+        }],
+    )
+    value["human_authorization_digest"] = authority.digest_json({
+        "authority_identity": value["human_authority_identity"],
+        "repository": value["repository"], "delivery_issue": 1053,
+        "pull_request": 1055, "purpose": amendment.PURPOSE,
+        "qualified_source_digest": qualified["qualification_digest"],
+        "accepted_main_sha": value["accepted_main_sha"],
+        "decision": "APPROVED", "bounded_uses": 1,
+    })
+    return reseal(value)
+
+
 class GovernanceAmendmentTests(TestCase):
     def test_target_work_graph_failure_is_bound_to_native_prerequisite(self) -> None:
         statuses = [{
@@ -558,6 +608,114 @@ class GovernanceAmendmentTests(TestCase):
             amendment._consumption_record(original)["resulting_parent_sha"],
             original["accepted_main_sha"],
         )
+
+    def test_reviewed_issuance_and_signatures_use_current_registration_trust(self) -> None:
+        reviewed = reviewed_authorization()
+        facts = {
+            key: copy.deepcopy(value) for key, value in reviewed.items()
+            if key not in {
+                "root_authorization", "signer_identity", "signature",
+                "authorization_digest",
+            }
+        }
+        trust = SimpleNamespace(
+            authority_signer_identities=frozenset({ROOT_SIGNER}),
+            legacy_adoption_signer_identities=frozenset({SIGNER}),
+        )
+        current = reviewed["current_validation"]["accepted_main_sha"]
+
+        def current_trust(_repository, main):
+            self.assertEqual(main, current)
+            return trust
+
+        def role_signer(_trust, identities, _label, **_kwargs):
+            return ((ROOT_SIGNER, root_signer)
+                    if identities == trust.authority_signer_identities
+                    else (SIGNER, signer))
+
+        with mock.patch.object(
+            amendment, "produce_observation", return_value=facts,
+        ), mock.patch.object(
+            amendment, "_accepted_trust_policy", side_effect=current_trust,
+        ), mock.patch.object(
+            amendment.execution, "_policy_role_signer", side_effect=role_signer,
+        ), mock.patch.object(
+            authority, "_policy_signature_verifier", return_value=signature_verifier,
+        ):
+            sealed = amendment.authenticate_issuance(
+                "SecPal/.github", 1053, observation_inputs(reviewed),
+            )
+            issued = amendment.issue(sealed)
+            amendment.verify(issued)
+
+    def test_reviewed_registration_tip_revocation_rejects_old_signers(self) -> None:
+        reviewed = reviewed_authorization()
+        current = reviewed["current_validation"]["accepted_main_sha"]
+        historical = reviewed["accepted_main_sha"]
+
+        def policy(_repository, main):
+            if main == historical:
+                return SimpleNamespace(
+                    authority_signer_identities=frozenset({ROOT_SIGNER}),
+                    legacy_adoption_signer_identities=frozenset({SIGNER}),
+                )
+            self.assertEqual(main, current)
+            return SimpleNamespace(
+                authority_signer_identities=frozenset(),
+                legacy_adoption_signer_identities=frozenset(),
+            )
+
+        with mock.patch.object(
+            amendment, "_accepted_trust_policy", side_effect=policy,
+        ), mock.patch.object(
+            authority, "_policy_signature_verifier", return_value=signature_verifier,
+        ), self.assertRaises(amendment.GovernanceAmendmentError):
+            amendment.verify(reviewed)
+
+    def test_reviewed_live_pr_base_is_current_registration_tip(self) -> None:
+        reviewed = reviewed_authorization()
+        historical = reviewed["accepted_main_sha"]
+        current = reviewed["current_validation"]["accepted_main_sha"]
+        pull = {
+            "number": 1055, "state": "open", "draft": False,
+            "merged": False, "head_repository": "SecPal/.github",
+            "base_sha": current, "base_ref": "main",
+            "base_repository": "SecPal/.github", "head_sha": HEAD,
+        }
+
+        def observe(value):
+            with mock.patch.object(
+                amendment, "_accepted_trust_policy",
+                return_value=SimpleNamespace(publication_remote_url="unused"),
+            ), mock.patch.object(
+                amendment, "_observe_remote_main", return_value=current,
+            ), mock.patch.object(
+                amendment, "_run_git",
+                return_value=SimpleNamespace(returncode=0),
+            ), mock.patch.object(
+                amendment, "_live_pull_request", return_value=value,
+            ), mock.patch.object(
+                amendment, "_live_issue",
+                return_value={"number": 1053, "state": "open"},
+            ), mock.patch.object(
+                amendment, "_registered_bootstrap_policy",
+                side_effect=RuntimeError("reached registration"),
+            ):
+                return amendment.produce_observation(
+                    "SecPal/.github", 1053, {
+                        key: reviewed[key] for key in amendment.OBSERVATION_INPUT_FIELDS
+                    },
+                )
+
+        self.assertNotEqual(historical, current)
+        with self.assertRaisesRegex(RuntimeError, "reached registration"):
+            observe(pull)
+        pull["base_sha"] = historical
+        with self.assertRaisesRegex(
+            amendment.GovernanceAmendmentError,
+            "live governance amendment delivery identity or state changed",
+        ):
+            observe(pull)
 
     def patches(self, trust: object | None = None):
         trust = trust or SimpleNamespace(
@@ -2102,6 +2260,21 @@ class GovernanceAmendmentTests(TestCase):
             side_effect=amendment.GovernanceAmendmentError("not strict"),
         ), self.assertRaises(amendment.GovernanceAmendmentError):
             amendment._authenticate_provider_merge_gate(item)
+
+        reviewed = reviewed_authorization()
+        current = reviewed["current_validation"]["accepted_main_sha"]
+        current_pull = copy.deepcopy(pull)
+        current_pull["base"]["sha"] = current
+        with mock.patch.object(
+            amendment, "_live_required_check_policy",
+            side_effect=lambda _repo, main: (
+                {"strict": True} if main == current else
+                (_ for _ in ()).throw(AssertionError("historical policy used"))
+            ),
+        ), mock.patch.object(
+            amendment, "_github_json", return_value=current_pull,
+        ):
+            amendment._authenticate_provider_merge_gate(reviewed)
 
     def test_signed_delivery_scope_cannot_change_without_new_root_signature(self) -> None:
         value = authorization()

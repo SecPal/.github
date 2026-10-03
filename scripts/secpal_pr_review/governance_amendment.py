@@ -353,7 +353,7 @@ def _verify_root_authorization(
         root["signer_identity"], "governance amendment root signer"
     )
     if authenticate_signature:
-        trust = _accepted_trust_policy(repository, accepted_main_sha)
+        trust = _accepted_trust_policy(repository, _consumption_base(item))
         try:
             authority._verify_signature(
                 authority.canonical_json_bytes(
@@ -662,7 +662,7 @@ def _verify(
     if digest != authority.digest_json(signed):
         raise GovernanceAmendmentError("governance amendment authorization digest mismatch")
     if authenticate_signature:
-        trust = _accepted_trust_policy(repository, main)
+        trust = _accepted_trust_policy(repository, _consumption_base(item))
         try:
             authority._verify_signature(
                 authority.canonical_json_bytes(
@@ -762,7 +762,7 @@ def issue(value: VerifiedGovernanceAmendmentIssuance) -> dict[str, Any]:
         raise GovernanceAmendmentError(
             "amendment issuance facts changed before signing"
         )
-    trust = _accepted_trust_policy(repository, facts["accepted_main_sha"])
+    trust = _accepted_trust_policy(repository, _consumption_base(facts))
     root_identity, root_signer = execution._policy_role_signer(
         trust,
         trust.authority_signer_identities,
@@ -2341,7 +2341,9 @@ def produce_observation(
         or pull.get("draft") is not False
         or pull.get("merged") is not False
         or pull.get("head_repository") != repository
-        or pull.get("base_sha") != accepted_main
+        or pull.get("base_sha") != (
+            protected_main if delivery_issue == 1053 else accepted_main
+        )
         or pull.get("base_ref") != "main"
         or pull.get("base_repository") != repository
         or issue != {"number": delivery_issue, "state": "open"}
@@ -2725,7 +2727,7 @@ def _authenticate_execution(
     if observed_parents != item["ordered_parent_shas"]:
         raise GovernanceAmendmentError("amendment parents changed")
     trust = _accepted_trust_policy(
-        item["repository"], item["accepted_main_sha"]
+        item["repository"], _consumption_base(item)
     )
     commits = _source_commit_range(
         root, item["accepted_main_sha"], item["head_sha"]
@@ -2766,8 +2768,9 @@ def _authenticate_execution(
 
 
 def _authenticate_provider_merge_gate(item: Mapping[str, Any]) -> None:
+    current_base = _consumption_base(item)
     policy = _live_required_check_policy(
-        item["repository"], item["accepted_main_sha"]
+        item["repository"], current_base
     )
     pull = _github_json(
         [
@@ -2794,7 +2797,7 @@ def _authenticate_provider_merge_gate(item: Mapping[str, Any]) -> None:
         or observed != {
             "state": "open", "draft": False, "merged": False,
             "head_sha": item["head_sha"],
-            "base_sha": item["accepted_main_sha"], "base_ref": "main",
+            "base_sha": current_base, "base_ref": "main",
             "mergeable": True, "mergeable_state": "clean",
         }
     ):
