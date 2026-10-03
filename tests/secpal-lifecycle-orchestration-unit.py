@@ -3067,14 +3067,14 @@ class LifecycleOrchestrationTests(TestCase):
             current_binding = fast_path.validation_registry_projection(
                 current_entry
             )
-            self.assertEqual(len(current_binding["validation"]), 20)
+            self.assertEqual(len(current_binding["validation"]), 21)
             self.assertEqual(
                 fast_path.digest_json(current_binding),
-                "331b8ca7ff311838f13d42307e0e7d15be4c1c26e14f3a019fbcbc28f6abcdc3",
+                "5eb32c33aa354dc9ebda3d00bef1eba02409f6b98c4f073f418309ef993cec90",
             )
             self.assertEqual(
                 fast_path.digest_json(current_binding["validation"]),
-                "92621b004275f295e705031832547610e88c349aa3337773ebbc27f654c4678f",
+                "b37fd0a415a61e6c8d3925ca7e87783c4301ae50bfe481bc6e8d76002bb62936",
             )
             self.assertNotEqual(
                 fast_path.digest_json(collision_binding),

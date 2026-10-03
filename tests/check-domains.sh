@@ -55,6 +55,7 @@ bad_internal_domain="cache.${domain_namespace}.internal"
 bad_development_suffix="${domain_namespace}.dev.example"
 bad_direct_development="foo.${domain_namespace}.dev"
 approved_public_io="${domain_namespace}.io"
+approved_repository_remote="https://github.com/SecPal/${domain_namespace}.app.git"
 approved_reverse_identifier="io.${domain_namespace}.polyscope.preview"
 bad_reverse_identifier="dev.${domain_namespace}.polyscope.preview"
 reverse_identifier_as_host="io.${domain_namespace}.attacker.example"
@@ -337,6 +338,28 @@ assert_domain_policy_case \
   accept \
   "$lifecycle_config_identifier" \
   "Use \`$lifecycle_config_identifier\` with https://secpal.io"
+assert_domain_policy_case \
+  "the exact GitHub repository remote used by lifecycle publication" \
+  accept \
+  "$approved_repository_remote" \
+  "publication_remote_url: $approved_repository_remote"
+assert_domain_policy_case \
+  "a lookalike repository remote suffix" \
+  reject \
+  "${domain_namespace}.app.git.evil" \
+  "publication_remote_url: ${approved_repository_remote}.evil"
+for suffix in /evil '?ref=evil' '#evil'; do
+  assert_domain_policy_case \
+    "a repository remote with a URI continuation" \
+    reject \
+    "${domain_namespace}.app.git" \
+    "publication_remote_url: ${approved_repository_remote}${suffix}"
+done
+assert_domain_policy_case \
+  "an unrelated repository remote beside the approved one" \
+  reject \
+  "${domain_namespace}.app.git" \
+  "publication_remote_url: $approved_repository_remote https://example.invalid/SecPal/${domain_namespace}.app.git"
 
 printf '%s\n' "credential=\`$lifecycle_config_identifier\`" \
   >"$workspace/domain-policy-case.sh"

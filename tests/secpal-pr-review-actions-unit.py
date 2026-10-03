@@ -4305,7 +4305,7 @@ class RegistryTests(TestCase):
             ["./tests/review-governance-suite.sh"],
             [command["argv"] for command in commands],
         )
-        self.assertEqual(len(commands), 20)
+        self.assertEqual(len(commands), 21)
 
     def test_locked_node_preparation_requires_exact_staged_manifest_identities(
         self,
@@ -14434,6 +14434,65 @@ class FastPathTests(TestCase):
                 pull_request_number=1,
                 ready_source_provider_binding=binding,
             )
+        verify_summary.assert_called_once_with(
+            body=provider_state["comments"]["nodes"][0]["body"],
+            repository="SecPal/.github",
+            pull_request=1,
+            current_head_sha=p21.HEAD,
+        )
+
+    def test_stale_summary_retains_ordinary_ready_remediation_capture(self) -> None:
+        provider_head = "f" * 40
+        binding = actions._ReadyRemediationProviderBinding(
+            {
+                "repository": "SecPal/.github",
+                "pull_request": 1,
+                "current_head_sha": p21.HEAD,
+                "provider_head_sha": provider_head,
+            },
+            repository="SecPal/.github",
+            pull_request=1,
+        )
+        provider_state = self._codex_provider_state(metadata_head=provider_head)
+        provider_state["comments"]["nodes"][0]["body"] = (
+            provider_state["comments"]["nodes"][0]["body"].replace(
+                "| head |", f"| `{provider_head[:7]}` |"
+            )
+        )
+        actions._require_review_providers_terminal(
+            provider_state,
+            repository="SecPal/.github",
+            pull_request_number=1,
+            ready_source_provider_binding=binding,
+        )
+
+    def test_stale_dual_row_historical_summary_requires_exact_binding(self) -> None:
+        binding = replace(
+            self._ready_source_provider_binding(),
+            provider_binding_sources=(
+                lifecycle_publication.
+                EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
+            ),
+        )
+        provider_state = self._codex_provider_state(metadata_head="f" * 40)
+        with mock.patch.object(
+            type(binding), "provider_head", return_value="f" * 40
+        ), mock.patch.object(
+            type(binding), "verify_historical_provider_summary",
+            side_effect=fast_path.SecurityBlocker(
+                "historical review-provider summary is invalid"
+            ),
+        ) as verify_summary:
+            with self.assertRaisesRegex(
+                actions.MutationBlocked,
+                "historical review-provider summary is invalid",
+            ):
+                actions._require_review_providers_terminal(
+                    provider_state,
+                    repository="SecPal/.github",
+                    pull_request_number=1,
+                    ready_source_provider_binding=binding,
+                )
         verify_summary.assert_called_once_with(
             body=provider_state["comments"]["nodes"][0]["body"],
             repository="SecPal/.github",
