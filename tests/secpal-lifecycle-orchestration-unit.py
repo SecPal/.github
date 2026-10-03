@@ -13463,6 +13463,25 @@ class ReadyIntegrationRemediationTests(TestCase):
                 publication.derive_ready_source_recovery_provider_binding(
                     self.current, ready_integrations=((self.predecessor, self.prior_authority),))
 
+    def test_provider_integration_rejects_substituted_loaded_module_origins(self):
+        transport = orchestration.bootstrap_source_admission
+        helper = transport._load_actions_helper()
+        modules = (
+            authority, transport, fast_path, helper.evidence,
+            fast_path.follow_up, helper.pre_enrollment,
+        )
+        with mock.patch.object(helper, "_authenticate_protected_bridge_main", return_value="a" * 40), \
+             mock.patch.object(helper, "_require_exact_accepted_main_blob"), \
+             mock.patch.object(transport, "_git"):
+            publication._authenticate_provider_integration_verifier()
+            for module in modules:
+                for field in ("__file__", "origin"):
+                    with self.subTest(module=module.__name__, field=field):
+                        target = module if field == "__file__" else module.__spec__
+                        with mock.patch.object(target, field, "/tmp/candidate-verifier.py"):
+                            with self.assertRaises(publication.LifecyclePublicationError):
+                                publication._authenticate_provider_integration_verifier()
+
     def test_provider_lineage_historical_summary_does_not_review_current_head(self):
         fixture = self.actions_fixture
         binding = self.derive_provider_lineage()
