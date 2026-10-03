@@ -138,6 +138,14 @@ def _timestamp(value: Any) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _result_timestamp(value: str) -> datetime:
+    """Preserve fractional seconds emitted by canonical Codex result rows."""
+
+    whole_seconds = re.sub(r"\.[0-9]{1,6}Z$", "Z", value)
+    _timestamp(whole_seconds)
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def _actor(value: Any) -> tuple[str, str, int]:
     if not isinstance(value, dict) or value.get("__typename") not in {"User", "Bot"}:
         raise fast_path.SecurityBlocker("first fallback actor is incomplete")
@@ -319,7 +327,7 @@ def _admit(
                 if (
                     _timestamp(event["updated_at"]) <= requested_at
                     or len(result_times) > 1
-                    or result_times and _timestamp(result_times[0]) <= requested_at
+                    or result_times and _result_timestamp(result_times[0]) <= requested_at
                 ):
                     raise fast_path.SecurityBlocker("first fallback follows an existing exact-head provider summary result")
         acquisitions.append(FirstFallbackAcquisition(

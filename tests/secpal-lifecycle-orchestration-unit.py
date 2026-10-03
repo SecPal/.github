@@ -2052,6 +2052,15 @@ class FirstFallbackAcquisitionTests(TestCase):
                 with self.assertRaises(fast_path.SecurityBlocker):
                     self.growth(fixture, acquired)
 
+    def test_real_codex_summary_fractional_result_timestamps_are_normalized(self):
+        _, current, _, _, summary, context, raw = first_fallback_growth()
+        summary = summary.replace("**Completed** | `", '✅ **Completed** <relative-time datetime="2026-10-01T16:23:11.487606Z">2026-10-01T16:23:11.487606Z</relative-time> | `')
+        nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+        next(v for v in nodes if fast_path.CODEX_REVIEW_SUMMARY_MARKER in v.get("body", ""))["body"] = summary
+        first_fallback_feedback(current, raw)
+        acquired = self.authenticate(current, context, raw)
+        self.assertEqual(tuple(v.review_type for v in acquired.acquisitions), ("CODE", "SECURITY"))
+
     def test_public_observation_normalizes_live_representation_without_writes(self):
         from scripts.secpal_pr_review import provider_acquisition as acquisition
         _, current, _, _, _, _, raw = first_fallback_growth()
