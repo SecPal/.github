@@ -9805,6 +9805,8 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
 class _ReadyRemediationProviderBinding:
     """Ephemeral read-only projection; the caller reauthenticates its source."""
 
+    provider_binding_sources: tuple[str, ...] = ()
+
     def __init__(self, value: Any, *, repository: str, pull_request: int):
         if (
             not isinstance(value, dict)
