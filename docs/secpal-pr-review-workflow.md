@@ -1573,6 +1573,31 @@ already verified final delivery attestation and does not create a new receipt.
 
 ### Explicit Ready-head integration evidence
 
+The canonical `derive_ready_source_recovery_provider_binding` can compose a
+Ready-preserving ordinary remediation suffix followed by a complete typed
+`HEAD_ADVANCED` suffix. Its `ready_integrations` argument supplies the original
+verifier-authenticated validation and prior-authority pairs in transition order;
+it selects no provider head or subset. Each pair must match the exact protected
+predecessor and successor publications, source head/tree, signed prior-authority
+tag, receipt, final attestation, signer and unchanged finite state. Missing,
+extra, reordered, substituted or candidate-local integration evidence fails
+closed. The existing integration verifier and its trust inputs must match
+freshly authenticated protected main.
+
+Historical parent 2 binds the exact main observation authorized in the signed
+integration evidence and protected publication. It does not bind today's main
+tip. Later main advancement therefore preserves the original integration's
+meaning, while substituting its historical main observation invalidates its
+signed receipt/source binding. Generic delivery ancestry grants no authority.
+
+The derived provider terminality remains at the unique historical reviewed
+head. Current feedback is separately captured in full at the resulting CURRENT
+head, and the capture rejects a historical head even when its provider summary
+is terminal. Existing current-source classification and material-blocker gates
+remain required. This composition changes neither bounded provider acquisition
+nor review, remediation, Ready, Recovery or Continuation budgets. The broader
+provider-lineage contract remains owned by #1031.
+
 Ordinary remediation and recovery continue to require one parent. A separately
 user-authorized mechanical integration into an already-Ready delivery PR uses
 `attest-validation --integration-evidence` and the closed
