@@ -1,0 +1,367 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SecPal/.github/blob/main/docs/schemas/secpal-trivy-repository-scan-v1.schema.json",
+  "title": "SecPal Trivy repository scan result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "subject",
+    "completed_at",
+    "operation",
+    "gate_state",
+    "summary",
+    "findings"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "secpal-trivy-repository-scan-v1"
+    },
+    "subject": {
+      "$ref": "#/$defs/subject"
+    },
+    "scanner": {
+      "$ref": "#/$defs/scanner"
+    },
+    "database": {
+      "$ref": "#/$defs/database"
+    },
+    "completed_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "policy": {
+      "$ref": "#/$defs/policy"
+    },
+    "operation": {
+      "$ref": "#/$defs/operation"
+    },
+    "gate_state": {
+      "enum": ["CLEAN", "ACTIONABLE", "REVIEW_REQUIRED", "UNKNOWN_STALE"]
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "gate_state": {
+            "const": "UNKNOWN_STALE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "operation": {
+            "properties": {
+              "status": {
+                "const": "FAILED"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "required": ["scanner", "database", "policy"],
+        "properties": {
+          "operation": {
+            "properties": {
+              "status": {
+                "const": "SUCCEEDED"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "scanner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "immutable_id"],
+      "properties": {
+        "name": {
+          "const": "trivy"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "immutable_id": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "identity", "updated_at", "next_update", "downloaded_at"],
+      "properties": {
+        "status": {
+          "enum": ["FRESH", "STALE"]
+        },
+        "identity": {
+          "$ref": "#/$defs/sha256"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "next_update": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "downloaded_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "sha256"],
+      "properties": {
+        "id": {
+          "const": "secpal-trivy-repository-policy-v1"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status"],
+      "properties": {
+        "name": {
+          "const": "TRIVY_REPOSITORY_SCAN"
+        },
+        "status": {
+          "enum": ["SUCCEEDED", "FAILED"]
+        },
+        "failure_code": {
+          "enum": [
+            "TARGET_IDENTITY_FAILURE",
+            "SCANNER_IDENTITY_FAILURE",
+            "NETWORK_FAILURE",
+            "DATABASE_FAILURE",
+            "SCANNER_FAILURE",
+            "MALFORMED_OUTPUT",
+            "POLICY_FAILURE"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "FAILED"
+              }
+            }
+          },
+          "then": {
+            "required": ["failure_code"]
+          },
+          "else": {
+            "not": {
+              "required": ["failure_code"]
+            }
+          }
+        }
+      ]
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "actionable", "review_required", "excepted"],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "actionable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "review_required": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "excepted": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start_line", "end_line"],
+      "properties": {
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "exception": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "disposition", "expires_at"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "disposition": {
+          "enum": ["IGNORED", "NOT_AFFECTED"]
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fingerprint", "class", "rule_id", "severity", "path"],
+      "properties": {
+        "fingerprint": {
+          "$ref": "#/$defs/sha256"
+        },
+        "class": {
+          "enum": ["VULNERABILITY", "SECRET", "MISCONFIGURATION"]
+        },
+        "rule_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "enum": ["UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "location": {
+          "$ref": "#/$defs/location"
+        },
+        "package": {
+          "type": "string",
+          "minLength": 1
+        },
+        "installed_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fixed_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resource": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exception": {
+          "$ref": "#/$defs/exception"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "class": {
+                "const": "SECRET"
+              }
+            }
+          },
+          "then": {
+            "required": ["location"],
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["package"]
+                },
+                {
+                  "required": ["installed_version"]
+                },
+                {
+                  "required": ["fixed_version"]
+                },
+                {
+                  "required": ["resource"]
+                },
+                {
+                  "required": ["title"]
+                },
+                {
+                  "required": ["message"]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "class": {
+                "const": "VULNERABILITY"
+              }
+            }
+          },
+          "then": {
+            "required": ["package", "installed_version"]
+          }
+        }
+      ]
+    }
+  }
+}
