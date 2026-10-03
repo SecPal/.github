@@ -13573,5 +13573,414 @@ class ReadyIntegrationRemediationTests(TestCase):
             orchestration.ordinary_ready_remediation_authorization_scope(replace(scope, finding_ids=scope.finding_ids[:-1]))
 
 
+class ProviderAcquisitionEvidenceLossTests(TestCase):
+    """The existing realistic timeline fixture supplies transport, never loss."""
+
+    def fixture(self):
+        from scripts.secpal_pr_review import provider_reacquisition as reacquisition
+        _, feedback, _, _, summary, current, raw = first_fallback_growth()
+        feedback.provider_summary_body = summary
+        current = replace(current, lifecycle=replace(current.lifecycle, tree_sha="3" * 40,
+            validation_receipt_digest="4" * 64, source_validation_evidence_digest="5" * 64,
+            adoption_source_evidence_digest="6" * 64))
+        observed = reacquisition.acquisition._normalize_observation(raw)
+        survey = {
+            "source_history": tuple((e["head"], current.lifecycle.tree_sha if e["head"] == current.lifecycle.head_sha else "8" * 40) for e in observed["events"] if e["kind"] == "COMMIT"),
+            "source_packages": (), "journal_packages": (),
+            "historical_digest_identities": ("4" * 64, "5" * 64, "6" * 64),
+            "maintained_stores": reacquisition.MAINTAINED_STORES,
+            "unsearched_stores": (), "retained_local_store": "NO_MAINTAINED_RETAINED_STORE",
+            "output_scope": "GITIGNORED_WORKSPACE_LOCAL",
+            "authoritative_head_publication": None,
+        }
+        return reacquisition, current, feedback, observed, survey
+
+    def test_complete_authenticated_bounded_loss_is_admitted(self):
+        r, c, f, o, s = self.fixture()
+        proof = r._admit_loss(c, f, o, s)
+        self.assertEqual(proof.classification, "REQUIRED_HISTORICAL_ACQUISITION_EVIDENCE_UNAVAILABLE")
+        self.assertEqual(proof.review_types, ("CODE", "SECURITY"))
+        self.assertEqual(proof.original_first_fallback_validity, "UNPROVABLE_FROM_RETAINED_AUTHORITY")
+        self.assertEqual(c.lifecycle.state["remediation_cycle_count"], 1)
+        r.require_verified_loss(proof)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r.require_verified_loss(replace(proof, classification="INVALID"))
+
+    def test_authenticated_adoption_history_keeps_observation_identity(self):
+        r, c, f, o, s = self.fixture()
+        state = copy.deepcopy(c.lifecycle.state)
+        state["ready_history"][0] = {"sequence": 1, "transition_kind": "DRAFT_TO_READY", "observation_digest": "6" * 64}
+        adopted = replace(c, lifecycle=replace(c.lifecycle, state=state, historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE))
+        self.assertEqual(r._admit_loss(adopted, f, o, s).lifecycle_state, state)
+        native = replace(c, lifecycle=replace(c.lifecycle, state=state))
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            r._admit_loss(native, f, o, s)
+
+    def test_source_store_accepts_unrelated_real_json_representations(self):
+        r, c, _, _, _ = self.fixture()
+        for value in ({"kind": {}}, {"kind": []}, {"kind": False},
+                      {"kind": fast_path.READY_INTEGRATION_KIND, "repository": c.lifecycle.repository,
+                       "delivery_issue": c.lifecycle.delivery_issue, "head_sha": {"description": "schema"}},
+                      {"digest": "4" * 64}, {"kind": fast_path.READY_INTEGRATION_KIND, "head_sha": "9" * 40}):
+            with self.subTest(value=value):
+                self.assertEqual(r._package_identities(fast_path.canonical_json_bytes(value), c), ())
+        package = {"kind": fast_path.READY_INTEGRATION_KIND, "repository": c.lifecycle.repository,
+                   "delivery_issue": c.lifecycle.delivery_issue, "head_sha": c.lifecycle.head_sha}
+        self.assertEqual(r._package_identities(fast_path.canonical_json_bytes({"package": package}), c),
+                         (fast_path.digest_json(package),))
+        for artifact in (
+            {"kind": fast_path.READY_INTEGRATION_KIND, "repository": c.lifecycle.repository,
+             "delivery_issue_number": c.lifecycle.delivery_issue, "pull_request_number": c.lifecycle.pull_request,
+             "validated_tree_sha": c.lifecycle.tree_sha},
+            {"kind": "VALIDATION_RECEIPT", "repository": c.lifecycle.repository,
+             "head_sha": c.lifecycle.head_sha, "receipt_digest": c.lifecycle.validation_receipt_digest},
+            {"repository": c.lifecycle.repository, "head_sha": c.lifecycle.head_sha,
+             "validated_tree_sha": c.lifecycle.tree_sha, "attestation_digest": c.lifecycle.adoption_source_evidence_digest}):
+            with self.subTest(artifact=artifact):
+                self.assertEqual(r._package_identities(fast_path.canonical_json_bytes(artifact), c), (fast_path.digest_json(artifact),))
+
+    def test_source_blob_bounds_are_checked_before_payload(self):
+        r, _, _, _, _ = self.fixture()
+        ids = ("1" * 40, "2" * 40)
+        def sizes(values):
+            return "".join(f"{oid} blob {size}\n" for oid, size in zip(ids, values)).encode()
+        r._admit_blob_sizes(ids, sizes((0, 16 * 1024 * 1024)))
+        for raw in (sizes((1,)), sizes((1, 16 * 1024 * 1024 + 1)),
+                    sizes((1, 2)).replace(b"blob", b"tree"),
+                    sizes((1, 2)).replace(ids[0].encode(), b"9" * 40)):
+            with self.subTest(raw=raw), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_blob_sizes(ids, raw)
+
+    def test_expired_event_alone_or_caller_declaration_is_denied(self):
+        r, c, f, o, s = self.fixture()
+        for survey in ({"authoritative_head_publication": None}, {"lost": True},
+                       {**s, "unsearched_stores": ("OTHER",)},
+                       {**s, "historical_digest_identities": ()},
+                       {**s, "retained_local_store": "UNKNOWN"}):
+            with self.subTest(survey=survey), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_loss(c, f, o, survey)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r.require_verified_loss({"lost": True})
+
+    def test_available_proof_or_authoritative_chronology_denies_loss(self):
+        r, c, f, o, s = self.fixture()
+        for field, value in (("source_packages", ("package",)),
+                             ("journal_packages", ("package",)),
+                             ("authoritative_head_publication", {"created_at": "2026-10-01T15:02:00Z"})):
+            with self.subTest(field=field), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_loss(c, f, o, {**s, field: value})
+
+    def test_provider_actor_and_head_alone_do_not_make_a_terminal_result(self):
+        r, c, f, o, s = self.fixture()
+        events = copy.deepcopy(list(o["events"]))
+        review = next(e for e in events if e["kind"] == "PullRequestReview" and e["head"] == c.lifecycle.head_sha)
+        review["body"] = f"Unclassified provider note\n**Reviewed commit:** `{c.lifecycle.head_sha[:10]}`"
+        captured = copy.deepcopy(f.to_dict())
+        next(e for e in captured["reviews"] if e["node_id"] == review["node_id"])["body_digest"] = fast_path.digest_text(review["body"])
+        changed = fast_path.verify_reviewed_state_evidence(f.to_dict())
+        changed.feedback["reviews"] = captured["reviews"]
+        changed.refresh_digests()
+        changed.provider_summary_body = f.provider_summary_body
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._admit_loss(c, changed, {**o, "events": tuple(events)}, s)
+
+    def test_retained_digest_and_source_inventory_cannot_be_substituted(self):
+        r, c, f, o, s = self.fixture()
+        for wrong in ({**s, "historical_digest_identities": ("9" * 64,)},
+                      {**s, "source_history": (("9" * 40, "8" * 40),) + s["source_history"]}):
+            with self.subTest(wrong=wrong), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_loss(c, f, o, wrong)
+
+    def test_wrong_delivery_head_ready_or_finite_state_is_denied(self):
+        r, c, f, o, s = self.fixture()
+        for field, value in (("repository", "SecPal/api"), ("pull_request", 999),
+                             ("head", "9" * 40), ("state", "CLOSED"), ("draft", True)):
+            with self.subTest(field=field), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_loss(c, f, {**o, field: value}, s)
+        for field, value in (("unrestricted_review_count", 0), ("remediation_cycle_count", 2),
+                             ("ready_transition_count", 2), ("cycle_3_absent", False),
+                             ("exceptional_recovery_count", 1), ("exceptional_continuation_count", 1)):
+            wrong = replace(c, lifecycle=replace(c.lifecycle, state={**c.lifecycle.state, field: value}))
+            with self.subTest(field=field), self.assertRaises((fast_path.SecurityBlocker, authority.LifecycleAuthorityError)):
+                r._admit_loss(wrong, f, o, s)
+
+    def test_missing_terminal_result_and_duplicate_requests_are_denied(self):
+        r, c, f, o, s = self.fixture()
+        f.provider_summary_body = f.provider_summary_body.replace("Completed", "Running")
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._admit_loss(c, f, o, s)
+        r, c, f, o, s = self.fixture()
+        for review_type, trigger in r.acquisition._CANONICAL_TRIGGERS.items():
+            event = next(e for e in o["events"] if e.get("body") == trigger)
+            duplicate = {**event, "node_id": "IC_DUPLICATE", "database_id": 99}
+            with self.subTest(review_type=review_type), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_loss(c, f, {**o, "events": o["events"] + (duplicate,)}, s)
+
+
+class ProviderReacquisitionAuthorizationTests(TestCase):
+    fixture = ProviderAcquisitionEvidenceLossTests.fixture
+
+    def authorization(self):
+        r, c, f, o, s = self.fixture()
+        proof = r._admit_loss(c, f, o, s)
+        fields = r._authorization_fields(proof, "2026-10-01T17:00:00Z", "aroviqen@secpal.app")
+        signed = {**fields, "signature": {"format": "ssh", "signer_identity": fields["signer_identity"], "value": "test-signature"}}
+        document = {**signed, "authorization_digest": fast_path.digest_json(signed)}
+        return r, c, document
+
+    def verify(self, r, c, doc):
+        with mock.patch.object(authority, "_verify_signature") as verify:
+            result = r.verify_authorization(doc, c)
+        verify.assert_called_once()
+        return result
+
+    def test_signed_exact_one_use_authorization_and_keys(self):
+        r, c, doc = self.authorization()
+        verified = self.verify(r, c, doc)
+        self.assertEqual(verified.document["bounded_uses"], 1)
+        with mock.patch.object(authority, "_verify_signature"):
+            keys = r.derive_dispatch_keys(verified, c)
+        self.assertEqual(tuple(k.review_type for k in keys), ("CODE", "SECURITY"))
+        self.assertNotEqual(publication.provider_dispatch_claim_id(keys[0]), publication.provider_dispatch_claim_id(keys[1]))
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r.derive_dispatch_keys(doc, c)
+
+    def test_stale_current_delivery_lifecycle_and_source_are_denied(self):
+        r, c, doc = self.authorization()
+        replacements = [replace(c, publication_oid="9" * 40),
+                        replace(c, publication_digest="9" * 64),
+                        replace(c, lifecycle=replace(c.lifecycle, repository="SecPal/api")),
+                        replace(c, lifecycle=replace(c.lifecycle, pull_request=999)),
+                        replace(c, lifecycle=replace(c.lifecycle, delivery_issue=999)),
+                        replace(c, lifecycle=replace(c.lifecycle, lifecycle_id="lifecycle:other")),
+                        replace(c, lifecycle=replace(c.lifecycle, head_sha="9" * 40)),
+                        replace(c, lifecycle=replace(c.lifecycle, tree_sha="9" * 40))]
+        for wrong in replacements:
+            with self.subTest(current=wrong), self.assertRaises(fast_path.SecurityBlocker):
+                self.verify(r, wrong, doc)
+
+    def test_subset_historical_relabel_and_unbounded_use_are_denied(self):
+        r, c, doc = self.authorization()
+        for field, value in (("review_types", ["CODE"]), ("bounded_uses", 2),
+                             ("bounded_uses", True), ("operation", "BOUNDED_POST_READY_FIRST_FALLBACK"),
+                             ("assessment_id", "9" * 64)):
+            wrong = {**doc, field: value}
+            wrong["authorization_digest"] = fast_path.digest_json({k:v for k,v in wrong.items() if k != "authorization_digest"})
+            with self.subTest(field=field), self.assertRaises(fast_path.SecurityBlocker):
+                self.verify(r, c, wrong)
+
+    def test_signature_failure_and_tampered_loss_fail_closed(self):
+        r, c, doc = self.authorization()
+        with mock.patch.object(authority, "_verify_signature", side_effect=authority.LifecycleAuthorityError("forged")):
+            with self.assertRaises(fast_path.SecurityBlocker):
+                r.verify_authorization(doc, c)
+        wrong = copy.deepcopy(doc)
+        wrong["loss_proof"]["original_first_fallback_validity"] = "VALID"
+        wrong["authorization_digest"] = fast_path.digest_json({k:v for k,v in wrong.items() if k != "authorization_digest"})
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.verify(r, c, wrong)
+
+
+class ProviderReacquisitionFreshHistoryTests(TestCase):
+    fixture = ProviderAcquisitionEvidenceLossTests.fixture
+    authorization = ProviderReacquisitionAuthorizationTests.authorization
+    verify = ProviderReacquisitionAuthorizationTests.verify
+
+    def fresh_fixture(self):
+        r, c, doc = self.authorization()
+        verified = self.verify(r, c, doc)
+        with mock.patch.object(authority, "_verify_signature"):
+            keys = r.derive_dispatch_keys(verified, c)
+        observed = copy.deepcopy(doc["loss_proof"]["historical_observation"])
+        observed["events"] = list(observed["events"])
+        old = doc["loss_proof"]["historical_requests"][0]
+        new = {k:v for k,v in old.items() if k != "review_type"}
+        new.update(node_id="IC_CODE_FRESH", database_id=100, created_at="2026-10-01T17:01:00Z", updated_at="2026-10-01T17:01:00Z", versions=(("2026-10-01T17:01:00Z", "@codex review"),))
+        observed["events"].append(new)
+        claims = (publication.VerifiedProviderDispatchClaim("8" * 40, "8" * 64, "7" * 40,
+            publication.provider_dispatch_claim_id(keys[0]), keys[0], doc["loss_proof_digest"], doc),)
+        return r, c, doc, observed, claims
+
+    def test_fresh_identity_never_relabels_historical_requests(self):
+        r, c, doc, observed, claims = self.fresh_fixture()
+        requests, results = r._admit_live_history(doc, observed, claims)
+        self.assertEqual(requests["CODE"]["node_id"], "IC_CODE_FRESH")
+        self.assertEqual(results, ())
+        self.assertEqual(doc["loss_proof"]["historical_requests"][0]["node_id"], "IC_CODE_FIRST")
+
+    def test_unclaimed_duplicate_edited_cross_head_and_old_result_are_denied(self):
+        r, c, doc, observed, claims = self.fresh_fixture()
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._admit_live_history(doc, observed, ())
+        duplicate = {**observed["events"][-1], "node_id": "IC_DUPLICATE", "database_id": 101}
+        for wrong in ({**observed, "events": observed["events"] + [duplicate]},
+                      {**observed, "head": "9" * 40},
+                      {**observed, "events": observed["events"][:-1] + [{**observed["events"][-1], "updated_at": "2026-10-01T17:02:00Z"}]}):
+            with self.subTest(wrong=wrong), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_live_history(doc, wrong, claims)
+        historic = doc["loss_proof"]["historical_results"][0]
+        relabeled = {k:v for k,v in historic.items() if k != "review_type"}
+        relabeled.update(node_id="PRR_FAKE_FRESH", database_id=101)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._admit_live_history(doc, {**observed, "events": observed["events"] + [relabeled]}, claims)
+
+    def test_ambiguous_post_reconciliation_never_retries(self):
+        r, c, doc, observed, claims = self.fresh_fixture()
+        response = r._reconcile_request(doc, "CODE", observed, claims, None)
+        self.assertEqual(response.replacement_count, 1)
+        self.assertEqual(response.replacement_comment_database_id, 100)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._reconcile_request(doc, "CODE", observed, claims, 999)
+
+
+class ProviderReacquisitionExecutionTests(TestCase):
+    fixture = ProviderAcquisitionEvidenceLossTests.fixture
+    authorization = ProviderReacquisitionAuthorizationTests.authorization
+    verify = ProviderReacquisitionAuthorizationTests.verify
+    fresh_fixture = ProviderReacquisitionFreshHistoryTests.fresh_fixture
+
+    def complete_observation(self):
+        r, c, doc, observed, claims = self.fresh_fixture()
+        verified = self.verify(r, c, doc)
+        with mock.patch.object(authority, "_verify_signature"):
+            keys = r.derive_dispatch_keys(verified, c)
+        claims += (publication.VerifiedProviderDispatchClaim("6" * 40, "6" * 64, "8" * 40,
+            publication.provider_dispatch_claim_id(keys[1]), keys[1], doc["loss_proof_digest"], doc),)
+        original = doc["loss_proof"]["historical_requests"][1]
+        security = {k:v for k,v in original.items() if k != "review_type"}
+        security.update(node_id="IC_SECURITY_FRESH", database_id=101, created_at="2026-10-01T17:02:00Z",
+            updated_at="2026-10-01T17:02:00Z", versions=(("2026-10-01T17:02:00Z", "@codex security review"),))
+        observed["events"].append(security)
+        for index, historic in enumerate(doc["loss_proof"]["historical_results"]):
+            result = {k:v for k,v in historic.items() if k != "review_type"}
+            stamp = f"2026-10-01T17:0{3 + index}:00Z"
+            result.update(node_id="PRR_FRESH" if index == 0 else "IC_SECURITY_FRESH_RESULT", database_id=102 + index, created_at=stamp)
+            if result["kind"] == "IssueComment":
+                result.update(updated_at=stamp, versions=((stamp, result["body"]),))
+            observed["events"].append(result)
+        summary_event = next(e for e in observed["events"] if e.get("body") == doc["loss_proof"]["historical_summary"])
+        lines = summary_event["body"].splitlines()
+        for index, label in enumerate(("Code Review", "Security Review")):
+            stamp = f"2026-10-01T17:0{3 + index}:00.123456Z"
+            for number, line in enumerate(lines):
+                if f"**{label}**" in line:
+                    cells = line.split("|")
+                    cells[2] = f' ✅ **Completed** <relative-time datetime="{stamp}">{stamp}</relative-time> '
+                    cells[4] = " Manual request "
+                    lines[number] = "|".join(cells)
+        body = "\n".join(lines)
+        summary_event["versions"] = tuple(summary_event["versions"]) + (("2026-10-01T17:04:01Z", body),)
+        summary_event.update(body=body, updated_at="2026-10-01T17:04:01Z")
+        feedback = fast_path.verify_reviewed_state_evidence(doc["loss_proof"]["historical_feedback"])
+        feedback.feedback["conversation_comments"] = [
+            {"node_id":e["node_id"], "body_digest":fast_path.digest_text(e["body"]),
+             "actor":{"login":e["actor"][0], "node_id":e["actor"][1], "database_id":e["actor"][2]},
+             "updated_at":e["updated_at"], "reactions":[]} for e in observed["events"] if e["kind"] == "IssueComment"]
+        code = next(e for e in observed["events"] if e["node_id"] == "PRR_FRESH")
+        feedback.feedback["reviews"].append({**copy.deepcopy(feedback.feedback["reviews"][0]),
+            "node_id":code["node_id"], "submitted_at":code["created_at"], "body_digest":fast_path.digest_text(code["body"])})
+        feedback.provider_summary_body = body
+        feedback.review_database_ids = [{"node_id":e["node_id"], "database_id":e["database_id"]}
+            for e in observed["events"] if e["kind"] == "PullRequestReview"]
+        feedback.refresh_digests()
+        requests, results = r._admit_live_history(doc, observed, claims)
+        return r, doc, r.ReacquisitionObservation(verified, c, claims, feedback, observed, requests, results, "5" * 40)
+
+    def test_complete_fresh_assessment_keeps_every_historical_source(self):
+        r, doc, observed = self.complete_observation()
+        with mock.patch.object(r, "_authenticate_execution", return_value=observed):
+            assessment = r.authenticate_assessment(doc)
+        self.assertEqual(assessment["status"], "PROVIDER_REACQUISITION_COMPLETE")
+        self.assertEqual(assessment["stable_feedback"], observed.feedback.to_dict())
+        self.assertEqual(len(assessment["finding_inventory"]), len(observed.feedback.feedback["threads"]))
+        old_ids = {result["node_id"] for result in doc["loss_proof"]["historical_results"]}
+        self.assertFalse(old_ids & {result["node_id"] for result in assessment["provider_results"]})
+        self.assertEqual(assessment["historical_first_fallback_validity"], "UNPROVABLE_FROM_RETAINED_AUTHORITY")
+        self.assertEqual(assessment["lifecycle_state"]["remediation_cycle_count"], 1)
+
+    def test_fresh_acquisition_seal_rejects_old_raw_stale_and_cross_head_authority(self):
+        r, doc, observed = self.complete_observation()
+        with mock.patch.object(r, "_authenticate_execution", return_value=observed):
+            assessment = r.authenticate_assessment(doc)
+        sealed = r._seal_fresh_assessment(assessment)
+        with mock.patch.object(authority, "_verify_signature"):
+            r.require_verified_fresh_acquisitions(sealed, observed.current, observed.feedback)
+        for value, current in ((assessment, observed.current),
+                (replace(sealed, canonical_assessment={**assessment, "acquisition_kind": "BOUNDED_POST_READY_FIRST_FALLBACK"}), observed.current),
+                (sealed, replace(observed.current, publication_oid="9" * 40)),
+                (sealed, replace(observed.current, lifecycle=replace(observed.current.lifecycle, head_sha="9" * 40)))):
+            with self.subTest(value=value), self.assertRaises(fast_path.SecurityBlocker):
+                r.require_verified_fresh_acquisitions(value, current, observed.feedback)
+
+    def test_old_summary_or_late_completion_never_authorizes_fresh_terminality(self):
+        r, doc, observed = self.complete_observation()
+        observed.feedback.provider_summary_body = doc["loss_proof"]["historical_summary"]
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._terminal_result(observed, "CODE")
+        r, doc, observed = self.complete_observation()
+        observed.feedback.provider_summary_body = observed.feedback.provider_summary_body.replace("17:03:00.123456Z", "17:32:00.123456Z")
+        self.assertIsNone(r._terminal_result(observed, "CODE"))
+        with mock.patch.object(r, "_authenticate_execution", return_value=observed):
+            self.assertEqual(r.authenticate_assessment(doc)["status"], "PROVIDER_NON_TERMINAL")
+
+    def test_stranded_claim_never_posts_a_second_request(self):
+        r, doc, observed = self.complete_observation()
+        observed = replace(observed, requests={}, results=())
+        with mock.patch.object(r, "_authenticate_execution", return_value=observed), mock.patch.object(authority, "_verify_signature"), \
+                mock.patch.object(publication, "_execute_provider_dispatch_with_claim") as execute:
+            report = r.dispatch_next(doc)
+        self.assertEqual(report["status"], "CLAIM_CONSUMED_WITHOUT_AUTHENTICATED_REQUEST")
+        self.assertEqual(report["write_attempts"], 0)
+        execute.assert_not_called()
+        with self.assertRaises(TypeError):
+            r.dispatch_next(doc, review_types=["CODE"])
+
+    def test_dispatch_uses_existing_routine_publication_role_and_serial_order(self):
+        from scripts.secpal_pr_review import lifecycle_execution
+        r, doc, observed = self.complete_observation()
+        keys = (SimpleNamespace(review_type="CODE", repository=doc["repository"]),
+                SimpleNamespace(review_type="SECURITY", repository=doc["repository"]))
+        for completed, expected in (((), "CODE"), (("CODE",), "SECURITY")):
+            live = replace(observed, requests={}, claims=(), results=())
+            signer = mock.Mock(return_value=("accepted-role", mock.Mock()))
+            execute = mock.Mock(return_value=SimpleNamespace(status="PERSISTED", replacement_comment_database_id=100, write_attempts=1))
+            with mock.patch.object(r, "_authenticate_execution", return_value=live), \
+                    mock.patch.object(r, "derive_dispatch_keys", return_value=keys), \
+                    mock.patch.object(r, "_terminal_result", side_effect=lambda _obs, typ: {} if typ in completed else None), \
+                    mock.patch.object(lifecycle_execution, "_policy_role_signer", signer), \
+                    mock.patch.object(publication, "_execute_provider_dispatch_with_claim", execute):
+                result = r.dispatch_next(doc)
+            self.assertEqual(result["review_type"], expected)
+            self.assertTrue(signer.call_args.kwargs["allow_routine_default"])
+            self.assertEqual(execute.call_count, 1)
+        with mock.patch.object(r, "_authenticate_execution", return_value=observed), \
+                mock.patch.object(r, "derive_dispatch_keys", return_value=keys), \
+                mock.patch.object(r, "_terminal_result", return_value={}), \
+                mock.patch.object(publication, "_execute_provider_dispatch_with_claim") as execute:
+            self.assertEqual(r.dispatch_next(doc)["status"], "FRESH_RESULTS_TERMINAL_CAPTURE_REQUIRED")
+        execute.assert_not_called()
+
+    def test_candidate_tooling_is_rejected_before_target_acquisition(self):
+        r, doc, _ = self.complete_observation()
+        helper = SimpleNamespace(_require_accepted_main_bridge_source=mock.Mock(side_effect=fast_path.SecurityBlocker("candidate")))
+        with mock.patch.object(r.transport, "_load_actions_helper", return_value=helper), \
+                mock.patch.object(publication, "verify_provider_dispatch_claims") as read:
+            with self.assertRaises(fast_path.SecurityBlocker):
+                r._authenticate_execution(doc)
+        read.assert_not_called()
+
+    def test_canonical_writer_attempts_one_post_and_preserves_ambiguity(self):
+        r, doc, observed = self.complete_observation()
+        helper = SimpleNamespace(_require_accepted_main_bridge_source=mock.Mock(return_value="5" * 40))
+        with mock.patch.object(r.transport, "_load_actions_helper", return_value=helper), \
+                mock.patch.object(r, "_observe_timeline", return_value=observed.timeline), \
+                mock.patch.object(publication, "_run_gh", side_effect=publication.LifecyclePublicationError("timeout")) as post:
+            with self.assertRaises(publication.AmbiguousProviderDispatchWrite):
+                r._write_request(observed, "CODE", "@codex review")
+        self.assertEqual(post.call_count, 1)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._write_request(observed, "CODE", "@codex review please")
+
+
 if __name__ == "__main__":
     main()

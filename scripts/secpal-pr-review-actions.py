@@ -6830,6 +6830,7 @@ def _require_accepted_main_tooling_blobs(
     required_paths = {
         "scripts/secpal-pr-review-actions.py",
         "scripts/secpal-pr-review.py",
+        "scripts/secpal-provider-reacquisition.py",
         ".agents/skills/secpal-pr-review/references/repositories.json",
         ".agents/skills/secpal-pr-review/references/repositories.schema.json",
         "policies/legacy-enrolled-package-loss.json",
