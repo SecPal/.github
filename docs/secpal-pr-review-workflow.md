@@ -267,6 +267,29 @@ second provider request, and a caller-selected subset fail closed.
 The authority verifier independently repeats the maintained live Stable
 Feedback capture at H1 and requires exact equality with the candidate-bound
 state, so candidate-local evidence cannot create provider history.
+
+A Codex-only H1 assessment instead composes both read-only first-fallback
+acquisitions from `provider_acquisition.py`. The fixed 30-minute window makes
+the maintained approximately-30-minute observation contract executable without
+configuration. Complete ordered native chronology must show each unedited
+canonical request at least 30 minutes after both Ready and an independently
+observed server-created H1 PushEvent, with the exact PR author and Ready actor.
+Intrinsic commit dates grant no observation-window authority. Complete native
+content-edit snapshots preserve consumed requests and earlier per-type summary
+startup even when current bodies or completion timestamps changed. Missing,
+deleted or ambiguous history and missing head-publication events fail closed.
+There must be no duplicate first fallback or earlier observable H1 provider
+startup for that type. Protected CURRENT and the entire live Stable
+Feedback capture are reauthenticated around the observation. An internally
+sealed ephemeral projection binds both request node/database identities,
+actors, timestamps, H1, lifecycle, CURRENT and actual review database identities.
+The existing terminal transport owner verifies the Code findings review,
+Security result and exact-head summary before the complete finding delta is
+admitted. Exact top-level provider comment Node IDs remain the finding IDs.
+No caller chooses a provider mode, request identity, feedback delta or subset.
+This read-only owner grants no replacement dispatch; #1053's reserved import
+and unavailable-verifier failure remain unchanged.
+
 The candidate-bound capture uses the dedicated read-only
 `resolve-batch --ready-remediation-provider-binding FILE` form. The authority
 verifier derives that ephemeral file from protected CURRENT, and the form is

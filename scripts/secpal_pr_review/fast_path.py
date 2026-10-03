@@ -3508,7 +3508,7 @@ class VerifiedOrdinaryReadyProviderGrowth:
     resulting_feedback_digest: str
     provider_head_sha: str
     assessment_head_sha: str
-    provider_request_node_id: str
+    provider_request_node_id: str | None
     provider_review_bindings: tuple[tuple[str, int | None, str, str, int, str, str, str, str], ...]
     thread_ids: tuple[str, ...]
     finding_ids: tuple[str, ...]
@@ -4089,6 +4089,7 @@ def _verify_successor_transport(
     rejected_candidate: bool = False,
     reanchored_classified_review: bool = False,
     require_codex_provider_transport: bool = False,
+    bounded_first_fallback: bool = False,
 ) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
     if not isinstance(value, list):
         raise SecurityBlocker("successor provider transport evidence is malformed")
@@ -4186,7 +4187,7 @@ def _verify_successor_transport(
                 raise SecurityBlocker("Codex review result transport is invalid")
             admitted_additions.add(key)
         elif role == "CODEX_REVIEW":
-            if rejected_candidate or reanchored_classified_review:
+            if rejected_candidate or reanchored_classified_review or bounded_first_fallback:
                 reviewed_commit = f"**Reviewed commit:** `{resulting_head_sha[:10]}`"
                 review_kind = (
                     "SECURITY_REVIEW"
@@ -4210,7 +4211,7 @@ def _verify_successor_transport(
                     raise SecurityBlocker(
                         "Codex findings review transport is not head-bound"
                     )
-                if reanchored_classified_review and review_kind != "CODE_REVIEW":
+                if (reanchored_classified_review or bounded_first_fallback) and review_kind != "CODE_REVIEW":
                     raise SecurityBlocker(
                         "classified Codex review transport is not a Code Review"
                     )
@@ -4267,7 +4268,7 @@ def _verify_successor_transport(
                     "CODEX_SECURITY_REVIEW_REQUEST",
                 }
             )
-        elif reanchored_classified_review:
+        elif reanchored_classified_review or bounded_first_fallback:
             required = REQUIRED_CODEX_CLASSIFIED_REVIEW_ROLES
         else:
             required = REQUIRED_CODEX_SUCCESSOR_ROLES
@@ -4294,7 +4295,7 @@ def _verify_successor_transport(
                 and not rejected_results_complete
             )
             or (
-                reanchored_classified_review
+                (reanchored_classified_review or bounded_first_fallback)
                 and not classified_review_complete
             )
         ):
@@ -5548,6 +5549,7 @@ def verify_ordinary_ready_remediation_provider_growth(
     eligibility_evidence: Any,
     provider_summary_body: str | None = None,
     review_database_ids: Any = None,
+    first_fallback_acquisitions: Any = None,
 ) -> VerifiedOrdinaryReadyProviderGrowth:
     """Derive one complete same-assessment provider delta for ordinary remediation.
 
@@ -5596,16 +5598,13 @@ def verify_ordinary_ready_remediation_provider_growth(
         )
 
     provider_requests = current.feedback.get("provider_review_requests", [])
-    if len(provider_requests) != 1:
+    if len(provider_requests) > 1:
         raise SecurityBlocker(
             "ordinary Ready provider request lineage is missing or ambiguous"
         )
-    provider_request = provider_requests[0]
-    provider_request_key = (
-        "PROVIDER_REVIEW_REQUEST",
-        provider_request["node_id"],
-    )
-    if (
+    provider_request = provider_requests[0] if provider_requests else None
+    provider_request_key = ("PROVIDER_REVIEW_REQUEST", provider_request["node_id"]) if provider_request else None
+    if provider_request is not None and (
         provider_request.get("requested_reviewer") != COPILOT_REVIEW_PROVIDER
         or not isinstance(provider_request.get("node_id"), str)
         or not IDENTITY.fullmatch(provider_request["node_id"])
@@ -5672,7 +5671,7 @@ def verify_ordinary_ready_remediation_provider_growth(
             or not isinstance(review_id, str)
             or not IDENTITY.fullmatch(review_id)
             or provider_review.get("state") != "COMMENTED"
-            or provider_request["created_at"] >= submitted_at
+            or (provider_request is not None and provider_request["created_at"] >= submitted_at)
             or provider_review.get("reactions") != []
             or (
                 not legacy_h0
@@ -5699,8 +5698,22 @@ def verify_ordinary_ready_remediation_provider_growth(
                 provider_review["body_digest"],
             )
         )
-    if COPILOT_REVIEW_PROVIDER["login"] not in provider_logins:
-        raise SecurityBlocker("ordinary Ready assessment has no requested Copilot review")
+    codex_only = COPILOT_REVIEW_PROVIDER["login"] not in provider_logins
+    acquisitions = None
+    if codex_only:
+        from . import provider_acquisition
+
+        acquisitions = provider_acquisition.require_verified_acquisitions(
+            first_fallback_acquisitions, current
+        )
+        if legacy_h0 or provider_logins != {CODEX_REVIEW_PROVIDER["login"]}:
+            raise SecurityBlocker("ordinary Ready bounded fallback provider was substituted")
+        if captured_review_ids != dict(acquisitions.review_database_ids):
+            raise SecurityBlocker("ordinary Ready bounded fallback review database identity was substituted")
+    elif provider_request is None:
+        raise SecurityBlocker("ordinary Ready Copilot request lineage is missing")
+    elif first_fallback_acquisitions is not None:
+        raise SecurityBlocker("ordinary Ready Copilot assessment received another acquisition form")
 
     summary_key: tuple[str, str] | None = None
     admitted_updates: set[tuple[str, str]] = set()
@@ -5744,12 +5757,61 @@ def verify_ordinary_ready_remediation_provider_growth(
             digest_json(provider_request),
             None,
         ),
-    ]
+    ] if provider_request is not None else []
     source_bindings.extend(
         ("REVIEW", item["node_id"], item["body_digest"], None)
         for item in added_reviews
     )
     admitted_additions = {("REVIEW", item["node_id"]) for item in added_reviews}
+    if acquisitions is not None:
+        conversation_bodies = dict(acquisitions.conversation_bodies)
+        review_bodies = dict(acquisitions.review_bodies)
+        if summary_candidates[0]["updated_at"] <= max(
+            item.request_created_at for item in acquisitions.acquisitions
+        ):
+            raise SecurityBlocker("ordinary Ready terminal summary predates the first fallbacks")
+        for label in ("Code Review", "Security Review"):
+            row = next(line for line in provider_summary_body.splitlines() if f"**{label}**" in line)
+            commit_cell = row.split("|")[3].strip()
+            if (
+                not re.fullmatch(r"`[0-9a-f]{7,40}`", commit_cell)
+                or not assessment_head_sha.startswith(commit_cell[1:-1])
+            ):
+                raise SecurityBlocker("ordinary Ready bounded fallback terminal row has the wrong head")
+        transport = [
+            {"role": "CODEX_SUMMARY_UPDATE", "kind": "CONVERSATION_COMMENT",
+             "node_id": summary_key[1], "body": provider_summary_body},
+        ]
+        for acquisition in acquisitions.acquisitions:
+            role = "CODEX_REVIEW_REQUEST" if acquisition.review_type == "CODE" else "CODEX_SECURITY_REVIEW_REQUEST"
+            transport.append({"role": role, "kind": "CONVERSATION_COMMENT",
+                              "node_id": acquisition.request_node_id,
+                              "body": conversation_bodies[acquisition.request_node_id]})
+        code_request = acquisitions.acquisitions[0]
+        security_request = acquisitions.acquisitions[1]
+        for review in added_reviews:
+            if review["submitted_at"] <= code_request.request_created_at:
+                raise SecurityBlocker("ordinary Ready Codex review predates its first fallback")
+            transport.append({"role": "CODEX_REVIEW", "kind": "REVIEW",
+                              "node_id": review["node_id"], "body": review_bodies[review["node_id"]]})
+        for comment in current.feedback["conversation_comments"]:
+            body = conversation_bodies[comment["node_id"]]
+            if body.lstrip().startswith("### 🛡️ Codex Security Review"):
+                if comment["updated_at"] <= security_request.request_created_at:
+                    raise SecurityBlocker("ordinary Ready Security result predates its first fallback")
+                transport.append({"role": "CODEX_SECURITY_REVIEW_RESULT", "kind": "CONVERSATION_COMMENT",
+                                  "node_id": comment["node_id"], "body": body})
+        transport_additions, transport_updates = _verify_successor_transport(
+            transport, reviewed_sources=reviewed_sources, current_sources=current_sources,
+            resulting_head_sha=assessment_head_sha, bounded_first_fallback=True,
+        )
+        admitted_additions.update(transport_additions)
+        admitted_updates.update(transport_updates)
+        source_bindings.extend(
+            (kind, node_id, current_sources[(kind, node_id)][0], None)
+            for kind, node_id in sorted(transport_additions)
+            if kind != "REVIEW" and (kind, node_id) != summary_key
+        )
     if provider_request_key in added_keys:
         admitted_additions.add(provider_request_key)
     if summary_key in added_keys:
@@ -5849,7 +5911,7 @@ def verify_ordinary_ready_remediation_provider_growth(
         "predecessor_feedback_digest": reviewed.feedback_digest,
         "resulting_state_digest": current.state_digest,
         "resulting_feedback_digest": current.feedback_digest,
-        "provider_request_node_id": provider_request["node_id"],
+        "provider_request_node_id": provider_request["node_id"] if provider_request else None,
         "thread_ids": list(ordered_threads),
         "finding_ids": list(ordered_findings),
         "source_bindings": [list(item) for item in ordered_sources],
@@ -5864,6 +5926,8 @@ def verify_ordinary_ready_remediation_provider_growth(
         projection["provider_review_bindings"] = [
             list(item) for item in sorted(review_bindings)
         ]
+        if acquisitions is not None:
+            projection["first_fallback_acquisition_digest"] = acquisitions._seal.digest
     return VerifiedOrdinaryReadyProviderGrowth(
         predecessor_state_digest=reviewed.state_digest,
         predecessor_feedback_digest=reviewed.feedback_digest,
@@ -5871,7 +5935,7 @@ def verify_ordinary_ready_remediation_provider_growth(
         resulting_feedback_digest=current.feedback_digest,
         provider_head_sha=provider_head_sha,
         assessment_head_sha=assessment_head_sha,
-        provider_request_node_id=provider_request["node_id"],
+        provider_request_node_id=provider_request["node_id"] if provider_request else None,
         provider_review_bindings=tuple(sorted(review_bindings)),
         thread_ids=ordered_threads,
         finding_ids=ordered_findings,

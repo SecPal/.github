@@ -573,6 +573,7 @@ ALLOWED_IMPORTS = {
         "from . import enrolled_draft_integration as integration",
         "from . import lifecycle_publication as publication",
         "from . import lifecycle_authority, lifecycle_execution",
+        "from . import provider_acquisition",
     },
     "exact_source_safety.py": {
         "from __future__ import annotations",
@@ -885,6 +886,7 @@ LOADED_MODULE_ATTRIBUTES = {
         },
     },
     "fast_path.py": {
+        "provider_acquisition": {"require_verified_acquisitions"},
         "evidence": {
             "CommandPolicyError",
             "ContractError",
@@ -2517,6 +2519,13 @@ def inspect_source(
 
 
 def self_test() -> None:
+    acquisition_import = "from . import provider_acquisition\n"
+    safe_acquisition = acquisition_import + "provider_acquisition.require_verified_acquisitions(value, feedback)\n"
+    if inspect_source(safe_acquisition, "fast_path.py", ()):
+        raise SystemExit("static policy read-only acquisition fixture was rejected")
+    for method in ("authenticate_claim_eligibility", "write_claimed_replacement", "reconcile_claimed_replacement"):
+        if not inspect_source(acquisition_import + f"provider_acquisition.{method}(value)\n", "fast_path.py", ()):
+            raise SystemExit("static policy replacement interface fixture was not detected")
     safe_call = ProcessCall(
         None,
         "safe_runner",

@@ -30,6 +30,7 @@ from . import fast_path
 from . import follow_up
 from . import lifecycle_authority as authority
 from . import lifecycle_publication as publication
+from . import provider_acquisition
 from . import late_disposition
 from . import version_collision
 
@@ -1365,6 +1366,21 @@ def verify_ready_remediation_provider_growth_authority(
         )
 
     try:
+        added_reviews = [
+            item for item in resulting.feedback["reviews"]
+            if item["node_id"] not in {
+                prior["node_id"] for prior in reviewed.feedback["reviews"]
+            }
+        ]
+        first_fallback_acquisitions = None
+        if added_reviews and all(
+            item.get("actor") == fast_path.CODEX_REVIEW_PROVIDER
+            and item.get("commit_oid") == lifecycle.head_sha
+            for item in added_reviews
+        ):
+            first_fallback_acquisitions = provider_acquisition.authenticate_first_fallback_acquisitions(
+                current, live_resulting
+            )
         growth = fast_path.verify_ordinary_ready_remediation_provider_growth(
             reviewed,
             resulting,
@@ -1377,6 +1393,7 @@ def verify_ready_remediation_provider_growth_authority(
             review_database_ids=getattr(
                 live_resulting, "review_database_ids", None
             ),
+            first_fallback_acquisitions=first_fallback_acquisitions,
         )
     except fast_path.SecurityBlocker as exc:
         raise LifecycleOrchestrationError(
