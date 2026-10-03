@@ -1943,6 +1943,265 @@ def _provider_feedback_response(
             }
         }
     }
+def first_fallback_growth():
+    """Replay the live GitHub timeline shape with an exact current-head review."""
+    reviewed, current, predecessor, eligibility, summary = multi_provider_ready_growth()
+    current.feedback["reviews"] = [v for v in current.feedback["reviews"] if v["actor"] == fast_path.CODEX_REVIEW_PROVIDER]
+    review = current.feedback["reviews"][0]
+    review["body_digest"] = fast_path.digest_text("### 💡 Codex Review\n\n**Reviewed commit:** `" + current.head_sha[:10] + "`")
+    current.review_database_ids = [v for v in current.review_database_ids if v["node_id"] == review["node_id"]]
+    current.feedback["threads"] = [current.feedback["threads"][0]] + current.feedback["threads"][2:]
+    eligibility["eligible_threads"] = eligibility["eligible_threads"][1:]
+    summary = summary.replace("| Ready |", "| Manual request |")
+    summary_id = current.feedback["conversation_comments"][0]["node_id"]
+    current.feedback["conversation_comments"][0]["body_digest"] = fast_path.digest_text(summary)
+    actor = {"__typename": "User", "login": "aroviqen", "id": "U_kgDOD9_SfQ", "databaseId": 266326653}
+    codex = {"__typename": "Bot", "login": fast_path.CODEX_REVIEW_PROVIDER["login"], "id": fast_path.CODEX_REVIEW_PROVIDER["node_id"], "databaseId": fast_path.CODEX_REVIEW_PROVIDER["database_id"]}
+    def comment(node, database, body, created, updated, author):
+        return {"__typename": "IssueComment", "id": node, "databaseId": database, "body": body,
+                "createdAt": created, "updatedAt": updated, "author": copy.deepcopy(author)}
+    nodes = [
+        {"__typename": "PullRequestCommit", "id": "PURC_H0", "commit": {"oid": reviewed.head_sha, "committedDate": "2026-10-01T14:00:00Z"}},
+        {"__typename": "ReadyForReviewEvent", "id": "RFRE_READY", "createdAt": "2026-10-01T15:00:00Z", "actor": actor},
+        comment(summary_id, 1, summary, "2026-10-01T15:01:00Z", "2026-10-01T16:25:59Z", codex),
+        {"__typename": "PullRequestCommit", "id": "PURC_H1", "commit": {"oid": current.head_sha, "committedDate": "2026-10-01T15:02:00Z"}},
+        comment("IC_CODE_FIRST", 2, "@codex review", "2026-10-01T16:00:00Z", "2026-10-01T16:00:00Z", actor),
+        comment("IC_SECURITY_FIRST", 3, "@codex security review", "2026-10-01T16:01:00Z", "2026-10-01T16:01:00Z", actor),
+        {"__typename": "PullRequestReview", "id": review["node_id"], "databaseId": current.review_database_ids[0]["database_id"],
+         "body": "### 💡 Codex Review\n\n**Reviewed commit:** `" + current.head_sha[:10] + "`",
+         "submittedAt": review["submitted_at"], "state": "COMMENTED", "commit": {"oid": current.head_sha}, "author": codex},
+        comment("IC_SECURITY_RESULT", 4, "### 🛡️ Codex Security Review\n\nNo security issues were found in this pull request.\n\n**Reviewed commit:** `" + current.head_sha[:10] + "`", "2026-10-01T16:24:00Z", "2026-10-01T16:24:00Z", codex),
+    ]
+    raw = {"data": {"repository": {"nameWithOwner": current.repository, "pullRequest": {
+        "number": current.pull_request_number, "state": "OPEN", "isDraft": False,
+        "headRefOid": current.head_sha, "author": actor,
+        "timelineItems": {"nodes": nodes, "pageInfo": {"hasNextPage": False}},
+    }}}}
+    first_fallback_feedback(current, raw)
+    eligibility["reviewed_state_digest"] = current.state_digest
+    current.provider_summary_body = summary
+    lifecycle = current_lifecycle(head_sha=current.head_sha, remediation_cycles=1, pull_request=current.pull_request_number, delivery_issue=1072)
+    publication_context = publication.VerifiedLifecyclePublication("1" * 40, "2" * 64, "refs/heads/secpal-lifecycle-publications", None, None, lifecycle)
+    return reviewed, current, predecessor, eligibility, summary, publication_context, raw
+
+
+def first_fallback_feedback(current, raw):
+    """Normalize test transport independently through the Stable Feedback seam."""
+    pull = raw["data"]["repository"]["pullRequest"]
+    current.feedback["conversation_comments"] = [
+        {"node_id": v["id"], "body_digest": fast_path.digest_text(v["body"]),
+         "actor": {"login": v["author"]["login"], "node_id": v["author"]["id"], "database_id": v["author"]["databaseId"]},
+         "updated_at": v["updatedAt"], "reactions": []}
+        for v in pull["timelineItems"]["nodes"] if v["__typename"] == "IssueComment"
+    ]
+    current.refresh_digests()
+
+
+class FirstFallbackAcquisitionTests(TestCase):
+    def test_read_only_first_fallback_owner_exists_without_replacement_interface(self):
+        from scripts.secpal_pr_review import provider_acquisition
+
+        self.assertEqual(provider_acquisition.PROVIDER_OBSERVATION_WINDOW.total_seconds(), 1800)
+        for name in ("authenticate_claim_eligibility", "write_claimed_replacement", "reconcile_claimed_replacement"):
+            self.assertFalse(hasattr(provider_acquisition, name))
+
+
+    def authenticate(self, current, publication_context, raw, review_type=None):
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        observed = acquisition._normalize_observation(raw)
+        with mock.patch.object(acquisition, "_observe", return_value=observed), mock.patch.object(
+            publication, "verify_current_lifecycle_authority", return_value=publication_context
+        ), mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=current):
+            if review_type is not None:
+                return acquisition.authenticate_first_fallback_acquisition(publication_context, current, review_type)
+            return acquisition.authenticate_first_fallback_acquisitions(publication_context, current)
+
+    def growth(self, fixture, acquired):
+        reviewed, current, predecessor, eligibility, summary, _, _ = fixture
+        return fast_path.verify_ordinary_ready_remediation_provider_growth(
+            reviewed, current, provider_head_sha=reviewed.head_sha,
+            predecessor_eligibility_evidence=predecessor, eligibility_evidence=eligibility,
+            provider_summary_body=summary, review_database_ids=current.review_database_ids,
+            first_fallback_acquisitions=acquired,
+        )
+
+    def test_both_first_fallbacks_admit_complete_codex_only_growth(self):
+        fixture = first_fallback_growth()
+        _, current, _, eligibility, _, context, raw = fixture
+        acquired = self.authenticate(current, context, raw)
+        self.assertEqual(tuple(v.review_type for v in acquired.acquisitions), ("CODE", "SECURITY"))
+        self.assertEqual(tuple(v.request_database_id for v in acquired.acquisitions), (2, 3))
+        growth = self.growth(fixture, acquired)
+        self.assertEqual(growth.finding_ids, tuple(sorted(v["finding_ids"][0] for v in eligibility["eligible_threads"])))
+        self.assertEqual(growth.assessment_head_sha, current.head_sha)
+        self.assertEqual(len(growth.provider_review_bindings), 1)
+
+    def test_each_first_acquisition_verifies_independently_at_the_exact_boundary(self):
+        for kind, node, other in (("CODE", "IC_CODE_FIRST", "IC_SECURITY_FIRST"), ("SECURITY", "IC_SECURITY_FIRST", "IC_CODE_FIRST")):
+            with self.subTest(kind=kind):
+                fixture = list(first_fallback_growth())
+                _, current, _, eligibility, _, context, raw = fixture
+                nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+                nodes[:] = [v for v in nodes if v["id"] != other]
+                request = next(v for v in nodes if v["id"] == node)
+                request.update(createdAt="2026-10-01T15:32:00Z", updatedAt="2026-10-01T15:32:00Z")
+                first_fallback_feedback(current, raw)
+                eligibility["reviewed_state_digest"] = current.state_digest
+                acquired = self.authenticate(current, context, raw, review_type=kind)
+                self.assertEqual(tuple(v.review_type for v in acquired.acquisitions), (kind,))
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    self.growth(fixture, acquired)
+
+    def test_public_observation_normalizes_live_representation_without_writes(self):
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        _, current, _, _, _, _, raw = first_fallback_growth()
+        with mock.patch.object(publication, "_run_gh", return_value=SimpleNamespace(returncode=0, stdout=json.dumps(raw))) as run:
+            observed = acquisition._observe(current.repository, current.pull_request_number)
+        self.assertEqual(observed, acquisition._normalize_observation(raw))
+        command = run.call_args.args[0]
+        self.assertEqual(command[:4], ["api", "--hostname", "github.com", "graphql"])
+        self.assertNotIn("mutation", " ".join(command).lower())
+
+    def test_database_identity_substitution_and_arbitrary_transport_reject(self):
+        fixture = first_fallback_growth()
+        _, current, _, _, _, context, raw = fixture
+        acquired = self.authenticate(current, context, raw)
+        current.review_database_ids[0]["database_id"] += 1
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "database identity was substituted"):
+            self.growth(fixture, acquired)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.growth(first_fallback_growth(), None)
+
+    def test_current_and_complete_live_capture_are_independently_reauthenticated(self):
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        _, current, _, _, _, context, raw = first_fallback_growth()
+        observed = acquisition._normalize_observation(raw)
+        for wrong in (replace(context, publication_oid="f" * 40), replace(context, publication_digest="f" * 64)):
+            with mock.patch.object(publication, "verify_current_lifecycle_authority", return_value=wrong), self.assertRaises(fast_path.SecurityBlocker):
+                acquisition.authenticate_first_fallback_acquisitions(context, current)
+        changed = copy.deepcopy(current)
+        changed.feedback["threads"].pop()
+        changed.refresh_digests()
+        with mock.patch.object(publication, "verify_current_lifecycle_authority", return_value=context), mock.patch.object(acquisition, "_observe", return_value=observed), mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=changed), self.assertRaises(fast_path.SecurityBlocker):
+            acquisition.authenticate_first_fallback_acquisitions(context, current)
+        with mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=[context, replace(context, publication_oid="f" * 40)]), mock.patch.object(acquisition, "_observe", return_value=observed), mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=current), self.assertRaises(fast_path.SecurityBlocker):
+            acquisition.authenticate_first_fallback_acquisitions(context, current)
+
+    def test_codex_only_form_does_not_fabricate_a_copilot_request(self):
+        fixture = list(first_fallback_growth())
+        reviewed, current, predecessor, eligibility, _, context, raw = fixture
+        reviewed.feedback.pop("provider_review_requests", None)
+        current.feedback.pop("provider_review_requests", None)
+        reviewed.refresh_digests()
+        current.refresh_digests()
+        predecessor["reviewed_state_digest"] = reviewed.state_digest
+        eligibility["reviewed_state_digest"] = current.state_digest
+        growth = self.growth(fixture, self.authenticate(current, context, raw))
+        self.assertIsNone(growth.provider_request_node_id)
+
+    def test_acquisition_rejects_chronology_identity_and_lifecycle_substitution(self):
+        def event(raw, node):
+            return next(v for v in raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"] if v["id"] == node)
+        def pull(raw):
+            return raw["data"]["repository"]["pullRequest"]
+        cases = (
+            ("early Code", lambda c, p, r: event(r, "IC_CODE_FIRST").update(createdAt="2026-10-01T15:31:59Z", updatedAt="2026-10-01T15:31:59Z")),
+            ("early Security", lambda c, p, r: event(r, "IC_SECURITY_FIRST").update(createdAt="2026-10-01T15:31:59Z", updatedAt="2026-10-01T15:31:59Z")),
+            ("Draft", lambda c, p, r: pull(r).update(isDraft=True)),
+            ("closed", lambda c, p, r: pull(r).update(state="CLOSED")),
+            ("cross repository", lambda c, p, r: r["data"]["repository"].update(nameWithOwner="SecPal/api")),
+            ("cross PR", lambda c, p, r: pull(r).update(number=9)),
+            ("wrong head", lambda c, p, r: pull(r).update(headRefOid="f" * 40)),
+            ("wrong trigger", lambda c, p, r: event(r, "IC_CODE_FIRST").update(body=" @codex review ")),
+            ("wrong actor", lambda c, p, r: event(r, "IC_SECURITY_FIRST")["author"].update(login="outsider", id="U_OUTSIDER", databaseId=99)),
+            ("edited request", lambda c, p, r: event(r, "IC_CODE_FIRST").update(updatedAt="2026-10-01T16:00:01Z")),
+            ("request node substitution", lambda c, p, r: event(r, "IC_CODE_FIRST").update(id="IC_SECURITY_FIRST")),
+            ("request database substitution", lambda c, p, r: event(r, "IC_CODE_FIRST").update(databaseId=3)),
+            ("missing Code", lambda c, p, r: pull(r)["timelineItems"]["nodes"].remove(event(r, "IC_CODE_FIRST"))),
+            ("missing Security", lambda c, p, r: pull(r)["timelineItems"]["nodes"].remove(event(r, "IC_SECURITY_FIRST"))),
+            ("duplicate Code", lambda c, p, r: pull(r)["timelineItems"]["nodes"].append({**copy.deepcopy(event(r, "IC_CODE_FIRST")), "id": "IC_DUP", "databaseId": 99})),
+            ("duplicate Security", lambda c, p, r: pull(r)["timelineItems"]["nodes"].append({**copy.deepcopy(event(r, "IC_SECURITY_FIRST")), "id": "IC_DUP", "databaseId": 99})),
+            ("incomplete chronology", lambda c, p, r: pull(r)["timelineItems"]["pageInfo"].update(hasNextPage=True)),
+            ("head not acquired", lambda c, p, r: event(r, "PURC_H1")["commit"].update(oid="f" * 40)),
+            ("Ready actor", lambda c, p, r: event(r, "RFRE_READY")["actor"].update(login="outsider")),
+            ("exhausted Remediation", lambda c, p, r: p.lifecycle.state.update(remediation_cycle_count=2)),
+            ("unconsumed Review", lambda c, p, r: p.lifecycle.state.update(unrestricted_review_count=0)),
+            ("second Review", lambda c, p, r: p.lifecycle.state.update(unrestricted_review_count=2)),
+            ("Cycle3", lambda c, p, r: p.lifecycle.state.update(cycle_3_absent=False)),
+            ("Recovery", lambda c, p, r: p.lifecycle.state.update(exceptional_recovery_count=1)),
+        )
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        for label, mutate in cases:
+            with self.subTest(label=label), self.assertRaises((fast_path.SecurityBlocker, authority.LifecycleAuthorityError)):
+                _, current, _, _, _, context, raw = first_fallback_growth()
+                mutate(current, context, raw)
+                first_fallback_feedback(current, raw)
+                self.authenticate(current, context, raw)
+
+    def test_unsealed_altered_or_replayed_acquisitions_reject(self):
+        fixture = first_fallback_growth()
+        _, current, _, _, _, context, raw = fixture
+        acquired = self.authenticate(current, context, raw)
+        for value in (None, {"provider": "CODEX"}, replace(acquired, delivery_issue=9), replace(acquired, assessment_head="f" * 40), replace(acquired, current_publication_oid="f" * 40), replace(acquired, lifecycle_id="lifecycle:" + "f" * 64), replace(acquired, acquisitions=acquired.acquisitions[:1])):
+            with self.subTest(value=value), self.assertRaises(fast_path.SecurityBlocker):
+                self.growth(fixture, value)
+        for option in ({"provider": "CODEX"}, {"request_node_id": "IC_CODE_FIRST"}, {"feedback_delta": []}):
+            with self.assertRaises(TypeError):
+                fast_path.verify_ordinary_ready_remediation_provider_growth(current, current, **option)
+
+    def test_authenticated_acquisition_does_not_substitute_for_terminal_results(self):
+        for label in ("missing Security result", "wrong Code review head", "malformed Code review body", "wrong Security result head", "wrong summary row head"):
+            with self.subTest(label=label), self.assertRaises(fast_path.SecurityBlocker):
+                fixture = list(first_fallback_growth())
+                _, current, _, eligibility, summary, context, raw = fixture
+                nodes = raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+                review = next(v for v in nodes if v["__typename"] == "PullRequestReview")
+                result = next(v for v in nodes if v["id"] == "IC_SECURITY_RESULT")
+                if label == "missing Security result":
+                    nodes.remove(result)
+                elif label == "wrong Code review head":
+                    review["commit"]["oid"] = "f" * 40
+                    current.feedback["reviews"][0]["commit_oid"] = "f" * 40
+                elif label == "malformed Code review body":
+                    review["body"] = "unbound review"
+                    current.feedback["reviews"][0]["body_digest"] = fast_path.digest_text(review["body"])
+                elif label == "wrong Security result head":
+                    result["body"] = result["body"].replace(current.head_sha[:10], "f" * 10)
+                else:
+                    fixture[4] = summary.replace(current.head_sha[:7], "f" * 7)
+                    next(v for v in nodes if fast_path.CODEX_REVIEW_SUMMARY_MARKER in v.get("body", ""))["body"] = fixture[4]
+                first_fallback_feedback(current, raw)
+                eligibility["reviewed_state_digest"] = current.state_digest
+                acquired = self.authenticate(current, context, raw)
+                self.growth(fixture, acquired)
+
+    def test_exact_finding_ids_terminal_summary_and_review_binding_remain_mandatory(self):
+        cases = (
+            ("semantic finding", lambda r,c,p,e,s: e["eligible_threads"][0].update(finding_ids=["Bind the live PR base"])),
+            ("finding subset", lambda r,c,p,e,s: e["eligible_threads"].pop()),
+            ("wrong parent review", lambda r,c,p,e,s: c.feedback["threads"][1]["comments"][0].update(review_id="PRR_OTHER")),
+            ("wrong finding node", lambda r,c,p,e,s: c.feedback["threads"][1]["comments"][0].update(node_id="PRRC_OTHER")),
+            ("missing database ID", lambda r,c,p,e,s: c.review_database_ids.clear()),
+            ("wrong-head review", lambda r,c,p,e,s: c.feedback["reviews"][0].update(commit_oid=r.head_sha)),
+            ("provider substitution", lambda r,c,p,e,s: c.feedback["reviews"][0]["actor"].update(login="outsider")),
+            ("missing summary", lambda r,c,p,e,s: ""),
+            ("nonterminal Code", lambda r,c,p,e,s: s.replace("📝 **Code Review** | **Completed**", "📝 **Code Review** | **Running**")),
+            ("nonterminal Security", lambda r,c,p,e,s: s.replace("🔒 **Security Review** | **Completed**", "🔒 **Security Review** | **Running**")),
+            ("wrong-head summary", lambda r,c,p,e,s: s.replace(c.head_sha,"f" * 40)),
+        )
+        for label, mutate in cases:
+            with self.subTest(label=label), self.assertRaises(fast_path.SecurityBlocker):
+                fixture = list(first_fallback_growth())
+                r,c,p,e,s,context,raw = fixture
+                acquired = self.authenticate(c,context,raw)
+                replacement = mutate(r,c,p,e,s)
+                if replacement is not None:
+                    fixture[4] = replacement
+                c.refresh_digests()
+                e["reviewed_state_digest"] = c.state_digest
+                self.growth(fixture, acquired)
+
+
 class LifecycleOrchestrationTests(TestCase):
     def test_review_database_observation_preserves_historical_feedback_digest(
         self,
@@ -12756,7 +13015,11 @@ class ReadyIntegrationRemediationTests(TestCase):
         first_correction = self.source_tree(baseline, "source.txt", "first ordinary correction\n")
         main_tree = self.source_tree(baseline, "main.txt", "accepted main\n")
         main_parent = self.signed_commit(main_tree, [base], "current main")
-        self.reviewed, self.resulting, self.predecessor_eligibility, self.eligibility, summary = multi_provider_ready_growth()
+        self.acquisition_raw = None
+        if self._testMethodName.startswith("test_bounded_codex"):
+            self.reviewed, self.resulting, self.predecessor_eligibility, self.eligibility, summary, _, self.acquisition_raw = first_fallback_growth()
+        else:
+            self.reviewed, self.resulting, self.predecessor_eligibility, self.eligibility, summary = multi_provider_ready_growth()
         self.reviewed.head_sha = h0
         self.reviewed.base_sha = main_parent
         self.reviewed.refresh_digests()
@@ -12886,6 +13149,19 @@ class ReadyIntegrationRemediationTests(TestCase):
             "79f0467d70ec0933f063fb3587144b49483bfefd", h1).replace("79f0467", h1[:7])
         self.resulting.provider_summary_body = summary
         self.resulting.feedback["conversation_comments"][0]["body_digest"] = fast_path.digest_text(summary)
+        if self.acquisition_raw is not None:
+            pull = self.acquisition_raw["data"]["repository"]["pullRequest"]
+            pull["headRefOid"] = h1
+            for event in pull["timelineItems"]["nodes"]:
+                if event["__typename"] == "PullRequestCommit":
+                    event["commit"]["oid"] = h1 if event["id"] == "PURC_H1" else h0
+                elif event["__typename"] == "PullRequestReview":
+                    event["commit"]["oid"] = h1
+                    event["body"] = event["body"].replace("79f0467d70", h1[:10])
+                    self.resulting.feedback["reviews"][0]["body_digest"] = fast_path.digest_text(event["body"])
+                elif event["__typename"] == "IssueComment":
+                    event["body"] = event["body"].replace("79f0467d70ec0933f063fb3587144b49483bfefd", h1).replace("79f0467d70", h1[:10]).replace("79f0467", h1[:7])
+            first_fallback_feedback(self.resulting, self.acquisition_raw)
         self.resulting.refresh_digests()
         self.eligibility.update(reviewed_head_sha=h1, reviewed_state_digest=self.resulting.state_digest)
         correction_tree = self.source_tree(tree, "source.txt", "correct the complete provider-growth finding set\n")
@@ -12947,6 +13223,20 @@ class ReadyIntegrationRemediationTests(TestCase):
                          {k: v for k, v in self.current.lifecycle.state.items() if k != "remediation_cycle_count"})
         with self.assertRaises(authority.LifecycleAuthorityError):
             authority.require_forward_transition(result, "REMEDIATION_COMPLETED", "e" * 64)
+
+    def test_bounded_codex_acquisition_composes_with_authenticated_integration_predecessor(self):
+        from scripts.secpal_pr_review import provider_acquisition as acquisition
+        observed = acquisition._normalize_observation(self.acquisition_raw)
+        acquired = acquisition._admit(self.current, self.resulting, observed)
+        with mock.patch.object(acquisition, "authenticate_first_fallback_acquisitions", return_value=acquired):
+            verified = self.verify()
+        self.assertEqual(verified.finding_ids, tuple(sorted(v["finding_ids"][0] for v in self.eligibility["eligible_threads"])))
+        self.assertEqual(verified.current_head_sha, self.predecessor.head_sha)
+        self.assertEqual(json.loads(self.predecessor._verification_seal.provenance_json)["kind"], "READY_INTEGRATION")
+        self.assertEqual(json.loads(self.candidate._verification_seal.provenance_json)["kind"], "ORDINARY")
+        after = authority.require_forward_transition(self.current.lifecycle.state, "REMEDIATION_COMPLETED", "d" * 64)
+        self.assertEqual(after["remediation_cycle_count"], 2)
+        self.assertEqual(after["unrestricted_review_count"], 1)
 
     def test_integration_finite_state_must_match_current(self):
         self.assertTrue(fast_path.is_verified_validation_evidence(self.predecessor))
