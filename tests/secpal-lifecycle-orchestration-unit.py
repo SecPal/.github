@@ -12754,10 +12754,8 @@ class ReadyIntegrationRemediationTests(TestCase):
         base = self.signed_commit(baseline, [], "base")
         h0 = self.signed_commit(baseline, [base], "reviewed source")
         first_correction = self.source_tree(baseline, "source.txt", "first ordinary correction\n")
-        r0 = self.signed_commit(first_correction, [h0], "first ordinary correction")
         main_tree = self.source_tree(baseline, "main.txt", "accepted main\n")
         main_parent = self.signed_commit(main_tree, [base], "current main")
-        tree = self.git("merge-tree", "--write-tree", r0, main_parent)
         self.reviewed, self.resulting, self.predecessor_eligibility, self.eligibility, summary = multi_provider_ready_growth()
         self.reviewed.head_sha = h0
         self.reviewed.base_sha = main_parent
@@ -12768,6 +12766,58 @@ class ReadyIntegrationRemediationTests(TestCase):
             self.predecessor_eligibility["eligible_threads"] = []
             self.resulting.feedback["threads"][0] = copy.deepcopy(self.reviewed.feedback["threads"][0])
         self.registry = self.actions_fixture.fast_registry()
+        prior_receipt = fast_path.create_validation_receipt(
+            repository=REPOSITORY, head_sha=h0, validated_tree_sha=first_correction,
+            registry=self.registry, command_set=self.registry["validation"],
+            successful_result=True, reviewed_state=self.reviewed, manual_gate_evidence=[],
+            eligibility_evidence_digest=fast_path.digest_json(self.predecessor_eligibility),
+        )
+        r0 = self.signed_commit(first_correction, [h0], "first ordinary correction\n\nSecPal-Validation-Receipt: " + prior_receipt["receipt_digest"])
+        prior_attestation = fast_path.create_validation_attestation(
+            repository=REPOSITORY, head_sha=r0, registry=self.registry,
+            command_set=self.registry["validation"], successful_result=True,
+            reviewed_state=self.reviewed, validation_receipt=prior_receipt,
+        )
+        prior_validation = fast_path.verify_validation_attestation(
+            prior_attestation, repository=REPOSITORY, head_sha=r0, registry=self.registry,
+            command_set=self.registry["validation"], reviewed_state=self.reviewed,
+            commit_parent_sha=h0, commit_tree_sha=first_correction,
+            commit_validation_receipt_digest=prior_receipt["receipt_digest"], delivery_issue_number=1070,
+        )
+        # Reuse only the hermetic journal transport and signature fixture.
+        pf = self.publication_fixture
+        journal = pf.LifecyclePublicationTests()
+        journal.setUp()
+        self.addCleanup(journal.tearDown)
+        chain = pf.Chain(1070, pull_request=self.reviewed.pull_request_number)
+        chain.initialization = authority.create_delivery_initialization(
+            repository=REPOSITORY, delivery_issue=1070, pull_request=self.reviewed.pull_request_number,
+            initial_head_sha=h0, validation_receipt_digest="1" * 64, final_attestation_digest="2" * 64,
+            signer_identity=pf.SIGNER, signer=pf.signer_for(),
+        )
+        chain.lifecycle_id = authority.delivery_initialization_lifecycle_id(chain.initialization["initialization_digest"])
+        chain.head = h0
+        for transition in ("INITIALIZED_DRAFT", "DRAFT_TO_READY", "UNRESTRICTED_REVIEW_CONSUMED"):
+            chain.append(transition, head=h0)
+        remediation = authority.create_transition_authorization(
+            event_id="first-remediation", repository=REPOSITORY, delivery_issue=1070,
+            lifecycle_id=chain.lifecycle_id, pull_request=self.reviewed.pull_request_number,
+            predecessor_authority_digest=chain.authorities[-1]["authority_digest"], predecessor_head_sha=h0,
+            resulting_head_sha=r0, transition_kind="REMEDIATION_COMPLETED", replacement_pull_request=None,
+            initialization_evidence_digest=chain.initialization["initialization_digest"],
+            signer_identity=pf.SIGNER, signer=pf.signer_for(),
+        )
+        snapshot = authority.issue_lifecycle_authority(
+            predecessor_chain=chain.authorities, transition_authorizations=chain.events,
+            authorization=remediation, signer_identity=pf.SIGNER, authority_signer=pf.signer_for(),
+            accepted_event_signers=frozenset({pf.SIGNER}), accepted_authority_signers=frozenset({pf.SIGNER}),
+            signature_verifier=pf.verify_signature, current_head_evidence=prior_validation,
+        )
+        chain.events.append(remediation)
+        chain.authorities.append(snapshot)
+        chain.head = r0
+        _, prior = journal.enroll(chain)
+        tree = self.git("merge-tree", "--write-tree", r0, main_parent)
         self.integration = self.actions_fixture.ready_integration_evidence(
             self.reviewed, validated_tree=tree, registry=self.registry,
             exceptional_recoveries=int(self._testMethodName == "test_integration_finite_state_must_match_current"),
@@ -12775,14 +12825,32 @@ class ReadyIntegrationRemediationTests(TestCase):
         self.integration.update(schema_version="1.2", reviewed_head_sha=h0,
                                 prior_delivery_head_sha=r0, ordered_parent_shas=[r0, main_parent],
                                 delivery_issue_number=1070)
-        pf = self.publication_fixture
-        initialization = authority.create_delivery_initialization(
-            repository=REPOSITORY, delivery_issue=1070, pull_request=self.reviewed.pull_request_number,
-            initial_head_sha=h0, validation_receipt_digest="1" * 64, final_attestation_digest="2" * 64,
-            signer_identity=pf.SIGNER, signer=pf.signer_for(),
+        self.integration["eligibility"]["lifecycle_identity"] = chain.lifecycle_id
+        self.prior_authority = self.actions_fixture.ready_integration_prior_authority(
+            self.reviewed, exceptional_recoveries=0,
         )
-        self.integration["eligibility"]["lifecycle_identity"] = authority.delivery_initialization_lifecycle_id(
-            initialization["initialization_digest"])
+        self.prior_authority.update(
+            delivery_issue_number=1070, prior_delivery_head_sha=r0,
+            prior_delivery_tree_sha=first_correction,
+            prior_validation_receipt_digest=prior_receipt["receipt_digest"],
+            prior_final_attestation_digest=prior_attestation["attestation_digest"],
+            publication={"object_oid": prior.publication_oid, "publication_digest": prior.publication_digest},
+        )
+        self.prior_authority["lifecycle"].update(
+            identity=chain.lifecycle_id, current_authority_digest=prior.lifecycle.authority_digest,
+            historical_proof_mode=prior.lifecycle.historical_proof_mode,
+        )
+        if self._testMethodName == "test_signed_integration_claiming_wrong_prior_authority_rejected":
+            self.prior_authority["delivery_issue_number"] = 9
+        if self._testMethodName == "test_signed_integration_claiming_wrong_prior_publication_rejected":
+            self.prior_authority["publication"]["object_oid"] = "a" * 40
+        if self._testMethodName == "test_signed_integration_claiming_wrong_prior_receipt_rejected":
+            self.prior_authority["prior_validation_receipt_digest"] = "a" * 64
+        self.integration["prior_authority_digest"] = fast_path.digest_json(self.prior_authority)
+        self.tag_ref = "refs/tags/secpal-ready-integration-prior-authority-1070-" + str(self.reviewed.pull_request_number) + "-" + r0
+        self.git("tag", "-s", self.tag_ref.removeprefix("refs/tags/"), r0,
+                 "-m", "Ready prior authority\n\nSecPal-Prior-Authority: " + self.integration["prior_authority_digest"])
+        self.integration["prior_authority_tag_object_sha"] = self.git("rev-parse", self.tag_ref + "^{tag}")
         self.integration.update(fast_path.derive_ready_integration_tree_evidence(
             self.root, [r0, main_parent], tree, schema_version="1.2",
         ))
@@ -12839,24 +12907,6 @@ class ReadyIntegrationRemediationTests(TestCase):
             commit_parent_sha=h1, commit_tree_sha=correction_tree,
             commit_validation_receipt_digest=receipt["receipt_digest"], delivery_issue_number=1070,
         )
-        # Reuse the established hermetic journal transport and signature fixture;
-        # lifecycle issuance, CAS, ancestry, and CURRENT verification run unchanged.
-        pf = self.publication_fixture
-        journal = pf.LifecyclePublicationTests()
-        journal.setUp()
-        self.addCleanup(journal.tearDown)
-        chain = pf.Chain(1070, pull_request=self.reviewed.pull_request_number)
-        chain.initialization = authority.create_delivery_initialization(
-            repository=REPOSITORY, delivery_issue=1070, pull_request=self.reviewed.pull_request_number,
-            initial_head_sha=h0, validation_receipt_digest="1" * 64, final_attestation_digest="2" * 64,
-            signer_identity=pf.SIGNER, signer=pf.signer_for(),
-        )
-        chain.lifecycle_id = authority.delivery_initialization_lifecycle_id(chain.initialization["initialization_digest"])
-        chain.head = h0
-        for transition, head in (("INITIALIZED_DRAFT", h0), ("DRAFT_TO_READY", h0),
-                                 ("UNRESTRICTED_REVIEW_CONSUMED", h0), ("REMEDIATION_COMPLETED", r0)):
-            chain.append(transition, head=head)
-        _, prior = journal.enroll(chain)
         event = authority.create_transition_authorization(
             event_id="integration-head-advanced", repository=REPOSITORY, delivery_issue=1070,
             lifecycle_id=chain.lifecycle_id, pull_request=self.reviewed.pull_request_number,
@@ -12878,7 +12928,8 @@ class ReadyIntegrationRemediationTests(TestCase):
     def verify(self, **updates):
         arguments = dict(predecessor_validation=self.predecessor, candidate_validation=self.candidate,
                          predecessor_eligibility_evidence=self.predecessor_eligibility,
-                         eligibility_evidence=self.eligibility)
+                         eligibility_evidence=self.eligibility,
+                         predecessor_prior_authority=self.prior_authority)
         arguments.update(updates)
         with mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=self.resulting):
             return orchestration.verify_ready_remediation_provider_growth_authority(self.current, **arguments)
@@ -12901,6 +12952,40 @@ class ReadyIntegrationRemediationTests(TestCase):
         self.assertTrue(fast_path.is_verified_validation_evidence(self.predecessor))
         self.assertEqual(self.current.lifecycle.state["exceptional_recovery_count"], 0)
         self.assertEqual(self.integration["eligibility"]["exceptional_recoveries_after"], 1)
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify()
+
+    def test_claimed_prior_authority_requires_authentication(self):
+        self.assertTrue(fast_path.is_verified_validation_evidence(self.predecessor))
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify(predecessor_prior_authority=None)
+
+    def test_signed_integration_claiming_wrong_prior_authority_rejected(self):
+        self.assertTrue(fast_path.is_verified_validation_evidence(self.predecessor))
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify()
+
+    def test_signed_integration_claiming_wrong_prior_publication_rejected(self):
+        self.assertTrue(fast_path.is_verified_validation_evidence(self.predecessor))
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify()
+
+    def test_signed_integration_claiming_wrong_prior_receipt_rejected(self):
+        self.assertTrue(fast_path.is_verified_validation_evidence(self.predecessor))
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.verify()
+
+    def test_prior_authority_manifest_and_tag_substitution_rejected(self):
+        for field, value in (("repository", "SecPal/api"), ("delivery_issue_number", 9),
+                             ("pull_request_number", 9), ("prior_delivery_head_sha", "a" * 40),
+                             ("prior_delivery_tree_sha", "a" * 40),
+                             ("prior_validation_receipt_digest", "a" * 64),
+                             ("prior_final_attestation_digest", "a" * 64)):
+            changed = copy.deepcopy(self.prior_authority)
+            changed[field] = value
+            with self.subTest(field=field), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.verify(predecessor_prior_authority=changed)
+        self.git("update-ref", "-d", self.tag_ref)
         with self.assertRaises(orchestration.LifecycleOrchestrationError):
             self.verify()
 
@@ -13057,7 +13142,8 @@ class ReadyIntegrationRemediationTests(TestCase):
             with self.assertRaises(orchestration.LifecycleOrchestrationError):
                 orchestration.verify_ready_remediation_provider_growth_authority(
                     self.current, predecessor_validation=self.predecessor, candidate_validation=self.candidate,
-                    predecessor_eligibility_evidence=self.predecessor_eligibility, eligibility_evidence=self.eligibility)
+                    predecessor_eligibility_evidence=self.predecessor_eligibility, eligibility_evidence=self.eligibility,
+                    predecessor_prior_authority=self.prior_authority)
         scope = self.verify()
         with self.assertRaises(orchestration.LifecycleOrchestrationError):
             orchestration.ordinary_ready_remediation_authorization_scope(replace(scope, finding_ids=scope.finding_ids[:-1]))

@@ -234,7 +234,15 @@ Ready-preserving ordinary remediation from H0 to H1 and prove Review 1/1,
 Remediation 1/2, Ready true, one Ready transition, Cycle 3 absent, and no
 Exceptional Recovery or Continuation. The candidate validation evidence binds
 the complete reviewed state at H1 and its existing ordinary eligibility
-manifest. Correction-candidate validation remains ordinary-only in both paths;
+manifest. The integration path additionally consumes its existing `READY_INTEGRATION_PRIOR_AUTHORITY`
+manifest as `predecessor_prior_authority`. Its canonical digest must equal the
+signed integration's prior-authority digest. The protected historical
+predecessor authenticates its repository, issue, PR, head/tree, receipt,
+attestation, lifecycle authority and publication identities; the maintained
+signed annotated-tag verifier independently authenticates the exact tag object,
+source target, manifest digest and integration signer. A missing, unrelated or
+substituted manifest or tag grants no authority.
+Correction-candidate validation remains ordinary-only in both paths;
 integration, exceptional and other validation families grant no candidate
 authority. An integration receipt without an eligibility digest can preserve
 predecessor feedback only with an empty eligible-thread set, which grants no

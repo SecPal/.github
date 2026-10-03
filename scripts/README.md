@@ -189,7 +189,9 @@ predecessor through `verified_ready_integration_review_context`. This dedicated
 projection independently reruns the canonical integration verifier and retains
 its provenance. Protected ancestry must select the exact integration's
 `HEAD_ADVANCED` publication as CURRENT, with the same first parent, lifecycle,
-finite state and source-evidence digest. Its independent feedback capture uses
+finite state and source-evidence digest. The composition also consumes
+the existing prior-authority manifest and canonical signed-tag verifier to bind
+the claimed authority to that protected historical predecessor. Its capture uses
 terminal CURRENT Code/Security evidence and complete current-head provider growth,
 without extending the historical provider-lineage helper. Ordinary candidate
 validation remains mandatory. An absent predecessor eligibility binding permits
