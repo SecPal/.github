@@ -236,9 +236,10 @@ def recovered_ready_chain(issue: int = ISSUE) -> Chain:
 
 
 def exact_adoption_evidence(
-    *, admit_review_budget: bool = False, provider_reviewed_draft: bool = False
+    *, admit_review_budget: bool = False, provider_reviewed_draft: bool = False,
+    ready_remaining_remediation: bool = False,
 ) -> tuple[bytes, dict[str, Any]]:
-    if admit_review_budget and provider_reviewed_draft:
+    if sum((admit_review_budget, provider_reviewed_draft, ready_remaining_remediation)) > 1:
         raise ValueError("adoption fixture modes are exclusive")
     if admit_review_budget:
         history = [
@@ -279,10 +280,16 @@ def exact_adoption_evidence(
              "observed_at": "2026-08-05T00:00:00Z", "head_sha": HEADS[2],
              "reviewed_head_sha": None},
         ]
+    if ready_remaining_remediation:
+        history.pop()
+        history[-1]["head_sha"] = HEADS[2]
     state = authority.initial_state()
     state.update(
         unrestricted_review_count=1,
-        remediation_cycle_count=1 if (admit_review_budget or provider_reviewed_draft) else 2,
+        remediation_cycle_count=(
+            1 if (admit_review_budget or provider_reviewed_draft or ready_remaining_remediation)
+            else 2
+        ),
         draft=True if (admit_review_budget or provider_reviewed_draft) else False,
         ready=False if (admit_review_budget or provider_reviewed_draft) else True,
         ready_transition_count=0 if (admit_review_budget or provider_reviewed_draft) else 1,
