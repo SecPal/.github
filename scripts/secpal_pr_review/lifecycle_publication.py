@@ -3376,16 +3376,19 @@ def publish_zero_receipt_ready_source_correction() -> VerifiedReadySourceRecover
     return recovered
 
 
-def verify_current_ready_source_recovery(
+def _verify_ready_source_recovery_publication(
     repository: str,
     delivery_issue: int,
-) -> VerifiedReadySourceRecovery:
-    """Authenticate one recovered prior-Ready authority and its still-CURRENT source."""
+    *, source_publication_oid: str | None = None,
+) -> tuple[VerifiedLifecyclePublication, VerifiedReadySourceRecovery]:
+    """Reverify recovery and its exact source through protected journal ancestry."""
 
     repository = authority._require_repository(repository)
     issue = authority._require_positive_int(
         delivery_issue, "Ready-source recovery issue"
     )
+    if source_publication_oid is not None:
+        source_publication_oid = authority._require_oid(source_publication_oid, "recovery source publication")
     policy = authority._load_lifecycle_trust_policy(repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=False) as (root, credential_environment):
@@ -3399,7 +3402,7 @@ def verify_current_ready_source_recovery(
             raise LifecyclePublicationError(
                 "Ready-source recovery publication is unavailable"
             )
-        _, latest, _, recoveries = _walk_journal(
+        entries, latest, _, recoveries = _walk_journal(
             root,
             tip,
             policy.publication_branch,
@@ -3408,6 +3411,12 @@ def verify_current_ready_source_recovery(
         key = (repository, issue)
         recovery = recoveries.get(key)
         current = latest.get(key)
+        if source_publication_oid is not None:
+            matches = [entry for entry in entries if entry[0] == source_publication_oid
+                       and (entry[1]["repository"], entry[1]["delivery_issue"]) == key]
+            if len(matches) != 1 or recovery is None or recovery.historical_evidence_correction is None:
+                raise LifecyclePublicationError("corrected historical recovery source is unavailable")
+            current = matches[0]
         if recovery is None or current is None:
             raise LifecyclePublicationError(
                 "Ready-source recovery publication is unavailable"
@@ -3426,7 +3435,20 @@ def verify_current_ready_source_recovery(
         _require_effective_recovery_historical_evidence(
             recovery, current_document, current_lifecycle
         )
-    return recovery
+    source = VerifiedLifecyclePublication(
+        current_oid, current_document["publication_digest"], policy.publication_branch,
+        current_document["journal_predecessor_oid"], current_document["predecessor_publication_oid"],
+        current_lifecycle, canonical_json_bytes(current_document["lifecycle_evidence"]),
+    )
+    return source, recovery
+
+
+def verify_current_ready_source_recovery(
+    repository: str, delivery_issue: int,
+) -> VerifiedReadySourceRecovery:
+    """Authenticate one recovered prior-Ready authority and its still-CURRENT source."""
+
+    return _verify_ready_source_recovery_publication(repository, delivery_issue)[1]
 
 
 def verify_current_lifecycle_authority(
@@ -4311,6 +4333,7 @@ def verify_ready_integration_predecessor(
     ):
         raise LifecyclePublicationError("Ready integration validation differs from the published advancement")
     manifest = fast_path.normalize_ready_integration_prior_authority(prior_authority)
+    corrected_root = manifest.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT"
     if (
         fast_path.digest_json(manifest) != integration["prior_authority_digest"]
         or manifest["repository"] != predecessor.repository
@@ -4318,8 +4341,10 @@ def verify_ready_integration_predecessor(
         or manifest["pull_request_number"] != predecessor.pull_request
         or manifest["prior_delivery_head_sha"] != predecessor.head_sha
         or manifest["prior_delivery_tree_sha"] != predecessor.tree_sha
-        or manifest["prior_validation_receipt_digest"] != predecessor.validation_receipt_digest
-        or manifest["prior_final_attestation_digest"] != predecessor.adoption_source_evidence_digest
+        or (not corrected_root and (
+            manifest["prior_validation_receipt_digest"] != predecessor.validation_receipt_digest
+            or manifest["prior_final_attestation_digest"] != predecessor.adoption_source_evidence_digest
+        ))
         or manifest["expected_signer"] != integration["expected_signer"]
         or manifest["publication"] != {
             "object_oid": transition.predecessor.publication_oid,
@@ -4334,10 +4359,25 @@ def verify_ready_integration_predecessor(
     actions = transport._load_actions_helper()
     try:
         actions._verify_ready_integration_lifecycle_authority(manifest, integration)
+        if corrected_root:
+            # Immutable predecessor fields remain provenance. Only complete
+            # maintained derivation authenticates the effective null projection.
+            actions._require_exact_adopted_ready_manifest(
+                manifest,
+                actions._derive_exact_state_adoption_ready_prior_authority(
+                    repository_root=Path(provenance["repository_root"]),
+                    repository=predecessor.repository, delivery_issue=predecessor.delivery_issue,
+                    pull_request=predecessor.pull_request, binding=provenance["registry"],
+                    reviewed_state_digest=reviewed.state_digest,
+                    reviewed_feedback_digest=reviewed.feedback_digest,
+                    source_publication_oid=transition.predecessor.publication_oid,
+                ),
+            )
         actions._verify_prior_authority_tag(
             repository_root=Path(provenance["repository_root"]),
             tag_ref=actions._canonical_ready_prior_authority_tag_ref(manifest),
             authority=manifest, integration_evidence=integration, binding=provenance["registry"],
+            source_publication_oid=transition.predecessor.publication_oid if corrected_root else None,
         )
     except actions.fast_path.SecurityBlocker as exc:
         raise SecurityBlocker("Ready integration prior authority authentication failed") from exc
