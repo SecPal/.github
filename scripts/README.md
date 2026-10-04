@@ -24,6 +24,31 @@ See [Deterministic PR State and Evidence Layer](../docs/secpal-pr-review-state-l
 for schemas, bounded pagination, signature and required-check semantics, safe
 outputs, commands, and Package 2.1 non-goals.
 
+### `secpal-provider-reacquisition.py`
+
+The maintained `SecPal/.github` action for historical provider-acquisition
+evidence loss. `inspect` authenticates the bounded loss class and `authorize`
+issues an exact signed one-use intent, both read-only. `dispatch` derives one
+required provider type, publishes its protected CAS claim and attempts at most
+one canonical request. `observe` captures a complete fresh exact-head assessment
+within the maintained provider window. It accepts no provider or finding subset.
+
+All operations require freshly authenticated protected-main tooling. Historical
+first-fallback validity remains unknown; fresh acquisition has separate request,
+result and chronology identities. Existing #1053 unacknowledged replacement
+semantics remain separate. The full rules and bounds are in
+[Historical acquisition evidence loss](../docs/secpal-pr-review-workflow.md#historical-acquisition-evidence-loss).
+
+```bash
+python3 -I scripts/secpal-provider-reacquisition.py inspect \
+  --repo SecPal/.github --delivery-issue "$provider_delivery_issue" \
+  --output .context/provider-loss.json
+```
+
+Set `provider_delivery_issue` to the enrolled delivery issue. The verifier
+derives all authority independently. Dispatch requires a separately
+authorized downstream operation and the exact signed `--authorization` file.
+
 ### `secpal-pr-review-actions.py`
 
 Validates deterministic Package-2.2 mutation plans and applies at most one
@@ -54,6 +79,15 @@ canonical dispositions, actionable fixes without commit and test proof, and
 operations whose evidence does not match their logical finding. Their initial
 and final heads must also encode exactly one new linear commit per recorded
 signed push, or no commit movement for a no-push session.
+
+`lifecycle_authority.recovered_adoption_root_historical_evidence()` authenticates
+only supported zero-historical exact-adoption roots. It preserves the existing
+version-3 loss root and independently verifies version-4 Governance-Amendment
+authority, exact delivery scope, intended Ready state and root-only publication
+shape. Version-4 `ABSENT_NEVER_ISSUED` keeps receipt, source-validation and final
+attestation null and never reconstructs historical bytes. Current-safety receipts
+remain distinct; successors and caller-selected provenance cannot bypass this
+root boundary.
 
 The protected publication journal also supports one exact append-only
 `SECPAL_READY_SOURCE_RECOVERY_CORRECTION` for the contradictory signed
@@ -209,8 +243,9 @@ state, transition, counter, signer, trust root, or journal. Its verifier-owned
 seal is not reproducible from serialized fields, and the generic authorization
 issuer rejects the provider-growth digest.
 
-For a current-head Codex-only assessment, the same composition requires both
-first fallback acquisitions through `provider_acquisition.py`. That read-only
+For a current-head Codex-only assessment with no fresh reacquisition claims,
+the same composition requires both first fallback acquisitions through
+`provider_acquisition.py`. That read-only
 owner reauthenticates protected CURRENT and complete live feedback, then derives
 the exact persisted Code and Security requests from the complete ordered native
 timeline. Each canonical, unedited request must come from the exact PR author
@@ -227,6 +262,18 @@ head, feedback, request identities, actors, chronology and live review database
 identities. Existing terminal provider transport verification then authenticates
 the Code findings review, Security result and current-head summary. Exact
 top-level comment Node IDs and complete eligibility remain mandatory.
+
+When protected CURRENT claims instead identify one signed fresh reacquisition,
+`provider_reacquisition.py` authenticates its complete assessment. `fast_path`
+projects the exact request/result transport, complete review database identities
+and signed historical request/result identities into ephemeral consumer data. Historical
+first-fallback validity remains unprovable; retained sources are preserved, not
+relabeled. Fresh chronology stays with its canonical verifier. The same
+provider-growth and finding-authority verifiers require complete ordinary
+eligibility, and only `issue_ready_remediation_provider_growth_authorization`
+bridges that authority to the existing signed `REMEDIATION_COMPLETED` scope.
+Raw assessments, altered seals, incompatible acquisition authorities and
+Copilot substitution fail closed. No caller chooses an acquisition mode.
 
 This first-acquisition verifier supplies no replacement-dispatch interface. The
 reserved #1053 `provider_fallback` import remains unavailable and its public
@@ -374,6 +421,27 @@ must match the integration evidence. When creating the integration receipt, the
 command performs one trusted GitHub read and requires the live open Ready PR
 head and registered target-base SHA to equal the two authorized parents; caller-
 supplied `observed_sha` cannot substitute for that read.
+
+A typed Ready integration can also supply parent-1 authority for another typed
+integration. `--prior-integration-chain` carries an immutable package transport
+with exactly `schema_version: "1.0"`,
+`kind: "READY_INTEGRATION_PREDECESSOR_PACKAGES"`, and `packages` in oldest-to-newest
+publication order. Each package contains exactly `integration_evidence`,
+`reviewed_state`, `validation_receipt`, `final_attestation`, and `prior_authority`.
+The ordinary prior companion arguments must equal the newest package's canonical
+reviewed state, receipt and attestation. The transport selects no provenance:
+every commit's actual trailers, ordered parents, tree and signature are observed,
+then its original receipt, attestation and evidence version are reverified by the
+canonical integration verifier. The publication verifier walks the exact complete
+`HEAD_ADVANCED` suffix iteratively and derives
+`VerifiedReadyIntegrationPriorAuthority`; the supplied manifest must equal that
+projection. Missing, extra, reordered, replayed or cyclic entries fail closed.
+The existing schema-1.1 manifest and signed annotated tag retain their bindings;
+there is no additional durable authority store. Historical parent 2 remains
+bound to its original protected publication, while issuance observes fresh main
+for the new parent 2. Ordinary remediation still requires a sole parent. No
+integration changes lifecycle state or consumes a review, remediation, Ready,
+Recovery or Continuation slot.
 
 Prior-authority schema `1.2` extends this same manifest, annotated-tag, signer,
 target, and normalization boundary for a genuine Exact-State-Adoption v3 source
@@ -586,12 +654,15 @@ Mixed provider-review/admission inputs, replay into another context, resets,
 and using the admission to derive remediation or Ready state fail closed.
 The lifecycle-authority suite is an unconditional registered validation command.
 
-Exact-State-Adoption version 4 is the registered, one-delivery
-`GOVERNANCE_AMENDMENT` mode for #960 / PR #961. It represents historical
+Exact-State-Adoption version 4 is the registered, per-delivery
+`GOVERNANCE_AMENDMENT` mode for #960 / PR #961 and #1053 / PR #1055. It represents historical
 validation as `ABSENT_NEVER_ISSUED` with typed null receipt, source-validation,
 and final-attestation fields. It consumes an independently signed exact-scope
-authorization only after current validation, natural CI, exact-head independent
-qualification, and zero material findings. Its public producer accepts only the
+authorization only after current validation, natural CI, and exact-head independent
+qualification. The #960 registration requires zero material findings. The #1053
+registration retains the complete authenticated unresolved finding inventory;
+qualification grants no correction or thread-resolution authority. Its public
+producer accepts only the
 closed external human/verifier inputs that cannot be observed from providers,
 then independently rebuilds the live GitHub, Git, CI, feedback, thread,
 source-range and exact change-set facts from the Ready PR. Before signing it
@@ -603,7 +674,16 @@ check policy are authenticated fail closed. The check identities come from the
 bound accepted-main copy of `sync-required-checks.sh`; accepted combined-status
 contexts are that exact set plus the maintained CLA context. The producer also
 derives current-validation policy identity from the bound accepted-main
-registry and derives `ABSENT_NEVER_ISSUED` only after the protected journal and
+registry. For reviewed Ready sources, the live target repository and `main` ref
+are authenticated independently of the historical PR base SHA. Registration,
+current trust, signer revocations, validation and consumption remain bound to
+the freshly authenticated protected registration tip; the historical baseline
+and Ready workflow base identities remain immutable. Current safety uses the
+existing two-provenance executor: its profile binds the accepted-main harness
+and transitively derived maintained tooling inventory, while the exact target
+source is preserved in a separate root. Isolated execution authenticates loaded
+module origins and rejects candidate verifier execution. The producer derives
+`ABSENT_NEVER_ISSUED` only after the protected journal and
 exact signed qualified-source trailer history both prove absence. Caller-
 provided validation, receipt, provenance, or absence objects are outside the
 closed input schema. The provider-produced fact set excludes the external
@@ -1049,8 +1129,8 @@ and native genesis, a canonical READY work graph, and unchanged initial Draft
 state. Only genesis and prior `HEAD_ADVANCED` events are admitted; review,
 remediation, Ready, correction, replacement and exceptional histories reject.
 The central `enrolled_draft_integration_policy` registers this operation only
-for `SecPal/.github` and `SecPal/deployment`. Historical pre-enrollment absence
-and Ready integration contracts remain unchanged.
+for `SecPal/.github`, `SecPal/frontend`, `SecPal/api`, `SecPal/contracts`, `SecPal/secpal.app`, `SecPal/android`, and `SecPal/deployment`.
+Historical pre-enrollment absence and Ready integration contracts remain unchanged.
 
 Run both commands from freshly authenticated accepted `.github/main` tooling,
 with a distinct candidate repository root. Stage the exact mechanically derived

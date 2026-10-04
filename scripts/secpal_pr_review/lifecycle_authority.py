@@ -3922,7 +3922,11 @@ def authenticate_exact_state_adoption_external_evidence(
         dict(intended_state), allow_adopted_observations=True
     )
     has_review_budget_admission = (
-        review_budget_consumption_admission is not None or amendment is not None
+        review_budget_consumption_admission is not None
+        or (
+            amendment is not None
+            and governance_amendment.review_budget_admitted(amendment)
+        )
     )
     history = _normalize_observed_pre_enrollment_history(
         list(observed_pre_enrollment_history),
@@ -4398,13 +4402,21 @@ def _assemble_exact_state_adoption_evidence(
     state = _validate_state(
         dict(intended_state), allow_adopted_observations=True
     )
+    if governance_amendment_authorization is not None:
+        from . import governance_amendment
+
     history = _normalize_observed_pre_enrollment_history(
         list(observed_pre_enrollment_history),
         expected_head=head,
         intended_state=state,
         review_budget_consumption_admitted=(
             review_budget_consumption_admission is not None
-            or governance_amendment_authorization is not None
+            or (
+                governance_amendment_authorization is not None
+                and governance_amendment.review_budget_admitted(
+                    governance_amendment_authorization
+                )
+            )
         ),
     )
     timestamp = _require_adoption_timestamp(adoption_timestamp, "adoption timestamp")
@@ -4714,7 +4726,7 @@ def recovered_adoption_root_historical_evidence(
     lifecycle_evidence: Mapping[str, Any] | None,
     predecessor_publication_oid: str | None,
 ) -> dict[str, Any]:
-    """Authenticate the one zero-receipt v3 enrollment-root projection."""
+    """Authenticate a supported zero-historical exact-adoption root."""
 
     if (
         not isinstance(lifecycle_evidence, Mapping)
@@ -4728,15 +4740,9 @@ def recovered_adoption_root_historical_evidence(
     if not isinstance(proof, Mapping):
         raise LifecycleAuthorityError("zero-receipt adoption proof is missing")
     verified = verify_exact_state_adoption_proof(proof)
-    loss = proof.get("validation_evidence_loss_admission")
     state = current_lifecycle.state
     if (
-        proof.get("schema_version") != "3.0"
-        or proof.get("proof_version") != "3.0"
-        or proof.get("historical_proof_mode") != "exact_state_adoption"
-        or not isinstance(loss, Mapping)
-        or loss.get("schema_version") != "1.2"
-        or loss.get("historical_package_status") != "UNAVAILABLE"
+        proof.get("historical_proof_mode") != "exact_state_adoption"
         or proof.get("intended_state") != state
         or verified.repository != current_lifecycle.repository
         or verified.delivery_issue != current_lifecycle.delivery_issue
@@ -4764,6 +4770,44 @@ def recovered_adoption_root_historical_evidence(
         != {"sequence", "transition_kind", "observation_digest"}
         or state["ready_history"][0].get("sequence") != 1
         or state["ready_history"][0].get("transition_kind") != "DRAFT_TO_READY"
+    ):
+        raise LifecycleAuthorityError("zero-receipt adoption-root binding changed")
+    if proof["proof_version"] == EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION:
+        # The proof verifier independently authenticates the amendment and its
+        # closed ABSENT_NEVER_ISSUED projection; CURRENT safety is not history.
+        amendment = proof["governance_amendment_authorization"]
+        if any(amendment[field] != expected for field, expected in {
+            "repository": current_lifecycle.repository,
+            "delivery_issue": current_lifecycle.delivery_issue,
+            "pull_request": current_lifecycle.pull_request,
+            "head_sha": current_lifecycle.head_sha,
+            "tree_sha": current_lifecycle.tree_sha,
+        }.items()):
+            raise LifecycleAuthorityError("zero-receipt amendment-root binding changed")
+        bundle = _require_closed(
+            lifecycle_evidence, EXACT_ADOPTION_PUBLICATION_FIELDS,
+            "exact-state adoption lifecycle evidence",
+        )
+        if (
+            bundle["schema_version"] != SCHEMA_VERSION
+            or bundle["kind"] != EXACT_ADOPTION_EVIDENCE_KIND
+            or bundle["domain"] != EXACT_ADOPTION_EVIDENCE_DOMAIN
+            or bundle["enrollment_mode"] != "EXACT_STATE_ADOPTION"
+            or current_lifecycle.validation_receipt_digest is not None
+            or current_lifecycle.source_validation_evidence_digest is not None
+        ):
+            raise LifecycleAuthorityError("zero-receipt adoption-root binding changed")
+        return normalize_exact_state_adoption_historical_evidence(
+            proof["historical_evidence"]
+        )
+
+    loss = proof.get("validation_evidence_loss_admission")
+    if (
+        proof.get("schema_version") != "3.0"
+        or proof.get("proof_version") != "3.0"
+        or not isinstance(loss, Mapping)
+        or loss.get("schema_version") != "1.2"
+        or loss.get("historical_package_status") != "UNAVAILABLE"
         or loss.get("repository") != current_lifecycle.repository
         or loss.get("delivery_issue") != current_lifecycle.delivery_issue
         or loss.get("pull_request") != current_lifecycle.pull_request

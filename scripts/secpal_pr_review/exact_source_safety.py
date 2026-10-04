@@ -8,6 +8,7 @@ import ast
 from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -55,6 +56,7 @@ _COLLISION_CURRENT_IDENTITY_FIXTURES = {
 
 _TWO_PROVENANCE_LAUNCHER = r"""
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -64,6 +66,7 @@ candidate_root = Path(sys.argv[2]).resolve(strict=True)
 candidate_repository = sys.argv[3]
 target = sys.argv[4]
 entrypoint = sys.argv[5]
+inventory = frozenset(json.loads(sys.argv[6]))
 if (
     tooling_root == candidate_root
     or tooling_root in candidate_root.parents
@@ -79,6 +82,36 @@ os.environ["SECPAL_CURRENT_SAFETY_TOOLING_ROOT"] = str(tooling_root)
 os.environ["SECPAL_CURRENT_SAFETY_CANDIDATE_ROOT"] = str(candidate_root)
 os.environ["SECPAL_CURRENT_SAFETY_CANDIDATE_REPOSITORY"] = candidate_repository
 sys.argv = [target]
+
+def verify_module_origins():
+    for name, module in tuple(sys.modules.items()):
+        location = getattr(module, "__file__", None)
+        owned = name.startswith(("secpal_pr_review", "scripts.secpal_pr_review",
+                                 "secpal_exact_source_safety"))
+        if location is None:
+            if owned:
+                paths = getattr(module, "__path__", ())
+                if not paths or any(tooling_root not in Path(path).resolve().parents
+                                    for path in paths):
+                    raise RuntimeError("current-safety module namespace escaped tooling")
+            continue
+        path = Path(location).resolve(strict=True)
+        if candidate_root in path.parents:
+            raise RuntimeError("current-safety module resolved to candidate source")
+        if owned or tooling_root in path.parents:
+            origin = getattr(getattr(module, "__spec__", None), "origin", None)
+            if (tooling_root not in path.parents
+                or path.relative_to(tooling_root).as_posix() not in inventory
+                or not isinstance(origin, str) or Path(origin).resolve() != path):
+                raise RuntimeError("current-safety module origin is not bound tooling")
+
+def reject_candidate_execution(event, arguments):
+    if event == "exec":
+        filename = arguments[0].co_filename
+        if not filename.startswith("<") and candidate_root in Path(filename).resolve().parents:
+            raise RuntimeError("current-safety cannot execute candidate verifier bytes")
+
+sys.addaudithook(reject_candidate_execution)
 spec = importlib.util.spec_from_file_location(
     "secpal_current_safety_accepted_harness", expected
 )
@@ -86,10 +119,15 @@ if spec is None or spec.loader is None:
     raise RuntimeError("current-safety harness is unavailable")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+verify_module_origins()
 selected = getattr(module, entrypoint, None)
 if not callable(selected):
     raise RuntimeError("current-safety harness entrypoint changed")
-raise SystemExit(selected([]))
+try:
+    result = selected([])
+finally:
+    verify_module_origins()
+raise SystemExit(result)
 """
 
 
@@ -474,6 +512,82 @@ def tooling_blob(
             "current safety tooling blob is invalid"
         )
     return facts.mode, facts.object_oid, facts.size
+
+
+def derive_tooling_paths(
+    repository_root: Path, accepted_main: str, *, harness_paths: Sequence[str],
+) -> tuple[str, ...]:
+    """Derive the maintained import/literal-loader closure from accepted bytes."""
+
+    listing = transport._git_text(
+        repository_root, ["ls-tree", "-r", "--name-only", accepted_main, "--", "scripts"],
+    ).splitlines()
+    available = frozenset(path for path in listing if path.endswith(".py") and (
+        path.startswith("scripts/secpal_pr_review/")
+        or path in {"scripts/secpal-pr-review.py", "scripts/secpal-pr-review-actions.py"}
+    ))
+    pending = list(harness_paths)
+    visited: set[str] = set()
+    closure: set[str] = set()
+    total_size = 0
+    with tempfile.TemporaryDirectory(prefix="secpal-tooling-closure-") as directory:
+        while pending:
+            path = pending.pop()
+            if path in visited:
+                continue
+            visited.add(path)
+            is_tooling = path in available
+            bind = tooling_blob if is_tooling else harness_blob
+            allowed = available if is_tooling else frozenset(harness_paths)
+            mode, blob, size = bind(repository_root, accepted_main, path, allowed_paths=allowed)
+            total_size += size
+            if size > 1024 * 1024 or total_size > 16 * 1024 * 1024 or len(visited) > 128:
+                raise authority.LifecycleAuthorityError("current safety tooling closure exceeds its bound")
+            _copy_harness_file(
+                repository_root, accepted_main,
+                {"path": path, "mode": mode, "blob_oid": blob, "size": size},
+                Path(directory), allowed_paths=allowed, tooling=is_tooling,
+            )
+            raw = (Path(directory) / path).read_bytes()
+            try:
+                syntax = ast.parse(raw, filename=path)
+            except (SyntaxError, ValueError) as exc:
+                raise authority.LifecycleAuthorityError("current safety tooling source is invalid") from exc
+            dependencies: set[str] = set()
+            required_imports = set(syntax.body)
+            for node in ast.walk(syntax):
+                if isinstance(node, ast.ImportFrom):
+                    names = []
+                    if node.level:
+                        names = ([node.module.split(".")[0]] if node.module else
+                                 [alias.name for alias in node.names])
+                    elif node.module in {"secpal_pr_review", "scripts.secpal_pr_review"}:
+                        names = [alias.name for alias in node.names]
+                    elif node.module and node.module.startswith(("secpal_pr_review.", "scripts.secpal_pr_review.")):
+                        names = [node.module.rsplit(".", 1)[1]]
+                    referenced = {"scripts/secpal_pr_review/" + name + ".py" for name in names}
+                    if node in required_imports and not referenced.issubset(available):
+                        raise authority.LifecycleAuthorityError("current safety tooling dependency is unavailable")
+                    dependencies.update(referenced.intersection(available))
+                elif isinstance(node, ast.Import):
+                    dependencies.update(
+                        "scripts/secpal_pr_review/" + alias.name.rsplit(".", 1)[1] + ".py"
+                        for alias in node.names
+                        if alias.name.startswith(("secpal_pr_review.", "scripts.secpal_pr_review."))
+                    )
+                elif isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.endswith(".py"):
+                    literal = node.value
+                    if literal.startswith("scripts/secpal_pr_review/") or literal in available:
+                        dependencies.update({literal}.intersection(available))
+                    elif "/" not in literal:
+                        dependencies.update(item for item in available if Path(item).name == literal)
+            if not dependencies.issubset(available):
+                raise authority.LifecycleAuthorityError("current safety tooling dependency is unavailable")
+            closure.update(dependencies)
+            pending.extend(dependencies - visited)
+    if not closure:
+        raise authority.LifecycleAuthorityError("current safety tooling closure is empty")
+    return tuple(sorted(closure))
 
 
 def build_profile(
@@ -2035,6 +2149,9 @@ def run_profile(
                     candidate_repository,
                     command["argv"][1],
                     "main",
+                    json.dumps([
+                        item["path"] for item in [*profile["harness"], *profile["tooling"]]
+                    ]),
                 )
             else:
                 isolated_command = transport._isolated_python_command(

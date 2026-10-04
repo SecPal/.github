@@ -127,7 +127,8 @@ class Chain:
         self.checkpoint: dict[str, Any] | None = None
 
     def append(self, transition: str, *, head: str | None = None,
-               replacement_pull_request: int | None = None) -> None:
+               replacement_pull_request: int | None = None,
+               current_head_evidence: Any = None) -> None:
         resulting_head = head or self.head
         event = authority.create_transition_authorization(
             event_id=(f"genesis:{self.initialization['initialization_digest']}"
@@ -154,6 +155,7 @@ class Chain:
                 accepted_event_signers=frozenset({SIGNER}),
                 accepted_authority_signers=frozenset({SIGNER}),
                 signature_verifier=verify_signature,
+                current_head_evidence=current_head_evidence,
             )
         self.events.append(event)
         self.authorities.append(snapshot)
@@ -234,9 +236,10 @@ def recovered_ready_chain(issue: int = ISSUE) -> Chain:
 
 
 def exact_adoption_evidence(
-    *, admit_review_budget: bool = False, provider_reviewed_draft: bool = False
+    *, admit_review_budget: bool = False, provider_reviewed_draft: bool = False,
+    ready_before_remediation: bool = False,
 ) -> tuple[bytes, dict[str, Any]]:
-    if admit_review_budget and provider_reviewed_draft:
+    if sum((admit_review_budget, provider_reviewed_draft, ready_before_remediation)) > 1:
         raise ValueError("adoption fixture modes are exclusive")
     if admit_review_budget:
         history = [
@@ -277,10 +280,16 @@ def exact_adoption_evidence(
              "observed_at": "2026-08-05T00:00:00Z", "head_sha": HEADS[2],
              "reviewed_head_sha": None},
         ]
+    if ready_before_remediation:
+        del history[3:]
+    adoption_head = HEADS[0] if ready_before_remediation else HEADS[2]
     state = authority.initial_state()
     state.update(
         unrestricted_review_count=1,
-        remediation_cycle_count=1 if (admit_review_budget or provider_reviewed_draft) else 2,
+        remediation_cycle_count=(
+            0 if ready_before_remediation else
+            1 if (admit_review_budget or provider_reviewed_draft) else 2
+        ),
         draft=True if (admit_review_budget or provider_reviewed_draft) else False,
         ready=False if (admit_review_budget or provider_reviewed_draft) else True,
         ready_transition_count=0 if (admit_review_budget or provider_reviewed_draft) else 1,
@@ -290,10 +299,10 @@ def exact_adoption_evidence(
         }],
     )
     validation = verified_validation_evidence(
-        head=HEADS[2], tree=HEADS[3], parent=HEADS[1]
+        head=adoption_head, tree=HEADS[3], parent=HEADS[1]
     )
     commit = {
-        "oid": HEADS[2], "source": "USER", "signer_identity": SIGNER,
+        "oid": adoption_head, "source": "USER", "signer_identity": SIGNER,
         "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
         "github_verification": {"verified": True, "reason": "valid"},
     }
@@ -335,7 +344,7 @@ def exact_adoption_evidence(
     ):
         arguments = dict(
             repository=REPOSITORY, delivery_issue=ISSUE, pull_request=PR,
-            head_sha=HEADS[2], tree_sha=HEADS[3], pull_request_state="OPEN",
+            head_sha=adoption_head, tree_sha=HEADS[3], pull_request_state="OPEN",
             commit_signature_evidence=commit, validation_evidence=validation,
             observed_pre_enrollment_history=history, intended_state=state,
         )
@@ -4693,6 +4702,116 @@ class LifecyclePublicationTests(TestCase):
             )
         self.assertEqual(self.remote_tip(), first)
 
+    def reacquisition_claim_fixture(self, *, prior_assessment=False):
+        from scripts.secpal_pr_review import provider_reacquisition as r
+        spec = importlib.util.spec_from_file_location("reacquisition_transport_fixture", Path(__file__).with_name("secpal-lifecycle-orchestration-unit.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _, feedback, _, _, _, fixture_current, raw = module.first_fallback_growth()
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        chain.append("DRAFT_TO_READY")
+        chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+        evidence = verified_validation_evidence(head=HEADS[1], tree=HEADS[3], parent=HEADS[0])
+        chain.append("REMEDIATION_COMPLETED", head=HEADS[1], current_head_evidence=evidence)
+        if prior_assessment:
+            chain.append("ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED")
+        _, current = self.enroll(chain)
+        old_head, old_pr = feedback.head_sha, feedback.pull_request_number
+        text = json.dumps(raw).replace(old_head, current.lifecycle.head_sha).replace(old_head[:10], current.lifecycle.head_sha[:10]).replace(old_head[:7], current.lifecycle.head_sha[:7])
+        raw = json.loads(text)
+        raw["data"]["repository"]["pullRequest"]["number"] = PR
+        for node in raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]:
+            if node["__typename"] == "IssueComment":
+                node["body"] = node["body"].replace('"pullRequestNumber": ' + str(old_pr), '"pullRequestNumber": ' + str(PR))
+                node["body"] = node["body"].replace('"pullRequestNumber":' + str(old_pr), '"pullRequestNumber":' + str(PR))
+        feedback.head_sha = current.lifecycle.head_sha
+        feedback.pull_request_number = PR
+        for review in feedback.feedback["reviews"]:
+            review["commit_oid"] = current.lifecycle.head_sha
+        module.first_fallback_feedback(feedback, raw)
+        observed = r.acquisition._normalize_observation(raw)
+        summary = next(e["body"] for e in observed["events"] if fast_path.CODEX_REVIEW_SUMMARY_MARKER in e.get("body", ""))
+        feedback.provider_summary_body = summary
+        feedback.feedback["reviews"][0]["body_digest"] = fast_path.digest_text(next(e["body"] for e in observed["events"] if e["kind"] == "PullRequestReview"))
+        feedback.refresh_digests()
+        survey = {"source_history": tuple((e["head"], current.lifecycle.tree_sha if e["head"] == current.lifecycle.head_sha else "8" * 40) for e in observed["events"] if e["kind"] == "COMMIT"),
+                  "source_packages": (), "journal_packages": (), "historical_digest_identities": r._retained_package_digests(current),
+                  "maintained_stores": r.MAINTAINED_STORES, "unsearched_stores": (),
+                  "retained_local_store": "NO_MAINTAINED_RETAINED_STORE", "output_scope": "GITIGNORED_WORKSPACE_LOCAL",
+                  "authoritative_head_publication": None}
+        loss = r._admit_loss(current, feedback, observed, survey)
+        fields = r._authorization_fields(loss, "2026-10-01T17:00:00Z", SIGNER)
+        signed = {**fields, "signature": signer_for()(fast_path.canonical_json_bytes(fields), r.AUTHORIZATION_DOMAIN)}
+        document = {**signed, "authorization_digest": fast_path.digest_json(signed)}
+        verified = r.verify_authorization(document, current)
+        return current, document, r.derive_dispatch_keys(verified, current)
+
+    def test_reacquisition_rejects_ordinary_claim_in_exact_scope(self):
+        current, document, keys = self.reacquisition_claim_fixture(prior_assessment=True)
+        ordinary = replace(keys[0], assessment_authority_digest=current.lifecycle.authority_digest)
+        publication._publish_provider_dispatch_claim(ordinary, eligibility_evidence_digest="9" * 64,
+            signer_identity=SIGNER, signer=signer_for())
+        for key in keys:
+            with self.assertRaisesRegex(publication.LifecyclePublicationError, "ordinary provider dispatch"):
+                publication._publish_provider_dispatch_claim(key, eligibility_evidence_digest=document["loss_proof_digest"],
+                    signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=document)
+        self.assertEqual(publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE), current)
+
+    def test_ordinary_claim_cannot_follow_reacquisition_in_same_scope(self):
+        current, document, keys = self.reacquisition_claim_fixture(prior_assessment=True)
+        publication._publish_provider_dispatch_claim(keys[0], eligibility_evidence_digest=document["loss_proof_digest"],
+            signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=document)
+        ordinary = replace(keys[1], assessment_authority_digest=current.lifecycle.authority_digest)
+        with self.assertRaisesRegex(publication.LifecyclePublicationError, "ordinary provider dispatch"):
+            publication._publish_provider_dispatch_claim(ordinary, eligibility_evidence_digest="9" * 64,
+                signer_identity=SIGNER, signer=signer_for())
+
+    def test_reacquisition_claims_preserve_current_and_both_journal_readers(self):
+        current, document, keys = self.reacquisition_claim_fixture()
+        for key in keys:
+            claim = publication._publish_provider_dispatch_claim(key, eligibility_evidence_digest=document["loss_proof_digest"],
+                signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=document)
+            self.assertEqual(fast_path.canonical_json_bytes(claim.reacquisition_authorization), fast_path.canonical_json_bytes(document))
+            with self.assertRaisesRegex(publication.LifecyclePublicationError, "already exists"):
+                publication._publish_provider_dispatch_claim(key, eligibility_evidence_digest=document["loss_proof_digest"],
+                    signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=document)
+        self.assertEqual(publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE), current)
+        publication._observe_remote_current_once(self.probe, str(self.remote), BRANCH)
+        enrolled, admitted = publication._walk_journal_identity_projection(self.probe, self.remote_tip(), BRANCH)
+        self.assertIn((REPOSITORY, ISSUE), enrolled)
+
+    def test_reacquisition_same_head_competing_authorization_is_rejected(self):
+        current, document, keys = self.reacquisition_claim_fixture()
+        publication._publish_provider_dispatch_claim(keys[0], eligibility_evidence_digest=document["loss_proof_digest"],
+            signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=document)
+        from scripts.secpal_pr_review import provider_reacquisition as r
+        fields = {k:v for k,v in document.items() if k not in {"signature", "authorization_digest"}}
+        fields["authorized_at"] = "2026-10-01T17:00:01Z"
+        signed = {**fields, "signature": signer_for()(fast_path.canonical_json_bytes(fields), r.AUTHORIZATION_DOMAIN)}
+        other = {**signed, "authorization_digest": fast_path.digest_json(signed)}
+        for key in keys:
+            with self.assertRaises(publication.LifecyclePublicationError):
+                publication._publish_provider_dispatch_claim(key, eligibility_evidence_digest=other["loss_proof_digest"],
+                    signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=other)
+
+    def test_reacquisition_cas_race_has_one_winner(self):
+        current, document, keys = self.reacquisition_claim_fixture()
+        publication._observe_remote_current_once(self.probe, str(self.remote), BRANCH)
+        successors = []
+        for attempt in ("1" * 64, "2" * 64):
+            fields = publication._provider_dispatch_claim_fields(keys[0], eligibility_evidence_digest=document["loss_proof_digest"],
+                publication_branch=BRANCH, journal_predecessor_oid=current.publication_oid,
+                signer_identity=SIGNER, attempt_id=attempt, reacquisition_authorization=document)
+            successors.append(publication._write_publication_object(self.probe,
+                publication._sign_provider_dispatch_claim(fields, signer_for()), current.publication_oid))
+        publication._cas_remote_ref(self.probe, str(self.remote), BRANCH, successors[0], current.publication_oid)
+        with self.assertRaises(publication.LifecyclePublicationError):
+            publication._cas_remote_ref(self.probe, str(self.remote), BRANCH, successors[1], current.publication_oid)
+        _, _, _, _, claims = publication._walk_journal(self.probe, self.remote_tip(), BRANCH, include_claims=True)
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(self.remote_tip(), successors[0])
+
     def test_provider_dispatch_claim_is_ancillary_and_unique(self) -> None:
         _, enrolled, key = self.provider_claim_fixture()
         claim = publication._publish_provider_dispatch_claim(
@@ -5383,6 +5502,7 @@ class LifecyclePublicationTests(TestCase):
 class ContractsLifecyclePolicyTests(TestCase):
     """Compose the accepted contracts policy through the generic lifecycle."""
 
+    repository = CONTRACTS_REPOSITORY
     SYNTHETIC_ISSUE = 900001
     SYNTHETIC_PR = 900002
 
@@ -5393,7 +5513,7 @@ class ContractsLifecyclePolicyTests(TestCase):
         )
         self.registry = registry_path.read_bytes()
         self.accepted_policy = authority._parse_lifecycle_trust_policy(
-            self.registry, CONTRACTS_REPOSITORY
+            self.registry, self.repository
         )
         self.directory = tempfile.TemporaryDirectory(
             prefix="contracts-lifecycle-publication-"
@@ -5442,18 +5562,18 @@ class ContractsLifecyclePolicyTests(TestCase):
     def chain(self) -> Chain:
         return Chain(
             self.SYNTHETIC_ISSUE,
-            repository=CONTRACTS_REPOSITORY,
+            repository=self.repository,
             pull_request=self.SYNTHETIC_PR,
         )
 
-    def test_contracts_policy_composes_first_publication_current_and_ready(self) -> None:
+    def test_repository_policy_composes_first_publication_current_and_ready(self) -> None:
         absence = publication.verify_pre_enrollment_absence(
-            CONTRACTS_REPOSITORY, self.SYNTHETIC_ISSUE
+            self.repository, self.SYNTHETIC_ISSUE
         )
         publication.require_unenrolled_delivery(
-            CONTRACTS_REPOSITORY, self.SYNTHETIC_ISSUE
+            self.repository, self.SYNTHETIC_ISSUE
         )
-        self.assertEqual(absence.repository, CONTRACTS_REPOSITORY)
+        self.assertEqual(absence.repository, self.repository)
         self.assertIsNone(absence.observed_tip_oid)
 
         chain = self.chain()
@@ -5465,9 +5585,9 @@ class ContractsLifecyclePolicyTests(TestCase):
             chain.raw(), signer_identity=SIGNER, signer=signer_for()
         )
         current = publication.verify_current_lifecycle_authority(
-            CONTRACTS_REPOSITORY, self.SYNTHETIC_ISSUE
+            self.repository, self.SYNTHETIC_ISSUE
         )
-        self.assertEqual(admission.repository, CONTRACTS_REPOSITORY)
+        self.assertEqual(admission.repository, self.repository)
         self.assertEqual(enrolled.journal_predecessor_oid, admission.admission_oid)
         self.assertEqual(current.publication_oid, enrolled.publication_oid)
         self.assertTrue(current.lifecycle.state["draft"])
@@ -5489,7 +5609,7 @@ class ContractsLifecyclePolicyTests(TestCase):
             )
             predecessor = ready
         current = publication.verify_current_lifecycle_authority(
-            CONTRACTS_REPOSITORY, self.SYNTHETIC_ISSUE
+            self.repository, self.SYNTHETIC_ISSUE
         )
         self.assertEqual(current.publication_oid, ready.publication_oid)
         self.assertFalse(current.lifecycle.state["draft"])
@@ -5502,10 +5622,10 @@ class ContractsLifecyclePolicyTests(TestCase):
             "already has native genesis or CURRENT",
         ):
             publication.verify_pre_enrollment_absence(
-                CONTRACTS_REPOSITORY, self.SYNTHETIC_ISSUE
+                self.repository, self.SYNTHETIC_ISSUE
             )
 
-    def test_contracts_policy_rejects_duplicate_genesis_and_wrong_signer(self) -> None:
+    def test_repository_policy_rejects_duplicate_genesis_and_wrong_signer(self) -> None:
         chain = self.chain()
         chain.append("INITIALIZED_DRAFT")
         with self.assertRaises(
@@ -5529,7 +5649,7 @@ class ContractsLifecyclePolicyTests(TestCase):
 
         competing = Chain(
             self.SYNTHETIC_ISSUE,
-            repository=CONTRACTS_REPOSITORY,
+            repository=self.repository,
             pull_request=self.SYNTHETIC_PR + 1,
         )
         competing.append("INITIALIZED_DRAFT")
@@ -5541,7 +5661,7 @@ class ContractsLifecyclePolicyTests(TestCase):
                 competing.raw(), signer_identity=SIGNER, signer=signer_for()
             )
 
-    def test_contracts_policy_rejects_repository_and_remote_substitution(self) -> None:
+    def test_repository_policy_rejects_repository_and_remote_substitution(self) -> None:
         for substituted_remote in (
             "https://github.com/SecPal/.github.git",
             "https://github.com/SecPal/deployment.git",
@@ -5551,7 +5671,7 @@ class ContractsLifecyclePolicyTests(TestCase):
                 contracts = next(
                     item
                     for item in registry["repositories"]
-                    if item["repository"] == CONTRACTS_REPOSITORY
+                    if item["repository"] == self.repository
                 )
                 contracts["lifecycle_authority_policy"][
                     "publication_remote_url"
@@ -5562,14 +5682,14 @@ class ContractsLifecyclePolicyTests(TestCase):
                 ):
                     authority._parse_lifecycle_trust_policy(
                         authority.canonical_json_bytes(registry),
-                        CONTRACTS_REPOSITORY,
+                        self.repository,
                     )
 
         registry = json.loads(self.registry)
         contracts = next(
             item
             for item in registry["repositories"]
-            if item["repository"] == CONTRACTS_REPOSITORY
+            if item["repository"] == self.repository
         )
         contracts["repository"] = "SecPal/other"
         with self.assertRaisesRegex(
@@ -5577,8 +5697,157 @@ class ContractsLifecyclePolicyTests(TestCase):
             "no unique maintained trust policy",
         ):
             authority._parse_lifecycle_trust_policy(
-                authority.canonical_json_bytes(registry), CONTRACTS_REPOSITORY
+                authority.canonical_json_bytes(registry), self.repository
             )
+
+
+class FrontendLifecyclePolicyTests(ContractsLifecyclePolicyTests):
+    """The Frontend registration consumes the existing lifecycle contract."""
+
+    repository = "SecPal/frontend"
+    expected_ruleset_id = 24431481
+
+    def test_registry_and_consumer_projections_agree(self) -> None:
+        modules = []
+        for name, script in (
+            ("frontend_policy_actions", "secpal-pr-review-actions.py"),
+            ("frontend_policy_resolver", "secpal-resolve-fixed-threads.py"),
+        ):
+            spec = importlib.util.spec_from_file_location(
+                name, Path(__file__).resolve().parents[1] / "scripts" / script
+            )
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+            modules.append(module)
+        actions, resolver = modules
+        entry = actions.select_repository(actions.load_registry(), self.repository)
+        binding = actions._fast_registry_binding(entry)
+        self.assertEqual(binding, resolver._validation_registry_binding(entry))
+        self.assertEqual(binding["repository"], self.repository)
+        self.assertIn("BRANCH_WRITE", entry["unsupported_operations"])
+        self.assertEqual(
+            entry["lifecycle_authority_policy"]["publication_remote_url"],
+            f"https://github.com/{self.repository}.git",
+        )
+        with self.assertRaises(actions.RegistryError):
+            actions.select_repository(actions.load_registry(), "Other/frontend")
+
+    def test_ready_integration_authenticates_repository_bound_current(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "frontend_ready_actions",
+            Path(__file__).resolve().parents[1] / "scripts/secpal-pr-review-actions.py",
+        )
+        actions = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = actions
+        spec.loader.exec_module(actions)
+        chain = self.chain()
+        chain.append("INITIALIZED_DRAFT")
+        publication.admit_native_genesis(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        publication.enroll_existing_lifecycle(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        chain.append("DRAFT_TO_READY")
+        current = publication.advance_current_terminal(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for()
+        )
+        lifecycle = current.lifecycle
+        manifest = {
+            "repository": self.repository,
+            "delivery_issue_number": self.SYNTHETIC_ISSUE,
+            "pull_request_number": self.SYNTHETIC_PR,
+            "prior_delivery_head_sha": lifecycle.head_sha,
+            "publication": {
+                "object_oid": current.publication_oid,
+                "publication_digest": current.publication_digest,
+            },
+            "lifecycle": {
+                "identity": lifecycle.lifecycle_id,
+                "unrestricted_reviews": 0,
+                "remediation_cycles": 0,
+                "exceptional_recoveries": 0,
+                "exceptional_continuations": 0,
+                "historical_proof_mode": lifecycle.historical_proof_mode,
+                "current_authority_digest": lifecycle.authority_digest,
+            },
+        }
+        integration = {"eligibility": {"lifecycle_identity": lifecycle.lifecycle_id}}
+        with patch.object(
+            actions, "_load_lifecycle_publication_helpers",
+            return_value=(authority, publication),
+        ):
+            selected = actions._authenticated_ready_integration_publication(
+                manifest, integration
+            )
+            self.assertEqual(selected.publication_oid, current.publication_oid)
+            manifest["repository"] = "Other/frontend"
+            with self.assertRaises(actions.fast_path.SecurityBlocker):
+                actions._authenticated_ready_integration_publication(manifest, integration)
+
+    def test_registration_reuses_signers_and_closed_storage_policy(self) -> None:
+        reference = authority._parse_lifecycle_trust_policy(
+            self.registry, CONTRACTS_REPOSITORY
+        )
+        self.assertEqual(
+            self.accepted_policy,
+            replace(
+                reference,
+                repository=self.repository,
+                publication_remote_url=f"https://github.com/{self.repository}.git",
+                publication_ruleset_id=self.expected_ruleset_id,
+            ),
+        )
+        self.assertEqual(self.accepted_policy.accepted_formats, frozenset({"ssh"}))
+        self.assertEqual(self.accepted_policy.publication_ruleset_id, self.expected_ruleset_id)
+        self.assertEqual(self.accepted_policy.initialization_anchors, ())
+
+    def test_registration_rejects_missing_malformed_and_widened_authority(self) -> None:
+        mutations = (
+            lambda entry: entry.pop("lifecycle_authority_policy"),
+            lambda entry: entry.update(lifecycle_authority_policy=[]),
+            lambda entry: entry["lifecycle_authority_policy"].update(
+                publication_branch="refs/heads/main"
+            ),
+            lambda entry: entry["lifecycle_authority_policy"].update(
+                publication_ruleset_id=0
+            ),
+            lambda entry: entry["lifecycle_authority_policy"].update(
+                publication_required_rules=[]
+            ),
+            lambda entry: entry["lifecycle_authority_policy"].update(
+                caller_branch="refs/heads/main"
+            ),
+        )
+        for mutation in mutations:
+            registry = json.loads(self.registry)
+            entry = next(
+                item for item in registry["repositories"]
+                if item["repository"] == self.repository
+            )
+            mutation(entry)
+            with self.subTest(mutation=mutation), self.assertRaises(
+                authority.LifecycleAuthorityError
+            ), patch.object(publication, "_run_git") as git:
+                authority._parse_lifecycle_trust_policy(
+                    authority.canonical_json_bytes(registry), self.repository
+                )
+            git.assert_not_called()
+
+
+class ApiLifecyclePolicyTests(FrontendLifecyclePolicyTests):
+    """API uses the same repository-bound public lifecycle authority."""
+
+    repository = "SecPal/api"
+    expected_ruleset_id = 24438764
+
+
+class AndroidLifecyclePolicyTests(FrontendLifecyclePolicyTests):
+    """Android governance uses the existing repository-bound lifecycle."""
+
+    repository = "SecPal/android"
+    expected_ruleset_id = 24443992
 
 
 if __name__ == "__main__":

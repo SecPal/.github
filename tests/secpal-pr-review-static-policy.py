@@ -574,6 +574,7 @@ ALLOWED_IMPORTS = {
         "from . import lifecycle_publication as publication",
         "from . import lifecycle_authority, lifecycle_execution",
         "from . import provider_acquisition",
+        "from . import provider_reacquisition",
     },
     "exact_source_safety.py": {
         "from __future__ import annotations",
@@ -581,6 +582,7 @@ ALLOWED_IMPORTS = {
         "from contextlib import contextmanager",
         "from dataclasses import dataclass",
         "import hashlib",
+        "import json",
         "import os",
         "from pathlib import Path",
         "import re",
@@ -887,6 +889,7 @@ LOADED_MODULE_ATTRIBUTES = {
     },
     "fast_path.py": {
         "provider_acquisition": {"require_verified_acquisitions"},
+        "provider_reacquisition": {"require_verified_fresh_acquisitions"},
         "evidence": {
             "CommandPolicyError",
             "ContractError",
@@ -1286,6 +1289,10 @@ SAFE_GETATTR_CALLS = {
         ),
         DynamicImportCall(
             ("_command_attest_validation",),
+            "getattr(arguments, 'prior_integration_chain', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
             "getattr(arguments, 'expected_prior_authority_signer', None)",
         ),
         DynamicImportCall(
@@ -1303,6 +1310,10 @@ SAFE_GETATTR_CALLS = {
         DynamicImportCall(
             ("_verify_ready_integration_prior_authority",),
             "getattr(arguments, 'prior_attestation', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'prior_integration_chain', None)",
         ),
         DynamicImportCall(
             ("_verify_ready_integration_prior_authority",),
@@ -1559,6 +1570,10 @@ SAFE_SYS_MODULES_STORES = {
         DynamicImportCall(
             ("_load_fast_path_helper",),
             "sys.modules[spec.name]",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers",),
+            "sys.modules['scripts']",
         ),
         DynamicImportCall(
             ("_load_lifecycle_publication_helpers",),
@@ -2519,6 +2534,13 @@ def inspect_source(
 
 
 def self_test() -> None:
+    fresh_import = "from . import provider_reacquisition\n"
+    safe_fresh = fresh_import + "provider_reacquisition.require_verified_fresh_acquisitions(value, current, feedback)\n"
+    if inspect_source(safe_fresh, "fast_path.py", ()):
+        raise SystemExit("static policy sealed fresh acquisition fixture was rejected")
+    for method in ("authenticate_fresh_provider_acquisitions", "issue_authorization", "dispatch_next", "authenticate_assessment"):
+        if not inspect_source(fresh_import + f"provider_reacquisition.{method}(value)\n", "fast_path.py", ()):
+            raise SystemExit("static policy fresh acquisition side-effect interface was not detected")
     acquisition_import = "from . import provider_acquisition\n"
     safe_acquisition = acquisition_import + "provider_acquisition.require_verified_acquisitions(value, feedback)\n"
     if inspect_source(safe_acquisition, "fast_path.py", ()):
@@ -2831,6 +2853,21 @@ def self_test() -> None:
     )
     if inspect_source(owner_module_read, "secpal-pr-review-actions.py", ()):
         raise SystemExit("closed provider-owner module read was rejected")
+
+    scripts_namespace = (
+        "import sys\nimport types\ndef _load_lifecycle_publication_helpers():\n"
+        "    scripts_package = types.ModuleType('scripts')\n"
+        "    scripts_package.__path__ = [str(REPOSITORY_ROOT / 'scripts')]\n"
+        "    sys.modules['scripts'] = scripts_package\n"
+    )
+    if inspect_source(scripts_namespace, "secpal-pr-review-actions.py", ()):
+        raise SystemExit("closed lifecycle scripts namespace was rejected")
+    for substituted in (
+        scripts_namespace.replace("['scripts']", "['subprocess']"),
+        scripts_namespace.replace("_load_lifecycle_publication_helpers", "arbitrary_loader"),
+    ):
+        if not inspect_source(substituted, "secpal-pr-review-actions.py", ()):
+            raise SystemExit("substituted lifecycle namespace was accepted")
 
     source_specific_unsafe = (
         (

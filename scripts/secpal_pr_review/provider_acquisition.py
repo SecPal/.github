@@ -117,7 +117,7 @@ def require_verified_acquisitions(
         or value.pull_request != feedback.pull_request_number
         or value.assessment_head != feedback.head_sha
         or value.feedback_state_digest != feedback.state_digest
-        or tuple(item.review_type for item in value.acquisitions) != ("CODE", "SECURITY")
+        or tuple(item.review_type for item in value.acquisitions) != fast_path.required_codex_review_types()
     ):
         raise fast_path.SecurityBlocker("first fallback acquisition is not independently authenticated")
     return value
@@ -318,6 +318,27 @@ def _normalize_observation(raw: Any) -> dict[str, Any]:
         raise fast_path.SecurityBlocker("first fallback timeline is malformed") from exc
 
 
+def _require_feedback_inventory(
+    feedback: fast_path.StableFeedbackState,
+    comments: dict[str, Any], reviews: dict[str, Any],
+) -> None:
+    """One owner for complete live source, actor, body and chronology binding."""
+
+    for category, observed_sources in (("conversation_comments", comments), ("reviews", reviews)):
+        sources = feedback.feedback[category]
+        if set(observed_sources) != {s["node_id"] for s in sources}:
+            raise fast_path.SecurityBlocker("first fallback complete feedback source inventory changed")
+        for source in sources:
+            event = observed_sources[source["node_id"]]
+            actor = source["actor"]
+            if event["actor"] != (actor["login"], actor["node_id"], actor["database_id"]) or fast_path.digest_text(event["body"]) != source["body_digest"]:
+                raise fast_path.SecurityBlocker("first fallback feedback source was substituted")
+            if category == "conversation_comments" and event["updated_at"] != source["updated_at"]:
+                raise fast_path.SecurityBlocker("first fallback comment chronology changed")
+            if category == "reviews" and (event["head"] != source["commit_oid"] or event["state"] != source["state"] or event["created_at"] != source["submitted_at"]):
+                raise fast_path.SecurityBlocker("first fallback review chronology changed")
+
+
 def _admit(
     current: publication.VerifiedLifecyclePublication,
     feedback: fast_path.StableFeedbackState,
@@ -356,19 +377,7 @@ def _admit(
         raise fast_path.SecurityBlocker("first fallback event chronology is ambiguous")
     comments = {e["node_id"]: e for e in events if e["kind"] == "IssueComment"}
     reviews = {e["node_id"]: e for e in events if e["kind"] == "PullRequestReview"}
-    for category, observed_sources in (("conversation_comments", comments), ("reviews", reviews)):
-        sources = feedback.feedback[category]
-        if set(observed_sources) != {s["node_id"] for s in sources}:
-            raise fast_path.SecurityBlocker("first fallback complete feedback source inventory changed")
-        for source in sources:
-            event = observed_sources[source["node_id"]]
-            actor = source["actor"]
-            if event["actor"] != (actor["login"], actor["node_id"], actor["database_id"]) or fast_path.digest_text(event["body"]) != source["body_digest"]:
-                raise fast_path.SecurityBlocker("first fallback feedback source was substituted")
-            if category == "conversation_comments" and event["updated_at"] != source["updated_at"]:
-                raise fast_path.SecurityBlocker("first fallback comment chronology changed")
-            if category == "reviews" and (event["head"] != source["commit_oid"] or event["state"] != source["state"] or event["created_at"] != source["submitted_at"]):
-                raise fast_path.SecurityBlocker("first fallback review chronology changed")
+    _require_feedback_inventory(feedback, comments, reviews)
     head_publication = observed.get("head_publication")
     if (
         not isinstance(head_publication, dict)
@@ -508,4 +517,4 @@ def authenticate_first_fallback_acquisitions(
 ) -> VerifiedFirstFallbackAcquisitions:
     """Authenticate both first acquisitions required for Codex-only growth."""
 
-    return _authenticate(current, feedback, ("CODE", "SECURITY"))
+    return _authenticate(current, feedback, fast_path.required_codex_review_types())

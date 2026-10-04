@@ -268,8 +268,8 @@ The authority verifier independently repeats the maintained live Stable
 Feedback capture at H1 and requires exact equality with the candidate-bound
 state, so candidate-local evidence cannot create provider history.
 
-A Codex-only H1 assessment instead composes both read-only first-fallback
-acquisitions from `provider_acquisition.py`. The fixed 30-minute window makes
+A Codex-only H1 assessment without fresh reacquisition claims composes both
+read-only first-fallback acquisitions from `provider_acquisition.py`. The fixed 30-minute window makes
 the maintained approximately-30-minute observation contract executable without
 configuration. Complete ordered native chronology must show each unedited
 canonical request at least 30 minutes after both Ready and an independently
@@ -287,6 +287,15 @@ The existing terminal transport owner verifies the Code findings review,
 Security result and exact-head summary before the complete finding delta is
 admitted. Exact top-level provider comment Node IDs remain the finding IDs.
 No caller chooses a provider mode, request identity, feedback delta or subset.
+For a protected, uniquely signed fresh reacquisition, the same consumer instead
+authenticates `VerifiedFreshProviderAcquisitions` through its canonical owner.
+The ephemeral common projection retains fresh request/result identities and
+chronology separately from the signed historical source inventory. It does not
+prove historical first-fallback validity or borrow an unavailable publication
+time. Both acquisition forms feed the existing provider-growth and remediation
+finding authority; the sole existing issuer then signs ordinary
+`REMEDIATION_COMPLETED` scope. Incompatible simultaneous authorities fail closed,
+and fresh evidence cannot substitute for a required Copilot assessment.
 This read-only owner grants no replacement dispatch; #1053's reserved import
 and unavailable-verifier failure remain unchanged.
 
@@ -627,14 +636,32 @@ Version 3 adds the distinct
 not reinterpret versions 1/2. Loss-admission schema 1.0 retains its exact signed,
 unenrolled OPEN Draft and same-head validation-receipt-trailer semantics.
 
-Version 4 adds one closed `GOVERNANCE_AMENDMENT` source mode for the registered
-issue #960 / PR #961 bootstrap only. It accepts no historical validation object:
+Version 4 adds one closed `GOVERNANCE_AMENDMENT` source mode with independently
+registered exact records for issue #960 / PR #961 and the reviewed Ready source
+of issue #1053 / PR #1055. It accepts no historical validation object:
 the typed state is `ABSENT_NEVER_ISSUED`, and validation-receipt,
 source-validation, and final-attestation digests are canonical JSON nulls.
 `PRESENT` projects the unchanged version-1/2 evidence, while `UNAVAILABLE`
 projects unchanged version-3 evidence whose receipt identity exists but whose
 package bytes are unavailable. These states are disjoint; prose, caller flags,
 synthetic digests, and candidate-local policy cannot select one.
+Null historical receipt authority is restricted to an independently authenticated
+zero-historical exact-adoption root. The canonical root verifier preserves the
+version-3 schema-1.2 loss path and also admits a version-4 Governance-Amendment
+root with its verified exact-scope amendment authorization and canonical
+`ABSENT_NEVER_ISSUED` projection. The root must bind the current repository,
+issue, PR, head, tree, lifecycle and intended Ready state, with no predecessor
+publication or transition/authority suffix. Proof provenance selects the path;
+there is no caller-selected mode. A fresh current-safety receipt remains CURRENT
+evidence and never supplies a missing historical digest.
+
+The #960 record retains its parent-inclusive historical audit and review-budget
+admission. The #1053 record audits only commits after its accepted baseline,
+derives its already consumed review and Ready transition from the authenticated
+PR chronology, and binds every unresolved finding through current Stable
+Feedback. Its qualification establishes adoption facts; it does not correct
+findings or grant thread resolution. The registration must be read from accepted
+protected main before issuance, and the target source remains unchanged.
 
 The amendment authorization contains a one-use exact-scope root authorization
 signed by an authority signer whose identity and key come from the bound
@@ -655,8 +682,15 @@ tree/topology/path/blob/mode scope, terminal CI, stable feedback, threads, and
 qualification binding before either signer runs. The exact required-check set
 comes from `sync-required-checks.sh` at bound accepted main, and combined-status
 contexts are limited to that set plus the maintained CLA context. Current-
-validation identity is derived from the bound accepted-main registry. Typed
-historical absence is derived from the protected lifecycle journal plus an
+validation identity is derived from the bound accepted-main registry. For the
+reviewed Ready registration, the accepted-main current-safety harness is also
+executed against an immutable projection of the exact target head and tree;
+the command, policy, target identity, and passing result are rebound on every
+issuance or consumption read. The historical absence record remains separate.
+The reviewed Ready authorization retains its historical accepted baseline;
+consumption checks the authenticated registration tip as current protected main
+and binds that tip as the resulting squash parent's identity.
+Typed historical absence is derived from the protected lifecycle journal plus an
 accepted-key verification and trailer audit of the exact qualified-source
 history; caller absence, validation, receipt, provenance, and candidate-local
 audit objects are rejected. Issuance occurs only after the
@@ -983,6 +1017,70 @@ own claim may proceed through the bounded dispatch executor. Existing claims
 cannot be replayed to post; a stranded claim remains consumed. The #1053
 consumer is responsible for supplying fresh, complete authenticated provider
 eligibility and request-history reconciliation to that executor.
+
+### Historical acquisition evidence loss
+
+`scripts/secpal-provider-reacquisition.py` is the canonical action for the exact
+`PROVIDER_ACQUISITION_EVIDENCE_LOSS_REACQUISITION` reconciliation case in
+`SecPal/.github`. It requires authenticated OPEN Ready CURRENT, Review 1/1,
+Remediation 1/2, one Ready transition, Cycle-3 absence and zero exceptional
+history. It creates no lifecycle event or counter change.
+
+The read-only loss verifier reuses the maintained bounded native timeline and
+three-page PushEvent feed, complete Stable Feedback, protected journal and
+source-history stores. Every PR source tree must preserve the gitignored
+workspace-local output scope. It surveys all immutable source blobs, independent
+of extension, and the authenticated journal for original typed integration,
+receipt and attestation bytes. Linked or unsearched stores, incomplete history,
+available companion bytes, an authoritative head-publication event, missing
+historical terminal results, substituted digest identities and changed CURRENT
+deny this exact case. Bounds are 100 native timeline events, 100 source heads,
+10,000 entries per tree, 20,000 distinct blobs, 16 MiB per blob, 64 MiB total
+source bytes and 4,096 journal objects. This is a maintained-store conclusion,
+not a universal absence proof.
+
+The admitted result is
+`REQUIRED_HISTORICAL_ACQUISITION_EVIDENCE_UNAVAILABLE`. Original first-fallback
+validity remains `UNPROVABLE_FROM_RETAINED_AUTHORITY`. Neither digest identities,
+HEAD_ADVANCED nor terminal results reconstruct unavailable typed package bytes
+or the original publication chronology.
+
+The accepted-main issuer signs one exact authorization using the existing
+publication role. It binds the full repository/issue/PR/lifecycle/CURRENT,
+head/tree and finite-state identities, complete historical assessment, loss
+proof, derived assessment identity, both canonical provider types and
+`bounded_uses = 1`. A fresh authenticated GitHub Date supplies authorization
+chronology. Caller providers, finding subsets and loss declarations are absent
+from the action interface. Issuance and execution authenticate the complete
+executing verifier package against freshly protected main.
+
+Dispatch uses schema 1.1 of the existing `SECPAL_PROVIDER_DISPATCH_CLAIM`, with
+the exact signed authorization. Existing schema 1.0 retains #1053's latest
+authorized assessment and persisted-unacknowledged replacement semantics.
+Retained original request fields identify the historical requests; they do not
+prove those requests were valid first fallbacks. The new signed assessment
+supplies reacquisition authority. Both journal readers enforce the same schema,
+signature, ancestry and uniqueness checks. One same-head authorization may
+reserve one Code and one Security claim; duplicates and competing
+authorizations fail closed. Claims remain consumed after an uncertain write.
+
+`dispatch` derives Code first, waits for its fresh terminal result, and then
+derives Security. Each call can publish one claim and attempt one canonical
+POST. Immediately before writing, the executor reauthenticates the bounded
+loss survey, CURRENT, OPEN Ready source, actor, request/result history and its
+own protected claim. Existing fresh requests or claims cannot authorize another
+POST. An ambiguous response requires complete request-history reconciliation;
+zero or ambiguous matches cannot be retried automatically.
+
+`observe` performs one maintained read. A complete result requires fresh
+canonical request identities, exact-head results and current terminal summary
+rows, with completion within the existing 30-minute observation window after
+each new request. Historical identities and results remain separate. Provider
+non-terminality ends automatic observation at the bound and authorizes no extra
+request. The final assessment captures all current feedback, provider review
+database identities and the complete finding/thread inventory. Every current
+finding still requires ordinary classification; this action performs no
+remediation, source change, lifecycle publication, thread resolution or merge.
 
 Publication does not derive lifecycle state, orchestrate lifecycle events, or
 implement two-parent integration. Those remain owned by #750, #692, and #745
@@ -1572,6 +1670,53 @@ separately signed late-disposition path documented below; that path reuses the
 already verified final delivery attestation and does not create a new receipt.
 
 ### Explicit Ready-head integration evidence
+
+For chained integration, the prior delivery head remains a typed integration;
+it is never flattened into ordinary remediation. Supply the original immutable
+packages through `attest-validation --prior-integration-chain PATH`, alongside
+the existing prior manifest, signed tag, reviewed-state, receipt and attestation
+arguments. The transport is a closed JSON object with schema `1.0`, kind
+`READY_INTEGRATION_PREDECESSOR_PACKAGES`, and a `packages` array in publication
+order. Each entry contains exactly `integration_evidence`, `reviewed_state`,
+`validation_receipt`, `final_attestation`, and `prior_authority`. These are
+original evidence documents, not caller-authored verifier results.
+
+The canonical integration verifier independently authenticates each package's
+supported historical evidence semantics, actual commit trailers, ordered parents,
+tree and signature. The protected publication owner verifies the exact complete
+`HEAD_ADVANCED` suffix, rejects gaps, duplicates, substituted ancestry and replay,
+and derives the prior-authority manifest from verified CURRENT. The manifest and
+its existing signed tag retain their exact head, tree, receipt, attestation,
+signer and publication bindings. Historical parent 2 is never compared with
+current main; the new integration still requires a fresh protected-main
+observation. All finite lifecycle state and histories remain identical across
+each advancement, including Remediation 2/2. Ordinary single-parent validation
+is unchanged, and supplying this transport cannot admit an ordinary merge.
+
+The canonical `derive_ready_source_recovery_provider_binding` can compose a
+Ready-preserving ordinary remediation suffix followed by a complete typed
+`HEAD_ADVANCED` suffix. Its `ready_integrations` argument supplies the original
+verifier-authenticated validation and prior-authority pairs in transition order;
+it selects no provider head or subset. Each pair must match the exact protected
+predecessor and successor publications, source head/tree, signed prior-authority
+tag, receipt, final attestation, signer and unchanged finite state. Missing,
+extra, reordered, substituted or candidate-local integration evidence fails
+closed. The existing integration verifier and its trust inputs must match
+freshly authenticated protected main.
+
+Historical parent 2 binds the exact main observation authorized in the signed
+integration evidence and protected publication. It does not bind today's main
+tip. Later main advancement therefore preserves the original integration's
+meaning, while substituting its historical main observation invalidates its
+signed receipt/source binding. Generic delivery ancestry grants no authority.
+
+The derived provider terminality remains at the unique historical reviewed
+head. Current feedback is separately captured in full at the resulting CURRENT
+head, and the capture rejects a historical head even when its provider summary
+is terminal. Existing current-source classification and material-blocker gates
+remain required. This composition changes neither bounded provider acquisition
+nor review, remediation, Ready, Recovery or Continuation budgets. The broader
+provider-lineage contract remains owned by #1031.
 
 Ordinary remediation and recovery continue to require one parent. A separately
 user-authorized mechanical integration into an already-Ready delivery PR uses
