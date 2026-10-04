@@ -4182,6 +4182,18 @@ def _exact_reviewed_ready_root_head(
     """Admit an unchanged reviewed root only underneath authenticated integrations."""
 
     events = bundle.get("transition_authorizations", [])
+    proof = bundle.get("exact_state_adoption_proof")
+    if (
+        isinstance(proof, Mapping)
+        and proof.get("proof_version") == authority.EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION
+        and current.lifecycle.adoption_review_submitted is True
+    ):
+        # The canonical root verifier authenticates observation-backed review
+        # history. Integration neither publishes a Ready event nor loses it.
+        authority.recovered_adoption_root_historical_evidence(
+            current.lifecycle, bundle, current.predecessor_publication_oid,
+        )
+        return current.lifecycle.head_sha
     reviews = [index for index, event in enumerate(events)
                if event.get("transition_kind") == "UNRESTRICTED_REVIEW_CONSUMED"]
     state = current.lifecycle.state
@@ -4333,7 +4345,10 @@ def verify_ready_integration_predecessor(
     ):
         raise LifecyclePublicationError("Ready integration validation differs from the published advancement")
     manifest = fast_path.normalize_ready_integration_prior_authority(prior_authority)
-    corrected_root = manifest.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT"
+    independent_root = manifest.get("source_authority_mode") in {
+        "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
+        "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
+    }
     if (
         fast_path.digest_json(manifest) != integration["prior_authority_digest"]
         or manifest["repository"] != predecessor.repository
@@ -4341,7 +4356,7 @@ def verify_ready_integration_predecessor(
         or manifest["pull_request_number"] != predecessor.pull_request
         or manifest["prior_delivery_head_sha"] != predecessor.head_sha
         or manifest["prior_delivery_tree_sha"] != predecessor.tree_sha
-        or (not corrected_root and (
+        or (not independent_root and (
             manifest["prior_validation_receipt_digest"] != predecessor.validation_receipt_digest
             or manifest["prior_final_attestation_digest"] != predecessor.adoption_source_evidence_digest
         ))
@@ -4358,10 +4373,10 @@ def verify_ready_integration_predecessor(
 
     actions = transport._load_actions_helper()
     try:
-        actions._verify_ready_integration_lifecycle_authority(manifest, integration)
-        if corrected_root:
+        actions._verify_ready_integration_lifecycle_authority(manifest, integration, reviewed_state=reviewed)
+        if independent_root:
             # Immutable predecessor fields remain provenance. Only complete
-            # maintained derivation authenticates the effective null projection.
+            # maintained derivation authenticates the distinct root projection.
             actions._require_exact_adopted_ready_manifest(
                 manifest,
                 actions._derive_exact_state_adoption_ready_prior_authority(
@@ -4377,7 +4392,7 @@ def verify_ready_integration_predecessor(
             repository_root=Path(provenance["repository_root"]),
             tag_ref=actions._canonical_ready_prior_authority_tag_ref(manifest),
             authority=manifest, integration_evidence=integration, binding=provenance["registry"],
-            source_publication_oid=transition.predecessor.publication_oid if corrected_root else None,
+            source_publication_oid=transition.predecessor.publication_oid if independent_root else None,
         )
     except actions.fast_path.SecurityBlocker as exc:
         raise SecurityBlocker("Ready integration prior authority authentication failed") from exc

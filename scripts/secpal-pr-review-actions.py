@@ -6479,10 +6479,23 @@ def _verify_pre_enrollment_work_graph_result(
 
 
 def _verify_ready_integration_lifecycle_authority(
-    authority: dict[str, Any], integration_evidence: dict[str, Any]
+    authority: dict[str, Any], integration_evidence: dict[str, Any],
+    *, reviewed_state: Any = None,
 ) -> None:
     lifecycle = authority["lifecycle"]
     eligibility = integration_evidence["eligibility"]
+    if authority.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT":
+        if (
+            reviewed_state is None
+            or reviewed_state.state_digest != integration_evidence["reviewed_state_digest"]
+            or reviewed_state.feedback_digest != integration_evidence["reviewed_feedback_digest"]
+            or reviewed_state.head_sha != authority["prior_delivery_head_sha"]
+            or not set(authority["source_authority"]["feedback"]["material_finding_ids"]).issubset({
+                thread["node_id"] for thread in reviewed_state.feedback["threads"]
+                if not thread["is_resolved"]
+            })
+        ):
+            raise fast_path.SecurityBlocker("Governance-Amendment integration feedback inventory changed")
     if (
         eligibility["lifecycle_identity"] != lifecycle["identity"]
         or eligibility["unrestricted_reviews_before"] != lifecycle["unrestricted_reviews"]
@@ -6590,6 +6603,10 @@ def _verify_ready_integration_published_authority(
         authority_manifest.get("source_authority_mode")
         == "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT"
     )
+    amendment_root = (
+        authority_manifest.get("source_authority_mode")
+        == "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT"
+    )
     expected_source = (
         authority_manifest["source_authority"]["current_safety_digest"]
         if recovered_root
@@ -6603,9 +6620,14 @@ def _verify_ready_integration_published_authority(
             != authority_manifest["prior_validation_receipt_digest"]
         )
         or (
-            not recovered_root
+            not recovered_root and not amendment_root
             and published.lifecycle.adoption_source_evidence_digest
             != authority_manifest["prior_final_attestation_digest"]
+        )
+        or (
+            amendment_root
+            and published.lifecycle.adoption_source_evidence_digest
+            != authority_manifest["source_authority"]["adoption_source_evidence_digest"]
         )
         or published.lifecycle.source_validation_evidence_digest != expected_source
     ):
@@ -7626,9 +7648,9 @@ def _derive_exact_state_adoption_ready_prior_authority(
         if source_publication_oid is None:
             current = lifecycle_publication.verify_current_lifecycle_authority(repository, delivery_issue)
         else:
-            current, _ = lifecycle_publication._verify_ready_source_recovery_publication(
-                repository, delivery_issue, source_publication_oid=source_publication_oid,
-            )
+            current = lifecycle_publication._verify_historical_lifecycle_transition(
+                repository, delivery_issue, source_publication_oid,
+            ).predecessor
         if (
             current.lifecycle.historical_proof_mode == "native_lifecycle"
             and current.lifecycle.pull_request == pull_request
@@ -7666,7 +7688,7 @@ def _derive_exact_state_adoption_ready_prior_authority(
         lifecycle_publication.LifecyclePublicationError,
     ) as exc:
         raise fast_path.SecurityBlocker(
-            "Exact-State-Adoption v3 source authority is invalid"
+            "Exact-State-Adoption source authority is invalid"
         ) from exc
     if (
         proof.get("schema_version") == "1.0"
@@ -7691,6 +7713,15 @@ def _derive_exact_state_adoption_ready_prior_authority(
             repository, expected_main=accepted_main
         )
         return fast_path.normalize_ready_integration_prior_authority(manifest)
+    if proof.get("proof_version") == lifecycle_authority.EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION:
+        manifest = _derive_governance_amendment_ready_root_prior_authority(
+            repository_root=repository_root, repository=repository,
+            delivery_issue=delivery_issue, pull_request=pull_request,
+            binding=binding, current=current, proof=proof, bundle=bundle,
+            lifecycle_authority=lifecycle_authority,
+        )
+        _require_accepted_main_bridge_source(repository, expected_main=accepted_main)
+        return manifest
     if (
         current.predecessor_publication_oid is None
         and bundle.get("transition_authorizations") == []
@@ -7935,6 +7966,90 @@ def _derive_exact_state_adoption_ready_prior_authority(
     normalized = fast_path.normalize_ready_integration_prior_authority(manifest)
     _require_accepted_main_bridge_source(repository, expected_main=accepted_main)
     return normalized
+
+
+def _derive_governance_amendment_ready_root_prior_authority(
+    *, repository_root: Path, repository: str, delivery_issue: int,
+    pull_request: int, binding: dict[str, Any], current: Any,
+    proof: dict[str, Any], bundle: dict[str, Any], lifecycle_authority: Any,
+) -> dict[str, Any]:
+    """Compose accepted v4 root authentication, without a recovery publication."""
+
+    try:
+        historical = lifecycle_authority.recovered_adoption_root_historical_evidence(
+            current.lifecycle, bundle, current.predecessor_publication_oid,
+        )
+    except lifecycle_authority.LifecycleAuthorityError as exc:
+        raise fast_path.SecurityBlocker("Governance-Amendment Ready root authority is invalid") from exc
+    amendment = proof["governance_amendment_authorization"]
+    source = _verified_prior_delivery_commit(
+        repository_root, current.lifecycle.head_sha,
+        amendment["source_signature"]["signer_identity"], binding,
+    )
+    if (
+        (current.lifecycle.repository, current.lifecycle.delivery_issue, current.lifecycle.pull_request)
+        != (repository, delivery_issue, pull_request)
+        or source["parent_shas"] != amendment["ordered_parent_shas"]
+        or source["tree_sha"] != current.lifecycle.tree_sha
+        or source["signer"]["identity"] != amendment["source_signature"]["signer_identity"]
+        or current.lifecycle.adoption_source_evidence_digest != proof["adoption_source_evidence_digest"]
+        or proof["adoption_source_evidence_digest"] != amendment["authorization_digest"]
+    ):
+        raise fast_path.SecurityBlocker("Governance-Amendment Ready root source binding changed")
+    state = current.lifecycle.state
+    publication = {"object_oid": current.publication_oid, "publication_digest": current.publication_digest}
+    manifest = {
+        "schema_version": "1.2", "kind": "READY_INTEGRATION_PRIOR_AUTHORITY",
+        "repository": repository, "delivery_issue_number": delivery_issue,
+        "pull_request_number": pull_request,
+        "prior_delivery_head_sha": current.lifecycle.head_sha,
+        "prior_delivery_tree_sha": current.lifecycle.tree_sha,
+        "prior_validation_receipt_digest": None,
+        "prior_final_attestation_digest": None,
+        "expected_signer": source["signer"],
+        "lifecycle": {
+            "identity": current.lifecycle.lifecycle_id,
+            "current_authority_digest": current.lifecycle.authority_digest,
+            "historical_proof_mode": "exact_state_adoption",
+            "draft": False, "ready": True, "ready_transition": False,
+            "unrestricted_reviews": state["unrestricted_review_count"],
+            "remediation_cycles": state["remediation_cycle_count"],
+            "exceptional_recoveries": 0, "exceptional_continuations": 0,
+            "cycle_3": False, "ready_transition_count": 1,
+            "ready_history": copy.deepcopy(state["ready_history"]),
+            "exceptional_recovery_history": [], "exceptional_continuation_history": [],
+        },
+        "publication": publication,
+        "source_authority_mode": "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
+        "source_authority": {
+            "proof_version": proof["proof_version"],
+            "source_parent_sha": source["parent_sha"],
+            "source_signer_identity": source["signer"]["identity"],
+            "commit_signature_evidence_digest": proof["commit_signature_evidence_digest"],
+            "observed_history_digest": proof["observed_history_digest"],
+            "intended_state_digest": proof["intended_state_digest"],
+            "head_advanced_count": proof["head_advanced_count"],
+            "head_advanced_history_digest": proof["head_advanced_history_digest"],
+            "governance_amendment_authorization_id": amendment["authorization_id"],
+            "governance_amendment_authorization_digest": amendment["authorization_digest"],
+            "registered_source_digest": fast_path.digest_json(amendment["qualified_source"]),
+            "registration_tip_sha": amendment["current_validation"]["accepted_main_sha"],
+            "adoption_source_evidence_digest": proof["adoption_source_evidence_digest"],
+            "adoption_proof_digest": proof["proof_digest"],
+            "adoption_authorization_id": proof["authorization"]["authorization_id"],
+            "adoption_authorization_digest": proof["authorization_digest"],
+            "enrollment_publication": publication,
+            "historical_evidence": historical,
+            "feedback": copy.deepcopy(amendment["feedback"]),
+        },
+        "historical_companions": {
+            "reviewed_state_bytes": "UNAVAILABLE",
+            "validation_receipt_bytes": "ABSENT_NEVER_ISSUED",
+            "final_attestation_bytes": "ABSENT_NEVER_ISSUED",
+            "historical_bytes_reconstructed": False,
+        },
+    }
+    return fast_path.normalize_ready_integration_prior_authority(manifest)
 
 
 def _derive_legacy_enrolled_loss_ready_prior_authority(
@@ -8429,6 +8544,7 @@ def _verify_ready_integration_prior_authority(
     binding: dict[str, Any],
     integration_evidence: dict[str, Any],
     live_observation: dict[str, Any] | None,
+    reviewed_state: Any = None,
 ) -> dict[str, Any]:
     required_paths = (
         getattr(arguments, "prior_authority", None),
@@ -8449,6 +8565,7 @@ def _verify_ready_integration_prior_authority(
     adopted = authority.get("source_authority_mode") in {
         "EXACT_STATE_ADOPTION_V3",
         "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
+        "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
         "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
         "EXISTING_AUTHORITY_COMPOSITION",
     }
@@ -8536,6 +8653,9 @@ def _verify_ready_integration_prior_authority(
             integration_evidence=integration_evidence,
             binding=binding,
         )
+        if authority["source_authority_mode"] == "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT":
+            if _commit_validation_receipt_digest(repository_root, authority["prior_delivery_head_sha"]) is not None:
+                raise fast_path.SecurityBlocker("Governance-Amendment root has an unexpected historical trailer")
         if authority["source_authority_mode"] == "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT":
             if _commit_validation_receipt_digest(
                 repository_root, authority["prior_delivery_head_sha"]
@@ -8561,7 +8681,7 @@ def _verify_ready_integration_prior_authority(
                 parent_sha=authority["source_authority"]["source_parent_sha"],
                 commit_signature_binding_digest=signature_binding,
             )
-        _verify_ready_integration_lifecycle_authority(authority, integration_evidence)
+        _verify_ready_integration_lifecycle_authority(authority, integration_evidence, reviewed_state=reviewed_state)
         if live_observation is not None:
             _verify_ready_integration_live_observation(
                 live_observation, integration_evidence, binding
@@ -9368,6 +9488,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 binding=binding,
                 integration_evidence=integration_evidence,
                 live_observation=live_observation,
+                reviewed_state=reviewed,
             )
             parents = _validated_integration_commit_parents(
                 repository_root,
@@ -9693,6 +9814,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             binding=binding,
             integration_evidence=integration_evidence,
             live_observation=None,
+            reviewed_state=reviewed,
         )
         _verify_integration_tree_delta(repository_root, integration_evidence, tree)
     if pre_enrollment_evidence_path:
