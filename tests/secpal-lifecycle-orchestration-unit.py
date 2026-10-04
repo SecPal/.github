@@ -13100,8 +13100,8 @@ class PostReadyValidationRemediationTests(TestCase):
 class AdoptedReadyStateAdmissionTests(TestCase):
     """Authenticate adoption through the existing signed hermetic journal.
 
-    Validation and provider prerequisites are controlled at this State seam;
-    their independent authentication remains covered by the composition suites.
+    The signed Ready remediation suffix supplies the real provider binding.
+    Validation review contexts and live feedback are controlled at this seam.
     """
 
     def setUp(self):
@@ -13116,15 +13116,39 @@ class AdoptedReadyStateAdmissionTests(TestCase):
         journal.setUp()
         self.addCleanup(journal.tearDown)
         serialized, self.proof = fixture.exact_adoption_evidence(
-            ready_remaining_remediation=True,
+            ready_before_remediation=True,
         )
         enrolled = publication.enroll_existing_lifecycle(
             serialized, signer_identity=fixture.SIGNER, signer=fixture.signer_for(),
         )
+        event = authority.create_transition_authorization(
+            event_id="adopted-ready-remediation", repository=REPOSITORY,
+            delivery_issue=fixture.ISSUE, lifecycle_id=enrolled.lifecycle.lifecycle_id,
+            pull_request=fixture.PR,
+            predecessor_authority_digest=enrolled.lifecycle.authority_digest,
+            predecessor_head_sha=enrolled.lifecycle.head_sha,
+            resulting_head_sha=fixture.HEADS[2], transition_kind="REMEDIATION_COMPLETED",
+            replacement_pull_request=None,
+            initialization_evidence_digest=enrolled.lifecycle.initialization_evidence_digest,
+            signer_identity=fixture.SIGNER, signer=fixture.signer_for(),
+        )
+        snapshot = authority.issue_exact_state_adoption_successor_authority(
+            serialized_adoption_evidence=serialized, authorization=event,
+            signer_identity=fixture.SIGNER, authority_signer=fixture.signer_for(),
+            current_head_evidence=fixture.verified_validation_evidence(
+                head=fixture.HEADS[2], tree=fixture.HEADS[3], parent=enrolled.lifecycle.head_sha,
+            ),
+        )
+        advanced = publication.advance_current_terminal(
+            authority.serialize_exact_state_adoption_evidence(
+                exact_state_adoption_proof=self.proof,
+                transition_authorizations=[event], authority_chain=[snapshot],
+            ), signer_identity=fixture.SIGNER, signer=fixture.signer_for(),
+        )
         self.current = publication.verify_current_lifecycle_authority(
             REPOSITORY, fixture.ISSUE,
         )
-        self.assertEqual(self.current, enrolled)
+        self.assertEqual(self.current, advanced)
         self.reviewed, self.resulting, self.before, self.after = ordinary_ready_provider_growth()
         head_map = {
             self.reviewed.head_sha: fixture.HEADS[0],
@@ -13154,29 +13178,24 @@ class AdoptedReadyStateAdmissionTests(TestCase):
             source_validation_evidence_digest=lifecycle.source_validation_evidence_digest,
         )
         self.candidate = replace(self.predecessor, head_sha="9" * 40)
-        self.binding = publication.VerifiedReadySourceRecoveryProviderBinding(
-            repository=REPOSITORY, delivery_issue=fixture.ISSUE,
-            pull_request=fixture.PR, lifecycle_id=lifecycle.lifecycle_id,
-            current_head_sha=lifecycle.head_sha, provider_head_sha=self.reviewed.head_sha,
-            current_authority_digest=lifecycle.authority_digest,
-            current_publication_oid=self.current.publication_oid,
-            current_publication_digest=self.current.publication_digest,
-            remediation_event_digests=(), lifecycle_evidence_digest="8" * 64,
-            provider_binding_sources=(publication.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION,),
-            adopted_remediation_observation_digest=authority.digest_json(
-                self.proof["observed_pre_enrollment_history"][-1]),
-        )
 
     def verify(self, current=None, **extra):
+        def capture(repository, pull_request, *, ready_remediation_provider_binding,
+                    capture_provider_summary):
+            binding = ready_remediation_provider_binding
+            self.assertEqual(binding.provider_head(
+                repository=repository, pull_request=pull_request,
+                current_head_sha=self.resulting.head_sha,
+            ), self.reviewed.head_sha)
+            return self.resulting
+
         with (
             mock.patch.object(fast_path, "verified_validation_review_context", side_effect=[
                 (self.reviewed, fast_path.digest_json(self.before)),
                 (self.resulting, fast_path.digest_json(self.after)),
             ]),
-            mock.patch.object(publication, "derive_ready_source_recovery_provider_binding",
-                              return_value=self.binding),
             mock.patch.object(orchestration, "_capture_current_stable_feedback",
-                              return_value=self.resulting),
+                              side_effect=capture),
         ):
             return orchestration.verify_ready_remediation_provider_growth_authority(
                 self.current if current is None else current,
@@ -13189,9 +13208,19 @@ class AdoptedReadyStateAdmissionTests(TestCase):
         state = self.current.lifecycle.state
         self.assertEqual(self.current.lifecycle.historical_proof_mode,
                          authority.EXACT_ADOPTION_PROOF_MODE)
+        self.assertEqual(state["ready_history"], [{
+            "sequence": 1, "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": authority.digest_json(
+                self.proof["observed_pre_enrollment_history"][1]),
+        }])
+        self.assertEqual(state["remediation_cycle_count"], 1)
         self.assertEqual(authority._validate_state(state, allow_adopted_observations=True), state)
         with self.assertRaises(authority.LifecycleAuthorityError):
             authority._validate_state(state)
+        binding = publication.derive_ready_source_recovery_provider_binding(self.current)
+        self.assertEqual(binding.provider_head_sha, self.reviewed.head_sha)
+        self.assertEqual(binding.provider_binding_sources, (publication.ORDINARY_REMEDIATION_SUFFIX,))
+        self.assertEqual(len(binding.remediation_event_digests), 1)
         verified = self.verify()
         self.assertEqual(verified.current_head_sha, self.current.lifecycle.head_sha)
         self.assertEqual(verified.thread_ids, tuple(sorted(
