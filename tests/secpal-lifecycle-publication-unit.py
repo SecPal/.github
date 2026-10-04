@@ -5698,6 +5698,7 @@ class FrontendLifecyclePolicyTests(ContractsLifecyclePolicyTests):
     """The Frontend registration consumes the existing lifecycle contract."""
 
     repository = "SecPal/frontend"
+    expected_ruleset_id = 24431481
 
     def test_registry_and_consumer_projections_agree(self) -> None:
         modules = []
@@ -5788,11 +5789,11 @@ class FrontendLifecyclePolicyTests(ContractsLifecyclePolicyTests):
                 reference,
                 repository=self.repository,
                 publication_remote_url=f"https://github.com/{self.repository}.git",
-                publication_ruleset_id=24431481,
+                publication_ruleset_id=self.expected_ruleset_id,
             ),
         )
         self.assertEqual(self.accepted_policy.accepted_formats, frozenset({"ssh"}))
-        self.assertEqual(self.accepted_policy.publication_ruleset_id, 24431481)
+        self.assertEqual(self.accepted_policy.publication_ruleset_id, self.expected_ruleset_id)
         self.assertEqual(self.accepted_policy.initialization_anchors, ())
 
     def test_registration_rejects_missing_malformed_and_widened_authority(self) -> None:
@@ -5826,6 +5827,13 @@ class FrontendLifecyclePolicyTests(ContractsLifecyclePolicyTests):
                     authority.canonical_json_bytes(registry), self.repository
                 )
             git.assert_not_called()
+
+
+class ApiLifecyclePolicyTests(FrontendLifecyclePolicyTests):
+    """API uses the same repository-bound public lifecycle authority."""
+
+    repository = "SecPal/api"
+    expected_ruleset_id = 24438764
 
 
 if __name__ == "__main__":
