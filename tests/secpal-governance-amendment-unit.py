@@ -2263,6 +2263,159 @@ class GovernanceAmendmentTests(TestCase):
                     Path("."), "SecPal/.github", PARENT
                 )
 
+    @contextmanager
+    def old_verifier_source(self):
+        """Two hermetic commits: corrected tooling and an immutable old verifier."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "authority"
+            root.mkdir()
+            def git(*arguments):
+                return subprocess.run(
+                    ["git", "-c", "commit.gpgsign=false", *arguments],
+                    cwd=root, check=True, capture_output=True,
+                ).stdout.decode().strip()
+            git("init", "-b", "main")
+            git("config", "user.name", "fixture")
+            git("config", "user.email", "fixture@example.invalid")
+            git("fetch", str(amendment.ROOT),
+                "HEAD")
+            git("read-tree", "--reset", "-u", "FETCH_HEAD")
+            git("commit", "-m", "accepted corrected tooling")
+            accepted = git("rev-parse", "HEAD")
+            verifier = root / "scripts/secpal_pr_review/lifecycle_authority.py"
+            corrected = verifier.read_text()
+            old = corrected.replace(
+                "    if zero_receipt_root:\n        recovered_adoption_root_historical_evidence(",
+                "    if zero_receipt_root:\n"
+                "        raise LifecycleAuthorityError('old verifier rejects null historical evidence')\n"
+                "        recovered_adoption_root_historical_evidence(",
+            )
+            self.assertNotEqual(old, corrected)
+            verifier.write_text(old)
+            git("add", ".")
+            git("commit", "-m", "unchanged historical source verifier")
+            candidate = git("rev-parse", "HEAD")
+            tree = git("rev-parse", "HEAD^{tree}")
+            git("reset", "--hard", accepted)
+            yield root, accepted, candidate, tree, git
+
+    def test_reviewed_current_safety_uses_accepted_verifier_with_old_exact_source(self):
+        with self.old_verifier_source() as (root, accepted, candidate, tree, git):
+            before = git("rev-parse", candidate + "^{tree}")
+            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(
+                amendment.validation_evidence_loss, "ROOT", root,
+            ):
+                result = amendment._bound_current_validation(
+                    root, "SecPal/.github", accepted,
+                    target_head_sha=candidate, target_tree_sha=tree,
+                )
+            self.assertEqual(result["result"], "PASS")
+            self.assertEqual(result["accepted_main_sha"], accepted)
+            self.assertEqual(git("rev-parse", candidate + "^{tree}"), before)
+            self.assertEqual(git("status", "--porcelain"), "")
+
+    def test_reviewed_current_safety_profile_and_source_substitutions_fail_closed(self):
+        safety = amendment.exact_source_safety
+        with self.old_verifier_source() as (root, accepted, candidate, tree, git):
+            profile = amendment._reviewed_current_safety_profile(root, accepted)
+            mutations = {
+                "caller tooling": lambda p: p["tooling"].append({
+                    "path": "scripts/caller.py", "mode": "100644",
+                    "blob_oid": "f" * 40, "size": 1,
+                }),
+                "missing tooling": lambda p: p["tooling"].pop(),
+                "wrong blob": lambda p: p["tooling"][0].update(blob_oid="f" * 40),
+                "wrong mode": lambda p: p["tooling"][0].update(
+                    mode="100755" if p["tooling"][0]["mode"] == "100644" else "100644"),
+                "wrong size": lambda p: p["tooling"][0].update(size=1),
+                "candidate tooling": lambda p: p.update(tooling=
+                    amendment._reviewed_current_safety_profile(root, candidate)["tooling"]),
+                "overlap": lambda p: p["tooling"].append(p["harness"][0]),
+                "execution model": lambda p: p.update(execution_model="CANDIDATE_TOOLING"),
+                "command set": lambda p: p["validation_command_set"].clear(),
+                "invariants": lambda p: p["required_invariants"].clear(),
+            }
+            for name, mutate in mutations.items():
+                changed = copy.deepcopy(profile)
+                mutate(changed)
+                with self.subTest(name=name), self.assertRaises(authority.LifecycleAuthorityError):
+                    with safety.two_provenance_execution_roots(
+                        root, accepted, source_root=root,
+                        candidate_repository="SecPal/.github", profile=changed,
+                    ) as roots:
+                        safety.run_profile(roots.tooling, changed,
+                                           expected_profile=profile,
+                                           candidate_root=roots.candidate,
+                                           candidate_repository="SecPal/.github")
+            for changed_root in ("tooling", "candidate"):
+                with self.subTest(root=changed_root), self.assertRaises(authority.LifecycleAuthorityError):
+                    with safety.two_provenance_execution_roots(
+                        root, accepted, source_root=root,
+                        candidate_repository="SecPal/.github", profile=profile,
+                    ) as roots:
+                        path = getattr(roots, changed_root) / "scripts/secpal_pr_review/lifecycle_authority.py"
+                        path.write_text("raise RuntimeError('substituted verifier')\n")
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                with safety.two_provenance_execution_roots(
+                    root, accepted, source_root=root,
+                    candidate_repository="other/repository", profile=profile,
+                ):
+                    self.fail("cross-repository tooling was accepted")
+            for head, target_tree in ((candidate, "f" * 40), ("f" * 40, tree)):
+                with self.subTest(head=head), self.assertRaises(amendment.GovernanceAmendmentError):
+                    amendment._bound_current_validation(root, "SecPal/.github", accepted,
+                                                       target_head_sha=head, target_tree_sha=target_tree)
+            # A different accepted commit cannot use the previously bound inventory.
+            git("checkout", "--detach", candidate)
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                with safety.two_provenance_execution_roots(
+                    root, candidate, source_root=root,
+                    candidate_repository="SecPal/.github", profile=profile,
+                ):
+                    self.fail("accepted tooling advance reused a stale profile")
+            git("rm", "scripts/secpal_pr_review/lifecycle_authority.py")
+            git("commit", "-m", "missing required accepted verifier fixture")
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                amendment._reviewed_current_safety_profile(root, git("rev-parse", "HEAD"))
+
+    def test_reviewed_current_safety_rejects_incompatible_loaded_module_origins(self):
+        safety = amendment.exact_source_safety
+        with self.old_verifier_source() as (root, _accepted, _candidate, _tree, git):
+            harness_path = root / amendment.validation_evidence_loss.CURRENT_SAFETY_PATH
+            original = harness_path.read_text()
+            substitutions = {
+                "candidate": ("secpal_pr_review.lifecycle_authority",
+                              "Path(os.environ['SECPAL_CURRENT_SAFETY_CANDIDATE_ROOT']) / 'scripts/secpal_pr_review/lifecycle_authority.py'"),
+                "ambient site package": ("secpal_pr_review.lifecycle_authority", "_ambient_file"),
+                "duplicate namespace": ("scripts.secpal_pr_review.lifecycle_authority",
+                                        "Path(os.environ['SECPAL_CURRENT_SAFETY_CANDIDATE_ROOT']) / 'scripts/secpal_pr_review/lifecycle_authority.py'"),
+            }
+            for name, (namespace, location) in substitutions.items():
+                poison = (
+                    "\nimport os, types, importlib.util, tempfile\n"
+                    "_ambient_root = tempfile.TemporaryDirectory(prefix='site-packages-')\n"
+                    "_ambient_file = Path(_ambient_root.name) / 'lifecycle_authority.py'\n"
+                    "_ambient_file.write_text('old_verifier = True\\n')\n"
+                    "_location = str(" + location + ")\n"
+                    "_module = types.ModuleType(" + repr(namespace) + ")\n"
+                    "_module.__file__ = _location\n"
+                    "_module.__spec__ = importlib.util.spec_from_file_location(" + repr(namespace) + ", _location)\n"
+                    "sys.modules[" + repr(namespace) + "] = _module\n"
+                )
+                harness_path.write_text(original + poison)
+                git("add", str(harness_path.relative_to(root)))
+                git("commit", "-m", "bound hostile module origin fixture")
+                main = git("rev-parse", "HEAD")
+                profile = amendment._reviewed_current_safety_profile(root, main)
+                with self.subTest(origin=name), self.assertRaises(authority.LifecycleAuthorityError):
+                    with safety.two_provenance_execution_roots(
+                        root, main, source_root=root,
+                        candidate_repository="SecPal/.github", profile=profile,
+                    ) as roots:
+                        safety.run_profile(roots.tooling, profile, expected_profile=profile,
+                                           candidate_root=roots.candidate,
+                                           candidate_repository="SecPal/.github")
+
     def test_reviewed_current_validation_executes_accepted_safety(self) -> None:
         record = {
             "repository": "SecPal/.github", "focused_validation": [{}],
@@ -2278,14 +2431,15 @@ class GovernanceAmendmentTests(TestCase):
             amendment, "_git_oid", side_effect=lambda root, expression:
             TREE if expression.endswith("^{tree}") else HEAD,
         ), mock.patch.object(
-            amendment.validation_evidence_loss, "_current_safety_profile",
+            amendment, "_reviewed_current_safety_profile",
             return_value=profile,
         ), mock.patch.object(
             amendment, "_run_git",
             return_value=SimpleNamespace(returncode=0),
         ), mock.patch.object(
-            amendment.exact_source_safety, "execution_root",
-            return_value=nullcontext(Path(".")),
+            amendment.exact_source_safety, "two_provenance_execution_roots",
+            return_value=nullcontext(SimpleNamespace(tooling=Path("tooling"),
+                                                    candidate=Path("candidate"))),
         ), mock.patch.object(
             amendment.exact_source_safety, "run_profile",
         ) as runner:

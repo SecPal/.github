@@ -2036,6 +2036,20 @@ def _registered_bootstrap_policy(
     return record
 
 
+def _reviewed_current_safety_profile(root: Path, accepted_main: str) -> dict[str, Any]:
+    harness = (validation_evidence_loss.CURRENT_SAFETY_PATH,)
+    return exact_source_safety.build_profile(
+        root, accepted_main,
+        policy="PRE_ENROLLMENT_VALIDATION_EVIDENCE_LOSS_CURRENT_SAFETY",
+        harness_paths=harness,
+        purpose="Validate pre-enrollment evidence-loss current safety",
+        required_invariants=validation_evidence_loss.CURRENT_SAFETY_INVARIANTS,
+        tooling_paths=exact_source_safety.derive_tooling_paths(
+            root, accepted_main, harness_paths=harness,
+        ),
+    )
+
+
 def _bound_current_validation(
     root: Path, repository: str, accepted_main_sha: str,
     *, target_head_sha: str | None = None, target_tree_sha: str | None = None,
@@ -2075,9 +2089,7 @@ def _bound_current_validation(
         target_tree_sha = authority._require_oid(target_tree_sha, "current-safety tree")
         if _git_oid(root, target_head_sha + "^{tree}") != target_tree_sha:
             raise GovernanceAmendmentError("current-safety source tree changed")
-        profile = validation_evidence_loss._current_safety_profile(
-            accepted_main_sha
-        )
+        profile = _reviewed_current_safety_profile(root, accepted_main_sha)
         with tempfile.TemporaryDirectory(
             prefix="secpal-governance-amendment-safety-"
         ) as directory:
@@ -2095,12 +2107,15 @@ def _bound_current_validation(
                     raise GovernanceAmendmentError(
                         "current-safety source head changed"
                     )
-                with exact_source_safety.execution_root(
+                with exact_source_safety.two_provenance_execution_roots(
                     root, accepted_main_sha, source_root=source_root,
                     profile=profile, candidate_repository=repository,
-                ) as execution_root:
+                ) as roots:
                     exact_source_safety.run_profile(
-                        execution_root, profile, expected_profile=profile,
+                        roots.tooling, profile,
+                        expected_profile=_reviewed_current_safety_profile(root, accepted_main_sha),
+                        candidate_root=roots.candidate,
+                        candidate_repository=repository,
                     )
             finally:
                 removed = _run_git(root, [
