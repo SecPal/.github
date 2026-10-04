@@ -2349,6 +2349,13 @@ def produce_observation(
         inputs["pull_request"], "pull request"
     )
     pull = _live_pull_request(repository, pull_request)
+    if delivery_issue == 1053:
+        try:
+            authority._require_oid(pull.get("base_sha"), "observed PR base SHA")
+        except authority.LifecycleAuthorityError as exc:
+            raise GovernanceAmendmentError(
+                "live governance amendment PR base SHA is malformed"
+            ) from exc
     issue = _live_issue(repository, delivery_issue)
     if (
         pull.get("number") != pull_request
@@ -2356,7 +2363,8 @@ def produce_observation(
         or pull.get("draft") is not False
         or pull.get("merged") is not False
         or pull.get("head_repository") != repository
-        # Reviewed PR base SHA is platform history, not registration authority.
+        # Reviewed PR base SHA is an observed platform fact. Registration and
+        # Git ancestry authenticate current authority and historical baseline.
         or (delivery_issue == 960 and pull.get("base_sha") != accepted_main)
         or pull.get("base_ref") != "main"
         or pull.get("base_repository") != repository

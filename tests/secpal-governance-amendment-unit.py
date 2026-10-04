@@ -803,6 +803,31 @@ class GovernanceAmendmentTests(TestCase):
             self.assertTrue(root.state["ready"])
             self.assertIsNone(root.validation_receipt_digest)
 
+    def test_reviewed_pr_base_platform_fact_can_advance_independently(self):
+        with self.reviewed_live_observation() as (value, pull, _policy, calls, _trust):
+            historical = value["accepted_main_sha"]
+            current = value["current_validation"]["accepted_main_sha"]
+            pull["base_sha"] = current
+            issued = amendment.issue(amendment.authenticate_issuance(
+                "SecPal/.github", 1053, observation_inputs(value),
+            ))
+            self.assertEqual(pull["base_sha"], current)
+            self.assertEqual(issued["accepted_main_sha"], historical)
+            self.assertEqual(amendment._consumption_base(issued), current)
+            calls["_live_ready_ci"].assert_called_with(
+                "SecPal/.github", 1055, HEAD, historical, value["natural_ci"],
+            )
+
+    def test_reviewed_pr_base_platform_fact_rejects_malformed_metadata(self):
+        for observed in (None, True, "not-a-sha", "f" * 39):
+            with self.subTest(observed=observed), self.reviewed_live_observation() as fixture:
+                value, pull, _policy, _calls, _trust = fixture
+                pull["base_sha"] = observed
+                with self.assertRaises(amendment.GovernanceAmendmentError):
+                    amendment.authenticate_issuance(
+                        "SecPal/.github", 1053, observation_inputs(value),
+                    )
+
     def test_reviewed_historical_pr_base_rejects_identity_and_authority_substitution(self):
         for field, replacement in (
             ("base_ref", "other"), ("base_repository", "other/repository"),
