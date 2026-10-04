@@ -24,6 +24,31 @@ See [Deterministic PR State and Evidence Layer](../docs/secpal-pr-review-state-l
 for schemas, bounded pagination, signature and required-check semantics, safe
 outputs, commands, and Package 2.1 non-goals.
 
+### `secpal-provider-reacquisition.py`
+
+The maintained `SecPal/.github` action for historical provider-acquisition
+evidence loss. `inspect` authenticates the bounded loss class and `authorize`
+issues an exact signed one-use intent, both read-only. `dispatch` derives one
+required provider type, publishes its protected CAS claim and attempts at most
+one canonical request. `observe` captures a complete fresh exact-head assessment
+within the maintained provider window. It accepts no provider or finding subset.
+
+All operations require freshly authenticated protected-main tooling. Historical
+first-fallback validity remains unknown; fresh acquisition has separate request,
+result and chronology identities. Existing #1053 unacknowledged replacement
+semantics remain separate. The full rules and bounds are in
+[Historical acquisition evidence loss](../docs/secpal-pr-review-workflow.md#historical-acquisition-evidence-loss).
+
+```bash
+python3 -I scripts/secpal-provider-reacquisition.py inspect \
+  --repo SecPal/.github --delivery-issue "$provider_delivery_issue" \
+  --output .context/provider-loss.json
+```
+
+Set `provider_delivery_issue` to the enrolled delivery issue. The verifier
+derives all authority independently. Dispatch requires a separately
+authorized downstream operation and the exact signed `--authorization` file.
+
 ### `secpal-pr-review-actions.py`
 
 Validates deterministic Package-2.2 mutation plans and applies at most one
@@ -374,6 +399,27 @@ must match the integration evidence. When creating the integration receipt, the
 command performs one trusted GitHub read and requires the live open Ready PR
 head and registered target-base SHA to equal the two authorized parents; caller-
 supplied `observed_sha` cannot substitute for that read.
+
+A typed Ready integration can also supply parent-1 authority for another typed
+integration. `--prior-integration-chain` carries an immutable package transport
+with exactly `schema_version: "1.0"`,
+`kind: "READY_INTEGRATION_PREDECESSOR_PACKAGES"`, and `packages` in oldest-to-newest
+publication order. Each package contains exactly `integration_evidence`,
+`reviewed_state`, `validation_receipt`, `final_attestation`, and `prior_authority`.
+The ordinary prior companion arguments must equal the newest package's canonical
+reviewed state, receipt and attestation. The transport selects no provenance:
+every commit's actual trailers, ordered parents, tree and signature are observed,
+then its original receipt, attestation and evidence version are reverified by the
+canonical integration verifier. The publication verifier walks the exact complete
+`HEAD_ADVANCED` suffix iteratively and derives
+`VerifiedReadyIntegrationPriorAuthority`; the supplied manifest must equal that
+projection. Missing, extra, reordered, replayed or cyclic entries fail closed.
+The existing schema-1.1 manifest and signed annotated tag retain their bindings;
+there is no additional durable authority store. Historical parent 2 remains
+bound to its original protected publication, while issuance observes fresh main
+for the new parent 2. Ordinary remediation still requires a sole parent. No
+integration changes lifecycle state or consumes a review, remediation, Ready,
+Recovery or Continuation slot.
 
 Prior-authority schema `1.2` extends this same manifest, annotated-tag, signer,
 target, and normalization boundary for a genuine Exact-State-Adoption v3 source
@@ -1052,8 +1098,8 @@ and native genesis, a canonical READY work graph, and unchanged initial Draft
 state. Only genesis and prior `HEAD_ADVANCED` events are admitted; review,
 remediation, Ready, correction, replacement and exceptional histories reject.
 The central `enrolled_draft_integration_policy` registers this operation only
-for `SecPal/.github` and `SecPal/deployment`. Historical pre-enrollment absence
-and Ready integration contracts remain unchanged.
+for `SecPal/.github`, `SecPal/frontend`, `SecPal/api`, `SecPal/contracts`, `SecPal/secpal.app`, `SecPal/android`, and `SecPal/deployment`.
+Historical pre-enrollment absence and Ready integration contracts remain unchanged.
 
 Run both commands from freshly authenticated accepted `.github/main` tooling,
 with a distinct candidate repository root. Stage the exact mechanically derived

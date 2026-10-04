@@ -245,6 +245,9 @@ def _load_lifecycle_publication_helpers(
 
     if return_collision and not include_orchestration:
         raise RuntimeError("collision helper requires lifecycle orchestration")
+    scripts_package = types.ModuleType("scripts")
+    scripts_package.__path__ = [str(REPOSITORY_ROOT / "scripts")]
+    sys.modules["scripts"] = scripts_package
     package_name = "secpal_ready_integration_lifecycle"
     package = types.ModuleType(package_name)
     package.__path__ = [str(LIFECYCLE_AUTHORITY_HELPER.parent)]
@@ -2334,9 +2337,12 @@ def _require_review_providers_terminal(
     repository: str | None = None,
     pull_request_number: int | None = None,
     ready_source_provider_binding: Any = None,
+    require_terminal: bool = True,
 ) -> None:
     """Reject visible non-terminal automated review-provider evidence."""
 
+    if not require_terminal and ready_source_provider_binding is not None:
+        raise MutationBlocked("provider observation cannot use historical head authority")
     historical_summary = (
         _provider_binding_uses_historical_summary(ready_source_provider_binding)
         if ready_source_provider_binding is not None else False
@@ -2381,13 +2387,14 @@ def _require_review_providers_terminal(
                     body,
                     head_sha=head_sha,
                     repository=(
-                        repository if ready_source_provider_binding is not None else None
+                        repository if ready_source_provider_binding is not None or not require_terminal else None
                     ),
                     pull_request_number=(
                         pull_request_number
-                        if ready_source_provider_binding is not None
+                        if ready_source_provider_binding is not None or not require_terminal
                         else None
                     ),
+                    require_terminal=require_terminal,
                 )
         except (RuntimeError, AttributeError, TypeError, ValueError) as exc:
             if (
@@ -2673,6 +2680,7 @@ class LiveGitHub:
         budget: dict[str, int],
         *,
         ready_source_provider_binding: Any = None,
+        require_provider_terminal: bool = True,
     ) -> dict[str, Any]:
         owner, name = plan["repository"].split("/", 1)
         base_variables = {
@@ -2792,7 +2800,11 @@ class LiveGitHub:
             "nodes": comments,
             "pageInfo": {"hasNextPage": False},
         }
-        if ready_source_provider_binding is None:
+        if not require_provider_terminal:
+            _require_review_providers_terminal(provider_state, repository=plan["repository"],
+                pull_request_number=plan["pull_request_number"], require_terminal=False,
+                ready_source_provider_binding=ready_source_provider_binding)
+        elif ready_source_provider_binding is None:
             _require_review_providers_terminal(provider_state)
         else:
             _require_review_providers_terminal(
@@ -4018,6 +4030,20 @@ class FastPathGateway:
             approval_required = approval_required or required > 0
         return approval_required
 
+    def observe_provider_acquisition_feedback(self, repository: str, pull_request_number: int) -> dict[str, Any]:
+        """Complete bounded read for acquisition reconciliation, without terminal authority."""
+
+        if self.registry_entry.get("repository") != repository or self.ready_source_provider_binding is not None:
+            raise fast_path.SecurityBlocker("provider observation scope or historical authority differs")
+        try:
+            return self.github._read_current_feedback_once(
+                {"repository": repository, "pull_request_number": pull_request_number},
+                self.registry_entry, {"calls": 0}, require_provider_terminal=False)
+        except (ActionCommandFailure, MutationFailure) as exc:
+            raise fast_path.TransientReadFailure(str(exc)) from exc
+        except (MutationBlocked, RegistryError) as exc:
+            raise fast_path.SecurityBlocker(str(exc)) from exc
+
     def capture_stable_feedback(self, repository: str, pull_request_number: int) -> Any:
         result = self.observe_stable_feedback(repository, pull_request_number)
         return fast_path.StableFeedbackState.from_payload(
@@ -5116,6 +5142,7 @@ def build_parser() -> argparse.ArgumentParser:
     attestation_parser.add_argument("--prior-reviewed-state")
     attestation_parser.add_argument("--prior-receipt")
     attestation_parser.add_argument("--prior-attestation")
+    attestation_parser.add_argument("--prior-integration-chain")
     attestation_parser.add_argument("--expected-prior-authority-signer")
     batch_parser = subparsers.add_parser("resolve-batch")
     batch_parser.add_argument("--repo", required=True)
@@ -6480,7 +6507,7 @@ def _verify_ready_integration_lifecycle_authority(
         )
 
 
-def _authenticated_ready_integration_publication(
+def _authenticated_ready_integration_publication_context(
     authority_manifest: dict[str, Any],
     integration_evidence: dict[str, Any],
 ) -> Any:
@@ -6535,7 +6562,15 @@ def _authenticated_ready_integration_publication(
         raise fast_path.SecurityBlocker(
             "Ready integration lifecycle publication binding changed"
         )
-    return published
+    return published, lifecycle_publication
+
+
+def _authenticated_ready_integration_publication(
+    authority_manifest: dict[str, Any], integration_evidence: dict[str, Any],
+) -> Any:
+    return _authenticated_ready_integration_publication_context(
+        authority_manifest, integration_evidence,
+    )[0]
 
 
 def _verify_ready_integration_published_authority(
@@ -6830,6 +6865,7 @@ def _require_accepted_main_tooling_blobs(
     required_paths = {
         "scripts/secpal-pr-review-actions.py",
         "scripts/secpal-pr-review.py",
+        "scripts/secpal-provider-reacquisition.py",
         ".agents/skills/secpal-pr-review/references/repositories.json",
         ".agents/skills/secpal-pr-review/references/repositories.schema.json",
         "policies/legacy-enrolled-package-loss.json",
@@ -8319,6 +8355,55 @@ def _canonical_ready_prior_authority_tag_ref(authority: dict[str, Any]) -> str:
     )
 
 
+def _verify_ready_integration_prior_chain(
+    *, repository_root: Path, published: Any, publication: Any, packages: Any,
+) -> Any:
+    """Observe immutable packages; delegate integration and chain admission."""
+
+    if not isinstance(packages, list) or not packages:
+        raise fast_path.SecurityBlocker("prior Ready integration chain evidence is missing")
+    raw = json.loads(published.serialized_lifecycle_evidence)
+    bundle = raw.get("lifecycle_evidence", raw)
+    if len(packages) > len(bundle["transition_authorizations"]):
+        raise fast_path.SecurityBlocker("prior Ready integration chain exceeds lifecycle history")
+    verifier = publication.fast_path
+    try:
+        verified = []
+        keys = {"integration_evidence", "reviewed_state", "validation_receipt", "final_attestation", "prior_authority"}
+        for package in packages:
+            if not isinstance(package, dict) or set(package) != keys:
+                raise fast_path.SecurityBlocker("prior Ready integration package is malformed")
+            attestation = package["final_attestation"]
+            if not isinstance(attestation, dict):
+                raise fast_path.SecurityBlocker("prior Ready integration attestation is malformed")
+            head = attestation.get("head_sha")
+            if not isinstance(head, str) or not OID_PATTERN.fullmatch(head):
+                raise fast_path.SecurityBlocker("prior Ready integration head is malformed")
+            reviewed = verifier.StableFeedbackState.from_payload(package["reviewed_state"])
+            binding = _prior_delivery_registry_binding(
+                head, published.lifecycle.repository,
+                attestation.get("registry_digest", ""), attestation.get("command_set_digest", ""),
+            )
+            tree = _run_attestation_git(repository_root, ["rev-parse", f"{head}^{{tree}}"]).stdout.strip()
+            parents = _run_attestation_git(repository_root, ["rev-list", "--parents", "-n", "1", head]).stdout.split()
+            if not parents or parents[0] != head:
+                raise fast_path.SecurityBlocker("prior Ready integration ancestry is malformed")
+            validation = verifier.verify_ready_integration_attestation(
+                attestation, repository=published.lifecycle.repository, head_sha=head,
+                registry=binding, command_set=binding["validation"], reviewed_state=reviewed,
+                validation_receipt=package["validation_receipt"], integration_evidence=package["integration_evidence"],
+                commit_parent_shas=parents[1:], commit_tree_sha=tree,
+                commit_validation_receipt_digest=_commit_validation_receipt_digest(repository_root, head),
+                commit_integration_evidence_digest=_commit_integration_evidence_digest(repository_root, head),
+                repository_root=repository_root, signature_policy=binding["signature_policy"],
+            )
+            verified.append((validation, package["prior_authority"]))
+        return publication.verify_ready_integration_prior_authority(published, tuple(verified))
+    except (publication.LifecyclePublicationError, verifier.SecurityBlocker,
+            KeyError, TypeError, ValueError) as exc:
+        raise fast_path.SecurityBlocker("prior Ready integration chain authentication failed") from exc
+
+
 def _verify_ready_integration_prior_authority(
     *,
     arguments: argparse.Namespace,
@@ -8350,6 +8435,8 @@ def _verify_ready_integration_prior_authority(
         "EXISTING_AUTHORITY_COMPOSITION",
     }
     historical_paths = required_paths[1:4]
+    if getattr(arguments, "prior_integration_chain", None) is not None and (recovered or adopted):
+        raise fast_path.SecurityBlocker("prior integration chain cannot substitute recovered or adopted evidence")
     caller_signer = required_paths[5]
     if recovered:
         if any(historical_paths):
@@ -8484,6 +8571,34 @@ def _verify_ready_integration_prior_authority(
         attestation = _read_json(
             historical_paths[2], "prior validation attestation"
         )
+    chain_path = getattr(arguments, "prior_integration_chain", None)
+    if chain_path is not None:
+        transport = _read_json(chain_path, "prior Ready integration chain")
+        if (set(transport) != {"schema_version", "kind", "packages"}
+            or transport["schema_version"] != "1.0"
+            or transport["kind"] != "READY_INTEGRATION_PREDECESSOR_PACKAGES"):
+            raise fast_path.SecurityBlocker("prior Ready integration chain transport is malformed")
+        packages = transport["packages"]
+        published, publication = _authenticated_ready_integration_publication_context(authority, integration_evidence)
+        projection = _verify_ready_integration_prior_chain(
+            repository_root=repository_root, published=published, publication=publication, packages=packages,
+        )
+        if json.loads(projection.manifest_json) != authority:
+            raise fast_path.SecurityBlocker("prior Ready integration authority projection changed")
+        last = packages[-1]
+        if (last["reviewed_state"] != reviewed.to_dict()
+            or last["validation_receipt"] != receipt or last["final_attestation"] != attestation):
+            raise fast_path.SecurityBlocker("prior Ready integration companions changed")
+        if required_paths[4] != _canonical_ready_prior_authority_tag_ref(authority):
+            raise fast_path.SecurityBlocker("prior Ready integration tag identity changed")
+        _verify_prior_authority_tag(
+            repository_root=repository_root, tag_ref=required_paths[4], authority=authority,
+            integration_evidence=integration_evidence, binding=binding,
+        )
+        _verify_ready_integration_lifecycle_authority(authority, integration_evidence)
+        if live_observation is not None:
+            _verify_ready_integration_live_observation(live_observation, integration_evidence, binding)
+        return authority
     parent = _validated_commit_parent(repository_root, head)
     tree = _run_attestation_git(repository_root, ["rev-parse", f"{head}^{{tree}}"]).stdout.strip()
     trailer = _commit_validation_receipt_digest(repository_root, head)
@@ -8984,6 +9099,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         getattr(arguments, "prior_reviewed_state", None),
         getattr(arguments, "prior_receipt", None),
         getattr(arguments, "prior_attestation", None),
+        getattr(arguments, "prior_integration_chain", None),
         getattr(arguments, "expected_prior_authority_signer", None),
     )
     if not (integration_evidence_path or pre_enrollment_evidence_path) and any(

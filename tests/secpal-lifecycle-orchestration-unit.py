@@ -13187,15 +13187,23 @@ class ReadyIntegrationRemediationTests(TestCase):
         journal.setUp()
         self.addCleanup(journal.tearDown)
         chain = pf.Chain(1070, pull_request=self.reviewed.pull_request_number)
+        exhausted = self._testMethodName == "test_provider_lineage_exhausted_remediation"
+        initial_head = base if exhausted else h0
         chain.initialization = authority.create_delivery_initialization(
             repository=REPOSITORY, delivery_issue=1070, pull_request=self.reviewed.pull_request_number,
-            initial_head_sha=h0, validation_receipt_digest="1" * 64, final_attestation_digest="2" * 64,
+            initial_head_sha=initial_head, validation_receipt_digest="1" * 64, final_attestation_digest="2" * 64,
             signer_identity=pf.SIGNER, signer=pf.signer_for(),
         )
         chain.lifecycle_id = authority.delivery_initialization_lifecycle_id(chain.initialization["initialization_digest"])
-        chain.head = h0
-        for transition in ("INITIALIZED_DRAFT", "DRAFT_TO_READY", "UNRESTRICTED_REVIEW_CONSUMED"):
-            chain.append(transition, head=h0)
+        chain.head = initial_head
+        chain.append("INITIALIZED_DRAFT", head=initial_head)
+        if exhausted:
+            chain.append("UNRESTRICTED_REVIEW_CONSUMED", head=initial_head)
+            chain.append("REMEDIATION_COMPLETED", head=h0)
+            chain.append("DRAFT_TO_READY", head=h0)
+        else:
+            chain.append("DRAFT_TO_READY", head=h0)
+            chain.append("UNRESTRICTED_REVIEW_CONSUMED", head=h0)
         remediation = authority.create_transition_authorization(
             event_id="first-remediation", repository=REPOSITORY, delivery_issue=1070,
             lifecycle_id=chain.lifecycle_id, pull_request=self.reviewed.pull_request_number,
@@ -13217,14 +13225,23 @@ class ReadyIntegrationRemediationTests(TestCase):
         tree = self.git("merge-tree", "--write-tree", r0, main_parent)
         self.integration = self.actions_fixture.ready_integration_evidence(
             self.reviewed, validated_tree=tree, registry=self.registry,
+            remediation_cycles=2 if exhausted else 1,
             exceptional_recoveries=int(self._testMethodName == "test_integration_finite_state_must_match_current"),
         )
         self.integration.update(schema_version="1.2", reviewed_head_sha=h0,
                                 prior_delivery_head_sha=r0, ordered_parent_shas=[r0, main_parent],
                                 delivery_issue_number=1070)
         self.integration["eligibility"]["lifecycle_identity"] = chain.lifecycle_id
+        if self._testMethodName == "test_chained_integration_historical_v11_semantics":
+            self.reviewed.head_sha = r0
+            self.reviewed.refresh_digests()
+            self.integration.update(schema_version="1.1",
+                                    reviewed_state_digest=self.reviewed.state_digest,
+                                    reviewed_feedback_digest=self.reviewed.feedback_digest)
+            self.integration.pop("reviewed_head_sha")
         self.prior_authority = self.actions_fixture.ready_integration_prior_authority(
             self.reviewed, exceptional_recoveries=0,
+            remediation_cycles=2 if exhausted else 1,
         )
         self.prior_authority.update(
             delivery_issue_number=1070, prior_delivery_head_sha=r0,
@@ -13260,7 +13277,7 @@ class ReadyIntegrationRemediationTests(TestCase):
         )
         h1 = self.signed_commit(tree, [r0, main_parent],
             "integrate main\n\nSecPal-Validation-Receipt: " + self.receipt["receipt_digest"]
-            + "\nSecPal-Ready-Integration: " + fast_path.digest_json(self.integration))
+            + "\nSecPal-Integration-Evidence: " + fast_path.digest_json(self.integration))
         self.attestation = fast_path.create_ready_integration_attestation(
             repository=REPOSITORY, head_sha=h1, registry=self.registry,
             command_set=self.registry["validation"], reviewed_state=self.reviewed,
@@ -13334,6 +13351,9 @@ class ReadyIntegrationRemediationTests(TestCase):
         chain.events.append(event)
         chain.authorities.append(snapshot)
         self.current = publication.advance_current_terminal(chain.published(), signer_identity=pf.SIGNER, signer=pf.signer_for())
+        self.chain = chain
+        self.ordinary_receipt = prior_receipt
+        self.ordinary_attestation = prior_attestation
 
     def verify(self, **updates):
         arguments = dict(predecessor_validation=self.predecessor, candidate_validation=self.candidate,
@@ -13357,6 +13377,252 @@ class ReadyIntegrationRemediationTests(TestCase):
                          {k: v for k, v in self.current.lifecycle.state.items() if k != "remediation_cycle_count"})
         with self.assertRaises(authority.LifecycleAuthorityError):
             authority.require_forward_transition(result, "REMEDIATION_COMPLETED", "e" * 64)
+
+    def test_provider_lineage_composes_remediation_and_typed_integration(self):
+        with mock.patch.object(publication, "_authenticate_provider_integration_verifier"):
+            binding = publication.derive_ready_source_recovery_provider_binding(
+                self.current,
+                ready_integrations=((self.predecessor, self.prior_authority),),
+            )
+        self.assertEqual(binding.provider_head_sha, self.reviewed.head_sha)
+        self.assertEqual(binding.current_head_sha, self.current.lifecycle.head_sha)
+        self.assertNotEqual(binding.provider_head_sha, binding.current_head_sha)
+        self.assertEqual(self.current.lifecycle.state["unrestricted_review_count"], 1)
+        self.assertEqual(self.current.lifecycle.state["ready_transition_count"], 1)
+        self.assertTrue(self.current.lifecycle.state["cycle_3_absent"])
+
+    def test_provider_lineage_exhausted_remediation(self):
+        self.test_provider_lineage_composes_remediation_and_typed_integration()
+        self.assertEqual(self.current.lifecycle.state["remediation_cycle_count"], 2)
+        self.assertEqual(self.current.lifecycle.state["exceptional_recovery_count"], 0)
+        self.assertEqual(self.current.lifecycle.state["exceptional_continuation_count"], 0)
+
+    def derive_provider_lineage(self, **updates):
+        arguments = {"ready_integrations": ((self.predecessor, self.prior_authority),)}
+        arguments.update(updates)
+        with mock.patch.object(publication, "_authenticate_provider_integration_verifier"):
+            return publication.derive_ready_source_recovery_provider_binding(self.current, **arguments)
+
+    def test_provider_lineage_reauthenticates_historical_head_and_current(self):
+        binding = self.derive_provider_lineage()
+        with mock.patch.object(publication, "_authenticate_provider_integration_verifier"):
+            self.assertEqual(binding.provider_head(
+                repository=REPOSITORY, pull_request=self.reviewed.pull_request_number,
+                current_head_sha=self.current.lifecycle.head_sha), self.reviewed.head_sha)
+            for changed in (
+                replace(binding, provider_head_sha=self.predecessor.head_sha),
+                replace(binding, current_head_sha=self.reviewed.head_sha),
+                replace(binding, head_advanced_event_digests=()),
+                replace(binding, ready_integrations=()),
+            ):
+                with self.subTest(changed=changed.current_head_sha), self.assertRaises(publication.LifecyclePublicationError):
+                    changed.provider_head(
+                        repository=REPOSITORY, pull_request=self.reviewed.pull_request_number,
+                        current_head_sha=self.current.lifecycle.head_sha)
+
+    def test_provider_lineage_rejects_incomplete_or_extra_integration_packages(self):
+        for packages in ((), ((self.predecessor, self.prior_authority),) * 2,
+                         ((self.candidate, self.prior_authority),),
+                         ((self.predecessor, {}),)):
+            with self.subTest(packages=len(packages)), self.assertRaises(publication.LifecyclePublicationError):
+                self.derive_provider_lineage(ready_integrations=packages)
+
+    def test_provider_lineage_rejects_substituted_typed_provenance(self):
+        mutations = {
+            "repository": lambda p: p.update(repository="SecPal/contracts"),
+            "issue": lambda p: p["integration_evidence"].update(delivery_issue_number=9),
+            "pr": lambda p: p["integration_evidence"].update(pull_request_number=9),
+            "lifecycle": lambda p: p["integration_evidence"]["eligibility"].update(lifecycle_identity="other"),
+            "predecessor": lambda p: p["integration_evidence"].update(prior_delivery_head_sha="a" * 40),
+            "result": lambda p: p.update(head_sha="a" * 40),
+            "tree": lambda p: p.update(commit_tree_sha="a" * 40),
+            "parent_order": lambda p: p["commit_parent_shas"].reverse(),
+            "historical_main": lambda p: p["integration_evidence"]["target_base"].update(authorized_sha="a" * 40),
+            "receipt": lambda p: p["validation_receipt"].update(receipt_digest="a" * 64),
+            "attestation": lambda p: p["attestation"].update(attestation_digest="a" * 64),
+            "signer": lambda p: p["integration_evidence"]["expected_signer"].update(identity="other"),
+            "review_count": lambda p: p["integration_evidence"]["eligibility"].update(unrestricted_reviews_after=2),
+            "remediation_count": lambda p: p["integration_evidence"]["eligibility"].update(remediation_cycles_after=2),
+            "ready_transition": lambda p: p["integration_evidence"]["eligibility"].update(ready_transition=True),
+            "cycle3": lambda p: p["integration_evidence"]["eligibility"].update(cycle_3=True),
+            "recovery": lambda p: p["integration_evidence"]["eligibility"].update(exceptional_recoveries_after=1),
+            "continuation": lambda p: p["integration_evidence"]["eligibility"].update(exceptional_continuations_after=1),
+            "provider_head": lambda p: p["integration_evidence"].update(reviewed_head_sha="a" * 40),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                provenance = json.loads(self.predecessor._verification_seal.provenance_json)
+                mutate(provenance)
+                changed = replace(self.predecessor, _verification_seal=replace(
+                    self.predecessor._verification_seal,
+                    provenance_json=fast_path.canonical_json_bytes(provenance).decode()))
+                with self.assertRaises(publication.LifecyclePublicationError):
+                    self.derive_provider_lineage(ready_integrations=((changed, self.prior_authority),))
+
+    def test_provider_lineage_rejects_invalid_commit_signature(self):
+        with mock.patch.object(fast_path, "authenticate_integration_commit",
+                               side_effect=fast_path.SecurityBlocker("invalid signature")):
+            with self.assertRaises(publication.LifecyclePublicationError):
+                self.derive_provider_lineage()
+
+    def test_provider_lineage_rejects_candidate_local_integration_verifier(self):
+        with mock.patch.object(publication, "_authenticate_provider_integration_verifier",
+                               side_effect=publication.LifecyclePublicationError("candidate-local verifier")):
+            with self.assertRaises(publication.LifecyclePublicationError):
+                publication.derive_ready_source_recovery_provider_binding(
+                    self.current, ready_integrations=((self.predecessor, self.prior_authority),))
+
+    def test_provider_integration_rejects_substituted_loaded_module_origins(self):
+        transport = orchestration.bootstrap_source_admission
+        helper = transport._load_actions_helper()
+        modules = (
+            authority, transport, fast_path, helper.evidence,
+            fast_path.follow_up, helper.pre_enrollment,
+        )
+        with mock.patch.object(helper, "_authenticate_protected_bridge_main", return_value="a" * 40), \
+             mock.patch.object(helper, "_require_exact_accepted_main_blob"), \
+             mock.patch.object(transport, "_git"):
+            publication._authenticate_provider_integration_verifier()
+            for module in modules:
+                for field in ("__file__", "origin"):
+                    with self.subTest(module=module.__name__, field=field):
+                        target = module if field == "__file__" else module.__spec__
+                        with mock.patch.object(target, field, "/tmp/candidate-verifier.py"):
+                            with self.assertRaises(publication.LifecyclePublicationError):
+                                publication._authenticate_provider_integration_verifier()
+
+    def test_provider_lineage_historical_summary_does_not_review_current_head(self):
+        fixture = self.actions_fixture
+        binding = self.derive_provider_lineage()
+        pull = fixture.FastPathTests._codex_provider_state(
+            metadata_head=self.reviewed.head_sha,
+            metadata_pull_request=self.reviewed.pull_request_number)
+        pull["headRefOid"] = self.current.lifecycle.head_sha
+        summary = pull["comments"]["nodes"][0]["body"]
+        with self.assertRaisesRegex(fixture.actions.MutationBlocked, "stale"):
+            fixture.actions._require_review_providers_terminal(pull)
+        with mock.patch.object(publication, "_authenticate_provider_integration_verifier"):
+            fixture.actions._require_review_providers_terminal(
+                pull, repository=REPOSITORY, pull_request_number=self.reviewed.pull_request_number,
+                ready_source_provider_binding=binding)
+        fast_path.verify_codex_provider_summary(summary, head_sha=self.reviewed.head_sha,
+            repository=REPOSITORY, pull_request_number=self.reviewed.pull_request_number)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "stale"):
+            fast_path.verify_codex_provider_summary(summary, head_sha=self.current.lifecycle.head_sha,
+                repository=REPOSITORY, pull_request_number=self.reviewed.pull_request_number)
+        self.assertEqual(pull["comments"]["nodes"][0]["body"], summary)
+
+    def test_provider_lineage_feedback_capture_rejects_historical_state(self):
+        binding = self.derive_provider_lineage()
+
+        def capture(arguments, **kwargs):
+            output = Path(arguments[arguments.index("--capture-reviewed-state") + 1])
+            fast_path.atomic_write_json(output, self.reviewed.to_dict())
+            summary = Path(arguments[arguments.index("--capture-provider-summary") + 1])
+            fast_path.atomic_write_json(summary, {"body": "historical summary", "review_database_ids": []})
+            return SimpleNamespace(returncode=0)
+
+        with mock.patch.object(orchestration.bootstrap_source_admission, "_run_isolated_python", side_effect=capture):
+            with self.assertRaises(orchestration.LifecycleOrchestrationError):
+                orchestration._capture_current_stable_feedback(
+                    REPOSITORY, self.reviewed.pull_request_number,
+                    ready_remediation_provider_binding=binding)
+
+    def test_provider_lineage_feedback_capture_keeps_current_state(self):
+        binding = self.derive_provider_lineage()
+        captured_payload = self.resulting.to_dict()
+        provider_body = self.actions_fixture.FastPathTests._codex_provider_state(
+            metadata_head=self.reviewed.head_sha,
+            metadata_pull_request=self.reviewed.pull_request_number)["comments"]["nodes"][0]["body"]
+
+        def capture(arguments, **kwargs):
+            output = Path(arguments[arguments.index("--capture-reviewed-state") + 1])
+            fast_path.atomic_write_json(output, captured_payload)
+            summary = Path(arguments[arguments.index("--capture-provider-summary") + 1])
+            fast_path.atomic_write_json(summary, {"body": provider_body, "review_database_ids": []})
+            return SimpleNamespace(returncode=0)
+
+        with mock.patch.object(orchestration.bootstrap_source_admission, "_run_isolated_python", side_effect=capture):
+            captured = orchestration._capture_current_stable_feedback(
+                REPOSITORY, self.reviewed.pull_request_number,
+                ready_remediation_provider_binding=binding)
+        self.assertEqual(captured.head_sha, self.current.lifecycle.head_sha)
+        self.assertEqual(captured.feedback_digest, self.resulting.feedback_digest)
+        self.assertNotEqual(captured.feedback_digest, self.reviewed.feedback_digest)
+        self.assertEqual(captured.provider_summary_body, provider_body)
+
+    def test_provider_lineage_composes_multiple_historical_integrations(self):
+        pf = self.publication_fixture
+        first = self.current
+        parent2 = self.integration["ordered_parent_shas"][1]
+        main_tree = self.source_tree(self.git("rev-parse", parent2 + "^{tree}"), "next-main.txt", "later accepted main\n")
+        later_main = self.signed_commit(main_tree, [parent2], "later protected main")
+        tree = self.git("merge-tree", "--write-tree", first.lifecycle.head_sha, later_main)
+        prior = copy.deepcopy(self.prior_authority)
+        prior.update(prior_delivery_head_sha=first.lifecycle.head_sha,
+                     prior_delivery_tree_sha=first.lifecycle.tree_sha,
+                     prior_validation_receipt_digest=first.lifecycle.validation_receipt_digest,
+                     prior_final_attestation_digest=first.lifecycle.adoption_source_evidence_digest,
+                     publication={"object_oid": first.publication_oid, "publication_digest": first.publication_digest})
+        prior["lifecycle"]["current_authority_digest"] = first.lifecycle.authority_digest
+        tag_ref = "refs/tags/secpal-ready-integration-prior-authority-1070-" + str(self.reviewed.pull_request_number) + "-" + first.lifecycle.head_sha
+        self.git("tag", "-s", tag_ref.removeprefix("refs/tags/"), first.lifecycle.head_sha,
+                 "-m", "Ready prior authority\n\nSecPal-Prior-Authority: " + fast_path.digest_json(prior))
+        integration = copy.deepcopy(self.integration)
+        integration.update(prior_delivery_head_sha=first.lifecycle.head_sha,
+                           prior_authority_digest=fast_path.digest_json(prior),
+                           prior_authority_tag_object_sha=self.git("rev-parse", tag_ref + "^{tag}"),
+                           ordered_parent_shas=[first.lifecycle.head_sha, later_main],
+                           target_base={"ref": "main", "authorized_sha": later_main, "observed_sha": later_main},
+                           validated_tree_sha=tree)
+        integration.update(fast_path.derive_ready_integration_tree_evidence(
+            self.root, integration["ordered_parent_shas"], tree, schema_version="1.2"))
+        receipt = fast_path.create_validation_receipt(
+            repository=REPOSITORY, head_sha=first.lifecycle.head_sha, validated_tree_sha=tree,
+            registry=self.registry, command_set=self.registry["validation"], successful_result=True,
+            reviewed_state=self.reviewed, manual_gate_evidence=[],
+            integration_evidence_digest=fast_path.digest_json(integration),
+            eligibility_evidence_digest=fast_path.digest_json(self.predecessor_eligibility))
+        head = self.signed_commit(tree, integration["ordered_parent_shas"],
+            "later integration\n\nSecPal-Validation-Receipt: " + receipt["receipt_digest"]
+            + "\nSecPal-Integration-Evidence: " + fast_path.digest_json(integration))
+        attestation = fast_path.create_ready_integration_attestation(
+            repository=REPOSITORY, head_sha=head, registry=self.registry,
+            command_set=self.registry["validation"], reviewed_state=self.reviewed,
+            validation_receipt=receipt, integration_evidence=integration)
+        validation = fast_path.verify_ready_integration_attestation(
+            attestation, repository=REPOSITORY, head_sha=head, registry=self.registry,
+            command_set=self.registry["validation"], reviewed_state=self.reviewed,
+            validation_receipt=receipt, integration_evidence=integration,
+            commit_parent_shas=integration["ordered_parent_shas"], commit_tree_sha=tree,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+            commit_integration_evidence_digest=fast_path.digest_json(integration),
+            repository_root=self.root, signature_policy=self.registry["signature_policy"])
+        chain = self.chain
+        event = authority.create_transition_authorization(
+            event_id="later-integration", repository=REPOSITORY, delivery_issue=1070,
+            lifecycle_id=chain.lifecycle_id, pull_request=self.reviewed.pull_request_number,
+            predecessor_authority_digest=first.lifecycle.authority_digest,
+            predecessor_head_sha=first.lifecycle.head_sha, resulting_head_sha=head,
+            transition_kind="HEAD_ADVANCED", replacement_pull_request=None,
+            initialization_evidence_digest=chain.initialization["initialization_digest"],
+            signer_identity=pf.SIGNER, signer=pf.signer_for())
+        snapshot = authority.issue_lifecycle_authority(
+            predecessor_chain=chain.authorities, transition_authorizations=chain.events,
+            authorization=event, signer_identity=pf.SIGNER, authority_signer=pf.signer_for(),
+            accepted_event_signers=frozenset({pf.SIGNER}), accepted_authority_signers=frozenset({pf.SIGNER}),
+            signature_verifier=pf.verify_signature, current_head_evidence=validation)
+        chain.events.append(event)
+        chain.authorities.append(snapshot)
+        self.current = publication.advance_current_terminal(chain.published(), signer_identity=pf.SIGNER, signer=pf.signer_for())
+        binding = self.derive_provider_lineage(ready_integrations=(
+            (self.predecessor, self.prior_authority), (validation, prior)))
+        self.assertEqual(binding.provider_head_sha, self.reviewed.head_sha)
+        self.assertEqual(binding.current_head_sha, head)
+        self.assertEqual(len(binding.head_advanced_event_digests), 2)
+        self.assertEqual(self.current.lifecycle.state, first.lifecycle.state)
+        with self.assertRaises(publication.LifecyclePublicationError):
+            self.derive_provider_lineage(ready_integrations=((validation, prior),))
 
     def test_bounded_codex_acquisition_composes_with_authenticated_integration_predecessor(self):
         from scripts.secpal_pr_review import provider_acquisition as acquisition
@@ -13492,7 +13758,7 @@ class ReadyIntegrationRemediationTests(TestCase):
         )
         head = self.signed_commit(self.predecessor.tree_sha, integration["ordered_parent_shas"],
             "another delivery\n\nSecPal-Validation-Receipt: " + receipt["receipt_digest"]
-            + "\nSecPal-Ready-Integration: " + fast_path.digest_json(integration))
+            + "\nSecPal-Integration-Evidence: " + fast_path.digest_json(integration))
         attestation = fast_path.create_ready_integration_attestation(
             repository=REPOSITORY, head_sha=head, registry=self.registry,
             command_set=self.registry["validation"], reviewed_state=self.reviewed,
@@ -13571,6 +13837,865 @@ class ReadyIntegrationRemediationTests(TestCase):
         scope = self.verify()
         with self.assertRaises(orchestration.LifecycleOrchestrationError):
             orchestration.ordinary_ready_remediation_authorization_scope(replace(scope, finding_ids=scope.finding_ids[:-1]))
+
+
+    def integration_package(self, validation=None, prior=None):
+        validation = validation or self.predecessor
+        provenance = json.loads(validation._verification_seal.provenance_json)
+        return {"integration_evidence": provenance["integration_evidence"],
+                "reviewed_state": provenance["reviewed_state"],
+                "validation_receipt": provenance["validation_receipt"],
+                "final_attestation": provenance["attestation"],
+                "prior_authority": prior or self.prior_authority}
+
+    def current_prior_manifest(self):
+        current = self.current
+        manifest = copy.deepcopy(self.prior_authority)
+        manifest.update(prior_delivery_head_sha=current.lifecycle.head_sha,
+                        prior_delivery_tree_sha=current.lifecycle.tree_sha,
+                        prior_validation_receipt_digest=current.lifecycle.validation_receipt_digest,
+                        prior_final_attestation_digest=current.lifecycle.adoption_source_evidence_digest,
+                        publication={"object_oid": current.publication_oid,
+                                     "publication_digest": current.publication_digest})
+        manifest["lifecycle"]["current_authority_digest"] = current.lifecycle.authority_digest
+        return manifest
+
+    def admit_next_integration(self, packages, *, manifest=None, substitutions=None, next_updates=None):
+        actions = self.actions_fixture.actions
+        manifest = manifest or self.current_prior_manifest()
+        last = packages[-1]
+        parent2 = getattr(self, "latest_integration", self.integration)["ordered_parent_shas"][1]
+        tree = self.source_tree(self.git("rev-parse", parent2 + "^{tree}"),
+                                "next-main.txt", str(len(packages)) + " later protected main\n")
+        fresh_main = self.signed_commit(tree, [parent2], "advance protected main")
+        integration = copy.deepcopy(self.integration)
+        integration.update(schema_version="1.2", reviewed_head_sha=self.reviewed.head_sha,
+                           prior_delivery_head_sha=self.current.lifecycle.head_sha,
+                           prior_authority_digest=fast_path.digest_json(manifest),
+                           ordered_parent_shas=[self.current.lifecycle.head_sha, fresh_main],
+                           target_base={"ref": "main", "authorized_sha": fresh_main, "observed_sha": fresh_main})
+        tag_ref = actions._canonical_ready_prior_authority_tag_ref(manifest)
+        tag_name = tag_ref.removeprefix("refs/tags/")
+        if not self.git("tag", "--list", tag_name):
+            self.git("tag", "-s", tag_name, self.current.lifecycle.head_sha,
+                     "-m", "Ready prior authority\n\nSecPal-Prior-Authority: " + fast_path.digest_json(manifest))
+        integration["prior_authority_tag_object_sha"] = self.git("rev-parse", tag_ref + "^{tag}")
+        paths = {}
+        documents = {"authority": manifest, "chain": {"schema_version": "1.0", "kind": "READY_INTEGRATION_PREDECESSOR_PACKAGES", "packages": packages},
+                     "receipt": last["validation_receipt"], "attestation": last["final_attestation"],
+                     "reviewed": last["reviewed_state"]}
+        documents.update(substitutions or {})
+        for name, document in documents.items():
+            path = self.root / (name + ".json")
+            path.write_text(json.dumps(document))
+            paths[name] = str(path)
+        arguments = SimpleNamespace(repo=REPOSITORY, delivery_issue=1070,
+            prior_authority=paths["authority"], prior_reviewed_state=paths["reviewed"],
+            prior_receipt=paths["receipt"], prior_attestation=paths["attestation"],
+            prior_authority_tag_ref=tag_ref, expected_prior_authority_signer="aroviqen",
+            prior_integration_chain=paths["chain"])
+        live = {"repository": REPOSITORY, "base_repository": REPOSITORY, "pull_request_number": self.reviewed.pull_request_number,
+                "state": "OPEN", "draft": False, "head_sha": self.current.lifecycle.head_sha,
+                "base_ref": "main", "base_sha": fresh_main}
+        integration.update(next_updates or {})
+        with (mock.patch.object(actions, "_prior_delivery_registry_binding", return_value=self.registry),
+              mock.patch.object(actions, "_load_lifecycle_publication_helpers", return_value=(authority, publication)) as loaded,
+              mock.patch.object(publication, "_authenticate_provider_integration_verifier")):
+            admitted = actions._verify_ready_integration_prior_authority(
+                arguments=arguments, repository_root=self.root, binding=self.registry,
+                integration_evidence=integration, live_observation=live)
+        self.assertEqual(loaded.call_count, 1, "CURRENT and typed packages must share their verifier namespace")
+        self.assertEqual(admitted, manifest)
+        return integration, manifest
+
+    def issue_next_integration(self, packages, *, version="1.2"):
+        before = self.current
+        integration, prior = self.admit_next_integration(packages)
+        integration.update(schema_version=version, reviewed_head_sha=self.reviewed.head_sha)
+        parents = integration["ordered_parent_shas"]
+        tree = self.git("merge-tree", "--write-tree", *parents)
+        integration["validated_tree_sha"] = tree
+        integration.update(fast_path.derive_ready_integration_tree_evidence(
+            self.root, parents, tree, schema_version=integration["schema_version"]))
+        receipt = fast_path.create_validation_receipt(
+            repository=REPOSITORY, head_sha=before.lifecycle.head_sha, validated_tree_sha=tree,
+            registry=self.registry, command_set=self.registry["validation"], successful_result=True,
+            reviewed_state=self.reviewed, manual_gate_evidence=[],
+            integration_evidence_digest=fast_path.digest_json(integration),
+            eligibility_evidence_digest=packages[-1]["final_attestation"].get("eligibility_evidence_digest"))
+        head = self.signed_commit(tree, parents,
+            "chained integration\n\nSecPal-Validation-Receipt: " + receipt["receipt_digest"]
+            + "\nSecPal-Integration-Evidence: " + fast_path.digest_json(integration))
+        attestation = fast_path.create_ready_integration_attestation(
+            repository=REPOSITORY, head_sha=head, registry=self.registry,
+            command_set=self.registry["validation"], reviewed_state=self.reviewed,
+            validation_receipt=receipt, integration_evidence=integration)
+        validation = fast_path.verify_ready_integration_attestation(
+            attestation, repository=REPOSITORY, head_sha=head, registry=self.registry,
+            command_set=self.registry["validation"], reviewed_state=self.reviewed,
+            validation_receipt=receipt, integration_evidence=integration,
+            commit_parent_shas=parents, commit_tree_sha=tree,
+            commit_validation_receipt_digest=receipt["receipt_digest"],
+            commit_integration_evidence_digest=fast_path.digest_json(integration),
+            repository_root=self.root, signature_policy=self.registry["signature_policy"])
+        chain, pf = self.chain, self.publication_fixture
+        event = authority.create_transition_authorization(
+            event_id="chained-integration-" + str(len(packages)), repository=REPOSITORY, delivery_issue=1070,
+            lifecycle_id=chain.lifecycle_id, pull_request=self.reviewed.pull_request_number,
+            predecessor_authority_digest=before.lifecycle.authority_digest,
+            predecessor_head_sha=before.lifecycle.head_sha, resulting_head_sha=head,
+            transition_kind="HEAD_ADVANCED", replacement_pull_request=None,
+            initialization_evidence_digest=chain.initialization["initialization_digest"],
+            signer_identity=pf.SIGNER, signer=pf.signer_for())
+        snapshot = authority.issue_lifecycle_authority(
+            predecessor_chain=chain.authorities, transition_authorizations=chain.events,
+            authorization=event, signer_identity=pf.SIGNER, authority_signer=pf.signer_for(),
+            accepted_event_signers=frozenset({pf.SIGNER}), accepted_authority_signers=frozenset({pf.SIGNER}),
+            signature_verifier=pf.verify_signature, current_head_evidence=validation)
+        chain.events.append(event)
+        chain.authorities.append(snapshot)
+        self.current = publication.advance_current_terminal(chain.published(), signer_identity=pf.SIGNER, signer=pf.signer_for())
+        self.assertEqual(self.current.lifecycle.state, before.lifecycle.state)
+        self.latest_integration = integration
+        return self.integration_package(validation, prior)
+
+    def test_chained_integration_production_prior_admission(self):
+        # Fail-first: production initially rejects H2 solely at its sole-parent gate.
+        original = copy.deepcopy(self.current.lifecycle.state)
+        packages = [self.integration_package()]
+        packages.append(self.issue_next_integration(packages))
+        packages.append(self.issue_next_integration(packages))
+        self.admit_next_integration(packages)
+        self.assertEqual(self.current.lifecycle.state, original)
+        self.assertEqual(len(packages), 3)
+
+    def test_chained_integration_exhausted_remediation(self):
+        # Reinitialize the same hermetic fixture at the maintained finite limit.
+        name = self._testMethodName
+        self._testMethodName = "test_provider_lineage_exhausted_remediation"
+        try:
+            self.setUp()
+        finally:
+            self._testMethodName = name
+        self.assertEqual(self.current.lifecycle.state["remediation_cycle_count"], 2)
+        self.test_chained_integration_production_prior_admission()
+
+
+    def test_chained_integration_evidence_rejects_substitution(self):
+        original = self.integration_package()
+        cases = [
+            ("missing evidence", lambda p: p.pop("integration_evidence")),
+            ("malformed evidence", lambda p: p.update(integration_evidence=[])),
+            ("unsupported version", lambda p: p["integration_evidence"].update(schema_version="99")),
+            ("generic merge", lambda p: p["integration_evidence"].update(kind="MERGE_COMMIT")),
+            ("wrong repository", lambda p: p["integration_evidence"].update(repository="SecPal/contracts")),
+            ("wrong issue", lambda p: p["integration_evidence"].update(delivery_issue_number=99)),
+            ("wrong PR", lambda p: p["integration_evidence"].update(pull_request_number=99)),
+            ("wrong lifecycle", lambda p: p["integration_evidence"]["eligibility"].update(lifecycle_identity="other")),
+            ("wrong predecessor", lambda p: p["integration_evidence"].update(prior_delivery_head_sha="a" * 40)),
+            ("wrong result head", lambda p: p["final_attestation"].update(head_sha=self.prior_authority["prior_delivery_head_sha"])),
+            ("wrong result tree", lambda p: p["integration_evidence"].update(validated_tree_sha="a" * 40)),
+            ("swapped parents", lambda p: p["integration_evidence"]["ordered_parent_shas"].reverse()),
+            ("missing parent", lambda p: p["integration_evidence"]["ordered_parent_shas"].pop()),
+            ("extra parent", lambda p: p["integration_evidence"]["ordered_parent_shas"].append("a" * 40)),
+            ("historical parent2", lambda p: p["integration_evidence"]["target_base"].update(authorized_sha="a" * 40, observed_sha="a" * 40)),
+            ("wrong receipt", lambda p: p["validation_receipt"].update(receipt_digest="a" * 64)),
+            ("another receipt", lambda p: p.update(validation_receipt=self.ordinary_receipt)),
+            ("missing receipt", lambda p: p.update(validation_receipt=None)),
+            ("wrong attestation", lambda p: p["final_attestation"].update(attestation_digest="a" * 64)),
+            ("stale attestation", lambda p: p.update(final_attestation=self.ordinary_attestation)),
+            ("missing attestation", lambda p: p.update(final_attestation=None)),
+            ("wrong signer", lambda p: p["integration_evidence"]["expected_signer"].update(identity="other")),
+            ("review drift", lambda p: p["integration_evidence"]["eligibility"].update(unrestricted_reviews_after=2)),
+            ("remediation drift", lambda p: p["integration_evidence"]["eligibility"].update(remediation_cycles_after=2)),
+            ("extra Ready", lambda p: p["integration_evidence"]["eligibility"].update(ready_transition=True)),
+            ("Cycle3", lambda p: p["integration_evidence"]["eligibility"].update(cycle_3=True)),
+            ("Recovery", lambda p: p["integration_evidence"]["eligibility"].update(exceptional_recoveries_after=1)),
+            ("Continuation", lambda p: p["integration_evidence"]["eligibility"].update(exceptional_continuations_after=1)),
+            ("prior tree", lambda p: p["prior_authority"].update(prior_delivery_tree_sha="a" * 40)),
+            ("prior publication", lambda p: p["prior_authority"]["publication"].update(object_oid="a" * 40)),
+            ("caller provenance", lambda p: p.update(predecessor_kind="TWO_PARENT_READY_INTEGRATION")),
+        ]
+        for label, mutate in cases:
+            package = copy.deepcopy(original)
+            mutate(package)
+            with self.subTest(label=label), self.assertRaises((self.actions_fixture.fast_path.SecurityBlocker, self.actions_fixture.actions.PlanError)):
+                self.admit_next_integration([package])
+
+    def test_chained_integration_transport_cannot_select_authority(self):
+        package = self.integration_package()
+        for document in ({}, {"schema_version": "9", "kind": "READY_INTEGRATION_PREDECESSOR_PACKAGES", "packages": [package]},
+                         {"schema_version": "1.0", "kind": "READY_INTEGRATION_PREDECESSOR_PACKAGES", "packages": []}):
+            with self.subTest(document=document.keys()), self.assertRaises(self.actions_fixture.fast_path.SecurityBlocker):
+                self.admit_next_integration([package], substitutions={"chain": document})
+        for key in ("reviewed", "receipt", "attestation"):
+            replacement = copy.deepcopy({"reviewed": package["reviewed_state"],
+                                         "receipt": package["validation_receipt"],
+                                         "attestation": package["final_attestation"]}[key])
+            if key == "reviewed":
+                replacement["head_sha"] = "a" * 40
+            else:
+                replacement["substituted"] = True
+            with self.subTest(key=key), self.assertRaises((self.actions_fixture.fast_path.SecurityBlocker, ValueError)):
+                self.admit_next_integration([package], substitutions={key: replacement})
+
+    def test_chained_integration_requires_complete_exact_chain(self):
+        packages = [self.integration_package()]
+        second = self.issue_next_integration(packages)
+        packages.append(second)
+        for chain in ([second], [packages[0], packages[0]], [second, packages[0]], packages + [second]):
+            with self.subTest(length=len(chain)), self.assertRaises(self.actions_fixture.fast_path.SecurityBlocker):
+                self.admit_next_integration(chain)
+        self.admit_next_integration(packages)
+
+    def test_chained_integration_new_parent2_must_be_fresh(self):
+        package = self.integration_package()
+        old = package["integration_evidence"]["ordered_parent_shas"][1]
+        with self.assertRaisesRegex(self.actions_fixture.fast_path.SecurityBlocker, "target-base authority drifted"):
+            self.admit_next_integration([package], next_updates={"target_base": {
+                "ref": "main", "authorized_sha": old, "observed_sha": old},
+                "ordered_parent_shas": [self.current.lifecycle.head_sha, old]})
+
+    def test_chained_integration_ordinary_path_keeps_sole_parent_rule(self):
+        actions = self.actions_fixture.actions
+        with self.assertRaisesRegex(actions.fast_path.SecurityBlocker, "sole parent"):
+            actions._validated_commit_parent(self.root, self.current.lifecycle.head_sha)
+        self.assertEqual(actions._validated_commit_parent(self.root, self.prior_authority["prior_delivery_head_sha"]), self.reviewed.head_sha)
+
+    def test_chained_integration_rejects_candidate_verifier(self):
+        with mock.patch.object(publication, "_authenticate_provider_integration_verifier",
+                               side_effect=publication.LifecyclePublicationError("candidate verifier")):
+            # Test the maintained owner directly: the helper above mocks only its
+            # accepted-main source guard for hermetic journal qualification.
+            with self.assertRaises(publication.LifecyclePublicationError):
+                publication.verify_ready_integration_prior_authority(
+                    self.current, ((self.predecessor, self.prior_authority),))
+
+
+    def test_chained_integration_authenticates_actual_signature_and_trailers(self):
+        original = self.integration_package()
+        commit = self.git("cat-file", "commit", self.current.lifecycle.head_sha)
+        changed = commit + "\nunauthenticated change\n"
+        head = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+                              cwd=self.root, input=changed, text=True, check=True,
+                              capture_output=True).stdout.strip()
+        unsigned = self.git("commit-tree", self.current.lifecycle.tree_sha,
+                            "-p", self.integration["ordered_parent_shas"][0],
+                            "-p", self.integration["ordered_parent_shas"][1], "-m", "generic merge")
+        for label, replacement in (("invalid signature", head), ("generic unsigned merge", unsigned)):
+            package = copy.deepcopy(original)
+            package["final_attestation"] = fast_path.create_ready_integration_attestation(
+                repository=REPOSITORY, head_sha=replacement, registry=self.registry,
+                command_set=self.registry["validation"], reviewed_state=self.reviewed,
+                validation_receipt=self.receipt, integration_evidence=self.integration)
+            with self.subTest(label=label), self.assertRaises(self.actions_fixture.fast_path.SecurityBlocker):
+                self.admit_next_integration([package])
+
+    def test_chained_integration_verifier_authenticates_composition_owners(self):
+        transport = orchestration.bootstrap_source_admission
+        helper = transport._load_actions_helper()
+        with (mock.patch.object(helper, "_authenticate_protected_bridge_main", return_value="a" * 40),
+              mock.patch.object(helper, "_require_exact_accepted_main_blob") as authenticate,
+              mock.patch.object(transport, "_git")):
+            publication._authenticate_provider_integration_verifier()
+        paths = {call.args[2] for call in authenticate.call_args_list}
+        self.assertIn("scripts/secpal_pr_review/lifecycle_publication.py", paths)
+        self.assertIn("scripts/secpal_pr_review/lifecycle_orchestration.py", paths)
+
+
+    def test_chained_integration_historical_v11_semantics(self):
+        self.assertEqual(self.integration["schema_version"], "1.1")
+        self.assertEqual(self.integration["prior_delivery_head_sha"], self.reviewed.head_sha)
+        packages = [self.integration_package()]
+        packages.append(self.issue_next_integration(packages))
+        self.admit_next_integration(packages)
+
+    def test_chained_integration_exact_preservation_v13_semantics(self):
+        packages = [self.integration_package()]
+        packages.append(self.issue_next_integration(packages, version="1.3"))
+        packages.append(self.issue_next_integration(packages, version="1.3"))
+        self.admit_next_integration(packages)
+        self.assertEqual(packages[-1]["integration_evidence"]["schema_version"], "1.3")
+
+
+
+class ProviderAcquisitionEvidenceLossTests(TestCase):
+    """The existing realistic timeline fixture supplies transport, never loss."""
+
+    def fixture(self):
+        from scripts.secpal_pr_review import provider_reacquisition as reacquisition
+        _, feedback, _, _, summary, current, raw = first_fallback_growth()
+        feedback.provider_summary_body = summary
+        current = replace(current, lifecycle=replace(current.lifecycle, tree_sha="3" * 40,
+            validation_receipt_digest="4" * 64, source_validation_evidence_digest="5" * 64,
+            adoption_source_evidence_digest="6" * 64))
+        observed = reacquisition.acquisition._normalize_observation(raw)
+        survey = {
+            "source_history": tuple((e["head"], current.lifecycle.tree_sha if e["head"] == current.lifecycle.head_sha else "8" * 40) for e in observed["events"] if e["kind"] == "COMMIT"),
+            "source_packages": (), "journal_packages": (),
+            "historical_digest_identities": ("4" * 64, "5" * 64, "6" * 64),
+            "maintained_stores": reacquisition.MAINTAINED_STORES,
+            "unsearched_stores": (), "retained_local_store": "NO_MAINTAINED_RETAINED_STORE",
+            "output_scope": "GITIGNORED_WORKSPACE_LOCAL",
+            "authoritative_head_publication": None,
+        }
+        return reacquisition, current, feedback, observed, survey
+
+    def test_complete_authenticated_bounded_loss_is_admitted(self):
+        r, c, f, o, s = self.fixture()
+        proof = r._admit_loss(c, f, o, s)
+        self.assertEqual(proof.classification, "REQUIRED_HISTORICAL_ACQUISITION_EVIDENCE_UNAVAILABLE")
+        self.assertEqual(proof.review_types, ("CODE", "SECURITY"))
+        self.assertEqual(proof.original_first_fallback_validity, "UNPROVABLE_FROM_RETAINED_AUTHORITY")
+        self.assertEqual(c.lifecycle.state["remediation_cycle_count"], 1)
+        r.require_verified_loss(proof)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r.require_verified_loss(replace(proof, classification="INVALID"))
+
+    def test_authenticated_adoption_history_keeps_observation_identity(self):
+        r, c, f, o, s = self.fixture()
+        state = copy.deepcopy(c.lifecycle.state)
+        state["ready_history"][0] = {"sequence": 1, "transition_kind": "DRAFT_TO_READY", "observation_digest": "6" * 64}
+        adopted = replace(c, lifecycle=replace(c.lifecycle, state=state, historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE))
+        self.assertEqual(r._admit_loss(adopted, f, o, s).lifecycle_state, state)
+        native = replace(c, lifecycle=replace(c.lifecycle, state=state))
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            r._admit_loss(native, f, o, s)
+
+    def test_source_store_accepts_unrelated_real_json_representations(self):
+        r, c, _, _, _ = self.fixture()
+        for value in ({"kind": {}}, {"kind": []}, {"kind": False},
+                      {"kind": fast_path.READY_INTEGRATION_KIND, "repository": c.lifecycle.repository,
+                       "delivery_issue": c.lifecycle.delivery_issue, "head_sha": {"description": "schema"}},
+                      {"digest": "4" * 64}, {"kind": fast_path.READY_INTEGRATION_KIND, "head_sha": "9" * 40}):
+            with self.subTest(value=value):
+                self.assertEqual(r._package_identities(fast_path.canonical_json_bytes(value), c), ())
+        package = {"kind": fast_path.READY_INTEGRATION_KIND, "repository": c.lifecycle.repository,
+                   "delivery_issue": c.lifecycle.delivery_issue, "head_sha": c.lifecycle.head_sha}
+        self.assertEqual(r._package_identities(fast_path.canonical_json_bytes({"package": package}), c),
+                         (fast_path.digest_json(package),))
+        for artifact in (
+            {"kind": fast_path.READY_INTEGRATION_KIND, "repository": c.lifecycle.repository,
+             "delivery_issue_number": c.lifecycle.delivery_issue, "pull_request_number": c.lifecycle.pull_request,
+             "validated_tree_sha": c.lifecycle.tree_sha},
+            {"kind": "VALIDATION_RECEIPT", "repository": c.lifecycle.repository,
+             "head_sha": c.lifecycle.head_sha, "receipt_digest": c.lifecycle.validation_receipt_digest},
+            {"repository": c.lifecycle.repository, "head_sha": c.lifecycle.head_sha,
+             "validated_tree_sha": c.lifecycle.tree_sha, "attestation_digest": c.lifecycle.adoption_source_evidence_digest}):
+            with self.subTest(artifact=artifact):
+                self.assertEqual(r._package_identities(fast_path.canonical_json_bytes(artifact), c), (fast_path.digest_json(artifact),))
+
+    def test_source_blob_bounds_are_checked_before_payload(self):
+        r, _, _, _, _ = self.fixture()
+        ids = ("1" * 40, "2" * 40)
+        def sizes(values):
+            return "".join(f"{oid} blob {size}\n" for oid, size in zip(ids, values)).encode()
+        r._admit_blob_sizes(ids, sizes((0, 16 * 1024 * 1024)))
+        for raw in (sizes((1,)), sizes((1, 16 * 1024 * 1024 + 1)),
+                    sizes((1, 2)).replace(b"blob", b"tree"),
+                    sizes((1, 2)).replace(ids[0].encode(), b"9" * 40)):
+            with self.subTest(raw=raw), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_blob_sizes(ids, raw)
+
+    def test_source_survey_includes_immutable_symlink_blobs(self):
+        r, c, _, o, _ = self.fixture()
+        policy = SimpleNamespace(publication_branch=c.publication_branch, publication_remote_url="https://github.com/SecPal/.github.git")
+        package = {"kind": fast_path.READY_INTEGRATION_KIND, "repository": c.lifecycle.repository,
+                   "delivery_issue": c.lifecycle.delivery_issue, "head_sha": c.lifecycle.head_sha}
+        blobs = {"1" * 40: b"{}", "2" * 40: fast_path.canonical_json_bytes(package)}
+        def git(_root, args):
+            if args[0] == "fetch": return b""
+            if args[0] == "rev-parse": return (c.lifecycle.tree_sha + "\n").encode()
+            if args[0] == "show": return b".context/\n"
+            if args[0] == "ls-tree":
+                return (f"100644 blob {'1' * 40}\tregular\0" + f"120000 blob {'2' * 40}\tlink\0").encode()
+            self.fail(f"unexpected source observation {args}")
+            return None
+        def batch(_root, args, *, input_bytes):
+            chunks = []
+            for oid in input_bytes.decode().splitlines():
+                data = blobs[oid]
+                chunks.append(f"{oid} blob {len(data)}\n".encode())
+                if args[1] == "--batch": chunks.extend((data, b"\n"))
+            return SimpleNamespace(returncode=0, stdout=b"".join(chunks))
+        isolated = mock.MagicMock()
+        isolated.__enter__.return_value = (Path("/unused"), None)
+        latest = {(c.lifecycle.repository, c.lifecycle.delivery_issue):
+                  (c.publication_oid, {"publication_digest": c.publication_digest}, c.lifecycle)}
+        with mock.patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy), \
+                mock.patch.object(publication, "_verify_live_protection"), \
+                mock.patch.object(publication, "_isolated_repository", return_value=isolated), \
+                mock.patch.object(publication, "_observe_remote_current_once", return_value="9" * 40), \
+                mock.patch.object(publication, "_walk_journal", return_value=([], latest, [])), \
+                mock.patch.object(publication, "_read_publication_object", return_value=(b"{}", None)), \
+                mock.patch.object(publication, "_run_git", side_effect=batch), \
+                mock.patch.object(r, "_git", side_effect=git), \
+                mock.patch.object(r, "_observe_push_survey", return_value=None):
+            survey = r._observe_package_survey(c, o)
+        self.assertEqual(survey["source_packages"], (fast_path.digest_json(package),))
+
+    def test_expired_event_alone_or_caller_declaration_is_denied(self):
+        r, c, f, o, s = self.fixture()
+        for survey in ({"authoritative_head_publication": None}, {"lost": True},
+                       {**s, "unsearched_stores": ("OTHER",)},
+                       {**s, "historical_digest_identities": ()},
+                       {**s, "retained_local_store": "UNKNOWN"}):
+            with self.subTest(survey=survey), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_loss(c, f, o, survey)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r.require_verified_loss({"lost": True})
+
+    def test_available_proof_or_authoritative_chronology_denies_loss(self):
+        r, c, f, o, s = self.fixture()
+        for field, value in (("source_packages", ("package",)),
+                             ("journal_packages", ("package",)),
+                             ("authoritative_head_publication", {"created_at": "2026-10-01T15:02:00Z"})):
+            with self.subTest(field=field), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_loss(c, f, o, {**s, field: value})
+
+    def test_provider_actor_and_head_alone_do_not_make_a_terminal_result(self):
+        r, c, f, o, s = self.fixture()
+        events = copy.deepcopy(list(o["events"]))
+        review = next(e for e in events if e["kind"] == "PullRequestReview" and e["head"] == c.lifecycle.head_sha)
+        review["body"] = f"Unclassified provider note\n**Reviewed commit:** `{c.lifecycle.head_sha[:10]}`"
+        captured = copy.deepcopy(f.to_dict())
+        next(e for e in captured["reviews"] if e["node_id"] == review["node_id"])["body_digest"] = fast_path.digest_text(review["body"])
+        changed = fast_path.verify_reviewed_state_evidence(f.to_dict())
+        changed.feedback["reviews"] = captured["reviews"]
+        changed.refresh_digests()
+        changed.provider_summary_body = f.provider_summary_body
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._admit_loss(c, changed, {**o, "events": tuple(events)}, s)
+
+    def test_retained_digest_and_source_inventory_cannot_be_substituted(self):
+        r, c, f, o, s = self.fixture()
+        for wrong in ({**s, "historical_digest_identities": ("9" * 64,)},
+                      {**s, "source_history": (("9" * 40, "8" * 40),) + s["source_history"]}):
+            with self.subTest(wrong=wrong), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_loss(c, f, o, wrong)
+
+    def test_wrong_delivery_head_ready_or_finite_state_is_denied(self):
+        r, c, f, o, s = self.fixture()
+        for field, value in (("repository", "SecPal/api"), ("pull_request", 999),
+                             ("head", "9" * 40), ("state", "CLOSED"), ("draft", True)):
+            with self.subTest(field=field), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_loss(c, f, {**o, field: value}, s)
+        for field, value in (("unrestricted_review_count", 0), ("remediation_cycle_count", 2),
+                             ("ready_transition_count", 2), ("cycle_3_absent", False),
+                             ("exceptional_recovery_count", 1), ("exceptional_continuation_count", 1)):
+            wrong = replace(c, lifecycle=replace(c.lifecycle, state={**c.lifecycle.state, field: value}))
+            with self.subTest(field=field), self.assertRaises((fast_path.SecurityBlocker, authority.LifecycleAuthorityError)):
+                r._admit_loss(wrong, f, o, s)
+
+    def test_missing_terminal_result_and_duplicate_requests_are_denied(self):
+        r, c, f, o, s = self.fixture()
+        f.provider_summary_body = f.provider_summary_body.replace("Completed", "Running")
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._admit_loss(c, f, o, s)
+        r, c, f, o, s = self.fixture()
+        for review_type, trigger in r.acquisition._CANONICAL_TRIGGERS.items():
+            event = next(e for e in o["events"] if e.get("body") == trigger)
+            duplicate = {**event, "node_id": "IC_DUPLICATE", "database_id": 99}
+            with self.subTest(review_type=review_type), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_loss(c, f, {**o, "events": o["events"] + (duplicate,)}, s)
+
+
+class ProviderReacquisitionAuthorizationTests(TestCase):
+    fixture = ProviderAcquisitionEvidenceLossTests.fixture
+
+    def authorization(self):
+        r, c, f, o, s = self.fixture()
+        proof = r._admit_loss(c, f, o, s)
+        fields = r._authorization_fields(proof, "2026-10-01T17:00:00Z", "aroviqen@secpal.app")
+        signed = {**fields, "signature": {"format": "ssh", "signer_identity": fields["signer_identity"], "value": "test-signature"}}
+        document = {**signed, "authorization_digest": fast_path.digest_json(signed)}
+        return r, c, document
+
+    def verify(self, r, c, doc):
+        with mock.patch.object(authority, "_verify_signature") as verify:
+            result = r.verify_authorization(doc, c)
+        verify.assert_called_once()
+        return result
+
+    def test_signed_exact_one_use_authorization_and_keys(self):
+        r, c, doc = self.authorization()
+        verified = self.verify(r, c, doc)
+        self.assertEqual(verified.document["bounded_uses"], 1)
+        with mock.patch.object(authority, "_verify_signature"):
+            keys = r.derive_dispatch_keys(verified, c)
+        self.assertEqual(tuple(k.review_type for k in keys), ("CODE", "SECURITY"))
+        self.assertNotEqual(publication.provider_dispatch_claim_id(keys[0]), publication.provider_dispatch_claim_id(keys[1]))
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r.derive_dispatch_keys(doc, c)
+
+    def test_stale_current_delivery_lifecycle_and_source_are_denied(self):
+        r, c, doc = self.authorization()
+        replacements = [replace(c, publication_oid="9" * 40),
+                        replace(c, publication_digest="9" * 64),
+                        replace(c, lifecycle=replace(c.lifecycle, repository="SecPal/api")),
+                        replace(c, lifecycle=replace(c.lifecycle, pull_request=999)),
+                        replace(c, lifecycle=replace(c.lifecycle, delivery_issue=999)),
+                        replace(c, lifecycle=replace(c.lifecycle, lifecycle_id="lifecycle:other")),
+                        replace(c, lifecycle=replace(c.lifecycle, head_sha="9" * 40)),
+                        replace(c, lifecycle=replace(c.lifecycle, tree_sha="9" * 40))]
+        for wrong in replacements:
+            with self.subTest(current=wrong), self.assertRaises(fast_path.SecurityBlocker):
+                self.verify(r, wrong, doc)
+
+    def test_subset_historical_relabel_and_unbounded_use_are_denied(self):
+        r, c, doc = self.authorization()
+        for field, value in (("review_types", ["CODE"]), ("bounded_uses", 2),
+                             ("bounded_uses", True), ("operation", "BOUNDED_POST_READY_FIRST_FALLBACK"),
+                             ("assessment_id", "9" * 64)):
+            wrong = {**doc, field: value}
+            wrong["authorization_digest"] = fast_path.digest_json({k:v for k,v in wrong.items() if k != "authorization_digest"})
+            with self.subTest(field=field), self.assertRaises(fast_path.SecurityBlocker):
+                self.verify(r, c, wrong)
+
+    def test_signature_failure_and_tampered_loss_fail_closed(self):
+        r, c, doc = self.authorization()
+        with mock.patch.object(authority, "_verify_signature", side_effect=authority.LifecycleAuthorityError("forged")):
+            with self.assertRaises(fast_path.SecurityBlocker):
+                r.verify_authorization(doc, c)
+        wrong = copy.deepcopy(doc)
+        wrong["loss_proof"]["original_first_fallback_validity"] = "VALID"
+        wrong["authorization_digest"] = fast_path.digest_json({k:v for k,v in wrong.items() if k != "authorization_digest"})
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.verify(r, c, wrong)
+
+
+class ProviderReacquisitionFreshHistoryTests(TestCase):
+    fixture = ProviderAcquisitionEvidenceLossTests.fixture
+    authorization = ProviderReacquisitionAuthorizationTests.authorization
+    verify = ProviderReacquisitionAuthorizationTests.verify
+
+    def fresh_fixture(self):
+        r, c, doc = self.authorization()
+        verified = self.verify(r, c, doc)
+        with mock.patch.object(authority, "_verify_signature"):
+            keys = r.derive_dispatch_keys(verified, c)
+        observed = copy.deepcopy(doc["loss_proof"]["historical_observation"])
+        observed["events"] = list(observed["events"])
+        old = doc["loss_proof"]["historical_requests"][0]
+        new = {k:v for k,v in old.items() if k != "review_type"}
+        new.update(node_id="IC_CODE_FRESH", database_id=100, created_at="2026-10-01T17:01:00Z", updated_at="2026-10-01T17:01:00Z", versions=(("2026-10-01T17:01:00Z", "@codex review"),))
+        observed["events"].append(new)
+        claims = (publication.VerifiedProviderDispatchClaim("8" * 40, "8" * 64, "7" * 40,
+            publication.provider_dispatch_claim_id(keys[0]), keys[0], doc["loss_proof_digest"], doc),)
+        return r, c, doc, observed, claims
+
+    def test_fresh_identity_never_relabels_historical_requests(self):
+        r, c, doc, observed, claims = self.fresh_fixture()
+        requests, results = r._admit_live_history(doc, observed, claims)
+        self.assertEqual(requests["CODE"]["node_id"], "IC_CODE_FRESH")
+        self.assertEqual(results, ())
+        self.assertEqual(doc["loss_proof"]["historical_requests"][0]["node_id"], "IC_CODE_FIRST")
+
+    def test_unclaimed_duplicate_edited_cross_head_and_old_result_are_denied(self):
+        r, c, doc, observed, claims = self.fresh_fixture()
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._admit_live_history(doc, observed, ())
+        duplicate = {**observed["events"][-1], "node_id": "IC_DUPLICATE", "database_id": 101}
+        for wrong in ({**observed, "events": observed["events"] + [duplicate]},
+                      {**observed, "head": "9" * 40},
+                      {**observed, "events": observed["events"][:-1] + [{**observed["events"][-1], "updated_at": "2026-10-01T17:02:00Z"}]}):
+            with self.subTest(wrong=wrong), self.assertRaises(fast_path.SecurityBlocker):
+                r._admit_live_history(doc, wrong, claims)
+        historic = doc["loss_proof"]["historical_results"][0]
+        relabeled = {k:v for k,v in historic.items() if k != "review_type"}
+        relabeled.update(node_id="PRR_FAKE_FRESH", database_id=101)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._admit_live_history(doc, {**observed, "events": observed["events"] + [relabeled]}, claims)
+
+    def test_ambiguous_post_reconciliation_never_retries(self):
+        r, c, doc, observed, claims = self.fresh_fixture()
+        response = r._reconcile_request(doc, "CODE", observed, claims, None)
+        self.assertEqual(response.replacement_count, 1)
+        self.assertEqual(response.replacement_comment_database_id, 100)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._reconcile_request(doc, "CODE", observed, claims, 999)
+
+
+class ProviderReacquisitionExecutionTests(TestCase):
+    fixture = ProviderAcquisitionEvidenceLossTests.fixture
+    authorization = ProviderReacquisitionAuthorizationTests.authorization
+    verify = ProviderReacquisitionAuthorizationTests.verify
+    fresh_fixture = ProviderReacquisitionFreshHistoryTests.fresh_fixture
+
+    def complete_observation(self):
+        r, c, doc, observed, claims = self.fresh_fixture()
+        verified = self.verify(r, c, doc)
+        with mock.patch.object(authority, "_verify_signature"):
+            keys = r.derive_dispatch_keys(verified, c)
+        claims += (publication.VerifiedProviderDispatchClaim("6" * 40, "6" * 64, "8" * 40,
+            publication.provider_dispatch_claim_id(keys[1]), keys[1], doc["loss_proof_digest"], doc),)
+        original = doc["loss_proof"]["historical_requests"][1]
+        security = {k:v for k,v in original.items() if k != "review_type"}
+        security.update(node_id="IC_SECURITY_FRESH", database_id=101, created_at="2026-10-01T17:02:00Z",
+            updated_at="2026-10-01T17:02:00Z", versions=(("2026-10-01T17:02:00Z", "@codex security review"),))
+        observed["events"].append(security)
+        for index, historic in enumerate(doc["loss_proof"]["historical_results"]):
+            result = {k:v for k,v in historic.items() if k != "review_type"}
+            stamp = f"2026-10-01T17:0{3 + index}:00Z"
+            result.update(node_id="PRR_FRESH" if index == 0 else "IC_SECURITY_FRESH_RESULT", database_id=102 + index, created_at=stamp)
+            if result["kind"] == "IssueComment":
+                result.update(updated_at=stamp, versions=((stamp, result["body"]),))
+            observed["events"].append(result)
+        summary_event = next(e for e in observed["events"] if e.get("body") == doc["loss_proof"]["historical_summary"])
+        lines = summary_event["body"].splitlines()
+        for index, label in enumerate(("Code Review", "Security Review")):
+            stamp = f"2026-10-01T17:0{3 + index}:00.123456Z"
+            for number, line in enumerate(lines):
+                if f"**{label}**" in line:
+                    cells = line.split("|")
+                    cells[2] = f' ✅ **Completed** <relative-time datetime="{stamp}">{stamp}</relative-time> '
+                    cells[4] = " Manual request "
+                    lines[number] = "|".join(cells)
+        body = "\n".join(lines)
+        summary_event["versions"] = tuple(summary_event["versions"]) + (("2026-10-01T17:04:01Z", body),)
+        summary_event.update(body=body, updated_at="2026-10-01T17:04:01Z")
+        feedback = fast_path.verify_reviewed_state_evidence(doc["loss_proof"]["historical_feedback"])
+        feedback.feedback["conversation_comments"] = [
+            {"node_id":e["node_id"], "body_digest":fast_path.digest_text(e["body"]),
+             "actor":{"login":e["actor"][0], "node_id":e["actor"][1], "database_id":e["actor"][2]},
+             "updated_at":e["updated_at"], "reactions":[]} for e in observed["events"] if e["kind"] == "IssueComment"]
+        code = next(e for e in observed["events"] if e["node_id"] == "PRR_FRESH")
+        feedback.feedback["reviews"].append({**copy.deepcopy(feedback.feedback["reviews"][0]),
+            "node_id":code["node_id"], "submitted_at":code["created_at"], "body_digest":fast_path.digest_text(code["body"])})
+        feedback.provider_summary_body = body
+        feedback.review_database_ids = [{"node_id":e["node_id"], "database_id":e["database_id"]}
+            for e in observed["events"] if e["kind"] == "PullRequestReview"]
+        feedback.refresh_digests()
+        requests, results = r._admit_live_history(doc, observed, claims)
+        return r, doc, r.ReacquisitionObservation(verified, c, claims, feedback, observed, requests, results, "5" * 40)
+
+    def test_complete_fresh_assessment_keeps_every_historical_source(self):
+        r, doc, observed = self.complete_observation()
+        with mock.patch.object(r, "_authenticate_execution", return_value=observed):
+            assessment = r.authenticate_assessment(doc)
+        self.assertEqual(assessment["status"], "PROVIDER_REACQUISITION_COMPLETE")
+        self.assertEqual(assessment["stable_feedback"], observed.feedback.to_dict())
+        self.assertEqual(len(assessment["finding_inventory"]), len(observed.feedback.feedback["threads"]))
+        old_ids = {result["node_id"] for result in doc["loss_proof"]["historical_results"]}
+        self.assertFalse(old_ids & {result["node_id"] for result in assessment["provider_results"]})
+        self.assertEqual(assessment["historical_first_fallback_validity"], "UNPROVABLE_FROM_RETAINED_AUTHORITY")
+        self.assertEqual(assessment["lifecycle_state"]["remediation_cycle_count"], 1)
+
+    def test_fresh_acquisition_seal_rejects_old_raw_stale_and_cross_head_authority(self):
+        r, doc, observed = self.complete_observation()
+        with mock.patch.object(r, "_authenticate_execution", return_value=observed):
+            assessment = r.authenticate_assessment(doc)
+        sealed = r._seal_fresh_assessment(assessment)
+        with mock.patch.object(authority, "_verify_signature"):
+            r.require_verified_fresh_acquisitions(sealed, observed.current, observed.feedback)
+        for value, current in ((assessment, observed.current),
+                (replace(sealed, canonical_assessment={**assessment, "acquisition_kind": "BOUNDED_POST_READY_FIRST_FALLBACK"}), observed.current),
+                (sealed, replace(observed.current, publication_oid="9" * 40)),
+                (sealed, replace(observed.current, lifecycle=replace(observed.current.lifecycle, head_sha="9" * 40)))):
+            with self.subTest(value=value), self.assertRaises(fast_path.SecurityBlocker):
+                r.require_verified_fresh_acquisitions(value, current, observed.feedback)
+
+    def test_old_summary_or_late_completion_never_authorizes_fresh_terminality(self):
+        r, doc, observed = self.complete_observation()
+        observed.feedback.provider_summary_body = doc["loss_proof"]["historical_summary"]
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._terminal_result(observed, "CODE")
+        r, doc, observed = self.complete_observation()
+        observed.feedback.provider_summary_body = observed.feedback.provider_summary_body.replace("17:03:00.123456Z", "17:32:00.123456Z")
+        self.assertIsNone(r._terminal_result(observed, "CODE"))
+        with mock.patch.object(r, "_authenticate_execution", return_value=observed):
+            self.assertEqual(r.authenticate_assessment(doc)["status"], "PROVIDER_NON_TERMINAL")
+
+    def test_capture_adapter_preserves_complete_feedback_and_accepted_root(self):
+        r, doc, observation = self.complete_observation()
+        native = {**observation.feedback.to_dict(), "provider_summary_body":observation.feedback.provider_summary_body,
+            "provider_review_database_ids":observation.feedback.review_database_ids}
+        gateway=SimpleNamespace(observe_provider_acquisition_feedback=mock.Mock(return_value=native))
+        helper=SimpleNamespace(__file__=str(REPO_ROOT/"scripts/secpal-pr-review-actions.py"),
+            FastPathGateway=mock.Mock(return_value=gateway),select_repository=mock.Mock(return_value={"repository":REPOSITORY}),
+            load_registry=mock.Mock(return_value={}),fast_path=fast_path)
+        with mock.patch.object(r.transport,"_load_actions_helper",return_value=helper):
+            captured=r._capture_reacquisition_feedback(REPOSITORY,doc["pull_request"])
+        self.assertEqual(captured.to_dict(),observation.feedback.to_dict())
+        self.assertEqual(captured.provider_summary_body,native["provider_summary_body"])
+        self.assertEqual(captured.review_database_ids,native["provider_review_database_ids"])
+        self.assertEqual(helper.FastPathGateway.call_args.args[0],REPO_ROOT)
+
+    def test_pending_capture_reconciles_persisted_request_without_terminal_result(self):
+        r, current, document, timeline, claims = self.fresh_fixture()
+        summary = next(e for e in timeline["events"] if e.get("body") == document["loss_proof"]["historical_summary"])
+        body = summary["body"].replace('"status":"completed"', '"status":"running"').replace('"status": "completed"', '"status": "running"')
+        lines = body.splitlines()
+        for number, line in enumerate(lines):
+            if "**Code Review**" in line:
+                cells = line.split("|")
+                cells[2] = ' 🔄 **Running** since <relative-time datetime="2026-10-01T17:01:00Z">2026-10-01T17:01:00Z</relative-time> '
+                cells[4] = " Manual request "
+                lines[number] = "|".join(cells)
+        body = "\n".join(lines)
+        summary["versions"] += (("2026-10-01T17:01:01Z", body),)
+        summary.update(body=body, updated_at="2026-10-01T17:01:01Z")
+        feedback = fast_path.verify_reviewed_state_evidence(document["loss_proof"]["historical_feedback"])
+        feedback.feedback["conversation_comments"] = [{"node_id":e["node_id"], "body_digest":fast_path.digest_text(e["body"]),
+            "actor":{"login":e["actor"][0], "node_id":e["actor"][1], "database_id":e["actor"][2]},
+            "updated_at":e["updated_at"], "reactions":[]} for e in timeline["events"] if e["kind"] == "IssueComment"]
+        feedback.provider_summary_body=body;feedback.refresh_digests()
+        actor=dict(zip(("login","node_id","id"),timeline["author"]))
+        with mock.patch.object(r, "_require_accepted_main", return_value="5"*40), \
+                mock.patch.object(publication, "verify_provider_dispatch_claims", return_value=(current,claims)), \
+                mock.patch.object(publication, "verify_current_lifecycle_authority", return_value=current), \
+                mock.patch.object(authority, "_verify_signature"), \
+                mock.patch.object(r, "_gh_json", side_effect=lambda args,_label: actor if args==["user"] else {"state":"open","number":current.lifecycle.delivery_issue}), \
+                mock.patch.object(r, "_observe_timeline", return_value=timeline), \
+                mock.patch.object(r, "_observe_package_survey", return_value=document["loss_proof"]["survey"]), \
+                mock.patch.object(r, "_capture_reacquisition_feedback", return_value=feedback) as capture:
+            observed=r._authenticate_execution(document)
+        capture.assert_called_once()
+        self.assertIsNone(r._terminal_result(observed,"CODE"))
+        reconciled=r._reconcile_request(document,"CODE",timeline,claims,None)
+        self.assertEqual(reconciled.replacement_count,1)
+        self.assertEqual(reconciled.replacement_comment_database_id,100)
+        with mock.patch.object(r,"_authenticate_execution",return_value=observed):
+            self.assertEqual(r.authenticate_assessment(document)["status"],"PROVIDER_NON_TERMINAL")
+
+    def test_old_scope_claim_does_not_consume_new_dispatch(self):
+        from scripts.secpal_pr_review import lifecycle_execution
+        r, doc, observed = self.complete_observation()
+        old_claim = replace(observed.claims[0], key=replace(observed.claims[0].key, current_head_sha="9" * 40))
+        live = replace(observed, claims=(old_claim,), requests={}, results=())
+        execute = mock.Mock(return_value=SimpleNamespace(status="PERSISTED", replacement_comment_database_id=100, write_attempts=1))
+        with mock.patch.object(r, "_authenticate_execution", return_value=live), mock.patch.object(authority, "_verify_signature"), \
+                mock.patch.object(publication, "_execute_provider_dispatch_with_claim", execute), \
+                mock.patch.object(lifecycle_execution, "_policy_role_signer", return_value=("accepted-role", mock.Mock())):
+            report = r.dispatch_next(doc)
+        self.assertEqual(report["status"], "PERSISTED")
+        self.assertEqual(execute.call_count, 1)
+
+    def test_cli_rejects_non_object_authorization_with_structured_failure(self):
+        spec = importlib.util.spec_from_file_location("secpal_reacquisition_cli_nonobject", REPO_ROOT / "scripts/secpal-provider-reacquisition.py")
+        cli = importlib.util.module_from_spec(spec);spec.loader.exec_module(cli)
+        with tempfile.TemporaryDirectory(prefix="secpal-reacquisition-input-") as directory:
+            source, output = Path(directory) / "auth.json", Path(directory) / "result.json"
+            for value in ([], None, "text", 7):
+                source.write_text(json.dumps(value))
+                with mock.patch.object(sys, "argv", ["reacquisition", "observe", "--repo", REPOSITORY,
+                        "--delivery-issue", "1082", "--authorization", str(source), "--output", str(output)]), \
+                        mock.patch.object(cli.provider_reacquisition, "authenticate_assessment") as observe:
+                    self.assertEqual(cli.main(), 1)
+                observe.assert_not_called()
+                self.assertEqual(json.loads(output.read_text())["status"], "BLOCKED")
+
+    def test_stranded_claim_never_posts_a_second_request(self):
+        r, doc, observed = self.complete_observation()
+        observed = replace(observed, requests={}, results=())
+        with mock.patch.object(r, "_authenticate_execution", return_value=observed), mock.patch.object(authority, "_verify_signature"), \
+                mock.patch.object(publication, "_execute_provider_dispatch_with_claim") as execute:
+            report = r.dispatch_next(doc)
+        self.assertEqual(report["status"], "CLAIM_CONSUMED_WITHOUT_AUTHENTICATED_REQUEST")
+        self.assertEqual(report["write_attempts"], 0)
+        execute.assert_not_called()
+        with self.assertRaises(TypeError):
+            r.dispatch_next(doc, review_types=["CODE"])
+
+    def test_dispatch_uses_existing_routine_publication_role_and_serial_order(self):
+        from scripts.secpal_pr_review import lifecycle_execution
+        r, doc, observed = self.complete_observation()
+        keys = (SimpleNamespace(review_type="CODE", repository=doc["repository"]),
+                SimpleNamespace(review_type="SECURITY", repository=doc["repository"]))
+        for completed, expected in (((), "CODE"), (("CODE",), "SECURITY")):
+            live = replace(observed, requests={}, claims=(), results=())
+            signer = mock.Mock(return_value=("accepted-role", mock.Mock()))
+            execute = mock.Mock(return_value=SimpleNamespace(status="PERSISTED", replacement_comment_database_id=100, write_attempts=1))
+            with mock.patch.object(r, "_authenticate_execution", return_value=live), \
+                    mock.patch.object(r, "derive_dispatch_keys", return_value=keys), \
+                    mock.patch.object(r, "_terminal_result", side_effect=lambda _obs, typ: {} if typ in completed else None), \
+                    mock.patch.object(lifecycle_execution, "_policy_role_signer", signer), \
+                    mock.patch.object(publication, "_execute_provider_dispatch_with_claim", execute):
+                result = r.dispatch_next(doc)
+            self.assertEqual(result["review_type"], expected)
+            self.assertTrue(signer.call_args.kwargs["allow_routine_default"])
+            self.assertEqual(execute.call_count, 1)
+        with mock.patch.object(r, "_authenticate_execution", return_value=observed), \
+                mock.patch.object(r, "derive_dispatch_keys", return_value=keys), \
+                mock.patch.object(r, "_terminal_result", return_value={}), \
+                mock.patch.object(publication, "_execute_provider_dispatch_with_claim") as execute:
+            self.assertEqual(r.dispatch_next(doc)["status"], "FRESH_RESULTS_TERMINAL_CAPTURE_REQUIRED")
+        execute.assert_not_called()
+
+    def test_loaded_guard_error_is_normalized_before_target_observation(self):
+        r, doc, _ = self.complete_observation()
+        class LoadedSecurityBlocker(Exception):
+            pass
+        helper = SimpleNamespace(fast_path=SimpleNamespace(SecurityBlocker=LoadedSecurityBlocker),
+            _require_accepted_main_bridge_source=mock.Mock(side_effect=LoadedSecurityBlocker("candidate")))
+        with mock.patch.object(r.transport, "_load_actions_helper", return_value=helper), \
+                mock.patch.object(publication, "verify_current_lifecycle_authority") as current, \
+                mock.patch.object(publication, "verify_provider_dispatch_claims") as claims:
+            for operation in (lambda: r.authenticate_loss(doc["repository"], doc["delivery_issue"]),
+                              lambda: r._authenticate_execution(doc)):
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    operation()
+        current.assert_not_called()
+        claims.assert_not_called()
+
+    def test_cli_records_signing_failure_without_an_external_operation(self):
+        spec = importlib.util.spec_from_file_location("secpal_reacquisition_cli_test", REPO_ROOT / "scripts/secpal-provider-reacquisition.py")
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        with tempfile.TemporaryDirectory(prefix="secpal-reacquisition-cli-") as directory:
+            output = Path(directory) / "result.json"
+            with mock.patch.object(sys, "argv", ["reacquisition", "authorize", "--repo", REPOSITORY,
+                    "--delivery-issue", "1082", "--output", str(output)]), \
+                    mock.patch.object(cli.provider_reacquisition, "issue_authorization",
+                        side_effect=cli.lifecycle_execution.LifecycleExecutionError("accepted signer unavailable")):
+                self.assertEqual(cli.main(), 1)
+            self.assertEqual(json.loads(output.read_text())["status"], "BLOCKED")
+
+    def test_existing_isolated_action_launcher_can_load_reacquisition_claims(self):
+        action = REPO_ROOT / "scripts/secpal-pr-review-actions.py"
+        code = ("import importlib.util, importlib; "
+            f"spec = importlib.util.spec_from_file_location('isolated_actions', {str(action)!r}); "
+            "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "authority_module, publication_module = module._load_lifecycle_publication_helpers(); "
+            "importlib.import_module(publication_module.__package__ + '.provider_reacquisition'); "
+            "importlib.import_module(publication_module.__package__ + '.enrolled_draft_integration')")
+        with tempfile.TemporaryDirectory(prefix="secpal-reacquisition-existing-launcher-") as directory:
+            result = subprocess.run([sys.executable, "-I", "-c", code], cwd=directory,
+                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_canonical_cli_imports_in_isolated_python_from_any_directory(self):
+        import subprocess
+        import sys
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        script = Path(__file__).resolve().parents[1] / "scripts/secpal-provider-reacquisition.py"
+        with TemporaryDirectory(prefix="secpal-reacquisition-cli-") as directory:
+            result = subprocess.run([sys.executable, "-I", str(script), "--help"],
+                cwd=directory, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("inspect,authorize,dispatch,observe", result.stdout)
+
+    def test_candidate_tooling_is_rejected_before_target_acquisition(self):
+        r, doc, _ = self.complete_observation()
+        helper = SimpleNamespace(fast_path=fast_path, _require_accepted_main_bridge_source=mock.Mock(side_effect=fast_path.SecurityBlocker("candidate")))
+        with mock.patch.object(r.transport, "_load_actions_helper", return_value=helper), \
+                mock.patch.object(publication, "verify_provider_dispatch_claims") as read:
+            with self.assertRaises(fast_path.SecurityBlocker):
+                r._authenticate_execution(doc)
+        read.assert_not_called()
+
+    def test_canonical_writer_attempts_one_post_and_preserves_ambiguity(self):
+        r, doc, observed = self.complete_observation()
+        helper = SimpleNamespace(_require_accepted_main_bridge_source=mock.Mock(return_value="5" * 40))
+        with mock.patch.object(r.transport, "_load_actions_helper", return_value=helper), \
+                mock.patch.object(r, "_observe_timeline", return_value=observed.timeline), \
+                mock.patch.object(publication, "_run_gh", side_effect=publication.LifecyclePublicationError("timeout")) as post:
+            with self.assertRaises(publication.AmbiguousProviderDispatchWrite):
+                r._write_request(observed, "CODE", "@codex review")
+        self.assertEqual(post.call_count, 1)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            r._write_request(observed, "CODE", "@codex review please")
 
 
 if __name__ == "__main__":

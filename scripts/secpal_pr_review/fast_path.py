@@ -538,12 +538,36 @@ def _is_codex_completed_status(value: str) -> bool:
     return True
 
 
+def required_codex_review_types() -> tuple[str, ...]:
+    """The complete canonical Codex assessment always includes both types."""
+
+    return ("CODE", "SECURITY")
+
+
+CODEX_NO_FINDING_TEXT = {
+    "CODE": "Codex Review: Didn't find any major issues.",
+    "SECURITY": "No security issues were found in this pull request.",
+}
+
+
+def codex_review_type(body: Any) -> str | None:
+    """Classify the existing canonical review headers, without granting trust."""
+
+    if isinstance(body, str):
+        if body.lstrip().startswith("### 🛡️ Codex Security Review"):
+            return "SECURITY"
+        if body.lstrip().startswith("### 💡 Codex Review"):
+            return "CODE"
+    return None
+
+
 def verify_codex_provider_summary(
     body: Any,
     *,
     head_sha: str,
     repository: str | None = None,
     pull_request_number: int | None = None,
+    require_terminal: bool = True,
 ) -> None:
     """Verify the canonical terminal Code/Security provider summary for a head."""
 
@@ -592,9 +616,12 @@ def verify_codex_provider_summary(
             raise SecurityBlocker(
                 "Codex review provider repository or PR identity changed"
             )
-    if status.get("status") != "completed":
+    if require_terminal and status.get("status") != "completed":
         raise SecurityBlocker("Codex review provider is not terminal")
-    for label in ("Code Review", "Security Review"):
+    if not require_terminal and status.get("status") not in {"running", "completed"}:
+        raise SecurityBlocker("Codex review provider status is indeterminate")
+    for review_type in required_codex_review_types():
+        label = {"CODE": "Code Review", "SECURITY": "Security Review"}[review_type]
         rows = [line for line in body.splitlines() if f"**{label}**" in line]
         if len(rows) != 1:
             raise SecurityBlocker("Codex review provider status is indeterminate")
@@ -608,8 +635,11 @@ def verify_codex_provider_summary(
             or not cells[4].strip()
         ):
             raise SecurityBlocker("Codex review provider status is indeterminate")
-        if not _is_codex_completed_status(cells[2].strip()):
-            raise SecurityBlocker("Codex review provider is not terminal")
+        row_status = cells[2].strip()
+        if not _is_codex_completed_status(row_status):
+            pending = row_status.replace("🔄 **Running** since ", "✅ **Completed** ", 1)
+            if require_terminal or not row_status.startswith("🔄 **Running** since ") or not _is_codex_completed_status(pending):
+                raise SecurityBlocker("Codex review provider is not terminal")
 
 
 def validation_registry_projection(entry: Any) -> dict[str, Any]:
@@ -4170,11 +4200,9 @@ def _verify_successor_transport(
             "CODEX_CODE_REVIEW_RESULT",
             "CODEX_SECURITY_REVIEW_RESULT",
         }:
-            no_finding_text = (
-                "Codex Review: Didn't find any major issues."
-                if role == "CODEX_CODE_REVIEW_RESULT"
-                else "No security issues were found in this pull request."
-            )
+            no_finding_text = CODEX_NO_FINDING_TEXT[
+                "CODE" if role == "CODEX_CODE_REVIEW_RESULT" else "SECURITY"
+            ]
             reviewed_commit = f"**Reviewed commit:** `{resulting_head_sha[:10]}`"
             if (
                 kind != "CONVERSATION_COMMENT"
@@ -4189,15 +4217,8 @@ def _verify_successor_transport(
         elif role == "CODEX_REVIEW":
             if rejected_candidate or reanchored_classified_review or bounded_first_fallback:
                 reviewed_commit = f"**Reviewed commit:** `{resulting_head_sha[:10]}`"
-                review_kind = (
-                    "SECURITY_REVIEW"
-                    if isinstance(body, str)
-                    and body.lstrip().startswith("### 🛡️ Codex Security Review")
-                    else "CODE_REVIEW"
-                    if isinstance(body, str)
-                    and body.lstrip().startswith("### 💡 Codex Review")
-                    else None
-                )
+                review_type = codex_review_type(body)
+                review_kind = {"CODE": "CODE_REVIEW", "SECURITY": "SECURITY_REVIEW"}.get(review_type)
                 if (
                     kind != "REVIEW"
                     or predecessor is not None

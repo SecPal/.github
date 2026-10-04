@@ -999,6 +999,70 @@ cannot be replayed to post; a stranded claim remains consumed. The #1053
 consumer is responsible for supplying fresh, complete authenticated provider
 eligibility and request-history reconciliation to that executor.
 
+### Historical acquisition evidence loss
+
+`scripts/secpal-provider-reacquisition.py` is the canonical action for the exact
+`PROVIDER_ACQUISITION_EVIDENCE_LOSS_REACQUISITION` reconciliation case in
+`SecPal/.github`. It requires authenticated OPEN Ready CURRENT, Review 1/1,
+Remediation 1/2, one Ready transition, Cycle-3 absence and zero exceptional
+history. It creates no lifecycle event or counter change.
+
+The read-only loss verifier reuses the maintained bounded native timeline and
+three-page PushEvent feed, complete Stable Feedback, protected journal and
+source-history stores. Every PR source tree must preserve the gitignored
+workspace-local output scope. It surveys all immutable source blobs, independent
+of extension, and the authenticated journal for original typed integration,
+receipt and attestation bytes. Linked or unsearched stores, incomplete history,
+available companion bytes, an authoritative head-publication event, missing
+historical terminal results, substituted digest identities and changed CURRENT
+deny this exact case. Bounds are 100 native timeline events, 100 source heads,
+10,000 entries per tree, 20,000 distinct blobs, 16 MiB per blob, 64 MiB total
+source bytes and 4,096 journal objects. This is a maintained-store conclusion,
+not a universal absence proof.
+
+The admitted result is
+`REQUIRED_HISTORICAL_ACQUISITION_EVIDENCE_UNAVAILABLE`. Original first-fallback
+validity remains `UNPROVABLE_FROM_RETAINED_AUTHORITY`. Neither digest identities,
+HEAD_ADVANCED nor terminal results reconstruct unavailable typed package bytes
+or the original publication chronology.
+
+The accepted-main issuer signs one exact authorization using the existing
+publication role. It binds the full repository/issue/PR/lifecycle/CURRENT,
+head/tree and finite-state identities, complete historical assessment, loss
+proof, derived assessment identity, both canonical provider types and
+`bounded_uses = 1`. A fresh authenticated GitHub Date supplies authorization
+chronology. Caller providers, finding subsets and loss declarations are absent
+from the action interface. Issuance and execution authenticate the complete
+executing verifier package against freshly protected main.
+
+Dispatch uses schema 1.1 of the existing `SECPAL_PROVIDER_DISPATCH_CLAIM`, with
+the exact signed authorization. Existing schema 1.0 retains #1053's latest
+authorized assessment and persisted-unacknowledged replacement semantics.
+Retained original request fields identify the historical requests; they do not
+prove those requests were valid first fallbacks. The new signed assessment
+supplies reacquisition authority. Both journal readers enforce the same schema,
+signature, ancestry and uniqueness checks. One same-head authorization may
+reserve one Code and one Security claim; duplicates and competing
+authorizations fail closed. Claims remain consumed after an uncertain write.
+
+`dispatch` derives Code first, waits for its fresh terminal result, and then
+derives Security. Each call can publish one claim and attempt one canonical
+POST. Immediately before writing, the executor reauthenticates the bounded
+loss survey, CURRENT, OPEN Ready source, actor, request/result history and its
+own protected claim. Existing fresh requests or claims cannot authorize another
+POST. An ambiguous response requires complete request-history reconciliation;
+zero or ambiguous matches cannot be retried automatically.
+
+`observe` performs one maintained read. A complete result requires fresh
+canonical request identities, exact-head results and current terminal summary
+rows, with completion within the existing 30-minute observation window after
+each new request. Historical identities and results remain separate. Provider
+non-terminality ends automatic observation at the bound and authorizes no extra
+request. The final assessment captures all current feedback, provider review
+database identities and the complete finding/thread inventory. Every current
+finding still requires ordinary classification; this action performs no
+remediation, source change, lifecycle publication, thread resolution or merge.
+
 Publication does not derive lifecycle state, orchestrate lifecycle events, or
 implement two-parent integration. Those remain owned by #750, #692, and #745
 respectively. Repositories with no enrolled publication remain valid, while a
@@ -1587,6 +1651,53 @@ separately signed late-disposition path documented below; that path reuses the
 already verified final delivery attestation and does not create a new receipt.
 
 ### Explicit Ready-head integration evidence
+
+For chained integration, the prior delivery head remains a typed integration;
+it is never flattened into ordinary remediation. Supply the original immutable
+packages through `attest-validation --prior-integration-chain PATH`, alongside
+the existing prior manifest, signed tag, reviewed-state, receipt and attestation
+arguments. The transport is a closed JSON object with schema `1.0`, kind
+`READY_INTEGRATION_PREDECESSOR_PACKAGES`, and a `packages` array in publication
+order. Each entry contains exactly `integration_evidence`, `reviewed_state`,
+`validation_receipt`, `final_attestation`, and `prior_authority`. These are
+original evidence documents, not caller-authored verifier results.
+
+The canonical integration verifier independently authenticates each package's
+supported historical evidence semantics, actual commit trailers, ordered parents,
+tree and signature. The protected publication owner verifies the exact complete
+`HEAD_ADVANCED` suffix, rejects gaps, duplicates, substituted ancestry and replay,
+and derives the prior-authority manifest from verified CURRENT. The manifest and
+its existing signed tag retain their exact head, tree, receipt, attestation,
+signer and publication bindings. Historical parent 2 is never compared with
+current main; the new integration still requires a fresh protected-main
+observation. All finite lifecycle state and histories remain identical across
+each advancement, including Remediation 2/2. Ordinary single-parent validation
+is unchanged, and supplying this transport cannot admit an ordinary merge.
+
+The canonical `derive_ready_source_recovery_provider_binding` can compose a
+Ready-preserving ordinary remediation suffix followed by a complete typed
+`HEAD_ADVANCED` suffix. Its `ready_integrations` argument supplies the original
+verifier-authenticated validation and prior-authority pairs in transition order;
+it selects no provider head or subset. Each pair must match the exact protected
+predecessor and successor publications, source head/tree, signed prior-authority
+tag, receipt, final attestation, signer and unchanged finite state. Missing,
+extra, reordered, substituted or candidate-local integration evidence fails
+closed. The existing integration verifier and its trust inputs must match
+freshly authenticated protected main.
+
+Historical parent 2 binds the exact main observation authorized in the signed
+integration evidence and protected publication. It does not bind today's main
+tip. Later main advancement therefore preserves the original integration's
+meaning, while substituting its historical main observation invalidates its
+signed receipt/source binding. Generic delivery ancestry grants no authority.
+
+The derived provider terminality remains at the unique historical reviewed
+head. Current feedback is separately captured in full at the resulting CURRENT
+head, and the capture rejects a historical head even when its provider summary
+is terminal. Existing current-source classification and material-blocker gates
+remain required. This composition changes neither bounded provider acquisition
+nor review, remediation, Ready, Recovery or Continuation budgets. The broader
+provider-lineage contract remains owned by #1031.
 
 Ordinary remediation and recovery continue to require one parent. A separately
 user-authorized mechanical integration into an already-Ready delivery PR uses
