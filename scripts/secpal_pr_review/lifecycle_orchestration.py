@@ -1183,7 +1183,12 @@ def verify_ready_remediation_provider_growth_authority(
         )
     lifecycle = current.lifecycle
     try:
-        state = authority._validate_state(copy.deepcopy(lifecycle.state))
+        state = authority._validate_state(
+            copy.deepcopy(lifecycle.state),
+            allow_adopted_observations=(
+                lifecycle.historical_proof_mode == authority.EXACT_ADOPTION_PROOF_MODE
+            ),
+        )
         try:
             reviewed, predecessor_eligibility = (
                 fast_path.verified_validation_review_context(predecessor_validation)

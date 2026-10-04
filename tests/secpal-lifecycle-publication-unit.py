@@ -236,9 +236,10 @@ def recovered_ready_chain(issue: int = ISSUE) -> Chain:
 
 
 def exact_adoption_evidence(
-    *, admit_review_budget: bool = False, provider_reviewed_draft: bool = False
+    *, admit_review_budget: bool = False, provider_reviewed_draft: bool = False,
+    ready_before_remediation: bool = False,
 ) -> tuple[bytes, dict[str, Any]]:
-    if admit_review_budget and provider_reviewed_draft:
+    if sum((admit_review_budget, provider_reviewed_draft, ready_before_remediation)) > 1:
         raise ValueError("adoption fixture modes are exclusive")
     if admit_review_budget:
         history = [
@@ -279,10 +280,16 @@ def exact_adoption_evidence(
              "observed_at": "2026-08-05T00:00:00Z", "head_sha": HEADS[2],
              "reviewed_head_sha": None},
         ]
+    if ready_before_remediation:
+        del history[3:]
+    adoption_head = HEADS[0] if ready_before_remediation else HEADS[2]
     state = authority.initial_state()
     state.update(
         unrestricted_review_count=1,
-        remediation_cycle_count=1 if (admit_review_budget or provider_reviewed_draft) else 2,
+        remediation_cycle_count=(
+            0 if ready_before_remediation else
+            1 if (admit_review_budget or provider_reviewed_draft) else 2
+        ),
         draft=True if (admit_review_budget or provider_reviewed_draft) else False,
         ready=False if (admit_review_budget or provider_reviewed_draft) else True,
         ready_transition_count=0 if (admit_review_budget or provider_reviewed_draft) else 1,
@@ -292,10 +299,10 @@ def exact_adoption_evidence(
         }],
     )
     validation = verified_validation_evidence(
-        head=HEADS[2], tree=HEADS[3], parent=HEADS[1]
+        head=adoption_head, tree=HEADS[3], parent=HEADS[1]
     )
     commit = {
-        "oid": HEADS[2], "source": "USER", "signer_identity": SIGNER,
+        "oid": adoption_head, "source": "USER", "signer_identity": SIGNER,
         "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
         "github_verification": {"verified": True, "reason": "valid"},
     }
@@ -337,7 +344,7 @@ def exact_adoption_evidence(
     ):
         arguments = dict(
             repository=REPOSITORY, delivery_issue=ISSUE, pull_request=PR,
-            head_sha=HEADS[2], tree_sha=HEADS[3], pull_request_state="OPEN",
+            head_sha=adoption_head, tree_sha=HEADS[3], pull_request_state="OPEN",
             commit_signature_evidence=commit, validation_evidence=validation,
             observed_pre_enrollment_history=history, intended_state=state,
         )

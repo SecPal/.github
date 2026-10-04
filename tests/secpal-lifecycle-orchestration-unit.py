@@ -13097,6 +13097,183 @@ class PostReadyValidationRemediationTests(TestCase):
             authority.derive_state(exhausted, "REMEDIATION_COMPLETED", "e" * 64)
 
 
+class AdoptedReadyStateAdmissionTests(TestCase):
+    """Authenticate adoption through the existing signed hermetic journal.
+
+    The signed Ready remediation suffix supplies the real provider binding.
+    Validation review contexts and live feedback are controlled at this seam.
+    """
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location(
+            "adopted_ready_publication_fixture",
+            REPO_ROOT / "tests/secpal-lifecycle-publication-unit.py",
+        )
+        fixture = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = fixture
+        spec.loader.exec_module(fixture)
+        journal = fixture.LifecyclePublicationTests()
+        journal.setUp()
+        self.addCleanup(journal.tearDown)
+        serialized, self.proof = fixture.exact_adoption_evidence(
+            ready_before_remediation=True,
+        )
+        enrolled = publication.enroll_existing_lifecycle(
+            serialized, signer_identity=fixture.SIGNER, signer=fixture.signer_for(),
+        )
+        event = authority.create_transition_authorization(
+            event_id="adopted-ready-remediation", repository=REPOSITORY,
+            delivery_issue=fixture.ISSUE, lifecycle_id=enrolled.lifecycle.lifecycle_id,
+            pull_request=fixture.PR,
+            predecessor_authority_digest=enrolled.lifecycle.authority_digest,
+            predecessor_head_sha=enrolled.lifecycle.head_sha,
+            resulting_head_sha=fixture.HEADS[2], transition_kind="REMEDIATION_COMPLETED",
+            replacement_pull_request=None,
+            initialization_evidence_digest=enrolled.lifecycle.initialization_evidence_digest,
+            signer_identity=fixture.SIGNER, signer=fixture.signer_for(),
+        )
+        snapshot = authority.issue_exact_state_adoption_successor_authority(
+            serialized_adoption_evidence=serialized, authorization=event,
+            signer_identity=fixture.SIGNER, authority_signer=fixture.signer_for(),
+            current_head_evidence=fixture.verified_validation_evidence(
+                head=fixture.HEADS[2], tree=fixture.HEADS[3], parent=enrolled.lifecycle.head_sha,
+            ),
+        )
+        advanced = publication.advance_current_terminal(
+            authority.serialize_exact_state_adoption_evidence(
+                exact_state_adoption_proof=self.proof,
+                transition_authorizations=[event], authority_chain=[snapshot],
+            ), signer_identity=fixture.SIGNER, signer=fixture.signer_for(),
+        )
+        self.current = publication.verify_current_lifecycle_authority(
+            REPOSITORY, fixture.ISSUE,
+        )
+        self.assertEqual(self.current, advanced)
+        self.reviewed, self.resulting, self.before, self.after = ordinary_ready_provider_growth()
+        head_map = {
+            self.reviewed.head_sha: fixture.HEADS[0],
+            self.resulting.head_sha: self.current.lifecycle.head_sha,
+        }
+        for feedback in (self.reviewed, self.resulting):
+            for review in feedback.feedback["reviews"]:
+                review["commit_oid"] = head_map.get(review["commit_oid"], review["commit_oid"])
+        for feedback, head, eligibility in (
+            (self.reviewed, fixture.HEADS[0], self.before),
+            (self.resulting, self.current.lifecycle.head_sha, self.after),
+        ):
+            feedback.head_sha = head
+            feedback.pull_request_number = fixture.PR
+            feedback.refresh_digests()
+            eligibility.update(
+                pull_request_number=fixture.PR, reviewed_head_sha=head,
+                reviewed_state_digest=feedback.state_digest,
+            )
+        lifecycle = self.current.lifecycle
+        self.predecessor = fast_path._unregistered_validation_evidence(
+            repository=REPOSITORY, delivery_issue_number=fixture.ISSUE,
+            pull_request_number=fixture.PR, head_sha=lifecycle.head_sha,
+            tree_sha=lifecycle.tree_sha,
+            validation_receipt_digest=lifecycle.validation_receipt_digest,
+            final_attestation_digest=lifecycle.adoption_source_evidence_digest,
+            source_validation_evidence_digest=lifecycle.source_validation_evidence_digest,
+        )
+        self.candidate = replace(self.predecessor, head_sha="9" * 40)
+
+    def verify(self, current=None, **extra):
+        def capture(repository, pull_request, *, ready_remediation_provider_binding,
+                    capture_provider_summary):
+            binding = ready_remediation_provider_binding
+            self.assertEqual(binding.provider_head(
+                repository=repository, pull_request=pull_request,
+                current_head_sha=self.resulting.head_sha,
+            ), self.reviewed.head_sha)
+            return self.resulting
+
+        with (
+            mock.patch.object(fast_path, "verified_validation_review_context", side_effect=[
+                (self.reviewed, fast_path.digest_json(self.before)),
+                (self.resulting, fast_path.digest_json(self.after)),
+            ]),
+            mock.patch.object(orchestration, "_capture_current_stable_feedback",
+                              side_effect=capture),
+        ):
+            return orchestration.verify_ready_remediation_provider_growth_authority(
+                self.current if current is None else current,
+                predecessor_validation=self.predecessor, candidate_validation=self.candidate,
+                predecessor_eligibility_evidence=self.before, eligibility_evidence=self.after,
+                **extra,
+            )
+
+    def test_signed_adopted_ready_observation_passes_state_boundary(self):
+        state = self.current.lifecycle.state
+        self.assertEqual(self.current.lifecycle.historical_proof_mode,
+                         authority.EXACT_ADOPTION_PROOF_MODE)
+        self.assertEqual(state["ready_history"], [{
+            "sequence": 1, "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": authority.digest_json(
+                self.proof["observed_pre_enrollment_history"][1]),
+        }])
+        self.assertEqual(state["remediation_cycle_count"], 1)
+        self.assertEqual(authority._validate_state(state, allow_adopted_observations=True), state)
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            authority._validate_state(state)
+        binding = publication.derive_ready_source_recovery_provider_binding(self.current)
+        self.assertEqual(binding.provider_head_sha, self.reviewed.head_sha)
+        self.assertEqual(binding.provider_binding_sources, (publication.ORDINARY_REMEDIATION_SUFFIX,))
+        self.assertEqual(len(binding.remediation_event_digests), 1)
+        verified = self.verify()
+        self.assertEqual(verified.current_head_sha, self.current.lifecycle.head_sha)
+        self.assertEqual(verified.thread_ids, tuple(sorted(
+            item["thread_id"] for item in self.after["eligible_threads"])))
+        self.assertEqual(self.current.lifecycle.state, state)
+
+    def test_adopted_history_and_finite_state_negative_matrix(self):
+        mutations = {
+            "native observation insertion": lambda s: None,
+            "missing observation": lambda s: s["ready_history"][0].pop("observation_digest"),
+            "malformed observation": lambda s: s["ready_history"][0].update(observation_digest="bad"),
+            "wrong transition": lambda s: s["ready_history"][0].update(transition_kind="HEAD_ADVANCED"),
+            "out of order": lambda s: s["ready_history"][0].update(sequence=2),
+            "duplicate sequence": lambda s: s["ready_history"].append(copy.deepcopy(s["ready_history"][0])),
+            "Ready history mismatch": lambda s: s.update(ready_transition_count=0),
+            "Review drift": lambda s: s.update(unrestricted_review_count=0),
+            "Remediation drift": lambda s: s.update(remediation_cycle_count=2),
+            "Cycle 3": lambda s: s.update(cycle_3_absent=False),
+            "Recovery drift": lambda s: s.update(exceptional_recovery_count=1),
+            "Continuation drift": lambda s: s.update(exceptional_continuation_count=1),
+        }
+        for label, mutate in mutations.items():
+            state = copy.deepcopy(self.current.lifecycle.state)
+            mutate(state)
+            changed = replace(self.current.lifecycle, state=state)
+            if label == "native observation insertion":
+                changed = replace(changed, historical_proof_mode=authority.NATIVE_PROOF_MODE)
+            with self.subTest(label=label), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.verify(replace(self.current, lifecycle=changed))
+        self.assertEqual(self.current.lifecycle.historical_proof_mode, authority.EXACT_ADOPTION_PROOF_MODE)
+
+    def test_caller_cannot_select_state_mode_or_substitute_delivery(self):
+        for extra in ({"allow_adopted_observations": True},
+                      {"historical_proof_mode": authority.EXACT_ADOPTION_PROOF_MODE}):
+            with self.subTest(extra=extra), self.assertRaises(TypeError):
+                self.verify(**extra)
+        for field, value in (
+            ("repository", "SecPal/contracts"), ("delivery_issue", 1),
+            ("pull_request", 1), ("lifecycle_id", "lifecycle:" + "a" * 64),
+            ("authority_digest", "a" * 64), ("head_sha", "a" * 40),
+        ):
+            with self.subTest(field=field), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.verify(replace(self.current, lifecycle=replace(self.current.lifecycle, **{field: value})))
+        for field, value in (("publication_oid", "a" * 40), ("publication_digest", "a" * 64)):
+            with self.subTest(field=field), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.verify(replace(self.current, **{field: value}))
+        # Authentication rejects proof tampering before it can select a mode.
+        proof = copy.deepcopy(self.proof)
+        proof["intended_state"]["ready_history"][0]["observation_digest"] = "a" * 64
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            authority.verify_exact_state_adoption_proof(proof)
+
+
 class ReadyIntegrationRemediationTests(TestCase):
     """Real signed integration, protected-journal read-back and ordinary candidate."""
 
