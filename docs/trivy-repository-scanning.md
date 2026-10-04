@@ -120,7 +120,7 @@ Normalized candidates stay private until redaction verification correlates
 Trivy's cause-line censor masks with immutable Git blobs. Captured values are
 used only transiently to reject aliases in all public metadata. Missing,
 truncated, binary, or ambiguous censor evidence fails closed. Trivy diagnostics
-stay private, fail closed on warnings/errors or malformed/missing log framing
+stay private, fail closed on unqualified warnings/errors or malformed/missing log framing
 even when the process exits zero, and are discarded. Every Python invocation is
 isolated from checkout imports.
 The exact absent-cache diagnostic for archive-pinned embedded checks is accepted
@@ -128,3 +128,50 @@ once only, with independent confirmation that no external checks cache exists.
 Normalization itself consumes captured canonical path strings and performs no
 filesystem observation. Only verified normalized evidence enters the bounded
 artifact directory.
+
+## Composer severity fallback qualification
+
+The exact Trivy 0.74.0 severity fallback advisory is qualified once per process
+against the same parsed native result used for normalization. Other warnings,
+additional warnings, changed text, malformed framing, and parser errors still
+fail closed. No caller input selects diagnostic policy. Qualification requires
+the reviewed version/archive identity, the exact scan workspace, and native
+Composer (`lang-pkgs` / `composer`) CVE findings from the PHP Security Advisories
+Database with an omitted `SeveritySource`. Every finding with an omitted source
+must satisfy this reviewed context; unsupported ecosystems and representations
+remain fail-closed when the advisory is present.
+
+The pinned [`autoDetectSeverity` implementation](https://github.com/aquasecurity/trivy/blob/v0.74.0/pkg/vulnerability/vulnerability.go)
+first considers the advisory source and NVD (and GHSA for GHSA IDs). Its last
+fallback returns the database severity with an empty source and emits the full
+versioned documentation advisory through `sync.OnceFunc`. The reviewed Composer
+CVE representation has no severity for its advisory source, no usable NVD
+severity, and a GHSA `VendorSeverity` entry matching the emitted fallback severity.
+Only GHSA and an optional NVD UNKNOWN entry qualify this fallback; additional
+vendor sources require independent qualification and remain rejected.
+An advisory-source entry, even UNKNOWN, would return before that warning; an
+NVD UNKNOWN entry can fall through. GHSA IDs and package-specific overrides are
+outside this bounded qualification. The native JSON omits empty
+`SeveritySource`; an explicit empty or malformed source is rejected.
+
+This does not attribute the fallback severity to a particular vendor. Trivy DB
+v2 explicitly describes its fallback `Severity` as not source-attributable.
+Normalized evidence already binds the emitted severity, advisory, package and
+version to the content identity of the complete database, exact scanner archive,
+and trusted configuration implementation. Together those identities reproduce
+the source-selection decision; no public diagnostic text or schema expansion
+is needed. Freshness, central exception policy, and immutable-source secret
+redaction still gate admission after scanner execution. No mutation or
+publication authority is added.
+
+The hermetic `composer-0.74.0-native.json` fixture retains only bounded,
+secret-free vulnerability fields observed from the exact archive on 2026-10-04
+with `symfony/http-foundation` v5.4.0 in `packages-dev`. The live replay preserves
+the generic fixture, adds this Composer development lockfile, and exercises the
+maintained action's scan step. It requires vulnerability, misconfiguration and
+synthetic-secret findings with exact subject/scanner/database/policy/configuration
+identity, checks public logs/summary/evidence for secret leakage, and confirms
+private native files are deleted. Unknown diagnostics and real parser/process
+failures remain negative cases. Callers must explicitly review and adopt the
+accepted immutable scanner revision; this correction does not change any API
+caller pin.

@@ -45,6 +45,7 @@ def run_evaluate_fixture(
     native: dict,
     database: dict | None = None,
     completed_at: str = "2026-09-16T10:10:00Z",
+    diagnostics: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[bytes], dict]:
     import jsonschema
 
@@ -58,11 +59,20 @@ def run_evaluate_fixture(
             json.dumps(valid_database() if database is None else database),
             encoding="utf-8",
         )
+        diagnostic_arguments = []
+        if diagnostics is not None:
+            diagnostic_path = root / "native.stderr"
+            fallback = '2026-10-04T12:00:00Z\tERROR\t[misconfig] Falling back to embedded checks\terr=' + json.dumps(
+                'failed to check cache: cache does not exist at ' + json.dumps(str(root / 'policy' / 'content'))
+            ) + '\n'
+            diagnostic_path.write_text(fallback + diagnostics)
+            diagnostic_arguments = ["--diagnostics", str(diagnostic_path), "--cache-dir", str(root)]
         completed = subprocess.run(
             [
                 "python3",
                 str(SCRIPT),
                 "evaluate",
+                *diagnostic_arguments,
                 "--native",
                 str(native_path),
                 "--database",
@@ -78,7 +88,7 @@ def run_evaluate_fixture(
                 "--scanner-version",
                 "0.74.0",
                 "--scanner-identity",
-                "sha256:" + "a" * 64,
+                "sha256:2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a",
                 "--completed-at",
                 completed_at,
                 "--output",
@@ -305,6 +315,98 @@ class RepositoryScanContractTests(unittest.TestCase):
             (cache / 'policy' / 'content').mkdir(parents=True)
             with self.assertRaises(self.module.ContractError):
                 self.module.verify_diagnostics(healthy, cache)
+
+    def test_composer_advisory_requires_pinned_native_fallback_context(self) -> None:
+        native = json.loads((FIXTURES / "composer-0.74.0-native.json").read_text())
+        scanner = {
+            "name": "trivy", "version": "0.74.0",
+            "immutable_id": "sha256:2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a",
+            "configuration_sha256": self.module.configuration_identity(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            prefix = '2026-10-04T12:00:00Z\t'
+            fallback = prefix + 'ERROR\t[misconfig] Falling back to embedded checks\terr=' + json.dumps(
+                'failed to check cache: cache does not exist at ' + json.dumps(str(cache / 'policy' / 'content'))
+            ) + '\n'
+            advisory = prefix + 'WARN\tUsing severities from other vendors for some vulnerabilities. Read https://trivy.dev/docs/v0.74/guide/scanner/vulnerability#severity-selection for details.\n'
+            self.module.verify_diagnostics(fallback + advisory, cache, native=native, scanner=scanner, workspace=".")
+            # One sync.Once warning can account for several fallback findings.
+            multiple = copy.deepcopy(native)
+            multiple["Results"][0]["Vulnerabilities"].append(copy.deepcopy(multiple["Results"][0]["Vulnerabilities"][0]))
+            self.module.verify_diagnostics(fallback + advisory, cache, native=multiple, scanner=scanner, workspace=".")
+            nvd_unknown = copy.deepcopy(native)
+            nvd_unknown["Results"][0]["Vulnerabilities"][0]["VendorSeverity"]["nvd"] = 0
+            self.module.verify_diagnostics(fallback + advisory, cache, native=nvd_unknown, scanner=scanner, workspace=".")
+            cases = []
+            for field, value in (
+                ("SeveritySource", "ghsa"), ("SeveritySource", ""),
+                ("DataSource", {}), ("VendorSeverity", {}),
+                ("VendorSeverity", {"ghsa": True}), ("VendorSeverity", {"unqualified-source": 3}),
+                ("VendorSeverity", {"ghsa": 3, "unqualified-source": 3}), ("VendorSeverity", {"nvd": 3}),
+                ("VendorSeverity", {"ghsa": 2}), ("VendorSeverity", {"php-security-advisories": 0, "ghsa": 3}),
+                ("Severity", "EXTREME"), ("VulnerabilityID", "GHSA-abcd-abcd-abcd"),
+            ):
+                changed = copy.deepcopy(native)
+                changed["Results"][0]["Vulnerabilities"][0][field] = value
+                cases.append(changed)
+            for field, value in (("Type", "npm"), ("Class", "os-pkgs"), ("Vulnerabilities", [])):
+                changed = copy.deepcopy(native)
+                changed["Results"][0][field] = value
+                cases.append(changed)
+            for field, value in (("ArtifactName", "/substituted"), ("SchemaVersion", 1), ("Results", False)):
+                changed = copy.deepcopy(native)
+                changed[field] = value
+                cases.append(changed)
+            for field, value in (("SeveritySource", "ghsa"), ("VendorSeverity", {"nvd": 3})):
+                changed = copy.deepcopy(native)
+                changed["Results"][0]["Vulnerabilities"][1][field] = value
+                cases.append(changed)
+            for changed in cases:
+                with self.subTest(native=changed), self.assertRaises(self.module.ContractError):
+                    self.module.verify_diagnostics(fallback + advisory, cache, native=changed, scanner=scanner, workspace=".")
+            for diagnostic in (
+                fallback + advisory + prefix + 'WARN\tpartial scan\n',
+                fallback + advisory + advisory,
+                fallback + advisory.replace('vendors', 'vendor'),
+                fallback + advisory.replace('WARN\t', 'WARN '),
+                fallback + advisory + prefix + 'ERROR\tparser failed\n',
+                fallback + advisory + prefix + 'WARN\tUnable to parse Composer lockfile\n',
+                '', 'malformed',
+            ):
+                with self.subTest(diagnostic=diagnostic), self.assertRaises(self.module.ContractError):
+                    self.module.verify_diagnostics(diagnostic, cache, native=native, scanner=scanner, workspace=".")
+            for changed in (None, {**scanner, "version": "0.73.0"}, {**scanner, "immutable_id": "sha256:" + "a" * 64}):
+                with self.assertRaises(self.module.ContractError):
+                    self.module.verify_diagnostics(fallback + advisory, cache, native=native, scanner=changed, workspace=".")
+            with self.assertRaises(self.module.ContractError):
+                self.module.verify_diagnostics(fallback + advisory, cache)
+            (cache / "policy" / "content").mkdir(parents=True)
+            with self.assertRaises(self.module.ContractError):
+                self.module.verify_diagnostics(fallback + advisory, cache, native=native, scanner=scanner, workspace=".")
+
+    def test_composer_advisory_survives_complete_admission_and_redaction(self) -> None:
+        native = native_result()
+        composer = json.loads((FIXTURES / "composer-0.74.0-native.json").read_text())
+        native["Results"][0] = composer["Results"][0]
+        advisory = '2026-10-04T12:00:00Z\tWARN\tUsing severities from other vendors for some vulnerabilities. Read https://trivy.dev/docs/v0.74/guide/scanner/vulnerability#severity-selection for details.\n'
+        process, result = run_evaluate_fixture(native, diagnostics=advisory)
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(result["gate_state"], "ACTIONABLE")
+        self.assertEqual({f["class"] for f in result["findings"]}, {"VULNERABILITY", "MISCONFIGURATION", "SECRET"})
+        self.assertEqual(result["subject"], {"repository": "SecPal/example", "commit": COMMIT})
+        self.assertEqual(result["scanner"]["configuration_sha256"], self.module.configuration_identity())
+        self.assertEqual(result["database"], valid_database())
+        self.assertNotIn(SYNTHETIC_SECRET, process.stdout.decode() + process.stderr.decode() + json.dumps(result))
+        database = valid_database()
+        database["next_update"] = "2026-09-16T10:09:00Z"
+        process, stale = run_evaluate_fixture(native, database, diagnostics=advisory)
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(stale["operation"]["failure_code"], "DATABASE_FAILURE")
+        process, failed = run_evaluate_fixture(native, diagnostics=advisory + '2026-10-04T12:00:00Z\tWARN\tparser failed\n')
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(failed["gate_state"], "UNKNOWN_STALE")
+        self.assertEqual(failed["operation"]["failure_code"], "SCANNER_FAILURE")
 
     def test_suppressed_native_findings_fail_closed(self) -> None:
         native = native_result()

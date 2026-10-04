@@ -95,9 +95,6 @@ runs:
             --secret-config "$governance_root/policies/trivy-repository-secret-v1.yaml" \
             --output "$native" "$GITHUB_WORKSPACE" >/dev/null 2>"$tool_root/native.stderr"; then
             failure_code="SCANNER_FAILURE"
-          elif ! python3 -I "$governance_root/scripts/secpal-trivy-repository-scan.py" verify-diagnostics \
-            --diagnostics "$tool_root/native.stderr" --cache-dir "$cache_root"; then
-            failure_code="SCANNER_FAILURE"
           fi
         fi
 
@@ -117,6 +114,7 @@ runs:
         if [ -z "$failure_code" ]; then
           if ! python3 -I "$governance_root/scripts/secpal-trivy-repository-scan.py" evaluate \
             --native "$native" --database "$database" \
+            --diagnostics "$tool_root/native.stderr" --cache-dir "$cache_root" \
             --policy "$governance_root/policies/trivy-repository-scan-v1.json" \
             --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
             --workspace "$GITHUB_WORKSPACE" \

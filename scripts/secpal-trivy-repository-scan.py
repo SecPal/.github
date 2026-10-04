@@ -40,6 +40,12 @@ REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 RFC3339_RE = re.compile(
     r"(?P<second>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(?P<fraction>\d{1,9}))?Z\Z"
 )
+TRIVY_VERSION = "0.74.0"
+TRIVY_ARCHIVE_ID = "sha256:2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a"
+SEVERITY_FALLBACK_DIAGNOSTIC = (
+    "Using severities from other vendors for some vulnerabilities. Read "
+    "https://trivy.dev/docs/v0.74/guide/scanner/vulnerability#severity-selection for details."
+)
 Timestamp = tuple[datetime, int]
 
 
@@ -138,7 +144,86 @@ def verify_target(workspace: Path, commit: str) -> None:
         raise ContractError("workspace contains paths outside the expected commit")
 
 
-def verify_diagnostics(content: str, cache_directory: Path) -> None:
+def _verify_composer_severity_fallback(native: dict[str, Any] | None,
+                                      scanner: dict[str, Any] | None,
+                                      workspace: str | None) -> None:
+    """Qualify only the observed Composer fallback from pinned autoDetectSeverity.
+
+    The source returns DB Severity with an omitted SeveritySource after preferred
+    vendors fail. CVE Composer advisories have no package-specific severity override.
+    Do not infer a source: the DB's fallback severity is not source-attributable.
+    """
+    if scanner is None or native is None or workspace is None:
+        raise ContractError("severity fallback context is unavailable")
+    verified_scanner = _validate_scanner(scanner)
+    if (verified_scanner["version"] != TRIVY_VERSION
+            or verified_scanner["immutable_id"] != TRIVY_ARCHIVE_ID):
+        raise ContractError("severity fallback scanner is unqualified")
+    if not isinstance(native, dict) or native.get("SchemaVersion") != 2:
+        raise ContractError("severity fallback native schema is unqualified")
+    _validate_scan_surface(native, workspace)
+    results = native.get("Results")
+    if not isinstance(results, list):
+        raise ContractError("severity fallback native results are unqualified")
+    fallbacks = 0
+    for result in results:
+        if not isinstance(result, dict):
+            raise ContractError("severity fallback result is malformed")
+        target = _path(result.get("Target"))
+        for vulnerability in _finding_collection(result, "Vulnerabilities"):
+            if not isinstance(vulnerability, dict):
+                raise ContractError("severity fallback vulnerability is malformed")
+            finding = _vulnerability(target, vulnerability)
+            vendors = vulnerability.get("VendorSeverity")
+            if "SeveritySource" in vulnerability:
+                source = _string(vulnerability["SeveritySource"], "severity source")
+                if result.get("Type") == "composer":
+                    data_source = vulnerability.get("DataSource")
+                    if (not isinstance(data_source, dict) or not isinstance(vendors, dict)
+                            or any(not isinstance(k, str) or not k or type(v) is not int
+                                   or v not in range(5) for k, v in vendors.items())):
+                        raise ContractError("Composer severity provenance is malformed")
+                    advisory_source = _string(data_source.get("BaseID", data_source.get("ID")), "advisory source")
+                    preferred = [advisory_source]
+                    if finding["rule_id"].startswith("GHSA-"):
+                        preferred.append("ghsa")
+                    preferred.append("nvd")
+                    selected = next((vendor for vendor in preferred if vendor in vendors), None)
+                    if (source != selected or (source != advisory_source and vendors[source] == 0)
+                            or vendors[source] != (
+                            "UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"
+                    ).index(finding["severity"])):
+                        raise ContractError("Composer severity provenance is inconsistent")
+                continue
+            # Restrict admission to the reviewed real representation. NVD UNKNOWN
+            # falls through; even UNKNOWN in the advisory's own source returns
+            # immediately and cannot explain this warning. GHSA IDs use another
+            # preferred-source branch and remain outside this qualification.
+            if (result.get("Class") != "lang-pkgs" or result.get("Type") != "composer"
+                    or re.fullmatch(r"CVE-[0-9]{4}-[0-9]{4,}", finding["rule_id"]) is None
+                    or vulnerability.get("DataSource") != {
+                        "ID": "php-security-advisories",
+                        "Name": "PHP Security Advisories Database",
+                        "URL": "https://github.com/FriendsOfPHP/security-advisories",
+                    }
+                    or not isinstance(vendors, dict) or not vendors
+                    or any(not isinstance(k, str) or not k or type(v) is not int
+                           or v not in range(5) for k, v in vendors.items())
+                    or set(vendors) - {"ghsa", "nvd"}
+                    or vendors.get("nvd", 0) != 0
+                    or finding["severity"] == "UNKNOWN"
+                    or ("UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL").index(
+                        finding["severity"]) != vendors.get("ghsa")):
+                raise ContractError("severity fallback native provenance is unqualified")
+            fallbacks += 1
+    if not fallbacks:
+        raise ContractError("severity fallback vulnerability is unavailable")
+
+
+def verify_diagnostics(content: str, cache_directory: Path, *,
+                       native: dict[str, Any] | None = None,
+                       scanner: dict[str, Any] | None = None,
+                       workspace: str | None = None) -> None:
     """Check pinned Trivy's private log framing without returning log material."""
     if not content.strip():
         raise ContractError("scanner diagnostics are unavailable")
@@ -152,6 +237,7 @@ def verify_diagnostics(content: str, cache_directory: Path) -> None:
         'failed to check cache: cache does not exist at ' + json.dumps(str(checks))
     )
     fallbacks = 0
+    advisories = 0
     for line in content.splitlines():
         fields = line.split("\t", 2)
         if len(fields) != 3 or re.fullmatch(
@@ -160,10 +246,16 @@ def verify_diagnostics(content: str, cache_directory: Path) -> None:
             raise ContractError("scanner diagnostics indicate unknown scan health")
         if fields[1] == "ERROR" and fields[2] == expected_fallback:
             fallbacks += 1
+        elif fields[1] == "WARN" and fields[2] == SEVERITY_FALLBACK_DIAGNOSTIC:
+            advisories += 1
         elif fields[1] not in {"INFO", "DEBUG"} or not fields[2]:
             raise ContractError("scanner diagnostics indicate unknown scan health")
     if fallbacks != 1:
         raise ContractError("pinned embedded check selection is unavailable")
+    if advisories:
+        if advisories != 1:
+            raise ContractError("severity fallback diagnostic count is unqualified")
+        _verify_composer_severity_fallback(native, scanner, workspace)
 
 
 def configuration_identity() -> str:
@@ -809,6 +901,21 @@ def _evaluate(arguments: argparse.Namespace) -> int:
             database=database,
             completed_at=completed_at,
         )
+        if arguments.diagnostics is not None:
+            try:
+                if arguments.cache_dir is None:
+                    raise ContractError("scanner diagnostic cache context is unavailable")
+                verify_diagnostics(
+                    arguments.diagnostics.read_text(encoding="utf-8"), arguments.cache_dir,
+                    native=observed_native, scanner=observation["scanner"],
+                    workspace=observed_workspace,
+                )
+            except (ContractError, OSError, UnicodeError):
+                _write(arguments.output, unknown_result(
+                    repository=arguments.repository, commit=arguments.commit,
+                    failure_code="SCANNER_FAILURE", completed_at=completed_at,
+                ))
+                return 1
         result = admit(observation, policy)
     except (ContractError, KeyError, TypeError, UnicodeError, json.JSONDecodeError, OSError):
         _write(
@@ -831,6 +938,8 @@ def _parser() -> argparse.ArgumentParser:
 
     evaluate = commands.add_parser("evaluate")
     evaluate.add_argument("--native", type=Path, required=True)
+    evaluate.add_argument("--diagnostics", type=Path)
+    evaluate.add_argument("--cache-dir", type=Path)
     evaluate.add_argument("--database", type=Path, required=True)
     evaluate.add_argument("--policy", type=Path, required=True)
     evaluate.add_argument("--repository", required=True)

@@ -1,0 +1,49 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": ".",
+  "ArtifactType": "repository",
+  "Results": [
+    {
+      "Target": "composer.lock",
+      "Class": "lang-pkgs",
+      "Type": "composer",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2025-64500",
+          "PkgName": "symfony/http-foundation",
+          "InstalledVersion": "v5.4.0",
+          "FixedVersion": "7.1.0, 3.0.0, 5.2.0, 6.2.0, 7.3.7, 4.0.0, 6.3.0, 5.3.0, 5.4.0, 5.4.50, 6.4.29, 7.2.0, 7.3.0, 5.0.0, 5.1.0, 6.1.0, 6.4.0",
+          "Severity": "HIGH",
+          "DataSource": {
+            "ID": "php-security-advisories",
+            "Name": "PHP Security Advisories Database",
+            "URL": "https://github.com/FriendsOfPHP/security-advisories"
+          },
+          "VendorSeverity": {
+            "ghsa": 3
+          },
+          "Title": "Symfony is a PHP framework for web and console applications and a set  ..."
+        },
+        {
+          "VulnerabilityID": "CVE-2024-50345",
+          "PkgName": "symfony/http-foundation",
+          "InstalledVersion": "v5.4.0",
+          "FixedVersion": "6.3.0, 7.1.0, 6.2.0, 6.4.14, 7.1.7, 4.0.0, 5.0.0, 3.0.0, 5.1.0, 5.2.0, 5.4.0, 5.4.46, 6.4.0, 5.3.0, 6.1.0",
+          "Severity": "MEDIUM",
+          "SeveritySource": "nvd",
+          "DataSource": {
+            "ID": "php-security-advisories",
+            "Name": "PHP Security Advisories Database",
+            "URL": "https://github.com/FriendsOfPHP/security-advisories"
+          },
+          "VendorSeverity": {
+            "ghsa": 1,
+            "nvd": 2,
+            "ubuntu": 2
+          },
+          "Title": "symfony/http-foundation is a module for the Symphony PHP framework whi ..."
+        }
+      ]
+    }
+  ]
+}
