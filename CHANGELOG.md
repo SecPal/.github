@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-04 - Authenticate Chained Ready Integration
+
+**Fixed:**
+
+- Admit an authenticated typed Ready integration as prior authority for the next
+  integration through the canonical verifier and exact protected publication
+  chain, preserving the ordinary remediation sole-parent rule.
+- Preserve historical parent-2 authority and every finite lifecycle counter
+  across chained integrations while requiring fresh protected main for each new
+  integration.
+
 ## 2026-09-29 - Unify Exact Parent-2 Ready Integration
 
 **Fixed:**
