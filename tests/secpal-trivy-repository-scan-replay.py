@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+from textwrap import dedent
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -227,9 +228,10 @@ def main() -> int:
             raise RuntimeError("representative findings were not admitted as actionable")
         # Exercise the maintained action boundary itself, including both DBs,
         # health admission, redaction, public summary, and private-file cleanup.
-        import yaml
         action_path = ROOT / ".github" / "actions" / "trivy-repository-scan" / "action.yml"
-        step = yaml.safe_load(action_path.read_text())["runs"]["steps"][0]
+        # Extract the owned literal Bash block; this replay needs only the
+        # existing vulnerability-policy dependencies on the CI runner.
+        step_script = dedent(action_path.read_text().split("      run: |\n", 1)[1].split("\n    - name:", 1)[0])
         runner = root / "runner"
         runner.mkdir(mode=0o700)
         output_path, summary_path = runner / "output", runner / "summary"
@@ -241,9 +243,10 @@ def main() -> int:
             "GITHUB_RUN_ID": "1123", "GITHUB_RUN_ATTEMPT": "1",
             "RUNNER_TEMP": str(runner), "RUNNER_OS": "Linux", "RUNNER_ARCH": "X64",
             "GITHUB_OUTPUT": str(output_path), "GITHUB_STEP_SUMMARY": str(summary_path),
-            **{key: str(value) for key, value in step["env"].items()},
+            "TRIVY_VERSION": TRIVY_VERSION,
+            "TRIVY_ARCHIVE_SHA256": TRIVY_ARCHIVE_SHA256,
         }
-        action = subprocess.run(["bash", "-c", step["run"]], env=action_environment,
+        action = subprocess.run(["bash", "-c", step_script], env=action_environment,
                                 capture_output=True, check=False)
         if action.returncode:
             raise RuntimeError("maintained action execution failed")
