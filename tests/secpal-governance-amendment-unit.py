@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import copy
-from contextlib import nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import replace
 import hashlib
 import json
@@ -674,50 +674,222 @@ class GovernanceAmendmentTests(TestCase):
         ), self.assertRaises(amendment.GovernanceAmendmentError):
             amendment.verify(reviewed)
 
-    def test_reviewed_live_pr_base_is_current_registration_tip(self) -> None:
-        reviewed = reviewed_authorization()
-        historical = reviewed["accepted_main_sha"]
-        current = reviewed["current_validation"]["accepted_main_sha"]
-        pull = {
-            "number": 1055, "state": "open", "draft": False,
-            "merged": False, "head_repository": "SecPal/.github",
-            "base_sha": current, "base_ref": "main",
-            "base_repository": "SecPal/.github", "head_sha": HEAD,
+    @contextmanager
+    def reviewed_live_observation(self):
+        """Historical PR metadata and maintained registration are distinct."""
+        value = reviewed_authorization()
+        historical = value["accepted_main_sha"]
+        current = value["current_validation"]["accepted_main_sha"]
+        value["ordered_parent_shas"] = [historical]
+        value["qualified_source"]["ordered_parent_shas"] = [historical]
+        value = reseal(value)
+        record = {
+            key: copy.deepcopy(value[key]) for key in (
+                "repository", "delivery_issue", "pull_request", "qualified_source",
+                "accepted_main_sha", "concepts", "human_authority_identity",
+                "human_authorization_digest", "authorization_id", "intended_state",
+                "feedback", "observed_pre_enrollment_history",
+            )
         }
+        record.update(source_signer_identity=SOURCE,
+                      allowed_path_prefixes=amendment.REVIEWED_READY_PATH_PREFIXES)
+        policy = {"schema_version": "1.0", "amendments": [proposed_policy(), record]}
+        registry = {"schema_version": "1.0", "repositories": [{
+            "repository": "SecPal/.github", "governance_amendment_policy": {
+                "path": amendment.POLICY_PATH, "kind": amendment.KIND,
+                "purpose": amendment.PURPOSE,
+            },
+        }]}
+        pull = {
+            "number": 1055, "state": "open", "draft": False, "merged": False,
+            "head_repository": "SecPal/.github", "head_sha": HEAD,
+            "base_sha": historical, "base_ref": "main",
+            "base_repository": "SecPal/.github",
+        }
+        trust = SimpleNamespace(
+            publication_remote_url="maintained-remote",
+            authority_signer_identities=frozenset({ROOT_SIGNER}),
+            legacy_adoption_signer_identities=frozenset({SIGNER}),
+        )
+        base_trust = SimpleNamespace(publication_remote_url="maintained-remote")
 
-        def observe(value):
-            with mock.patch.object(
-                amendment, "_accepted_trust_policy",
-                return_value=SimpleNamespace(publication_remote_url="unused"),
-            ), mock.patch.object(
-                amendment, "_observe_remote_main", return_value=current,
-            ), mock.patch.object(
-                amendment, "_run_git",
-                return_value=SimpleNamespace(returncode=0),
-            ), mock.patch.object(
-                amendment, "_live_pull_request", return_value=value,
-            ), mock.patch.object(
-                amendment, "_live_issue",
-                return_value={"number": 1053, "state": "open"},
-            ), mock.patch.object(
-                amendment, "_registered_bootstrap_policy",
-                side_effect=RuntimeError("reached registration"),
-            ):
-                return amendment.produce_observation(
-                    "SecPal/.github", 1053, {
-                        key: reviewed[key] for key in amendment.OBSERVATION_INPUT_FIELDS
-                    },
-                )
+        def git(_root, arguments):
+            if arguments[0] == "merge-base":
+                self.assertEqual(arguments, [
+                    "merge-base", "--is-ancestor", historical, current,
+                ])
+                return SimpleNamespace(returncode=0, stdout=b"")
+            if arguments[:3] == ["show", "-s", "--format=%P"]:
+                return SimpleNamespace(returncode=0, stdout=historical.encode())
+            self.assertEqual(arguments[0], "show")
+            revision, path = arguments[1].split(":", 1)
+            self.assertEqual(revision, current)
+            document = registry if path == amendment.REGISTRY_PATH else policy
+            return SimpleNamespace(returncode=0, stdout=json.dumps(document).encode())
 
-        self.assertNotEqual(historical, current)
-        with self.assertRaisesRegex(RuntimeError, "reached registration"):
-            observe(pull)
-        pull["base_sha"] = historical
-        with self.assertRaisesRegex(
-            amendment.GovernanceAmendmentError,
-            "live governance amendment delivery identity or state changed",
+        def accepted_trust(_repository, main):
+            self.assertIn(main, (historical, current))
+            return base_trust if main == historical else trust
+
+        def role_signer(selected, identities, _label, **_kwargs):
+            self.assertIs(selected, trust)
+            return ((ROOT_SIGNER, root_signer)
+                    if identities == trust.authority_signer_identities
+                    else (SIGNER, signer))
+
+        patches = {
+            "_accepted_trust_policy": {"side_effect": accepted_trust},
+            "_observe_remote_main": {"return_value": current},
+            "_run_git": {"side_effect": git},
+            "_live_pull_request": {"return_value": pull},
+            "_live_issue": {"return_value": {"number": 1053, "state": "open"}},
+            "_git_oid": {"return_value": TREE},
+            "_git_changed_files": {"return_value": value["changed_files"]},
+            "_source_commit_range": {"return_value": [HEAD]},
+            "_verify_commit_against_accepted_trust": {},
+            "_live_ci": {"return_value": value["natural_ci"]},
+            "_live_ready_ci": {"return_value": value["natural_ci"]},
+            "_bound_current_validation": {"return_value": value["current_validation"]},
+            "_observe_historical_absence": {"return_value": (
+                value["historical_evidence"], value["historical_absence_proof"],
+            )},
+            "_live_feedback": {"return_value": value["feedback"]},
+            "_live_reviewed_ready_history": {
+                "return_value": value["observed_pre_enrollment_history"],
+            },
+        }
+        with ExitStack() as stack:
+            calls = {name: stack.enter_context(mock.patch.object(
+                amendment, name, **options,
+            )) for name, options in patches.items()}
+            stack.enter_context(mock.patch.object(
+                amendment.execution, "_policy_role_signer", side_effect=role_signer,
+            ))
+            stack.enter_context(mock.patch.object(
+                authority, "_policy_signature_verifier", return_value=signature_verifier,
+            ))
+            yield value, pull, policy, calls, trust
+
+    def test_reviewed_historical_pr_base_issues_with_current_registration_and_v4_root(self):
+        with self.reviewed_live_observation() as (value, pull, _policy, calls, trust):
+            historical = value["accepted_main_sha"]
+            current = value["current_validation"]["accepted_main_sha"]
+            self.assertNotEqual(historical, current)
+            self.assertEqual(pull["base_sha"], historical)
+            sealed = amendment.authenticate_issuance(
+                "SecPal/.github", 1053, observation_inputs(value),
+            )
+            issued = amendment.issue(sealed)
+            self.assertTrue(amendment.is_verified(amendment.verify(issued)))
+            self.assertEqual(issued["accepted_main_sha"], historical)
+            self.assertEqual(amendment._consumption_base(issued), current)
+            calls["_verify_commit_against_accepted_trust"].assert_called_with(
+                amendment.ROOT.resolve(), HEAD, SOURCE, trust,
+            )
+            calls["_bound_current_validation"].assert_called_with(
+                amendment.ROOT.resolve(), "SecPal/.github", current,
+                target_head_sha=HEAD, target_tree_sha=TREE,
+            )
+            calls["_live_ci"].assert_called_with(
+                "SecPal/.github", HEAD, current, delivery_issue=1053,
+            )
+            calls["_live_ready_ci"].assert_called_with(
+                "SecPal/.github", 1055, HEAD, historical, value["natural_ci"],
+            )
+            root, bundle = self.zero_receipt_root(amendment_authorization=issued)
+            self.assertEqual(authority.recovered_adoption_root_historical_evidence(
+                root, bundle, None,
+            ), amendment.historical_evidence())
+            self.assertTrue(root.state["ready"])
+            self.assertIsNone(root.validation_receipt_digest)
+
+    def test_reviewed_pr_base_platform_fact_can_advance_independently(self):
+        with self.reviewed_live_observation() as (value, pull, _policy, calls, _trust):
+            historical = value["accepted_main_sha"]
+            current = value["current_validation"]["accepted_main_sha"]
+            pull["base_sha"] = current
+            issued = amendment.issue(amendment.authenticate_issuance(
+                "SecPal/.github", 1053, observation_inputs(value),
+            ))
+            self.assertEqual(pull["base_sha"], current)
+            self.assertEqual(issued["accepted_main_sha"], historical)
+            self.assertEqual(amendment._consumption_base(issued), current)
+            calls["_live_ready_ci"].assert_called_with(
+                "SecPal/.github", 1055, HEAD, historical, value["natural_ci"],
+            )
+
+    def test_reviewed_pr_base_platform_fact_rejects_malformed_metadata(self):
+        for observed in (None, True, "not-a-sha", "f" * 39):
+            with self.subTest(observed=observed), self.reviewed_live_observation() as fixture:
+                value, pull, _policy, _calls, _trust = fixture
+                pull["base_sha"] = observed
+                with self.assertRaises(amendment.GovernanceAmendmentError):
+                    amendment.authenticate_issuance(
+                        "SecPal/.github", 1053, observation_inputs(value),
+                    )
+
+    def test_reviewed_historical_pr_base_rejects_identity_and_authority_substitution(self):
+        for field, replacement in (
+            ("base_ref", "other"), ("base_repository", "other/repository"),
+            ("head_repository", "other/repository"), ("number", 1056),
+            ("head_sha", "f" * 40), ("draft", True), ("state", "closed"),
+            ("merged", True),
         ):
-            observe(pull)
+            with self.subTest(field=field), self.reviewed_live_observation() as fixture:
+                value, pull, _policy, _calls, _trust = fixture
+                pull[field] = replacement
+                with self.assertRaises(amendment.GovernanceAmendmentError):
+                    amendment.authenticate_issuance(
+                        "SecPal/.github", 1053, observation_inputs(value),
+                    )
+        for failure in ("issue", "unavailable", "ancestry", "registration", "tree",
+                        "caller main", "stale registration"):
+            with self.subTest(failure=failure), self.reviewed_live_observation() as fixture:
+                value, _pull, policy, calls, _trust = fixture
+                if failure == "issue":
+                    calls["_live_issue"].return_value = {"number": 1054, "state": "open"}
+                elif failure == "unavailable":
+                    calls["_observe_remote_main"].side_effect = amendment.GovernanceAmendmentError(
+                        "protected main cannot be authenticated"
+                    )
+                elif failure == "ancestry":
+                    calls["_run_git"].side_effect = None
+                    calls["_run_git"].return_value = SimpleNamespace(returncode=1)
+                elif failure == "registration":
+                    policy["amendments"] = policy["amendments"][:1]
+                elif failure == "tree":
+                    calls["_git_oid"].return_value = "f" * 40
+                elif failure == "caller main":
+                    value["current_main_sha"] = "f" * 40
+                else:
+                    policy["amendments"][1]["accepted_main_sha"] = "f" * 40
+                inputs = observation_inputs(value)
+                if failure == "caller main":
+                    inputs["current_main_sha"] = value["current_main_sha"]
+                with self.assertRaises(amendment.GovernanceAmendmentError):
+                    amendment.authenticate_issuance("SecPal/.github", 1053, inputs)
+
+    def test_reviewed_registration_change_rejects_issuance_and_consumption(self):
+        with self.reviewed_live_observation() as (value, _pull, _policy, calls, _trust):
+            sealed = amendment.authenticate_issuance(
+                "SecPal/.github", 1053, observation_inputs(value),
+            )
+            calls["_bound_current_validation"].return_value = {
+                **value["current_validation"], "accepted_main_sha": "f" * 40,
+            }
+            with self.assertRaisesRegex(amendment.GovernanceAmendmentError,
+                                        "facts changed before signing"):
+                amendment.issue(sealed)
+            calls["_bound_current_validation"].return_value = value["current_validation"]
+            verified = amendment.verify(amendment.issue(sealed))
+            calls["_observe_remote_main"].side_effect = [
+                value["current_validation"]["accepted_main_sha"], "f" * 40,
+            ]
+            with self.assertRaisesRegex(amendment.GovernanceAmendmentError,
+                                        "protected main changed before amendment consumption"):
+                amendment._authenticate_execution(
+                    verified, amendment.ROOT.resolve(), "maintained-remote",
+                )
 
     def patches(self, trust: object | None = None):
         trust = trust or SimpleNamespace(
@@ -737,7 +909,9 @@ class GovernanceAmendmentTests(TestCase):
         )
 
     def zero_receipt_root(self, **scope):
-        amendment_authorization = reviewed_authorization()
+        amendment_authorization = scope.get(
+            "amendment_authorization", reviewed_authorization(),
+        )
         evidence = authority._assemble_exact_state_adoption_evidence(
             repository=scope.get("repository", amendment_authorization["repository"]),
             delivery_issue=scope.get("delivery_issue", amendment_authorization["delivery_issue"]),
@@ -2114,6 +2288,159 @@ class GovernanceAmendmentTests(TestCase):
                     Path("."), "SecPal/.github", PARENT
                 )
 
+    @contextmanager
+    def old_verifier_source(self):
+        """Two hermetic commits: corrected tooling and an immutable old verifier."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "authority"
+            root.mkdir()
+            def git(*arguments):
+                return subprocess.run(
+                    ["git", "-c", "commit.gpgsign=false", *arguments],
+                    cwd=root, check=True, capture_output=True,
+                ).stdout.decode().strip()
+            git("init", "-b", "main")
+            git("config", "user.name", "fixture")
+            git("config", "user.email", "fixture@example.invalid")
+            git("fetch", str(amendment.ROOT),
+                "HEAD")
+            git("read-tree", "--reset", "-u", "FETCH_HEAD")
+            git("commit", "-m", "accepted corrected tooling")
+            accepted = git("rev-parse", "HEAD")
+            verifier = root / "scripts/secpal_pr_review/lifecycle_authority.py"
+            corrected = verifier.read_text()
+            old = corrected.replace(
+                "    if zero_receipt_root:\n        recovered_adoption_root_historical_evidence(",
+                "    if zero_receipt_root:\n"
+                "        raise LifecycleAuthorityError('old verifier rejects null historical evidence')\n"
+                "        recovered_adoption_root_historical_evidence(",
+            )
+            self.assertNotEqual(old, corrected)
+            verifier.write_text(old)
+            git("add", ".")
+            git("commit", "-m", "unchanged historical source verifier")
+            candidate = git("rev-parse", "HEAD")
+            tree = git("rev-parse", "HEAD^{tree}")
+            git("reset", "--hard", accepted)
+            yield root, accepted, candidate, tree, git
+
+    def test_reviewed_current_safety_uses_accepted_verifier_with_old_exact_source(self):
+        with self.old_verifier_source() as (root, accepted, candidate, tree, git):
+            before = git("rev-parse", candidate + "^{tree}")
+            with mock.patch.object(amendment, "ROOT", root), mock.patch.object(
+                amendment.validation_evidence_loss, "ROOT", root,
+            ):
+                result = amendment._bound_current_validation(
+                    root, "SecPal/.github", accepted,
+                    target_head_sha=candidate, target_tree_sha=tree,
+                )
+            self.assertEqual(result["result"], "PASS")
+            self.assertEqual(result["accepted_main_sha"], accepted)
+            self.assertEqual(git("rev-parse", candidate + "^{tree}"), before)
+            self.assertEqual(git("status", "--porcelain"), "")
+
+    def test_reviewed_current_safety_profile_and_source_substitutions_fail_closed(self):
+        safety = amendment.exact_source_safety
+        with self.old_verifier_source() as (root, accepted, candidate, tree, git):
+            profile = amendment._reviewed_current_safety_profile(root, accepted)
+            mutations = {
+                "caller tooling": lambda p: p["tooling"].append({
+                    "path": "scripts/caller.py", "mode": "100644",
+                    "blob_oid": "f" * 40, "size": 1,
+                }),
+                "missing tooling": lambda p: p["tooling"].pop(),
+                "wrong blob": lambda p: p["tooling"][0].update(blob_oid="f" * 40),
+                "wrong mode": lambda p: p["tooling"][0].update(
+                    mode="100755" if p["tooling"][0]["mode"] == "100644" else "100644"),
+                "wrong size": lambda p: p["tooling"][0].update(size=1),
+                "candidate tooling": lambda p: p.update(tooling=
+                    amendment._reviewed_current_safety_profile(root, candidate)["tooling"]),
+                "overlap": lambda p: p["tooling"].append(p["harness"][0]),
+                "execution model": lambda p: p.update(execution_model="CANDIDATE_TOOLING"),
+                "command set": lambda p: p["validation_command_set"].clear(),
+                "invariants": lambda p: p["required_invariants"].clear(),
+            }
+            for name, mutate in mutations.items():
+                changed = copy.deepcopy(profile)
+                mutate(changed)
+                with self.subTest(name=name), self.assertRaises(authority.LifecycleAuthorityError):
+                    with safety.two_provenance_execution_roots(
+                        root, accepted, source_root=root,
+                        candidate_repository="SecPal/.github", profile=changed,
+                    ) as roots:
+                        safety.run_profile(roots.tooling, changed,
+                                           expected_profile=profile,
+                                           candidate_root=roots.candidate,
+                                           candidate_repository="SecPal/.github")
+            for changed_root in ("tooling", "candidate"):
+                with self.subTest(root=changed_root), self.assertRaises(authority.LifecycleAuthorityError):
+                    with safety.two_provenance_execution_roots(
+                        root, accepted, source_root=root,
+                        candidate_repository="SecPal/.github", profile=profile,
+                    ) as roots:
+                        path = getattr(roots, changed_root) / "scripts/secpal_pr_review/lifecycle_authority.py"
+                        path.write_text("raise RuntimeError('substituted verifier')\n")
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                with safety.two_provenance_execution_roots(
+                    root, accepted, source_root=root,
+                    candidate_repository="other/repository", profile=profile,
+                ):
+                    self.fail("cross-repository tooling was accepted")
+            for head, target_tree in ((candidate, "f" * 40), ("f" * 40, tree)):
+                with self.subTest(head=head), self.assertRaises(amendment.GovernanceAmendmentError):
+                    amendment._bound_current_validation(root, "SecPal/.github", accepted,
+                                                       target_head_sha=head, target_tree_sha=target_tree)
+            # A different accepted commit cannot use the previously bound inventory.
+            git("checkout", "--detach", candidate)
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                with safety.two_provenance_execution_roots(
+                    root, candidate, source_root=root,
+                    candidate_repository="SecPal/.github", profile=profile,
+                ):
+                    self.fail("accepted tooling advance reused a stale profile")
+            git("rm", "scripts/secpal_pr_review/lifecycle_authority.py")
+            git("commit", "-m", "missing required accepted verifier fixture")
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                amendment._reviewed_current_safety_profile(root, git("rev-parse", "HEAD"))
+
+    def test_reviewed_current_safety_rejects_incompatible_loaded_module_origins(self):
+        safety = amendment.exact_source_safety
+        with self.old_verifier_source() as (root, _accepted, _candidate, _tree, git):
+            harness_path = root / amendment.validation_evidence_loss.CURRENT_SAFETY_PATH
+            original = harness_path.read_text()
+            substitutions = {
+                "candidate": ("secpal_pr_review.lifecycle_authority",
+                              "Path(os.environ['SECPAL_CURRENT_SAFETY_CANDIDATE_ROOT']) / 'scripts/secpal_pr_review/lifecycle_authority.py'"),
+                "ambient site package": ("secpal_pr_review.lifecycle_authority", "_ambient_file"),
+                "duplicate namespace": ("scripts.secpal_pr_review.lifecycle_authority",
+                                        "Path(os.environ['SECPAL_CURRENT_SAFETY_CANDIDATE_ROOT']) / 'scripts/secpal_pr_review/lifecycle_authority.py'"),
+            }
+            for name, (namespace, location) in substitutions.items():
+                poison = (
+                    "\nimport os, types, importlib.util, tempfile\n"
+                    "_ambient_root = tempfile.TemporaryDirectory(prefix='site-packages-')\n"
+                    "_ambient_file = Path(_ambient_root.name) / 'lifecycle_authority.py'\n"
+                    "_ambient_file.write_text('old_verifier = True\\n')\n"
+                    "_location = str(" + location + ")\n"
+                    "_module = types.ModuleType(" + repr(namespace) + ")\n"
+                    "_module.__file__ = _location\n"
+                    "_module.__spec__ = importlib.util.spec_from_file_location(" + repr(namespace) + ", _location)\n"
+                    "sys.modules[" + repr(namespace) + "] = _module\n"
+                )
+                harness_path.write_text(original + poison)
+                git("add", str(harness_path.relative_to(root)))
+                git("commit", "-m", "bound hostile module origin fixture")
+                main = git("rev-parse", "HEAD")
+                profile = amendment._reviewed_current_safety_profile(root, main)
+                with self.subTest(origin=name), self.assertRaises(authority.LifecycleAuthorityError):
+                    with safety.two_provenance_execution_roots(
+                        root, main, source_root=root,
+                        candidate_repository="SecPal/.github", profile=profile,
+                    ) as roots:
+                        safety.run_profile(roots.tooling, profile, expected_profile=profile,
+                                           candidate_root=roots.candidate,
+                                           candidate_repository="SecPal/.github")
+
     def test_reviewed_current_validation_executes_accepted_safety(self) -> None:
         record = {
             "repository": "SecPal/.github", "focused_validation": [{}],
@@ -2129,14 +2456,15 @@ class GovernanceAmendmentTests(TestCase):
             amendment, "_git_oid", side_effect=lambda root, expression:
             TREE if expression.endswith("^{tree}") else HEAD,
         ), mock.patch.object(
-            amendment.validation_evidence_loss, "_current_safety_profile",
+            amendment, "_reviewed_current_safety_profile",
             return_value=profile,
         ), mock.patch.object(
             amendment, "_run_git",
             return_value=SimpleNamespace(returncode=0),
         ), mock.patch.object(
-            amendment.exact_source_safety, "execution_root",
-            return_value=nullcontext(Path(".")),
+            amendment.exact_source_safety, "two_provenance_execution_roots",
+            return_value=nullcontext(SimpleNamespace(tooling=Path("tooling"),
+                                                    candidate=Path("candidate"))),
         ), mock.patch.object(
             amendment.exact_source_safety, "run_profile",
         ) as runner:

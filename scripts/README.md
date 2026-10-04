@@ -674,7 +674,16 @@ check policy are authenticated fail closed. The check identities come from the
 bound accepted-main copy of `sync-required-checks.sh`; accepted combined-status
 contexts are that exact set plus the maintained CLA context. The producer also
 derives current-validation policy identity from the bound accepted-main
-registry and derives `ABSENT_NEVER_ISSUED` only after the protected journal and
+registry. For reviewed Ready sources, the live target repository and `main` ref
+are authenticated independently of the historical PR base SHA. Registration,
+current trust, signer revocations, validation and consumption remain bound to
+the freshly authenticated protected registration tip; the historical baseline
+and Ready workflow base identities remain immutable. Current safety uses the
+existing two-provenance executor: its profile binds the accepted-main harness
+and transitively derived maintained tooling inventory, while the exact target
+source is preserved in a separate root. Isolated execution authenticates loaded
+module origins and rejects candidate verifier execution. The producer derives
+`ABSENT_NEVER_ISSUED` only after the protected journal and
 exact signed qualified-source trailer history both prove absence. Caller-
 provided validation, receipt, provenance, or absence objects are outside the
 closed input schema. The provider-produced fact set excludes the external
