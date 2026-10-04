@@ -1074,7 +1074,7 @@ and native genesis, a canonical READY work graph, and unchanged initial Draft
 state. Only genesis and prior `HEAD_ADVANCED` events are admitted; review,
 remediation, Ready, correction, replacement and exceptional histories reject.
 The central `enrolled_draft_integration_policy` registers this operation only
-for `SecPal/.github`, `SecPal/frontend`, `SecPal/api`, and `SecPal/deployment`.
+for `SecPal/.github`, `SecPal/frontend`, `SecPal/api`, `SecPal/contracts`, and `SecPal/deployment`.
 Historical pre-enrollment absence and Ready integration contracts remain unchanged.
 
 Run both commands from freshly authenticated accepted `.github/main` tooling,
