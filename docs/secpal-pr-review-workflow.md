@@ -984,6 +984,70 @@ cannot be replayed to post; a stranded claim remains consumed. The #1053
 consumer is responsible for supplying fresh, complete authenticated provider
 eligibility and request-history reconciliation to that executor.
 
+### Historical acquisition evidence loss
+
+`scripts/secpal-provider-reacquisition.py` is the canonical action for the exact
+`PROVIDER_ACQUISITION_EVIDENCE_LOSS_REACQUISITION` reconciliation case in
+`SecPal/.github`. It requires authenticated OPEN Ready CURRENT, Review 1/1,
+Remediation 1/2, one Ready transition, Cycle-3 absence and zero exceptional
+history. It creates no lifecycle event or counter change.
+
+The read-only loss verifier reuses the maintained bounded native timeline and
+three-page PushEvent feed, complete Stable Feedback, protected journal and
+source-history stores. Every PR source tree must preserve the gitignored
+workspace-local output scope. It surveys all immutable source blobs, independent
+of extension, and the authenticated journal for original typed integration,
+receipt and attestation bytes. Linked or unsearched stores, incomplete history,
+available companion bytes, an authoritative head-publication event, missing
+historical terminal results, substituted digest identities and changed CURRENT
+deny this exact case. Bounds are 100 native timeline events, 100 source heads,
+10,000 entries per tree, 20,000 distinct blobs, 16 MiB per blob, 64 MiB total
+source bytes and 4,096 journal objects. This is a maintained-store conclusion,
+not a universal absence proof.
+
+The admitted result is
+`REQUIRED_HISTORICAL_ACQUISITION_EVIDENCE_UNAVAILABLE`. Original first-fallback
+validity remains `UNPROVABLE_FROM_RETAINED_AUTHORITY`. Neither digest identities,
+HEAD_ADVANCED nor terminal results reconstruct unavailable typed package bytes
+or the original publication chronology.
+
+The accepted-main issuer signs one exact authorization using the existing
+publication role. It binds the full repository/issue/PR/lifecycle/CURRENT,
+head/tree and finite-state identities, complete historical assessment, loss
+proof, derived assessment identity, both canonical provider types and
+`bounded_uses = 1`. A fresh authenticated GitHub Date supplies authorization
+chronology. Caller providers, finding subsets and loss declarations are absent
+from the action interface. Issuance and execution authenticate the complete
+executing verifier package against freshly protected main.
+
+Dispatch uses schema 1.1 of the existing `SECPAL_PROVIDER_DISPATCH_CLAIM`, with
+the exact signed authorization. Existing schema 1.0 retains #1053's latest
+authorized assessment and persisted-unacknowledged replacement semantics.
+Retained original request fields identify the historical requests; they do not
+prove those requests were valid first fallbacks. The new signed assessment
+supplies reacquisition authority. Both journal readers enforce the same schema,
+signature, ancestry and uniqueness checks. One same-head authorization may
+reserve one Code and one Security claim; duplicates and competing
+authorizations fail closed. Claims remain consumed after an uncertain write.
+
+`dispatch` derives Code first, waits for its fresh terminal result, and then
+derives Security. Each call can publish one claim and attempt one canonical
+POST. Immediately before writing, the executor reauthenticates the bounded
+loss survey, CURRENT, OPEN Ready source, actor, request/result history and its
+own protected claim. Existing fresh requests or claims cannot authorize another
+POST. An ambiguous response requires complete request-history reconciliation;
+zero or ambiguous matches cannot be retried automatically.
+
+`observe` performs one maintained read. A complete result requires fresh
+canonical request identities, exact-head results and current terminal summary
+rows, with completion within the existing 30-minute observation window after
+each new request. Historical identities and results remain separate. Provider
+non-terminality ends automatic observation at the bound and authorizes no extra
+request. The final assessment captures all current feedback, provider review
+database identities and the complete finding/thread inventory. Every current
+finding still requires ordinary classification; this action performs no
+remediation, source change, lifecycle publication, thread resolution or merge.
+
 Publication does not derive lifecycle state, orchestrate lifecycle events, or
 implement two-parent integration. Those remain owned by #750, #692, and #745
 respectively. Repositories with no enrolled publication remain valid, while a

@@ -24,6 +24,31 @@ See [Deterministic PR State and Evidence Layer](../docs/secpal-pr-review-state-l
 for schemas, bounded pagination, signature and required-check semantics, safe
 outputs, commands, and Package 2.1 non-goals.
 
+### `secpal-provider-reacquisition.py`
+
+The maintained `SecPal/.github` action for historical provider-acquisition
+evidence loss. `inspect` authenticates the bounded loss class and `authorize`
+issues an exact signed one-use intent, both read-only. `dispatch` derives one
+required provider type, publishes its protected CAS claim and attempts at most
+one canonical request. `observe` captures a complete fresh exact-head assessment
+within the maintained provider window. It accepts no provider or finding subset.
+
+All operations require freshly authenticated protected-main tooling. Historical
+first-fallback validity remains unknown; fresh acquisition has separate request,
+result and chronology identities. Existing #1053 unacknowledged replacement
+semantics remain separate. The full rules and bounds are in
+[Historical acquisition evidence loss](../docs/secpal-pr-review-workflow.md#historical-acquisition-evidence-loss).
+
+```bash
+python3 -I scripts/secpal-provider-reacquisition.py inspect \
+  --repo SecPal/.github --delivery-issue "$provider_delivery_issue" \
+  --output .context/provider-loss.json
+```
+
+Set `provider_delivery_issue` to the enrolled delivery issue. The verifier
+derives all authority independently. Dispatch requires a separately
+authorized downstream operation and the exact signed `--authorization` file.
+
 ### `secpal-pr-review-actions.py`
 
 Validates deterministic Package-2.2 mutation plans and applies at most one

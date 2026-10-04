@@ -290,6 +290,7 @@ class VerifiedProviderDispatchClaim:
     claim_id: str
     key: ProviderDispatchKey
     eligibility_evidence_digest: str
+    reacquisition_authorization: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -1778,10 +1779,11 @@ def _provider_dispatch_claim_fields(
     key: ProviderDispatchKey, *, eligibility_evidence_digest: str,
     publication_branch: str, journal_predecessor_oid: str,
     signer_identity: str, attempt_id: str,
+    reacquisition_authorization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     claim_id = provider_dispatch_claim_id(key)
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": SCHEMA_VERSION if reacquisition_authorization is None else "1.1",
         "kind": PROVIDER_DISPATCH_CLAIM_KIND,
         "domain": PROVIDER_DISPATCH_CLAIM_DOMAIN,
         **asdict(key),
@@ -1795,6 +1797,9 @@ def _provider_dispatch_claim_fields(
         "signer_identity": authority._require_identity(
             signer_identity, "provider dispatch publication signer"
         ),
+        **({} if reacquisition_authorization is None else {
+            "reacquisition_authorization": copy.deepcopy(reacquisition_authorization)
+        }),
     }
 
 
@@ -1823,11 +1828,14 @@ def _verify_provider_dispatch_claim_document(
     if (
         not isinstance(document, dict)
         or canonical_json_bytes(document) != raw
-        or frozenset(document) != PROVIDER_DISPATCH_CLAIM_FIELDS
+        or frozenset(document) != (PROVIDER_DISPATCH_CLAIM_FIELDS
+            if document.get("schema_version") == SCHEMA_VERSION else
+            PROVIDER_DISPATCH_CLAIM_FIELDS | {"reacquisition_authorization"})
     ):
         raise LifecyclePublicationError("provider dispatch claim is not closed canonical JSON")
     if (
-        document["schema_version"] != SCHEMA_VERSION
+        not isinstance(document["schema_version"], str)
+        or document["schema_version"] not in {SCHEMA_VERSION, "1.1"}
         or document["kind"] != PROVIDER_DISPATCH_CLAIM_KIND
         or document["domain"] != PROVIDER_DISPATCH_CLAIM_DOMAIN
     ):
@@ -1869,6 +1877,59 @@ def _verify_provider_dispatch_claim_document(
         or current_lifecycle.state.get("cycle_3_absent") is not True
     ):
         raise LifecyclePublicationError("provider dispatch claim does not bind CURRENT Ready")
+    reacquisition_authorization = document.get("reacquisition_authorization")
+    if document["schema_version"] == "1.1":
+        from . import provider_reacquisition
+        current = VerifiedLifecyclePublication(
+            current_oid, current_document["publication_digest"], expected_branch,
+            current_document["journal_predecessor_oid"], current_document.get("predecessor_publication_oid"),
+            current_lifecycle, canonical_json_bytes(current_document["lifecycle_evidence"]))
+        try:
+            verified = provider_reacquisition.verify_authorization(reacquisition_authorization, current)
+            if key not in provider_reacquisition.derive_dispatch_keys(verified, current):
+                raise SecurityBlocker("reacquisition claim key differs from signed authority")
+            if document["eligibility_evidence_digest"] != reacquisition_authorization["loss_proof_digest"]:
+                raise SecurityBlocker("reacquisition claim loss proof changed")
+        except SecurityBlocker as exc:
+            raise LifecyclePublicationError("provider reacquisition claim authority is invalid") from exc
+    else:
+        _require_latest_provider_dispatch_assessment(key, current_document)
+    signer = authority._require_identity(
+        document["signer_identity"], "provider dispatch publication signer"
+    )
+    signed = {name: copy.deepcopy(value) for name, value in document.items()
+              if name != "publication_digest"}
+    if document["publication_digest"] != digest_json(signed):
+        raise LifecyclePublicationError("provider dispatch publication digest mismatch")
+    try:
+        authority._verify_signature(
+            canonical_json_bytes(authority._unsigned(
+                document, "publication_digest", "signature"
+            )),
+            document["signature"], signer, PROVIDER_DISPATCH_CLAIM_DOMAIN,
+            policy.publication_signer_identities,
+            authority._policy_signature_verifier(policy),
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecyclePublicationError(
+            f"provider dispatch object {object_oid} signature policy failed"
+        ) from exc
+    return document, VerifiedProviderDispatchClaim(
+        publication_oid=object_oid,
+        publication_digest=document["publication_digest"],
+        journal_predecessor_oid=predecessor,
+        claim_id=document["claim_id"],
+        key=key,
+        eligibility_evidence_digest=document["eligibility_evidence_digest"],
+        reacquisition_authorization=reacquisition_authorization,
+    )
+
+
+def _require_latest_provider_dispatch_assessment(
+    key: ProviderDispatchKey, current_document: Mapping[str, Any],
+) -> None:
+    """Preserve the exact #1053 latest-assessment replacement predicate."""
+
     bundle = _lifecycle_bundle(current_document)
     events = bundle.get("transition_authorizations")
     snapshots = bundle.get("authority_chain")
@@ -1899,34 +1960,25 @@ def _verify_provider_dispatch_claim_document(
     ]
     if not assessments or key.assessment_authority_digest != assessments[-1]:
         raise LifecyclePublicationError("provider dispatch assessment is not the latest authorized assessment")
-    signer = authority._require_identity(
-        document["signer_identity"], "provider dispatch publication signer"
-    )
-    signed = {name: copy.deepcopy(value) for name, value in document.items()
-              if name != "publication_digest"}
-    if document["publication_digest"] != digest_json(signed):
-        raise LifecyclePublicationError("provider dispatch publication digest mismatch")
-    try:
-        authority._verify_signature(
-            canonical_json_bytes(authority._unsigned(
-                document, "publication_digest", "signature"
-            )),
-            document["signature"], signer, PROVIDER_DISPATCH_CLAIM_DOMAIN,
-            policy.publication_signer_identities,
-            authority._policy_signature_verifier(policy),
-        )
-    except authority.LifecycleAuthorityError as exc:
-        raise LifecyclePublicationError(
-            f"provider dispatch object {object_oid} signature policy failed"
-        ) from exc
-    return document, VerifiedProviderDispatchClaim(
-        publication_oid=object_oid,
-        publication_digest=document["publication_digest"],
-        journal_predecessor_oid=predecessor,
-        claim_id=document["claim_id"],
-        key=key,
-        eligibility_evidence_digest=document["eligibility_evidence_digest"],
-    )
+
+
+def _require_reacquisition_claim_uniqueness(
+    key: ProviderDispatchKey, authorization: dict[str, Any] | None,
+    claims: Mapping[str, VerifiedProviderDispatchClaim],
+) -> None:
+    scope = (key.repository, key.delivery_issue, key.pull_request, key.lifecycle_id, key.current_head_sha)
+    for claim in claims.values():
+        prior = claim.key
+        if scope != (prior.repository, prior.delivery_issue, prior.pull_request, prior.lifecycle_id, prior.current_head_sha):
+            continue
+        if authorization is None and claim.reacquisition_authorization is None:
+            continue
+        if authorization is None or claim.reacquisition_authorization is None:
+            raise LifecyclePublicationError("ordinary provider dispatch conflicts with provider reacquisition")
+        if prior.review_type == key.review_type:
+            raise LifecyclePublicationError("provider reacquisition claim already exists")
+        if canonical_json_bytes(claim.reacquisition_authorization) != canonical_json_bytes(authorization):
+            raise LifecyclePublicationError("provider reacquisition has competing signed authorizations")
 
 
 def _recovery_root_historical_evidence(
@@ -2219,6 +2271,7 @@ def _walk_journal(
                 raise LifecyclePublicationError(
                     "provider dispatch claim already exists in ancestry"
                 )
+            _require_reacquisition_claim_uniqueness(claim.key, claim.reacquisition_authorization, claims)
             claims[claim.claim_id] = claim
             continue
         candidate_repository = (
@@ -2989,6 +3042,7 @@ def verify_enrolled_draft_integration_claim(authorization: Mapping[str, Any]) ->
 def _publish_provider_dispatch_claim(
     key: ProviderDispatchKey, *, eligibility_evidence_digest: str,
     signer_identity: str, signer: authority.Signer,
+    reacquisition_authorization: dict[str, Any] | None = None,
 ) -> VerifiedProviderDispatchClaim:
     """Reserve one exact dispatch on the protected journal; never reuse a claim.
 
@@ -3014,6 +3068,7 @@ def _publish_provider_dispatch_claim(
         )
         if claim_id in claims:
             raise LifecyclePublicationError("provider dispatch claim already exists")
+        _require_reacquisition_claim_uniqueness(key, reacquisition_authorization, claims)
         previous = latest.get((key.repository, key.delivery_issue))
         if previous is None:
             raise LifecyclePublicationError("current lifecycle publication is unavailable")
@@ -3024,6 +3079,7 @@ def _publish_provider_dispatch_claim(
             journal_predecessor_oid=tip,
             signer_identity=signer_identity,
             attempt_id=secrets.token_hex(32),
+            reacquisition_authorization=reacquisition_authorization,
         )
         raw = _sign_provider_dispatch_claim(values, signer)
         object_oid = _write_publication_object(root, raw, tip)
@@ -3093,6 +3149,7 @@ def _execute_provider_dispatch_with_claim(
     write: Callable[[str], int | None],
     reconcile: Callable[[ProviderDispatchKey, int | None], ProviderDispatchReconciliation],
     *, signer_identity: str, signer: authority.Signer,
+    reacquisition_authorization: dict[str, Any] | None = None,
 ) -> ProviderDispatchResult:
     """Own the ephemeral CAS winner capability through one bounded provider write.
 
@@ -3101,15 +3158,20 @@ def _execute_provider_dispatch_with_claim(
     """
 
     initial = authenticate()
+    if reacquisition_authorization is not None and type(initial) is ProviderDispatchNoLongerRequired:
+        return ProviderDispatchResult("REACQUISITION_NO_LONGER_REQUIRED", None, 0)
     _require_provider_dispatch_eligibility(initial)
     current = authenticate()
     _require_provider_dispatch_eligibility(current)
     if current != initial:
         raise LifecyclePublicationError("provider dispatch eligibility changed before claim")
     _require_provider_dispatch_current(initial.key)
-    _publish_provider_dispatch_claim(
+    claimed = _publish_provider_dispatch_claim(
         initial.key, eligibility_evidence_digest=initial.eligibility_evidence_digest,
         signer_identity=signer_identity, signer=signer,
+        **({} if reacquisition_authorization is None else {
+            "reacquisition_authorization": reacquisition_authorization
+        }),
     )
     _require_provider_dispatch_current(initial.key)
     final = authenticate()
@@ -3118,6 +3180,12 @@ def _execute_provider_dispatch_with_claim(
     _require_provider_dispatch_eligibility(final)
     if final != initial:
         raise LifecyclePublicationError("provider dispatch eligibility changed after claim")
+    if reacquisition_authorization is not None:
+        owned_current, owned_claims = verify_provider_dispatch_claims(initial.key.repository, initial.key.delivery_issue)
+        if (claimed not in owned_claims
+                or owned_current.publication_oid != initial.key.current_publication_oid
+                or owned_current.publication_digest != initial.key.current_publication_digest):
+            raise LifecyclePublicationError("provider dispatch claim ownership or CURRENT changed before write")
     response_id: int | None = None
     try:
         response_id = write(PROVIDER_DISPATCH_TRIGGERS[initial.key.review_type])
@@ -3391,6 +3459,32 @@ def verify_current_lifecycle_authority(
         document["predecessor_publication_oid"], lifecycle,
         canonical_json_bytes(document["lifecycle_evidence"]),
     )
+
+
+def verify_provider_dispatch_claims(
+    repository: str, delivery_issue: int,
+) -> tuple[VerifiedLifecyclePublication, tuple[VerifiedProviderDispatchClaim, ...]]:
+    """Observe CURRENT and ancillary claims from one authenticated journal tip."""
+
+    issue = authority._require_positive_int(delivery_issue, "provider dispatch issue")
+    policy = authority._load_lifecycle_trust_policy(repository)
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=False) as (root, environment):
+        tip = _observe_remote_current_once(root, policy.publication_remote_url,
+            policy.publication_branch, credential_environment=environment)
+        if tip is None:
+            raise LifecyclePublicationError("current lifecycle publication is unavailable")
+        _, latest, _, _, claims = _walk_journal(root, tip, policy.publication_branch, include_claims=True)
+        selected = latest.get((repository, issue))
+        if selected is None:
+            raise LifecyclePublicationError("current lifecycle publication is unavailable")
+        oid, document, lifecycle = selected
+    current = VerifiedLifecyclePublication(oid, document["publication_digest"],
+        policy.publication_branch, document["journal_predecessor_oid"],
+        document["predecessor_publication_oid"], lifecycle,
+        canonical_json_bytes(document["lifecycle_evidence"]))
+    return current, tuple(claim for claim in claims.values()
+        if claim.key.repository == repository and claim.key.delivery_issue == issue)
 
 
 def derive_ready_source_recovery_current_head_trailers(
@@ -4733,6 +4827,7 @@ def _walk_journal_identity_projection(
     recovery_authorization_ids: set[tuple[str, str]] = set()
     recovery_authorization_digests: set[tuple[str, str]] = set()
     integrations: dict[str, dict[str, Any]] = {}
+    claims: dict[str, VerifiedProviderDispatchClaim] = {}
     for position, (object_oid, raw, parent) in enumerate(chronological):
         kind, candidate = _classify_journal_document(raw)
         if kind == GENESIS_ADMISSION_KIND:
@@ -4774,6 +4869,23 @@ def _walk_journal_identity_projection(
                 raise LifecyclePublicationError("enrolled Draft integration claim precedes CURRENT")
             document = _verify_enrolled_draft_claim_document(raw, expected_branch=publication_branch, parent=parent, previous=previous, verify_lifecycle=False)
             _add_enrolled_draft_claim(integrations, document)
+            continue
+        if kind == PROVIDER_DISPATCH_CLAIM_KIND:
+            previous = publications.get((candidate.get("repository"), candidate.get("delivery_issue")))
+            if previous is None:
+                raise LifecyclePublicationError("provider dispatch claim precedes CURRENT lifecycle publication")
+            current_oid, current_document, _ = previous
+            lifecycle = authority._verify_lifecycle_authority_for_journal(
+                canonical_json_bytes(current_document["lifecycle_evidence"]))
+            document, claim = _verify_provider_dispatch_claim_document(
+                raw, object_oid=object_oid, expected_branch=publication_branch,
+                current_oid=current_oid, current_document=current_document, current_lifecycle=lifecycle)
+            if document["journal_predecessor_oid"] != parent:
+                raise LifecyclePublicationError("provider dispatch claim journal parent binding is invalid")
+            if claim.claim_id in claims:
+                raise LifecyclePublicationError("provider dispatch claim already exists in ancestry")
+            _require_reacquisition_claim_uniqueness(claim.key, claim.reacquisition_authorization, claims)
+            claims[claim.claim_id] = claim
             continue
         if kind == READY_SOURCE_RECOVERY_KIND:
             try:
