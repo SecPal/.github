@@ -47,7 +47,8 @@ class ContractError(ValueError):
     """Raised when evidence does not satisfy the closed contract."""
 
 
-def _git(workspace: Path, arguments: list[str], *, index: Path | None = None) -> bytes:
+def _git(workspace: Path, arguments: list[str], *, index: Path | None = None,
+         accepted_return_codes: tuple[int, ...] = (0,)) -> bytes:
     environment = os.environ.copy()
     for name in tuple(environment):
         if name.startswith("GIT_"):
@@ -74,7 +75,7 @@ def _git(workspace: Path, arguments: list[str], *, index: Path | None = None) ->
         stderr=subprocess.DEVNULL,
         env=environment,
     )
-    if completed.returncode != 0:
+    if completed.returncode not in accepted_return_codes:
         raise ContractError("Git target verification failed")
     return completed.stdout
 
@@ -99,6 +100,21 @@ def verify_target(workspace: Path, commit: str) -> None:
     if top_level != resolved_workspace or checked_out_commit != commit:
         raise ContractError("workspace does not identify the expected commit")
 
+    entries = _git(resolved_workspace, ["ls-tree", "-r", "-z", commit])
+    if any(record.startswith(b"160000 ") for record in entries.split(b"\0")):
+        raise ContractError("gitlinks cannot be completely scanned as local files")
+
+    # The pinned scanner drops inline-ignored IaC findings before native JSON.
+    # No caller-owned source directive may replace reviewed central exceptions.
+    inline_ignores = _git(
+        resolved_workspace,
+        ["grep", "-a", "-i", "-l", "-z", "-e",
+         "trivy" + r"[[:space:]]*:[[:space:]]*ignore", commit, "--"],
+        accepted_return_codes=(0, 1),
+    )
+    if inline_ignores:
+        raise ContractError("source contains unsupported inline scanner suppression")
+
     tracked = _git(resolved_workspace, ["ls-files", "-v", "-z"])
     for record in tracked.split(b"\0"):
         if record and (record[:1] == b"S" or record[:1].islower()):
@@ -120,6 +136,107 @@ def verify_target(workspace: Path, commit: str) -> None:
     )
     if status:
         raise ContractError("workspace contains paths outside the expected commit")
+
+
+def verify_diagnostics(content: str, cache_directory: Path) -> None:
+    """Check pinned Trivy's private log framing without returning log material."""
+    if not content.strip():
+        raise ContractError("scanner diagnostics are unavailable")
+    # --skip-check-update deliberately uses archive-pinned embedded checks.
+    # Trivy labels its absent-cache fallback ERROR. Authenticate only that exact
+    # transport diagnostic, once, while proving no external checks were loaded.
+    checks = cache_directory / "policy" / "content"
+    if checks.exists() or checks.is_symlink():
+        raise ContractError("external check bundle is not admitted")
+    expected_fallback = '[misconfig] Falling back to embedded checks\terr=' + json.dumps(
+        'failed to check cache: cache does not exist at ' + json.dumps(str(checks))
+    )
+    fallbacks = 0
+    for line in content.splitlines():
+        fields = line.split("\t", 2)
+        if len(fields) != 3 or re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})", fields[0]
+        ) is None:
+            raise ContractError("scanner diagnostics indicate unknown scan health")
+        if fields[1] == "ERROR" and fields[2] == expected_fallback:
+            fallbacks += 1
+        elif fields[1] not in {"INFO", "DEBUG"} or not fields[2]:
+            raise ContractError("scanner diagnostics indicate unknown scan health")
+    if fallbacks != 1:
+        raise ContractError("pinned embedded check selection is unavailable")
+
+
+def configuration_identity() -> str:
+    """Bind the trusted implementation, invocation and policy bundle by content."""
+    root = Path(__file__).resolve().parents[1]
+    paths = (
+        ".github/actions/trivy-repository-scan/action.yml",
+        "scripts/secpal-trivy-repository-scan.py",
+        "policies/trivy-repository-scan-v1.json",
+        "policies/trivy-repository-scan-ignore-v1.yaml",
+        "policies/trivy-repository-secret-v1.yaml",
+    )
+    return _sha256({path: _sha256((root / path).read_bytes()) for path in paths})
+
+
+def verify_redaction(native: dict[str, Any], candidate: dict[str, Any], workspace: Path,
+                     repository: str, commit: str) -> None:
+    """Reject secret aliases before a private candidate becomes public evidence.
+
+    Correlate Trivy's full cause-line censor masks with immutable Git blobs.
+    Captures remain transient; ambiguous binary or truncated masks fail closed.
+    """
+    if candidate["subject"] != _validate_subject(repository, commit):
+        raise ContractError("redaction subject differs from the authenticated target")
+    if candidate["gate_state"] == "UNKNOWN_STALE" and candidate["findings"] == []:
+        return
+    captures: set[str] = set()
+    for result in native["Results"]:
+        for secret in _finding_collection(result, "Secrets"):
+            target = _path(result["Target"])
+            source = _git(workspace, ["cat-file", "blob", commit + ":" + target])
+            lines = source.split(b"\n")
+            location = _location(secret)
+            if location is None:
+                raise ContractError("secret censor location is unavailable")
+            start, end = location["start_line"], location["end_line"]
+            code = secret.get("Code")
+            if not isinstance(code, dict) or not isinstance(code.get("Lines"), list):
+                raise ContractError("secret censor evidence is unavailable")
+            causes = [line for line in code["Lines"] if isinstance(line, dict) and line.get("IsCause") is True]
+            numbers = [line.get("Number") for line in causes]
+            if numbers != list(range(start, end + 1)) or any(type(n) is not int for n in numbers):
+                raise ContractError("secret censor line coverage is ambiguous")
+            found = False
+            for line in causes:
+                number = line["Number"]
+                if number > len(lines) or not isinstance(line.get("Content"), str):
+                    raise ContractError("secret censor source is unavailable")
+                original = lines[number - 1].replace(b"\r", b"")
+                mask = line["Content"].encode("utf-8")
+                if len(original) != len(mask) or any(a != b and b != 42 for a, b in zip(original, mask)):
+                    raise ContractError("secret censor source is ambiguous")
+                for match in re.finditer(rb"\*+", mask):
+                    value = original[match.start():match.end()]
+                    if value == match.group():
+                        continue
+                    if b"*" in value:
+                        raise ContractError("secret censor span is ambiguous")
+                    captures.add(value.decode("utf-8", errors="strict"))
+                    found = True
+            if not found:
+                raise ContractError("secret censor span is unavailable")
+    def strings(value: Any):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for member in value.values():
+                yield from strings(member)
+        elif isinstance(value, list):
+            for member in value:
+                yield from strings(member)
+    if any(capture in value for value in strings(candidate) for capture in captures):
+        raise ContractError("candidate evidence contains captured material")
 
 
 def _canonical(value: Any) -> str:
@@ -195,7 +312,7 @@ def _validate_subject(repository: str, commit: str) -> dict[str, str]:
 
 
 def _validate_scanner(scanner: dict[str, Any]) -> dict[str, str]:
-    if not isinstance(scanner, dict) or set(scanner) != {"name", "version", "immutable_id"}:
+    if not isinstance(scanner, dict) or set(scanner) != {"name", "version", "immutable_id", "configuration_sha256"}:
         raise ContractError("scanner identity is malformed")
     if scanner["name"] != "trivy":
         raise ContractError("scanner must be Trivy")
@@ -203,7 +320,11 @@ def _validate_scanner(scanner: dict[str, Any]) -> dict[str, str]:
     immutable_id = _string(scanner["immutable_id"], "scanner immutable identity")
     if not SHA256_RE.fullmatch(immutable_id):
         raise ContractError("scanner immutable identity must be sha256")
-    return {"name": "trivy", "version": version, "immutable_id": immutable_id}
+    configuration = _string(scanner["configuration_sha256"], "scanner configuration identity")
+    if not SHA256_RE.fullmatch(configuration):
+        raise ContractError("scanner configuration identity must be sha256")
+    return {"name": "trivy", "version": version, "immutable_id": immutable_id,
+            "configuration_sha256": configuration}
 
 
 def _validate_database(
@@ -349,12 +470,7 @@ def _validate_scan_surface(native: dict[str, Any], workspace: str) -> None:
         raise ContractError("Trivy output is not a filesystem repository scan")
     artifact_name = _string(native.get("ArtifactName"), "Trivy filesystem artifact")
     intended_workspace = _string(workspace, "intended scan workspace")
-    try:
-        artifact_path = Path(artifact_name).resolve(strict=True)
-        workspace_path = Path(intended_workspace).resolve(strict=True)
-    except OSError as error:
-        raise ContractError("Trivy scan workspace cannot be resolved") from error
-    if artifact_path != workspace_path:
+    if os.path.normpath(artifact_name) != os.path.normpath(intended_workspace):
         raise ContractError("Trivy scan artifact differs from the intended workspace")
 
 
@@ -368,7 +484,7 @@ def normalize_native(
     database: dict[str, Any],
     completed_at: str,
 ) -> dict[str, Any]:
-    """Purely normalize Trivy JSON into a secret-safe observation."""
+    """Purely normalize captured Trivy JSON into a private candidate observation."""
     if not isinstance(native, dict) or native.get("SchemaVersion") != 2:
         raise ContractError("Trivy output schema version is missing or unsupported")
     _validate_scan_surface(native, workspace)
@@ -384,6 +500,8 @@ def normalize_native(
     for result in results:
         if not isinstance(result, dict):
             raise ContractError("Trivy result entry is malformed")
+        if _finding_collection(result, "ExperimentalModifiedFindings"):
+            raise ContractError("Trivy suppressed findings bypass central policy")
         target = _path(result.get("Target"))
         vulnerabilities = _finding_collection(result, "Vulnerabilities")
         secrets = _finding_collection(result, "Secrets")
@@ -439,9 +557,9 @@ def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any
         raise ContractError("policy exceptions must be an array")
     now = _timestamp(completed_at)
     seen: set[str] = set()
-    seen_selectors: set[tuple[str, str, str]] = set()
+    seen_selectors: set[tuple[str, str, str, str]] = set()
     for exception in exceptions:
-        required = {"id", "class", "rule_id", "path", "disposition", "expires_at", "rationale"}
+        required = {"id", "repository", "class", "rule_id", "path", "disposition", "expires_at", "rationale"}
         if not isinstance(exception, dict) or set(exception) != required:
             raise ContractError("policy exception is malformed")
         exception_id = _string(exception["id"], "exception ID")
@@ -452,7 +570,10 @@ def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any
             raise ContractError("policy exception class is invalid")
         rule_id = _string(exception["rule_id"], "exception rule ID")
         path = _path(exception["path"])
-        selector = (exception["class"], rule_id, path)
+        repository = _string(exception["repository"], "exception repository")
+        if not REPOSITORY_RE.fullmatch(repository):
+            raise ContractError("exception repository must be exact owner/name")
+        selector = (repository, exception["class"], rule_id, path)
         if selector in seen_selectors:
             raise ContractError("policy exception selectors must be unique")
         seen_selectors.add(selector)
@@ -474,12 +595,13 @@ def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any
 
 
 def _apply_exception(
-    finding: dict[str, Any], exceptions: list[dict[str, Any]]
+    finding: dict[str, Any], exceptions: list[dict[str, Any]], repository: str
 ) -> dict[str, Any]:
     matches = [
         exception
         for exception in exceptions
-        if exception["class"] == finding["class"]
+        if exception["repository"] == repository
+        and exception["class"] == finding["class"]
         and exception["rule_id"] == finding["rule_id"]
         and exception["path"] == finding["path"]
     ]
@@ -506,7 +628,7 @@ def admit(observation: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]
         {**exception, "path": _path(exception["path"])}
         for exception in policy["exceptions"]
     ]
-    findings = [_apply_exception(finding, exceptions) for finding in observation["findings"]]
+    findings = [_apply_exception(finding, exceptions, observation["subject"]["repository"]) for finding in observation["findings"]]
     active = [finding for finding in findings if "exception" not in finding]
     actions = [policy["actions"][finding["class"]][finding["severity"]] for finding in active]
     if observation["database"]["status"] != "FRESH":
@@ -629,7 +751,7 @@ def _evaluate(arguments: argparse.Namespace) -> int:
     completed_at = arguments.completed_at
     try:
         native = _load(arguments.native)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         _write(
             arguments.output,
             unknown_result(
@@ -643,7 +765,7 @@ def _evaluate(arguments: argparse.Namespace) -> int:
     try:
         database = _load(arguments.database)
         _validate_database(database, _timestamp(completed_at))
-    except (ContractError, KeyError, TypeError, OSError, json.JSONDecodeError):
+    except (ContractError, KeyError, TypeError, OSError, UnicodeError, json.JSONDecodeError):
         _write(
             arguments.output,
             unknown_result(
@@ -657,7 +779,7 @@ def _evaluate(arguments: argparse.Namespace) -> int:
     try:
         policy = _load(arguments.policy)
         _validate_policy(policy, completed_at)
-    except (ContractError, KeyError, TypeError, json.JSONDecodeError, OSError):
+    except (ContractError, KeyError, TypeError, UnicodeError, json.JSONDecodeError, OSError):
         _write(
             arguments.output,
             unknown_result(
@@ -669,21 +791,26 @@ def _evaluate(arguments: argparse.Namespace) -> int:
         )
         return 1
     try:
+        # Capture filesystem identity here; normalization is replayable without it.
+        observed_workspace = str(Path(arguments.workspace).resolve(strict=True))
+        observed_native = dict(native)
+        observed_native["ArtifactName"] = str(Path(native["ArtifactName"]).resolve(strict=True))
         observation = normalize_native(
-            native,
+            observed_native,
             repository=arguments.repository,
             commit=arguments.commit,
-            workspace=arguments.workspace,
+            workspace=observed_workspace,
             scanner={
                 "name": "trivy",
                 "version": arguments.scanner_version,
                 "immutable_id": arguments.scanner_identity,
+                "configuration_sha256": configuration_identity(),
             },
             database=database,
             completed_at=completed_at,
         )
         result = admit(observation, policy)
-    except (ContractError, KeyError, TypeError, json.JSONDecodeError, OSError):
+    except (ContractError, KeyError, TypeError, UnicodeError, json.JSONDecodeError, OSError):
         _write(
             arguments.output,
             unknown_result(
@@ -714,6 +841,17 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--completed-at", required=True)
     evaluate.add_argument("--output", type=Path, required=True)
 
+    diagnostics = commands.add_parser("verify-diagnostics")
+    diagnostics.add_argument("--diagnostics", type=Path, required=True)
+    diagnostics.add_argument("--cache-dir", type=Path, required=True)
+
+    redaction = commands.add_parser("verify-redaction")
+    redaction.add_argument("--native", type=Path, required=True)
+    redaction.add_argument("--candidate", type=Path, required=True)
+    redaction.add_argument("--workspace", type=Path, required=True)
+    redaction.add_argument("--repository", required=True)
+    redaction.add_argument("--commit", required=True)
+
     target = commands.add_parser("verify-target")
     target.add_argument("--workspace", type=Path, required=True)
     target.add_argument("--commit", required=True)
@@ -740,6 +878,11 @@ def main() -> int:
     try:
         if arguments.command == "verify-target":
             verify_target(arguments.workspace, arguments.commit)
+        elif arguments.command == "verify-diagnostics":
+            verify_diagnostics(arguments.diagnostics.read_text(encoding="utf-8"), arguments.cache_dir)
+        elif arguments.command == "verify-redaction":
+            verify_redaction(_load(arguments.native), _load(arguments.candidate),
+                             arguments.workspace, arguments.repository, arguments.commit)
         elif arguments.command == "database":
             _write(
                 arguments.output,
@@ -759,8 +902,8 @@ def main() -> int:
                     completed_at=arguments.completed_at,
                 ),
             )
-    except (ContractError, OSError, json.JSONDecodeError) as error:
-        print(f"repository scan evidence error: {error}", file=sys.stderr)
+    except (ContractError, OSError, KeyError, TypeError, UnicodeError, json.JSONDecodeError):
+        print("repository scan evidence verification failed", file=sys.stderr)
         return 1
     return 0
 

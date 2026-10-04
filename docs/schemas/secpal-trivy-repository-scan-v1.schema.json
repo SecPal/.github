@@ -77,6 +77,13 @@
                 "const": "SUCCEEDED"
               }
             }
+          },
+          "database": {
+            "properties": {
+              "status": {
+                "const": "FRESH"
+              }
+            }
           }
         }
       }
@@ -110,7 +117,7 @@
     "scanner": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "version", "immutable_id"],
+      "required": ["name", "version", "immutable_id", "configuration_sha256"],
       "properties": {
         "name": {
           "const": "trivy"
@@ -120,6 +127,9 @@
           "minLength": 1
         },
         "immutable_id": {
+          "$ref": "#/$defs/sha256"
+        },
+        "configuration_sha256": {
           "$ref": "#/$defs/sha256"
         }
       }

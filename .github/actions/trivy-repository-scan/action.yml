@@ -24,25 +24,27 @@ runs:
       run: |
         set -u
         governance_root="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
-        invocation_id="$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
+        invocation_id="$(python3 -I -c 'import secrets; print(secrets.token_hex(8))')"
         evidence_root="${RUNNER_TEMP}/secpal-trivy-repository-${invocation_id}"
         tool_root="${RUNNER_TEMP}/secpal-trivy-tool-${invocation_id}"
         cache_root="${RUNNER_TEMP}/secpal-trivy-cache-${invocation_id}"
         artifact_name="trivy-repository-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${invocation_id}"
         result="$evidence_root/result.json"
+        candidate="$tool_root/candidate-result.json"
         failure_code=""
 
         install -d -m 0700 "$evidence_root" "$tool_root" "$cache_root"
+        trap 'rm -rf -- "$tool_root" "$cache_root"' EXIT
 
         write_unknown() {
           local failure_completed_at
           failure_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          python3 "$governance_root/scripts/secpal-trivy-repository-scan.py" unknown \
+          python3 -I "$governance_root/scripts/secpal-trivy-repository-scan.py" unknown \
             --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
             --failure-code "$1" --completed-at "$failure_completed_at" --output "$result"
         }
 
-        if ! python3 "$governance_root/scripts/secpal-trivy-repository-scan.py" verify-target \
+        if ! python3 -I "$governance_root/scripts/secpal-trivy-repository-scan.py" verify-target \
           --workspace "$GITHUB_WORKSPACE" --commit "$GITHUB_SHA"; then
           failure_code="TARGET_IDENTITY_FAILURE"
         fi
@@ -74,10 +76,10 @@ runs:
 
         if [ -z "$failure_code" ]; then
           if ! env -i HOME="$tool_root" "$tool_root/trivy" --config "$trusted_config" image \
-            --download-db-only --cache-dir "$cache_root" --quiet; then
+            --download-db-only --cache-dir "$cache_root" --quiet >/dev/null 2>&1; then
             failure_code="NETWORK_FAILURE"
           elif ! env -i HOME="$tool_root" "$tool_root/trivy" --config "$trusted_config" image \
-            --download-java-db-only --cache-dir "$cache_root" --quiet; then
+            --download-java-db-only --cache-dir "$cache_root" --quiet >/dev/null 2>&1; then
             failure_code="NETWORK_FAILURE"
           fi
         fi
@@ -85,21 +87,24 @@ runs:
         native="$tool_root/native.json"
         if [ -z "$failure_code" ]; then
           if ! env -i HOME="$tool_root" "$tool_root/trivy" --config "$trusted_config" fs \
-            --scanners vuln,secret,misconfig \
-            --format json --exit-code 0 --quiet \
-            --skip-db-update --skip-java-db-update --skip-check-update \
+            --scanners vuln,secret,misconfig --include-dev-deps --show-suppressed \
+            --format json --exit-code 0 \
+            --skip-db-update --skip-java-db-update --skip-check-update --skip-version-check \
             --cache-dir "$cache_root" \
             --ignorefile "$governance_root/policies/trivy-repository-scan-ignore-v1.yaml" \
             --secret-config "$governance_root/policies/trivy-repository-secret-v1.yaml" \
-            --output "$native" "$GITHUB_WORKSPACE"; then
+            --output "$native" "$GITHUB_WORKSPACE" >/dev/null 2>"$tool_root/native.stderr"; then
+            failure_code="SCANNER_FAILURE"
+          elif ! python3 -I "$governance_root/scripts/secpal-trivy-repository-scan.py" verify-diagnostics \
+            --diagnostics "$tool_root/native.stderr" --cache-dir "$cache_root"; then
             failure_code="SCANNER_FAILURE"
           fi
         fi
 
         database="$tool_root/database.json"
         if [ -z "$failure_code" ]; then
-          completed_at="$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))')"
-          if ! python3 "$governance_root/scripts/secpal-trivy-repository-scan.py" database \
+          completed_at="$(python3 -I -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))')"
+          if ! python3 -I "$governance_root/scripts/secpal-trivy-repository-scan.py" database \
             --metadata "$cache_root/db/metadata.json" \
             --metadata "$cache_root/java-db/metadata.json" \
             --database-file "$cache_root/db/trivy.db" \
@@ -110,17 +115,27 @@ runs:
         fi
 
         if [ -z "$failure_code" ]; then
-          if ! python3 "$governance_root/scripts/secpal-trivy-repository-scan.py" evaluate \
+          if ! python3 -I "$governance_root/scripts/secpal-trivy-repository-scan.py" evaluate \
             --native "$native" --database "$database" \
             --policy "$governance_root/policies/trivy-repository-scan-v1.json" \
             --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
             --workspace "$GITHUB_WORKSPACE" \
             --scanner-version "$TRIVY_VERSION" \
             --scanner-identity "sha256:${TRIVY_ARCHIVE_SHA256}" \
-            --completed-at "$completed_at" --output "$result"; then
-            if [ ! -s "$result" ]; then
+            --completed-at "$completed_at" --output "$candidate"; then
+            if [ ! -s "$candidate" ]; then
               failure_code="MALFORMED_OUTPUT"
             fi
+          fi
+        fi
+
+        if [ -z "$failure_code" ]; then
+          if python3 -I "$governance_root/scripts/secpal-trivy-repository-scan.py" verify-redaction \
+            --native "$native" --candidate "$candidate" --workspace "$GITHUB_WORKSPACE" \
+            --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA"; then
+            install -m 0600 "$candidate" "$result"
+          else
+            failure_code="MALFORMED_OUTPUT"
           fi
         fi
 
@@ -130,12 +145,12 @@ runs:
           write_unknown "$failure_code"
         fi
 
-        gate_state="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["gate_state"])' "$result")"
+        gate_state="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["gate_state"])' "$result")"
         printf 'gate-state=%s\n' "$gate_state" >> "$GITHUB_OUTPUT"
         printf 'evidence-artifact=%s\n' "$artifact_name" >> "$GITHUB_OUTPUT"
         printf 'evidence-path=%s\n' "$evidence_root" >> "$GITHUB_OUTPUT"
 
-        python3 - "$result" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+        python3 -I - "$result" >> "$GITHUB_STEP_SUMMARY" <<'PY'
         import json
         import sys
 

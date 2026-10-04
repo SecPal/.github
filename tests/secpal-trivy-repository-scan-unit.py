@@ -176,6 +176,14 @@ class RepositoryScanContractTests(unittest.TestCase):
         )
         self.assertIn("--scanners vuln,secret,misconfig", source)
         self.assertIn("--skip-check-update", source)
+        self.assertIn("--include-dev-deps", source)
+        self.assertIn("--show-suppressed", source)
+        self.assertNotIn("python3 -c", source)
+        self.assertNotIn("python3 - ", source)
+        self.assertIn("verify-redaction", source)
+        self.assertIn('--output "$candidate"', source)
+        self.assertLess(source.index("verify-redaction"), source.index('install -m 0600 "$candidate"'))
+        self.assertIn('--output "$native" "$GITHUB_WORKSPACE" >/dev/null 2>"$tool_root/native.stderr"', source)
         self.assertNotIn("repository:", source)
         self.assertNotIn("ref:", source)
         self.assertNotIn("github-token", source)
@@ -265,6 +273,113 @@ class RepositoryScanContractTests(unittest.TestCase):
             failure_code = "TARGET_IDENTITY_FAILURE" if completed.returncode else ""
             self.assertEqual(failure_code, "TARGET_IDENTITY_FAILURE")
 
+    def test_isolated_inline_python_rejects_checkout_shadow_module(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            marker = workspace / "executed"
+            (workspace / "secrets.py").write_text(
+                "from pathlib import Path\nPath('executed').touch()\n"
+            )
+            process = subprocess.run(
+                ["python3", "-I", "-c", "import secrets; assert len(secrets.token_hex(8)) == 16"],
+                cwd=workspace, capture_output=True, check=False,
+            )
+            self.assertEqual(process.returncode, 0)
+            self.assertFalse(marker.exists())
+
+    def test_private_scanner_diagnostics_fail_closed_without_echoing_material(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            prefix = '2026-10-04T12:00:00Z\t'
+            fallback = prefix + 'ERROR\t[misconfig] Falling back to embedded checks\terr=' + json.dumps(
+                'failed to check cache: cache does not exist at ' + json.dumps(str(cache / 'policy' / 'content'))
+            ) + '\n'
+            healthy = prefix + 'INFO\tscan started\n' + fallback
+            self.module.verify_diagnostics(healthy, cache)
+            for value in ('', 'malformed', prefix + 'INFO\tmissing check selection', fallback + fallback,
+                          healthy + prefix + 'UNKNOWN\tmessage', healthy + prefix + 'ERROR\t' + SYNTHETIC_SECRET,
+                          healthy + prefix + 'WARN\tpartial scan', fallback.replace(str(cache), '/substituted')):
+                with self.assertRaises(self.module.ContractError) as context:
+                    self.module.verify_diagnostics(value, cache)
+                self.assertFalse(SYNTHETIC_SECRET in str(context.exception))
+            (cache / 'policy' / 'content').mkdir(parents=True)
+            with self.assertRaises(self.module.ContractError):
+                self.module.verify_diagnostics(healthy, cache)
+
+    def test_suppressed_native_findings_fail_closed(self) -> None:
+        native = native_result()
+        native["Results"][0]["ExperimentalModifiedFindings"] = [{"Status": "ignored"}]
+        process, result = run_evaluate_fixture(native)
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+        self.assertEqual(result["findings"], [])
+
+    def test_gitlinks_fail_target_identity_without_fetching(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            def git(*arguments: str) -> str:
+                return subprocess.check_output(
+                    ["git", "-C", str(workspace), *arguments], text=True
+                ).strip()
+            git("init", "--quiet")
+            git("config", "user.name", "SecPal Test")
+            git("config", "user.email", "test@secpal.app")
+            (workspace / "tracked").write_text("source\n")
+            git("add", ".")
+            git("-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture")
+            original = git("rev-parse", "HEAD")
+            self.module.verify_target(workspace, original)
+            (workspace / "linked").mkdir()
+            git("update-index", "--add", "--cacheinfo", "160000," + original + ",linked")
+            git("-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "gitlink")
+            self.assertEqual(git("status", "--porcelain"), "")
+            with self.assertRaises(self.module.ContractError):
+                self.module.verify_target(workspace, git("rev-parse", "HEAD"))
+
+    def test_normalization_is_independent_of_workspace_existence(self) -> None:
+        native = native_result()
+        native["ArtifactName"] = "/absent/authenticated-workspace"
+        result = self.module.normalize_native(
+            native, repository="SecPal/example", commit=COMMIT,
+            workspace="/absent/authenticated-workspace",
+            scanner={"name": "trivy", "version": "0.74.0", "immutable_id": "sha256:" + "a" * 64, "configuration_sha256": "sha256:" + "c" * 64},
+            database=valid_database(), completed_at="2026-09-16T10:10:00Z",
+        )
+        self.assertEqual(result["subject"]["commit"], COMMIT)
+
+    def test_secret_metadata_is_guarded_using_immutable_censor_masks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            secret = SYNTHETIC_SECRET
+            def git(*arguments: str) -> str:
+                return subprocess.check_output(["git", "-C", str(workspace), *arguments], text=True).strip()
+            git("init", "--quiet")
+            git("config", "user.name", "SecPal Test")
+            git("config", "user.email", "test@secpal.app")
+            (workspace / "secret.txt").write_text("token=" + secret + "\n")
+            git("add", ".")
+            git("-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture")
+            commit = git("rev-parse", "HEAD")
+            native = {"Results": [{"Target": "secret.txt", "Secrets": [{
+                "StartLine": 1, "EndLine": 1,
+                "Code": {"Lines": [{"Number": 1, "IsCause": True, "Content": "token=" + "*" * len(secret)}]},
+            }]}]}
+            candidate = {"subject": {"repository": "SecPal/example", "commit": commit},
+                         "gate_state": "ACTIONABLE", "findings": [{"path": "secret.txt"}]}
+            self.module.verify_redaction(native, candidate, workspace, "SecPal/example", commit)
+            for field in ("path", "resource", "title", "message", "package", "rule_id"):
+                unsafe = copy.deepcopy(candidate)
+                unsafe["findings"][0][field] = "prefix/" + secret
+                with self.assertRaises(self.module.ContractError):
+                    self.module.verify_redaction(native, unsafe, workspace, "SecPal/example", commit)
+            (workspace / "secret.txt").write_text("modified\n")
+            self.module.verify_redaction(native, candidate, workspace, "SecPal/example", commit)
+            for bad in ({}, {"Lines": []}, {"Lines": [{"Number": 1, "IsCause": True, "Content": "***"}]}):
+                altered = copy.deepcopy(native)
+                altered["Results"][0]["Secrets"][0]["Code"] = bad
+                with self.assertRaises(self.module.ContractError):
+                    self.module.verify_redaction(altered, candidate, workspace, "SecPal/example", commit)
+
     def test_assume_unchanged_modified_bytes_fail_target_identity(self) -> None:
         self._assert_index_flags_fail_target_identity(["--assume-unchanged"])
 
@@ -283,6 +398,7 @@ class RepositoryScanContractTests(unittest.TestCase):
                 "name": "trivy",
                 "version": "0.74.0",
                 "immutable_id": "sha256:" + "a" * 64,
+                "configuration_sha256": "sha256:" + "c" * 64,
             },
             database={
                 "status": "FRESH",
@@ -321,6 +437,7 @@ class RepositoryScanContractTests(unittest.TestCase):
                 "name": "trivy",
                 "version": "0.74.0",
                 "immutable_id": "sha256:" + "a" * 64,
+                "configuration_sha256": "sha256:" + "c" * 64,
             },
             database={
                 "status": "FRESH",
@@ -350,6 +467,7 @@ class RepositoryScanContractTests(unittest.TestCase):
                 "name": "trivy",
                 "version": "0.74.0",
                 "immutable_id": "sha256:" + "a" * 64,
+                "configuration_sha256": "sha256:" + "c" * 64,
             },
             database={
                 "status": "FRESH",
@@ -364,6 +482,7 @@ class RepositoryScanContractTests(unittest.TestCase):
         policy["exceptions"] = [
             {
                 "id": "SEC-EXAMPLE-1",
+                "repository": "SecPal/example",
                 "class": "VULNERABILITY",
                 "rule_id": "CVE-2021-23337",
                 "path": "package-lock.json",
@@ -376,6 +495,14 @@ class RepositoryScanContractTests(unittest.TestCase):
         self.assertEqual(result["gate_state"], "CLEAN")
         self.assertEqual(result["summary"]["excepted"], 1)
         self.assertEqual(result["findings"][0]["exception"]["id"], "SEC-EXAMPLE-1")
+
+        other = copy.deepcopy(observation)
+        other["subject"]["repository"] = "SecPal/other"
+        self.assertEqual(self.module.admit(other, policy)["gate_state"], "ACTIONABLE")
+        missing_repository = copy.deepcopy(policy)
+        del missing_repository["exceptions"][0]["repository"]
+        with self.assertRaises(self.module.ContractError):
+            self.module.admit(observation, missing_repository)
 
         policy["exceptions"][0]["expires_at"] = "2026-09-16T10:10:00Z"
         with self.assertRaises(self.module.ContractError):
@@ -393,6 +520,7 @@ class RepositoryScanContractTests(unittest.TestCase):
                 "name": "trivy",
                 "version": "0.74.0",
                 "immutable_id": "sha256:" + "a" * 64,
+                "configuration_sha256": "sha256:" + "c" * 64,
             },
             database={
                 "status": "FRESH",
@@ -406,6 +534,7 @@ class RepositoryScanContractTests(unittest.TestCase):
         policy = copy.deepcopy(self.policy)
         exception = {
             "id": "SEC-EXAMPLE-1",
+                "repository": "SecPal/example",
             "class": "VULNERABILITY",
             "rule_id": "CVE-2021-23337",
             "path": "./package-lock.json",
@@ -438,6 +567,7 @@ class RepositoryScanContractTests(unittest.TestCase):
                     "name": "trivy",
                     "version": "0.74.0",
                     "immutable_id": "sha256:" + "a" * 64,
+                "configuration_sha256": "sha256:" + "c" * 64,
                 },
                 database={
                     "status": "FRESH",
@@ -583,7 +713,7 @@ class RepositoryScanContractTests(unittest.TestCase):
                 repository="SecPal/example",
                 commit=COMMIT,
                 workspace=".",
-                scanner={"name": "trivy", "version": "0.74.0", "immutable_id": "sha256:" + "a" * 64},
+                scanner={"name": "trivy", "version": "0.74.0", "immutable_id": "sha256:" + "a" * 64, "configuration_sha256": "sha256:" + "c" * 64},
                 database={"status": "FRESH"},
                 completed_at="2026-09-16T10:10:00Z",
             )
@@ -610,7 +740,7 @@ class RepositoryScanContractTests(unittest.TestCase):
             repository="SecPal/example",
             commit=COMMIT,
             workspace=".",
-            scanner={"name": "trivy", "version": "0.74.0", "immutable_id": "sha256:" + "a" * 64},
+            scanner={"name": "trivy", "version": "0.74.0", "immutable_id": "sha256:" + "a" * 64, "configuration_sha256": "sha256:" + "c" * 64},
             database=json.loads((FIXTURES / "stale-database.json").read_text(encoding="utf-8")),
             completed_at="2026-09-16T10:10:00Z",
         )
@@ -650,6 +780,7 @@ class RepositoryScanContractTests(unittest.TestCase):
                 "name": "trivy",
                 "version": "0.74.0",
                 "immutable_id": "sha256:" + "a" * 64,
+                "configuration_sha256": "sha256:" + "c" * 64,
             },
             database={
                 "status": "FRESH",
@@ -662,6 +793,10 @@ class RepositoryScanContractTests(unittest.TestCase):
         )
         successful = self.module.admit(observation, self.policy)
         jsonschema.validate(successful, schema)
+        stale = copy.deepcopy(successful)
+        stale["database"]["status"] = "STALE"
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(stale, schema)
         unsafe = copy.deepcopy(successful)
         secret = next(item for item in unsafe["findings"] if item["class"] == "SECRET")
         secret["message"] = SYNTHETIC_SECRET

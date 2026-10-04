@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-04 - Harden Trivy Repository Scan Admission
+
+**Fixed:**
+
+- Include development dependencies and all secret paths; reject gitlinks and
+  caller-owned inline scanner suppression before scanning.
+- Bind the trusted scan configuration bundle, scope exceptions to an exact
+  repository, and require fresh database evidence for successful admission.
+- Isolate Python imports, keep normalization replayable, and verify secret
+  redaction against immutable source before publishing bounded evidence.
+
 ## 2026-09-29 - Unify Exact Parent-2 Ready Integration
 
 **Fixed:**

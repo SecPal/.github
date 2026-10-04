@@ -71,6 +71,14 @@ def main() -> int:
             encoding="utf-8",
         )
         template.unlink()
+        (workspace / "tests").mkdir()
+        (workspace / "tests" / "example.md").write_text(secret_path.read_text())
+        lock = json.loads((workspace / "package-lock.json").read_text())
+        lock["packages"][""]["devDependencies"] = {"lodash": "4.17.20"}
+        lock["packages"]["node_modules/lodash"]["dev"] = True
+        lock["dependencies"]["lodash"]["dev"] = True
+        lock["fixture_token"] = SYNTHETIC_SECRET
+        (workspace / "package-lock.json").write_text(json.dumps(lock, indent=2) + "\n")
         (workspace / "trivy.yaml").write_text(
             "scan:\n  skip-files:\n    - '**'\n",
             encoding="utf-8",
@@ -101,7 +109,12 @@ def main() -> int:
         native = root / "native.json"
         trusted_config = root / "trivy.yaml"
         trusted_config.write_text("{}\n", encoding="utf-8")
-        subprocess.run(
+        subprocess.run([
+            str(trivy), "--config", str(trusted_config), "image",
+            "--download-db-only", "--cache-dir", str(cache), "--quiet",
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env={"HOME": str(root)})
+        scanned = subprocess.run(
             [
                 str(trivy),
                 "--config",
@@ -109,12 +122,15 @@ def main() -> int:
                 "fs",
                 "--scanners",
                 "vuln,secret,misconfig",
+                "--include-dev-deps",
+                "--include-non-failures", "--show-suppressed",
                 "--format",
                 "json",
                 "--exit-code",
                 "0",
-                "--quiet",
-                "--skip-check-update",
+                "--skip-db-update",
+                "--skip-java-db-update",
+                "--skip-check-update", "--skip-version-check",
                 "--cache-dir",
                 str(cache),
                 "--secret-config",
@@ -124,8 +140,10 @@ def main() -> int:
                 str(workspace),
             ],
             check=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             env={"HOME": str(root)},
         )
+        module.verify_diagnostics(scanned.stderr.decode("utf-8"), cache)
         native_value = json.loads(native.read_text(encoding="utf-8"))
         if native_value.get("ArtifactType") != "repository":
             raise RuntimeError("pinned Trivy did not identify the Git worktree as a repository")
@@ -138,25 +156,72 @@ def main() -> int:
         observation = module.normalize_native(
             native_value,
             repository="SecPal/repository-scan-fixture",
-            commit="1" * 40,
+            commit=commit,
             workspace=str(workspace),
             scanner={
                 "name": "trivy",
                 "version": TRIVY_VERSION,
                 "immutable_id": "sha256:" + TRIVY_ARCHIVE_SHA256,
+                "configuration_sha256": module.configuration_identity(),
             },
             database=database,
             completed_at=completed_at,
         )
         result = module.admit(observation, json.loads(POLICY.read_text(encoding="utf-8")))
+        module.verify_redaction(native_value, result, workspace, "SecPal/repository-scan-fixture", commit)
+        for field in ("path", "resource", "title", "message", "package"):
+            import copy
+            unsafe = copy.deepcopy(result)
+            unsafe["findings"][0][field] = SYNTHETIC_SECRET
+            try:
+                module.verify_redaction(native_value, unsafe, workspace, "SecPal/repository-scan-fixture", commit)
+            except module.ContractError:
+                pass
+            else:
+                raise RuntimeError("captured metadata bypassed the redaction guard")
         encoded = json.dumps(result, sort_keys=True)
         classes = {finding["class"] for finding in result["findings"]}
         if classes != {"VULNERABILITY", "SECRET", "MISCONFIGURATION"}:
             raise RuntimeError(f"pinned Trivy did not exercise every scanner class: {sorted(classes)}")
         if SYNTHETIC_SECRET in encoded or '"match"' in encoded.lower() or '"code"' in encoded.lower():
             raise RuntimeError("normalized evidence retained secret capture material")
+        secret_paths = {f["path"] for f in result["findings"] if f["class"] == "SECRET"}
+        if not {"tests/example.md", "package-lock.json"} <= secret_paths:
+            raise RuntimeError("secret default exclusions remain enabled")
         if result["gate_state"] != "ACTIONABLE":
             raise RuntimeError("representative findings were not admitted as actionable")
+        # Inline source suppression is rejected from immutable source before
+        # Trivy can omit ignored IaC findings from its native representation.
+        terraform = workspace / "insecure.tf"
+        terraform.write_text("# " + "trivy" + ":ignore:*\nresource \"aws_s3_bucket\" \"insecure\" {\n  acl = \"public-read\"\n}\n")
+        subprocess.run(["git", "-C", str(workspace), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(workspace), "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "inline ignore fixture"], check=True)
+        ignored_commit = subprocess.check_output(["git", "-C", str(workspace), "rev-parse", "HEAD"], text=True).strip()
+        try:
+            module.verify_target(workspace, ignored_commit)
+        except module.ContractError:
+            pass
+        else:
+            raise RuntimeError("inline source suppression bypassed central policy")
+        # Some parsers report failures diagnostically while the scanner exits
+        # zero. Their private diagnostics must prevent clean admission.
+        terraform.unlink()
+        (workspace / "malformed.tf").write_text('resource "aws_s3_bucket" "broken" {\n')
+        subprocess.run(["git", "-C", str(workspace), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(workspace), "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "malformed parser fixture"], check=True)
+        failed = subprocess.run([
+            str(trivy), "--config", str(trusted_config), "fs",
+            "--scanners", "misconfig", "--format", "json",
+            "--skip-check-update", "--skip-version-check", "--cache-dir", str(cache),
+            "--output", str(root / "failure.json"), str(workspace),
+        ], env={"HOME": str(root)}, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=False)
+        if failed.returncode == 0:
+            try:
+                module.verify_diagnostics(failed.stderr.decode("utf-8"), cache)
+            except module.ContractError:
+                pass
+            else:
+                raise RuntimeError("parser failure fixture was admitted as healthy")
         print(
             json.dumps(
                 {

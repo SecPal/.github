@@ -69,7 +69,7 @@ and misconfigurations are actionable; lower or unknown severities require
 review. Every secret finding is actionable. The policy hash is included in each
 successful result.
 
-Exceptions require an exact class, rule, repository-relative path, disposition,
+Exceptions require an exact repository identity, class, rule, repository-relative path, disposition,
 expiry, rationale, and unique ID in the central policy. `NOT_AFFECTED` is valid
 only for vulnerability findings. Expired, duplicate, ambiguous, or malformed
 exceptions fail closed. VEX runtime injection is disabled; reviewed VEX may be
@@ -84,7 +84,8 @@ Its schema is
 [`secpal-trivy-repository-scan-v1.schema.json`](schemas/secpal-trivy-repository-scan-v1.schema.json).
 It records the exact repository commit, scanner version and archive identity,
 vulnerability database identity and freshness, policy identity, deterministic
-finding fingerprints, and one of these states:
+finding fingerprints, the hash of the trusted invocation/helper/policy bundle,
+and one of these states:
 
 - `CLEAN`
 - `ACTIONABLE`
@@ -108,3 +109,22 @@ pinned scanner and proves all three result classes, database identity capture,
 and removal of the synthetic secret value. Unit fixtures cover stale database,
 malformed output, network/failure envelopes, deterministic normalization, and
 closed exception semantics.
+
+The action rejects gitlinks rather than fetching submodules. Development
+packages are explicitly included. Inline scanner suppression directives are
+rejected from immutable tracked source before scanning because the pinned tool
+omits ignored IaC results before native JSON. Secret scanning disables built-in path skipping and global
+allow rules; only the reviewed central exception contract can suppress findings.
+
+Normalized candidates stay private until redaction verification correlates
+Trivy's cause-line censor masks with immutable Git blobs. Captured values are
+used only transiently to reject aliases in all public metadata. Missing,
+truncated, binary, or ambiguous censor evidence fails closed. Trivy diagnostics
+stay private, fail closed on warnings/errors or malformed/missing log framing
+even when the process exits zero, and are discarded. Every Python invocation is
+isolated from checkout imports.
+The exact absent-cache diagnostic for archive-pinned embedded checks is accepted
+once only, with independent confirmation that no external checks cache exists.
+Normalization itself consumes captured canonical path strings and performs no
+filesystem observation. Only verified normalized evidence enters the bounded
+artifact directory.
