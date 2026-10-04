@@ -574,6 +574,7 @@ ALLOWED_IMPORTS = {
         "from . import lifecycle_publication as publication",
         "from . import lifecycle_authority, lifecycle_execution",
         "from . import provider_acquisition",
+        "from . import provider_reacquisition",
     },
     "exact_source_safety.py": {
         "from __future__ import annotations",
@@ -887,6 +888,7 @@ LOADED_MODULE_ATTRIBUTES = {
     },
     "fast_path.py": {
         "provider_acquisition": {"require_verified_acquisitions"},
+        "provider_reacquisition": {"require_verified_fresh_acquisitions"},
         "evidence": {
             "CommandPolicyError",
             "ContractError",
@@ -2531,6 +2533,13 @@ def inspect_source(
 
 
 def self_test() -> None:
+    fresh_import = "from . import provider_reacquisition\n"
+    safe_fresh = fresh_import + "provider_reacquisition.require_verified_fresh_acquisitions(value, current, feedback)\n"
+    if inspect_source(safe_fresh, "fast_path.py", ()):
+        raise SystemExit("static policy sealed fresh acquisition fixture was rejected")
+    for method in ("authenticate_fresh_provider_acquisitions", "issue_authorization", "dispatch_next", "authenticate_assessment"):
+        if not inspect_source(fresh_import + f"provider_reacquisition.{method}(value)\n", "fast_path.py", ()):
+            raise SystemExit("static policy fresh acquisition side-effect interface was not detected")
     acquisition_import = "from . import provider_acquisition\n"
     safe_acquisition = acquisition_import + "provider_acquisition.require_verified_acquisitions(value, feedback)\n"
     if inspect_source(safe_acquisition, "fast_path.py", ()):

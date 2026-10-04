@@ -976,7 +976,8 @@ def require_verified_fresh_acquisitions(
     value: Any, current: publication.VerifiedLifecyclePublication,
     feedback: fast_path.StableFeedbackState,
 ) -> VerifiedFreshProviderAcquisitions:
-    if (type(value) is not VerifiedFreshProviderAcquisitions
+    if (type(current) is not publication.VerifiedLifecyclePublication
+            or type(value) is not VerifiedFreshProviderAcquisitions
             or type(value._seal) is not _FreshAcquisitionSeal
             or value._seal.token is not _FRESH_ACQUISITION_TOKEN
             or value._seal.digest != fast_path.digest_json(value.canonical_assessment)
