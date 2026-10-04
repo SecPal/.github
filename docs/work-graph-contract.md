@@ -604,9 +604,13 @@ assessment, head, and review type may be admitted. Derive eligibility only from
 authenticated current lifecycle and complete GitHub request, reaction, provider,
 and chronology evidence; recheck immediately before writing. A provider reaction,
 processing acknowledgement, review object, status for the exact head/type, or
-terminal result prevents replacement. Durable request history permits at most
-one replacement. An ambiguous replacement write is reconciled by reading that
-history and is never blindly retried. This is neither a review retry loop nor a
+terminal result prevents replacement. The maintained protected
+`SECPAL_PROVIDER_DISPATCH_CLAIM` CAS serializes at most one winning invocation
+per exact assessment/head/type/first-fallback dispatch key. Complete request
+history authenticates and reconciles requests; it does not serialize writes.
+An ambiguous replacement write is reconciled by reading that history and is
+never blindly retried. A stranded claim or definite POST rejection consumes
+the opportunity. This is neither a review retry loop nor a
 new lifecycle review. A known persisted request with no provider acknowledgement
 is distinct from an unknown mutation result.
 

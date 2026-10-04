@@ -418,11 +418,23 @@ exact-head result, the accepted runtime may authorize one same-assessment
 replacement for the same head and review type. Use
 `scripts/secpal-provider-fallback.py inspect` to classify live evidence and
 `dispatch` only in the delivery workspace that owns that authorized assessment.
-The runtime re-reads provider state immediately before its single write and
-reconciles an ambiguous write through complete request history without issuing
-another write. It adds no Review, Remediation, Ready transition, Recovery,
-Continuation, or journal entry. A late acknowledgement or result cancels the
-replacement. A second replacement is forbidden.
+The first fallback must follow the maintained observation window for the exact
+current assessment/head; the native head-publication boundary prevents a later
+assessment from inheriting time elapsed before that head became visible. Reuse
+the provider-acquisition window, then require its expiry again after the first
+fallback. Stable actor node and database identities bind that request.
+
+The runtime consumes the maintained protected `SECPAL_PROVIDER_DISPATCH_CLAIM`
+CAS through its public executor. Only its claim-winning invocation may post.
+After external provider reads it reauthenticates exact CURRENT and passes that
+same verified dispatch key to the one writer. Complete request history is
+evidence for request identity and POST reconciliation, never serialization
+authority. A late acknowledgement or result cancels the replacement. A definite
+POST rejection propagates as a failure; only indeterminate writes are reconciled,
+without another write. A stranded claim remains consumed. Maximum one claim is
+admitted per exact assessment/head/type/first-fallback key. Dispatch adds no
+Review, additional-review authorization, Remediation, Ready transition,
+Recovery, or Continuation and uses the existing protected journal only.
 
 The unrestricted external review budget remains one. Remediation never creates
 a second unrestricted external review cycle. Changed remediation requires a

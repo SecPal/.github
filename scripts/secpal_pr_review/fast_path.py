@@ -558,6 +558,9 @@ def codex_review_type(body: Any) -> str | None:
             return "SECURITY"
         if body.lstrip().startswith("### 💡 Codex Review"):
             return "CODE"
+        for review_type, no_finding_text in CODEX_NO_FINDING_TEXT.items():
+            if body.lstrip().startswith(no_finding_text):
+                return review_type
     return None
 
 

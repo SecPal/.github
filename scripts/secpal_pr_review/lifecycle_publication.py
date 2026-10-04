@@ -1925,12 +1925,10 @@ def _verify_provider_dispatch_claim_document(
     )
 
 
-def _require_latest_provider_dispatch_assessment(
-    key: ProviderDispatchKey, current_document: Mapping[str, Any],
-) -> None:
-    """Preserve the exact #1053 latest-assessment replacement predicate."""
-
-    bundle = _lifecycle_bundle(current_document)
+def provider_dispatch_assessment_authority(
+    bundle: Mapping[str, Any], *, head_sha: str, pull_request: int,
+) -> str:
+    """Project the same latest assessment for eligibility and claim admission."""
     events = bundle.get("transition_authorizations")
     snapshots = bundle.get("authority_chain")
     if not isinstance(events, list) or not isinstance(snapshots, list) or len(events) != len(snapshots):
@@ -1939,7 +1937,7 @@ def _require_latest_provider_dispatch_assessment(
         (index for index, event in enumerate(events)
          if isinstance(event, dict)
          and (
-             event.get("resulting_head_sha") != key.current_head_sha
+             event.get("resulting_head_sha") != head_sha
              or event.get("transition_kind") in {
                  "PR_REBOUND", "READY_TO_DRAFT", "DRAFT_TO_READY",
                  "INVALID_REVIEW_CONSUMPTION_CORRECTED",
@@ -1954,11 +1952,23 @@ def _require_latest_provider_dispatch_assessment(
         if isinstance(event, dict) and isinstance(snapshot, dict)
         and index > last_assessment_boundary
         and event.get("transition_kind") == "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED"
-        and event.get("resulting_head_sha") == key.current_head_sha
-        and event.get("pull_request") == key.pull_request
-        and snapshot.get("pull_request") == key.pull_request
+        and event.get("resulting_head_sha") == head_sha
+        and snapshot.get("head_sha") == head_sha
+        and event.get("pull_request") == pull_request
+        and snapshot.get("pull_request") == pull_request
     ]
-    if not assessments or key.assessment_authority_digest != assessments[-1]:
+    if not assessments:
+        raise LifecyclePublicationError("provider dispatch assessment is not the latest authorized assessment")
+    return assessments[-1]
+
+
+def _require_latest_provider_dispatch_assessment(
+    key: ProviderDispatchKey, current_document: Mapping[str, Any],
+) -> None:
+    if key.assessment_authority_digest != provider_dispatch_assessment_authority(
+        _lifecycle_bundle(current_document), head_sha=key.current_head_sha,
+        pull_request=key.pull_request,
+    ):
         raise LifecyclePublicationError("provider dispatch assessment is not the latest authorized assessment")
 
 
@@ -3217,6 +3227,7 @@ def _execute_provider_dispatch_with_claim(
 def execute_provider_dispatch_with_claim(
     repository: str, delivery_issue: int, review_type: str, *,
     signer_identity: str, signer: authority.Signer,
+    expected_pull_request: int | None = None,
 ) -> ProviderDispatchResult:
     """Dispatch only through the maintained complete fallback verifier.
 
@@ -3230,6 +3241,8 @@ def execute_provider_dispatch_with_claim(
     )
     if review_type not in PROVIDER_DISPATCH_TRIGGERS:
         raise LifecyclePublicationError("provider dispatch review type is invalid")
+    if expected_pull_request is not None:
+        authority._require_positive_int(expected_pull_request, "provider dispatch PR")
     try:
         from . import provider_fallback
     except ImportError as exc:
@@ -3244,19 +3257,32 @@ def execute_provider_dispatch_with_claim(
             "maintained provider fallback verifier is unavailable"
         )
 
+    latest_key: ProviderDispatchKey | None = None
+
     def observe() -> ProviderDispatchEligibility | ProviderDispatchNoLongerRequired:
+        nonlocal latest_key
         result = authenticate(repository, delivery_issue, review_type)
         if type(result) is ProviderDispatchEligibility and (
             result.key.repository != repository
             or result.key.delivery_issue != delivery_issue
             or result.key.review_type != review_type
+            or expected_pull_request is not None and result.key.pull_request != expected_pull_request
         ):
             raise LifecyclePublicationError("maintained provider fallback scope changed")
+        if type(result) is ProviderDispatchEligibility:
+            latest_key = result.key
         return result
+
+    def claimed_write(body: str) -> int | None:
+        # Carry the final verified scope to the fixed consumer. Re-selecting a
+        # PR from a later CURRENT inside the writer could redirect this claim.
+        if latest_key is None:
+            raise LifecyclePublicationError("provider dispatch write scope is unavailable")
+        return write(repository, delivery_issue, review_type, latest_key, body)
 
     return _execute_provider_dispatch_with_claim(
         observe,
-        lambda body: write(repository, delivery_issue, review_type, body),
+        claimed_write,
         lambda key, response_id: reconcile(key, response_id),
         signer_identity=signer_identity, signer=signer,
     )
