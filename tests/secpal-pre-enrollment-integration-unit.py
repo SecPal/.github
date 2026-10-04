@@ -60,7 +60,7 @@ class DeploymentIntegrationPolicyTests(TestCase):
             entry["repository"] for entry in self.registry["repositories"]
             if "pre_enrollment_integration_policy" in entry
         }
-        self.assertEqual(admitted, {"SecPal/.github", "SecPal/deployment", "SecPal/secpal.app", "SecPal/api"})
+        self.assertEqual(admitted, {"SecPal/.github", "SecPal/deployment", "SecPal/secpal.app", "SecPal/api", "SecPal/contracts"})
         self.assertEqual(
             actions.select_repository(self.registry, "SecPal/.github")[
                 "pre_enrollment_integration_policy"
@@ -193,6 +193,12 @@ class SecpalAppIntegrationPolicyTests(DeploymentIntegrationPolicyTests):
 
 class ApiIntegrationPolicyTests(SecpalAppIntegrationPolicyTests):
     repository = "SecPal/api"
+    delivery_issue = 900001
+    pull_request = 900002
+
+
+class ContractsIntegrationPolicyTests(SecpalAppIntegrationPolicyTests):
+    repository = "SecPal/contracts"
     delivery_issue = 900001
     pull_request = 900002
 
