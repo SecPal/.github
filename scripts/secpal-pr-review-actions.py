@@ -7349,6 +7349,7 @@ def _derive_recovered_adoption_root_ready_prior_authority(
     lifecycle_authority: Any, lifecycle_publication: Any,
     reviewed_state_digest: str | None,
     reviewed_feedback_digest: str | None,
+    source_publication_oid: str | None = None,
 ) -> dict[str, Any]:
     """Compose one authenticated zero-receipt enrollment root and recovery."""
 
@@ -7422,9 +7423,14 @@ def _derive_recovered_adoption_root_ready_prior_authority(
         historical = lifecycle_authority.recovered_adoption_root_historical_evidence(
             current.lifecycle, bundle, current.predecessor_publication_oid
         )
-        recovery = lifecycle_publication.verify_current_ready_source_recovery(
-            repository, delivery_issue
-        )
+        if source_publication_oid is None:
+            recovery = lifecycle_publication.verify_current_ready_source_recovery(repository, delivery_issue)
+        else:
+            source_publication, recovery = lifecycle_publication._verify_ready_source_recovery_publication(
+                repository, delivery_issue, source_publication_oid=source_publication_oid,
+            )
+            if source_publication != current:
+                raise lifecycle_publication.LifecyclePublicationError("historical recovery source changed")
     except (ValueError, lifecycle_authority.LifecycleAuthorityError,
             lifecycle_publication.LifecyclePublicationError) as exc:
         raise fast_path.SecurityBlocker(
@@ -7585,6 +7591,7 @@ def _derive_exact_state_adoption_ready_prior_authority(
     binding: dict[str, Any],
     reviewed_state_digest: str | None = None,
     reviewed_feedback_digest: str | None = None,
+    source_publication_oid: str | None = None,
 ) -> dict[str, Any]:
     """Derive a maintained adopted source projection from protected CURRENT."""
 
@@ -7616,9 +7623,12 @@ def _derive_exact_state_adoption_ready_prior_authority(
     )
     _require_accepted_main_bridge_source(repository, expected_main=accepted_main)
     try:
-        current = lifecycle_publication.verify_current_lifecycle_authority(
-            repository, delivery_issue
-        )
+        if source_publication_oid is None:
+            current = lifecycle_publication.verify_current_lifecycle_authority(repository, delivery_issue)
+        else:
+            current, _ = lifecycle_publication._verify_ready_source_recovery_publication(
+                repository, delivery_issue, source_publication_oid=source_publication_oid,
+            )
         if (
             current.lifecycle.historical_proof_mode == "native_lifecycle"
             and current.lifecycle.pull_request == pull_request
@@ -7700,6 +7710,7 @@ def _derive_exact_state_adoption_ready_prior_authority(
             lifecycle_publication=lifecycle_publication,
             reviewed_state_digest=reviewed_state_digest,
             reviewed_feedback_digest=reviewed_feedback_digest,
+            source_publication_oid=source_publication_oid,
         )
         _require_accepted_main_bridge_source(
             repository, expected_main=accepted_main
@@ -8210,6 +8221,7 @@ def _verify_prior_authority_tag(
     authority: dict[str, Any],
     integration_evidence: dict[str, Any],
     binding: dict[str, Any],
+    source_publication_oid: str | None = None,
 ) -> None:
     if not re.fullmatch(r"refs/tags/[A-Za-z0-9._/-]+", tag_ref) or ".." in tag_ref:
         raise fast_path.SecurityBlocker("prior authority tag ref is unsafe")
@@ -8248,11 +8260,17 @@ def _verify_prior_authority_tag(
                     repository_root=repository_root, repository=authority["repository"],
                     delivery_issue=authority["delivery_issue_number"],
                     pull_request=authority["pull_request_number"], binding=binding,
+                    source_publication_oid=source_publication_oid,
                 ),
             )
-            recovery = lifecycle_publication.verify_current_ready_source_recovery(
-                authority["repository"], authority["delivery_issue_number"]
-            )
+            if source_publication_oid is None:
+                recovery = lifecycle_publication.verify_current_ready_source_recovery(
+                    authority["repository"], authority["delivery_issue_number"])
+            else:
+                _, recovery = lifecycle_publication._verify_ready_source_recovery_publication(
+                    authority["repository"], authority["delivery_issue_number"],
+                    source_publication_oid=source_publication_oid,
+                )
             correction = lifecycle_authority.loads_closed_json(recovery.historical_evidence_correction)
             if (
                 correction["prior_authority_tag_oid"] == tag_object_oid
