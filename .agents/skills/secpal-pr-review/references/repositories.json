@@ -863,6 +863,17 @@
         "force_push": false,
         "automatic_retry": false,
         "merge_pull_request": false
+      },
+      "enrolled_draft_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-enrolled-draft",
+        "topology_kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
       }
     },
     {
