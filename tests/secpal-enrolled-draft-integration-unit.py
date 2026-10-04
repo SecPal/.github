@@ -9,6 +9,7 @@ from contextlib import ExitStack
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import tempfile
 from dataclasses import replace
@@ -220,6 +221,18 @@ class EnrolledDraftAuthorityTests(TestCase):
             candidate["authorization_digest"] = enrolled.fast_path.digest_json({key: value for key, value in candidate.items() if key != "authorization_digest"})
             with self.assertRaises(enrolled.authority.LifecycleAuthorityError):
                 enrolled.normalize_authorization(candidate)
+
+    def test_documented_enrolled_draft_registrations_match_registry(self):
+        documentation = (ROOT / "scripts/README.md").read_text()
+        paragraph = documentation.split(
+            "The central `enrolled_draft_integration_policy`", 1
+        )[1].split("Historical pre-enrollment absence", 1)[0]
+        documented = set(re.findall(r"`(SecPal/[^`]+)`", paragraph))
+        registered = {
+            entry["repository"] for entry in draft.actions.load_registry()["repositories"]
+            if "enrolled_draft_integration_policy" in entry
+        }
+        self.assertEqual(documented, registered)
 
     def test_registry_only_registers_closed_operation_for_delivery_repositories(self):
         registry = draft.actions.load_registry()
