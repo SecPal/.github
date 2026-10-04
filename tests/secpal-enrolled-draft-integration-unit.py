@@ -237,7 +237,7 @@ class EnrolledDraftAuthorityTests(TestCase):
     def test_registry_only_registers_closed_operation_for_delivery_repositories(self):
         registry = draft.actions.load_registry()
         admitted = {entry["repository"] for entry in registry["repositories"] if "enrolled_draft_integration_policy" in entry}
-        self.assertEqual(admitted, {"SecPal/.github", "SecPal/deployment", "SecPal/frontend"})
+        self.assertEqual(admitted, {"SecPal/.github", "SecPal/deployment", "SecPal/frontend", "SecPal/api"})
         for repository in admitted:
             entry = draft.actions.select_repository(registry, repository)
             self.assertEqual(entry["enrolled_draft_integration_policy"], enrolled.POLICY)
@@ -321,6 +321,10 @@ class FrontendEnrolledDraftPolicyTests(TestCase):
             with self.subTest(key=key), self.assertRaises(draft.actions.RegistryError):
                 draft.actions.validate_registry(fixture)
             self.dispatch(fixture, admitted=False)
+
+
+class ApiEnrolledDraftPolicyTests(FrontendEnrolledDraftPolicyTests):
+    repository = "SecPal/api"
 
 
 class EnrolledDraftJournalTests(TestCase):
