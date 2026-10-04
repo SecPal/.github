@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 from contextlib import nullcontext
+from dataclasses import replace
 import hashlib
 import json
 import subprocess
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 from unittest import TestCase, main, mock
 
 from scripts.secpal_pr_review import governance_amendment as amendment
+from scripts.secpal_pr_review import fast_path
 from scripts.secpal_pr_review import lifecycle_authority as authority
 
 SIGNER = "lifecycle-legacy-adoption@secpal.app"
@@ -733,6 +735,204 @@ class GovernanceAmendmentTests(TestCase):
                 return_value=signature_verifier,
             ),
         )
+
+    def zero_receipt_root(self, **scope):
+        amendment_authorization = reviewed_authorization()
+        evidence = authority._assemble_exact_state_adoption_evidence(
+            repository=scope.get("repository", amendment_authorization["repository"]),
+            delivery_issue=scope.get("delivery_issue", amendment_authorization["delivery_issue"]),
+            pull_request=scope.get("pull_request", amendment_authorization["pull_request"]),
+            head_sha=HEAD, tree_sha=TREE, pull_request_state="OPEN",
+            commit_signature_evidence_digest="1" * 64,
+            validation_receipt_digest=None,
+            source_validation_evidence_digest=None,
+            adoption_source_evidence_digest=amendment_authorization[
+                "authorization_digest"
+            ],
+            observed_pre_enrollment_history=amendment_authorization[
+                "observed_pre_enrollment_history"
+            ],
+            intended_state=amendment_authorization["intended_state"],
+            adoption_timestamp="2026-09-18T12:00:00Z",
+            supporting_evidence_digests=[
+                amendment_authorization["authorization_digest"]
+            ],
+            governance_amendment_authorization=amendment_authorization,
+        )
+        adoption_authorization = authority.create_exact_state_adoption_authorization(
+            adoption_evidence=evidence, authorization_id="fixture:zero-root",
+            bounded_uses=1, signer_identity=SIGNER, signer=signer,
+        )
+        proof = authority.create_exact_state_adoption_proof(
+            adoption_evidence=evidence, authorization=adoption_authorization,
+            signer_identity=SIGNER, signer=signer,
+        )
+        return (
+            authority.verify_exact_state_adoption_proof(proof),
+            json.loads(authority.serialize_exact_state_adoption_evidence(
+                exact_state_adoption_proof=proof,
+            )),
+        )
+
+    def test_v4_governance_amendment_zero_receipt_root(self) -> None:
+        first, second = self.patches()
+        with first, second:
+            current, bundle = self.zero_receipt_root()
+            historical = authority.recovered_adoption_root_historical_evidence(
+                current, bundle, None,
+            )
+        self.assertEqual(historical, amendment.historical_evidence())
+        self.assertTrue(current.state["ready"])
+        self.assertEqual(current.state["ready_transition_count"], 1)
+        self.assertIsNone(current.validation_receipt_digest)
+        self.assertIsNone(current.source_validation_evidence_digest)
+
+    def test_v4_zero_receipt_root_rejects_successors_and_replay(self) -> None:
+        first, second = self.patches()
+        with first, second:
+            current, bundle = self.zero_receipt_root()
+            mutations = {
+                "caller-selected mode": lambda b: b.update(root_mode="v4"),
+                "transition suffix": lambda b: b["transition_authorizations"].append({}),
+                "authority suffix": lambda b: b["authority_chain"].append({}),
+                "wrong root kind": lambda b: b.update(kind="ordinary"),
+                "wrong enrollment": lambda b: b.update(enrollment_mode="NATIVE"),
+                "wrong root version": lambda b: b.update(schema_version="4.0"),
+                "wrong root domain": lambda b: b.update(domain="candidate-local"),
+            }
+            for label, mutate in mutations.items():
+                changed = copy.deepcopy(bundle)
+                mutate(changed)
+                with self.subTest(label=label), self.assertRaises(
+                    authority.LifecycleAuthorityError
+                ):
+                    authority.recovered_adoption_root_historical_evidence(
+                        current, changed, None,
+                    )
+            for field, value in {
+                "repository": "example/other", "delivery_issue": 999,
+                "pull_request": 998, "head_sha": "e" * 40,
+                "tree_sha": "f" * 40, "lifecycle_id": "other-lifecycle",
+                "authority_digest": "7" * 64,
+                "validation_receipt_digest": "8" * 64,
+                "source_validation_evidence_digest": "9" * 64,
+                "state": authority.initial_state(),
+                "historical_proof_mode": "native",
+            }.items():
+                with self.subTest(field=field), self.assertRaises(
+                    authority.LifecycleAuthorityError
+                ):
+                    authority.recovered_adoption_root_historical_evidence(
+                        replace(current, **{field: value}), bundle, None,
+                    )
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                authority.recovered_adoption_root_historical_evidence(
+                    current, bundle, "e" * 40,
+                )
+
+    def test_v4_zero_receipt_root_rejects_amendment_cross_delivery_replay(self) -> None:
+        first, second = self.patches()
+        with first, second:
+            for field, value in {"delivery_issue": 999, "pull_request": 998}.items():
+                with self.subTest(field=field):
+                    current, bundle = self.zero_receipt_root(**{field: value})
+                    with self.assertRaises(authority.LifecycleAuthorityError):
+                        authority.recovered_adoption_root_historical_evidence(
+                            current, bundle, None,
+                        )
+
+    def test_v4_zero_receipt_root_requires_independent_exact_proof(self) -> None:
+        first, second = self.patches()
+        with first, second:
+            current, bundle = self.zero_receipt_root()
+            mutations = {
+                "malformed version": lambda p: p.update(proof_version="4"),
+                "unverified amendment": lambda p: p[
+                    "governance_amendment_authorization"
+                ]["signature"].update(value="substituted"),
+                "missing amendment": lambda p: p.pop("governance_amendment_authorization"),
+                "substituted intended state": lambda p: p["intended_state"].update(ready=False),
+                "PRESENT": lambda p: p["historical_evidence"].update(state="PRESENT"),
+                "UNAVAILABLE": lambda p: p["historical_evidence"].update(state="UNAVAILABLE"),
+                "reconstructed": lambda p: p["historical_evidence"].update(bytes_reconstructed=True),
+            }
+            for field in (
+                "validation_receipt_digest", "source_validation_evidence_digest",
+                "final_attestation_digest",
+            ):
+                mutations[field] = lambda p, field=field: p["historical_evidence"].update(
+                    **{field: "8" * 64}
+                )
+            for label, mutate in mutations.items():
+                changed = copy.deepcopy(bundle)
+                mutate(changed["exact_state_adoption_proof"])
+                with self.subTest(label=label), mock.patch.object(
+                    authority, "verify_exact_state_adoption_proof",
+                    wraps=authority.verify_exact_state_adoption_proof,
+                ) as verify, self.assertRaises(authority.LifecycleAuthorityError):
+                    authority.recovered_adoption_root_historical_evidence(
+                        current, changed, None,
+                    )
+                verify.assert_called_once_with(changed["exact_state_adoption_proof"])
+            with mock.patch.object(
+                amendment, "_accepted_trust_policy",
+                side_effect=amendment.GovernanceAmendmentError("candidate-local authority"),
+            ), self.assertRaises(authority.LifecycleAuthorityError):
+                authority.recovered_adoption_root_historical_evidence(
+                    current, bundle, None,
+                )
+
+    def test_v4_current_safety_receipt_is_not_historical_evidence(self) -> None:
+        first, second = self.patches()
+        with first, second:
+            current, bundle = self.zero_receipt_root()
+            reviewed = fast_path.StableFeedbackState(
+                repository=current.repository, pull_request_number=current.pull_request,
+                head_sha=HEAD, base_ref="main", base_sha=PARENT, pr_state="OPEN",
+                feedback={"pull_request_reactions": [], "reviews": [],
+                          "conversation_comments": [], "threads": []},
+            )
+            registry = {"manual_gates": [], "validation": [],
+                        "limits": {"maximum_items": 10000}}
+            receipt = fast_path.create_validation_receipt(
+                repository=current.repository, head_sha=HEAD, validated_tree_sha=TREE,
+                registry=registry, command_set=[], successful_result=True,
+                reviewed_state=reviewed, manual_gate_evidence=[],
+            )
+            safety = fast_path.derive_ready_source_recovery_safety_facts(
+                tooling_authority_main="9" * 40, repository=current.repository,
+                pull_request_number=current.pull_request, head_sha=HEAD, tree_sha=TREE,
+                parent_shas=[PARENT], expected_base_ref="main", expected_base_sha=PARENT,
+                reviewed_state=reviewed, review_decision="NONE", feedback_findings=[],
+                fresh_validation_receipt=receipt, registry=registry, command_set=[],
+            )
+            scope = dict(
+                current_lifecycle=current, current_publication_oid="3" * 40,
+                current_publication_digest="4" * 64,
+                current_lifecycle_evidence=bundle, predecessor_publication_oid=None,
+            )
+            document = authority._sign_ready_source_recovery_authorization(
+                **scope, recovery_safety_facts=safety,
+                commit_signature_evidence={
+                    "oid": HEAD, "source": "USER", "signer_identity": SOURCE,
+                    "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
+                    "github_verification": {"verified": True, "reason": "valid"},
+                },
+                historical_validation_receipt_digest=None,
+                historical_final_attestation_digest=None,
+                historical_evidence_loss_proof_digest="7" * 64,
+                authorization_id="fixture:current-safety", bounded_uses=1,
+                expected_commit_signer={"kind": "SSH_PRINCIPAL", "identity": SOURCE},
+                signer_identity=SOURCE, signer=root_signer,
+            )
+            authority.verify_ready_source_recovery_authorization(document, **scope)
+            self.assertEqual(document["fresh_validation_receipt_digest"], receipt["receipt_digest"])
+            self.assertIsNone(document["historical_validation_receipt_digest"])
+            self.assertIsNone(document["historical_final_attestation_digest"])
+            self.assertEqual(
+                authority.recovered_adoption_root_historical_evidence(current, bundle, None),
+                amendment.historical_evidence(),
+            )
 
     def hermetic_repository(
         self, directory: str, *, attacker_intermediate: bool,

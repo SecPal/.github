@@ -636,6 +636,16 @@ source-validation, and final-attestation digests are canonical JSON nulls.
 projects unchanged version-3 evidence whose receipt identity exists but whose
 package bytes are unavailable. These states are disjoint; prose, caller flags,
 synthetic digests, and candidate-local policy cannot select one.
+Null historical receipt authority is restricted to an independently authenticated
+zero-historical exact-adoption root. The canonical root verifier preserves the
+version-3 schema-1.2 loss path and also admits a version-4 Governance-Amendment
+root with its verified exact-scope amendment authorization and canonical
+`ABSENT_NEVER_ISSUED` projection. The root must bind the current repository,
+issue, PR, head, tree, lifecycle and intended Ready state, with no predecessor
+publication or transition/authority suffix. Proof provenance selects the path;
+there is no caller-selected mode. A fresh current-safety receipt remains CURRENT
+evidence and never supplies a missing historical digest.
+
 The #960 record retains its parent-inclusive historical audit and review-budget
 admission. The #1053 record audits only commits after its accepted baseline,
 derives its already consumed review and Ready transition from the authenticated

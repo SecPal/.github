@@ -80,6 +80,15 @@ operations whose evidence does not match their logical finding. Their initial
 and final heads must also encode exactly one new linear commit per recorded
 signed push, or no commit movement for a no-push session.
 
+`lifecycle_authority.recovered_adoption_root_historical_evidence()` authenticates
+only supported zero-historical exact-adoption roots. It preserves the existing
+version-3 loss root and independently verifies version-4 Governance-Amendment
+authority, exact delivery scope, intended Ready state and root-only publication
+shape. Version-4 `ABSENT_NEVER_ISSUED` keeps receipt, source-validation and final
+attestation null and never reconstructs historical bytes. Current-safety receipts
+remain distinct; successors and caller-selected provenance cannot bypass this
+root boundary.
+
 The protected publication journal also supports one exact append-only
 `SECPAL_READY_SOURCE_RECOVERY_CORRECTION` for the contradictory signed
 zero-receipt recovery of #711 / PR #951. It preserves the original recovery,
