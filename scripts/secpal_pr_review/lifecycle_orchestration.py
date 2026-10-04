@@ -1315,14 +1315,32 @@ def verify_ready_remediation_provider_growth_authority(
             }
         ]
         first_fallback_acquisitions = None
+        fresh_provider_acquisitions = None
         if added_reviews and all(
             item.get("actor") == fast_path.CODEX_REVIEW_PROVIDER
             and item.get("commit_oid") == lifecycle.head_sha
             for item in added_reviews
         ):
-            first_fallback_acquisitions = provider_acquisition.authenticate_first_fallback_acquisitions(
-                current, live_resulting
+            claim_current, claims = publication.verify_provider_dispatch_claims(
+                lifecycle.repository, lifecycle.delivery_issue
             )
+            if claim_current != current:
+                raise fast_path.SecurityBlocker("ordinary Ready acquisition CURRENT changed")
+            if any(
+                claim.reacquisition_authorization is not None
+                and claim.key.current_publication_oid == current.publication_oid
+                and claim.key.current_head_sha == lifecycle.head_sha
+                for claim in claims
+            ):
+                from . import provider_reacquisition
+
+                fresh_provider_acquisitions = provider_reacquisition.authenticate_fresh_provider_acquisitions(
+                    current, live_resulting
+                )
+            else:
+                first_fallback_acquisitions = provider_acquisition.authenticate_first_fallback_acquisitions(
+                    current, live_resulting
+                )
         growth = fast_path.verify_ordinary_ready_remediation_provider_growth(
             reviewed,
             resulting,
@@ -1336,8 +1354,10 @@ def verify_ready_remediation_provider_growth_authority(
                 live_resulting, "review_database_ids", None
             ),
             first_fallback_acquisitions=first_fallback_acquisitions,
+            fresh_provider_acquisitions=fresh_provider_acquisitions,
+            current_publication=current,
         )
-    except fast_path.SecurityBlocker as exc:
+    except (fast_path.SecurityBlocker, publication.LifecyclePublicationError) as exc:
         raise LifecycleOrchestrationError(
             "ordinary Ready provider growth is incomplete or unauthenticated"
         ) from exc

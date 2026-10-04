@@ -243,8 +243,9 @@ state, transition, counter, signer, trust root, or journal. Its verifier-owned
 seal is not reproducible from serialized fields, and the generic authorization
 issuer rejects the provider-growth digest.
 
-For a current-head Codex-only assessment, the same composition requires both
-first fallback acquisitions through `provider_acquisition.py`. That read-only
+For a current-head Codex-only assessment with no fresh reacquisition claims,
+the same composition requires both first fallback acquisitions through
+`provider_acquisition.py`. That read-only
 owner reauthenticates protected CURRENT and complete live feedback, then derives
 the exact persisted Code and Security requests from the complete ordered native
 timeline. Each canonical, unedited request must come from the exact PR author
@@ -261,6 +262,18 @@ head, feedback, request identities, actors, chronology and live review database
 identities. Existing terminal provider transport verification then authenticates
 the Code findings review, Security result and current-head summary. Exact
 top-level comment Node IDs and complete eligibility remain mandatory.
+
+When protected CURRENT claims instead identify one signed fresh reacquisition,
+`provider_reacquisition.py` authenticates its complete assessment. `fast_path`
+projects the exact request/result transport, complete review database identities
+and signed historical request/result identities into ephemeral consumer data. Historical
+first-fallback validity remains unprovable; retained sources are preserved, not
+relabeled. Fresh chronology stays with its canonical verifier. The same
+provider-growth and finding-authority verifiers require complete ordinary
+eligibility, and only `issue_ready_remediation_provider_growth_authorization`
+bridges that authority to the existing signed `REMEDIATION_COMPLETED` scope.
+Raw assessments, altered seals, incompatible acquisition authorities and
+Copilot substitution fail closed. No caller chooses an acquisition mode.
 
 This first-acquisition verifier supplies no replacement-dispatch interface. The
 reserved #1053 `provider_fallback` import remains unavailable and its public
