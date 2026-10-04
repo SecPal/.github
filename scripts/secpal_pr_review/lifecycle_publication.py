@@ -4213,6 +4213,7 @@ def _authenticate_provider_integration_verifier() -> None:
     # registered under its canonical package name.
     for name, module, filename in (
         ("authority", authority, "lifecycle_authority.py"),
+        ("publication", sys.modules[__name__], "lifecycle_publication.py"),
         ("transport", transport, "bootstrap_source_admission.py"),
         ("fast_path", fast_path, "fast_path.py"),
         ("helper_fast_path", helper.fast_path, "fast_path.py"),
@@ -4229,22 +4230,20 @@ def _authenticate_provider_integration_verifier() -> None:
              for name, module in modules.items()},
             paths,
         )
-        # The new composition owners are candidate code until this Leaf merges.
-        # Existing loaded verifier dependencies must match accepted main.
-        candidate_owners = {
-            "scripts/secpal_pr_review/lifecycle_publication.py",
-            "scripts/secpal_pr_review/lifecycle_orchestration.py",
-        }
+        # Publication composition is part of the production verifier too.
+        # Candidate tooling can qualify behavior only in a hermetic test seam.
         verifier_paths = {
             path.relative_to(helper.REPOSITORY_ROOT).as_posix()
             for path in paths.values()
-        } - candidate_owners
+        }
         verifier_paths.update({
             "scripts/secpal-pr-review-actions.py", "scripts/secpal-pr-review.py",
             "scripts/secpal_pr_review/fast_path.py",
             "scripts/secpal_pr_review/follow_up.py",
             "scripts/secpal_pr_review/pre_enrollment_integration.py",
             "scripts/secpal_pr_review/lifecycle_authority.py",
+            "scripts/secpal_pr_review/lifecycle_publication.py",
+            "scripts/secpal_pr_review/lifecycle_orchestration.py",
             "scripts/secpal_pr_review/bootstrap_source_admission.py",
             "scripts/secpal_pr_review/exact_source_safety.py",
             ".agents/skills/secpal-pr-review/references/repositories.json",
@@ -4348,6 +4347,95 @@ def verify_ready_integration_predecessor(
     return transition.predecessor, reviewed, eligibility
 
 
+@dataclass(frozen=True)
+class VerifiedReadyIntegrationPriorAuthority:
+    """Verifier-owned projection; no ordinary remediation authority is issued."""
+
+    manifest_json: str
+    integration_evidence_digest: str
+    source_validation_evidence_digest: str
+    head_advanced_event_digests: tuple[str, ...]
+
+
+def _walk_ready_integration_chain(
+    current: VerifiedLifecyclePublication,
+    ready_integrations: tuple[tuple[Any, Any], ...],
+) -> tuple[VerifiedLifecyclePublication, tuple[str, ...], tuple[str, ...]]:
+    """Verify the exact complete publication suffix, without recursive trust."""
+
+    if not isinstance(ready_integrations, tuple) or not ready_integrations:
+        raise LifecyclePublicationError("Ready integration predecessor packages are missing")
+    root = current
+    seen: set[str] = set()
+    digests: list[str] = []
+    reviewed_heads: list[str] = []
+    for index, package in enumerate(reversed(ready_integrations)):
+        if not isinstance(package, tuple) or len(package) != 2:
+            raise LifecyclePublicationError("Ready integration predecessor package is malformed")
+        if root.publication_oid in seen or root.lifecycle.head_sha in seen:
+            raise LifecyclePublicationError("Ready integration predecessor chain repeats")
+        seen.update((root.publication_oid, root.lifecycle.head_sha))
+        before = root
+        root, reviewed, _ = verify_ready_integration_predecessor(
+            root, *package, require_current=index == 0,
+        )
+        reviewed_heads.append(reviewed.head_sha)
+        raw = authority._load_canonical_json(before.serialized_lifecycle_evidence, "integration lifecycle")
+        bundle = raw.get("lifecycle_evidence", raw)
+        digests.append(bundle["transition_authorizations"][-1]["event_digest"])
+    raw = authority._load_canonical_json(root.serialized_lifecycle_evidence, "integration predecessor lifecycle")
+    bundle = raw.get("lifecycle_evidence", raw)
+    events = bundle.get("transition_authorizations")
+    if not isinstance(events, list):
+        raise LifecyclePublicationError("Ready integration predecessor history is malformed")
+    if events and events[-1]["transition_kind"] == "HEAD_ADVANCED":
+        raise LifecyclePublicationError("Ready integration predecessor chain has a gap")
+    return root, tuple(reversed(digests)), tuple(reviewed_heads)
+
+
+def verify_ready_integration_prior_authority(
+    current: VerifiedLifecyclePublication,
+    ready_integrations: tuple[tuple[Any, Any], ...],
+) -> VerifiedReadyIntegrationPriorAuthority:
+    """Derive the existing signed-manifest projection from typed publications."""
+
+    _authenticate_provider_integration_verifier()
+    _, digests, _ = _walk_ready_integration_chain(current, ready_integrations)
+    validation, _ = ready_integrations[-1]
+    # The chain owner has independently reverified this seal and CURRENT.
+    provenance = json.loads(validation._verification_seal.provenance_json)
+    integration = provenance["integration_evidence"]
+    lifecycle = current.lifecycle
+    state = lifecycle.state
+    if state["ready_transition_count"] != 1:
+        raise LifecyclePublicationError("Ready integration prior authority has extra Ready history")
+    manifest = fast_path.normalize_ready_integration_prior_authority({
+        "schema_version": "1.1", "kind": fast_path.READY_INTEGRATION_PRIOR_AUTHORITY_KIND,
+        "repository": lifecycle.repository, "delivery_issue_number": lifecycle.delivery_issue,
+        "pull_request_number": lifecycle.pull_request,
+        "prior_delivery_head_sha": lifecycle.head_sha, "prior_delivery_tree_sha": lifecycle.tree_sha,
+        "prior_validation_receipt_digest": validation.validation_receipt_digest,
+        "prior_final_attestation_digest": validation.final_attestation_digest,
+        "expected_signer": integration["expected_signer"],
+        "lifecycle": {
+            "identity": lifecycle.lifecycle_id, "current_authority_digest": lifecycle.authority_digest,
+            "historical_proof_mode": lifecycle.historical_proof_mode,
+            "draft": state["draft"], "ready": state["ready"], "ready_transition": False,
+            "unrestricted_reviews": state["unrestricted_review_count"],
+            "remediation_cycles": state["remediation_cycle_count"],
+            "exceptional_recoveries": state["exceptional_recovery_count"],
+            "exceptional_continuations": state["exceptional_continuation_count"],
+            "cycle_3": not state["cycle_3_absent"],
+        },
+        "publication": {"object_oid": current.publication_oid,
+                        "publication_digest": current.publication_digest},
+    })
+    return VerifiedReadyIntegrationPriorAuthority(
+        fast_path.canonical_json_bytes(manifest).decode("utf-8"), fast_path.digest_json(integration),
+        validation.source_validation_evidence_digest, digests,
+    )
+
+
 def _verify_ready_source_integration_suffix(
     current: VerifiedLifecyclePublication,
     ready_integrations: tuple[tuple[Any, Any], ...],
@@ -4358,21 +4446,7 @@ def _verify_ready_source_integration_suffix(
         raise LifecyclePublicationError("Ready-source provider HEAD_ADVANCED evidence is missing")
     try:
         _authenticate_provider_integration_verifier()
-        root = current
-        digests: list[str] = []
-        reviewed_heads: list[str] = []
-        for package in reversed(ready_integrations):
-            if not isinstance(package, tuple) or len(package) != 2:
-                raise LifecyclePublicationError("Ready-source provider integration package is malformed")
-            validation, prior = package
-            before = root
-            root, reviewed, _ = verify_ready_integration_predecessor(
-                root, validation, prior, require_current=False
-            )
-            reviewed_heads.append(reviewed.head_sha)
-            raw = authority._load_canonical_json(before.serialized_lifecycle_evidence, "integration lifecycle")
-            bundle = raw.get("lifecycle_evidence", raw)
-            digests.append(bundle["transition_authorizations"][-1]["event_digest"])
+        root, digests, reviewed_heads = _walk_ready_integration_chain(current, ready_integrations)
         state = current.lifecycle.state
         if (
             state.get("unrestricted_review_count") != 1
@@ -4385,7 +4459,7 @@ def _verify_ready_source_integration_suffix(
             raise LifecyclePublicationError("Ready-source provider integration changed finite lifecycle")
     except (SecurityBlocker, authority.LifecycleAuthorityError, KeyError, TypeError, ValueError) as exc:
         raise LifecyclePublicationError("Ready-source provider typed integration lineage is invalid") from exc
-    return root, tuple(reversed(digests)), tuple(reviewed_heads)
+    return root, digests, reviewed_heads
 
 
 def derive_ready_source_recovery_provider_binding(
