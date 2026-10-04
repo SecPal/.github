@@ -15229,6 +15229,9 @@ class FreshProviderRemediationCompositionTests(TestCase):
         verification = mock.patch.object(authority, "_policy_signature_verifier", side_effect=verifier_for)
         verification.start()
         self.addCleanup(verification.stop)
+        if name == "test_pre_request_review_cannot_contribute_remediation_findings":
+            self.resulting.feedback["provider_review_requests"] = []
+            self.resulting.refresh_digests()
         historical = copy.deepcopy(self.resulting)
         timeline = r.acquisition._normalize_observation(self.acquisition_raw)
         if name == "test_signed_loss_inventory_does_not_authorize_unrelated_additions":
@@ -15242,6 +15245,23 @@ class FreshProviderRemediationCompositionTests(TestCase):
                 "actor": dict(zip(("login", "node_id", "database_id"), event["actor"])),
                 "updated_at": stamp, "reactions": []})
             historical.refresh_digests()
+        if name == "test_pre_request_review_cannot_contribute_remediation_findings":
+            event = copy.deepcopy(next(e for e in timeline["events"] if e["kind"] == "PullRequestReview"))
+            event.update(node_id="PRR_UNACQUIRED", database_id=999, created_at="2026-10-01T15:59:00Z")
+            position = next(i for i, e in enumerate(timeline["events"]) if e["node_id"] == "IC_CODE_FIRST")
+            timeline["events"] = timeline["events"][:position] + (event,) + timeline["events"][position:]
+            review = {**copy.deepcopy(historical.feedback["reviews"][0]),
+                      "node_id": event["node_id"], "submitted_at": event["created_at"]}
+            thread = copy.deepcopy(historical.feedback["threads"][-1])
+            thread["node_id"] = "PRRT_UNACQUIRED"
+            thread["comments"][0].update(node_id="PRRC_UNACQUIRED", review_id=event["node_id"])
+            for state in (historical, self.resulting):
+                state.feedback["reviews"].append(copy.deepcopy(review))
+                state.feedback["threads"].append(copy.deepcopy(thread))
+                state.refresh_digests()
+            eligible = copy.deepcopy(self.eligibility["eligible_threads"][-1])
+            eligible.update(thread_id=thread["node_id"], finding_ids=["PRRC_UNACQUIRED"])
+            self.eligibility["eligible_threads"].append(eligible)
         survey = {
             "source_history": tuple((e["head"], self.current.lifecycle.tree_sha)
                 for e in timeline["events"] if e["kind"] == "COMMIT"),
@@ -15498,6 +15518,14 @@ class FreshProviderRemediationCompositionTests(TestCase):
         self.resulting.provider_summary_body = summary.replace("**Completed**", "**Running**")
         with self.assertRaises(fast_path.SecurityBlocker):
             self.r.authenticate_fresh_provider_acquisitions(self.current, self.resulting)
+
+    def test_pre_request_review_cannot_contribute_remediation_findings(self):
+        self.assertIsInstance(self.fresh, self.r.VerifiedFreshProviderAcquisitions)
+        assessment = self.fresh.canonical_assessment
+        self.assertNotIn("PRR_UNACQUIRED", {e["node_id"] for e in assessment["provider_results"]})
+        self.assertNotIn("PRR_UNACQUIRED", {e["node_id"] for e in assessment["authorization"]["loss_proof"]["historical_results"]})
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "review.*acquisition"):
+            self.growth()
 
     def test_signed_loss_inventory_does_not_authorize_unrelated_additions(self):
         self.assertIsInstance(self.fresh, self.r.VerifiedFreshProviderAcquisitions)

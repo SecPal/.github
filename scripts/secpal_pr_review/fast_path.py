@@ -5607,6 +5607,11 @@ def _ordinary_provider_assessment(
             ("REVIEW" if item["kind"] == "PullRequestReview" else "CONVERSATION_COMMENT", item["node_id"])
             for item in proof["historical_requests"] + proof["historical_results"]
         )
+        acquired_reviews = retained | frozenset(
+            (item["kind"], item["node_id"]) for item in transport if item["kind"] == "REVIEW"
+        )
+        if any(("REVIEW", item["node_id"]) not in acquired_reviews for item in added_reviews):
+            raise SecurityBlocker("ordinary Ready provider review is outside the authenticated acquisition")
         return _OrdinaryProviderAssessment(
             assessment["acquisition_kind"], fresh._seal.digest,
             tuple((item["node_id"], item["database_id"]) for item in assessment["review_database_ids"]),
