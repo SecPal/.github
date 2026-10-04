@@ -59,14 +59,12 @@ def run_evaluate_fixture(
             json.dumps(valid_database() if database is None else database),
             encoding="utf-8",
         )
-        diagnostic_arguments = []
-        if diagnostics is not None:
-            diagnostic_path = root / "native.stderr"
-            fallback = '2026-10-04T12:00:00Z\tERROR\t[misconfig] Falling back to embedded checks\terr=' + json.dumps(
-                'failed to check cache: cache does not exist at ' + json.dumps(str(root / 'policy' / 'content'))
-            ) + '\n'
-            diagnostic_path.write_text(fallback + diagnostics)
-            diagnostic_arguments = ["--diagnostics", str(diagnostic_path), "--cache-dir", str(root)]
+        diagnostic_path = root / "native.stderr"
+        fallback = '2026-10-04T12:00:00Z\tERROR\t[misconfig] Falling back to embedded checks\terr=' + json.dumps(
+            'failed to check cache: cache does not exist at ' + json.dumps(str(root / 'policy' / 'content'))
+        ) + '\n'
+        diagnostic_path.write_text(fallback + (diagnostics or ""))
+        diagnostic_arguments = ["--diagnostics", str(diagnostic_path), "--cache-dir", str(root)]
         completed = subprocess.run(
             [
                 "python3",
@@ -905,6 +903,23 @@ class RepositoryScanContractTests(unittest.TestCase):
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.validate(unsafe, schema)
 
+    def test_evaluate_requires_private_diagnostic_context(self) -> None:
+        import contextlib
+        import io
+
+        arguments = [
+            "evaluate", "--native", "native.json", "--database", "database.json",
+            "--policy", str(POLICY), "--repository", "SecPal/example",
+            "--commit", COMMIT, "--workspace", ".", "--scanner-version", "0.74.0",
+            "--scanner-identity", self.module.TRIVY_ARCHIVE_ID,
+            "--completed-at", "2026-09-16T10:10:00Z", "--output", "result.json",
+        ]
+        for supplied in [[], ["--diagnostics", "native.stderr"], ["--cache-dir", "."]]:
+            with self.subTest(supplied=supplied), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    self.module._parser().parse_args(arguments + supplied)
+                self.assertEqual(error.exception.code, 2)
+
     def test_cli_returns_nonzero_unknown_for_malformed_native_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -916,6 +931,8 @@ class RepositoryScanContractTests(unittest.TestCase):
                     "python3",
                     str(SCRIPT),
                     "evaluate",
+                    "--diagnostics", str(root / "native.stderr"),
+                    "--cache-dir", str(root),
                     "--native",
                     str(native),
                     "--policy",
@@ -971,6 +988,8 @@ class RepositoryScanContractTests(unittest.TestCase):
             completed = subprocess.run(
                 [
                     "python3", str(SCRIPT), "evaluate",
+                    "--diagnostics", str(root / "native.stderr"),
+                    "--cache-dir", str(root),
                     "--native", str(native), "--database", str(database),
                     "--policy", str(policy), "--repository", "SecPal/example",
                     "--commit", COMMIT, "--scanner-version", "0.74.0",

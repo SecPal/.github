@@ -901,21 +901,18 @@ def _evaluate(arguments: argparse.Namespace) -> int:
             database=database,
             completed_at=completed_at,
         )
-        if arguments.diagnostics is not None:
-            try:
-                if arguments.cache_dir is None:
-                    raise ContractError("scanner diagnostic cache context is unavailable")
-                verify_diagnostics(
-                    arguments.diagnostics.read_text(encoding="utf-8"), arguments.cache_dir,
-                    native=observed_native, scanner=observation["scanner"],
-                    workspace=observed_workspace,
-                )
-            except (ContractError, OSError, UnicodeError):
-                _write(arguments.output, unknown_result(
-                    repository=arguments.repository, commit=arguments.commit,
-                    failure_code="SCANNER_FAILURE", completed_at=completed_at,
-                ))
-                return 1
+        try:
+            verify_diagnostics(
+                arguments.diagnostics.read_text(encoding="utf-8"), arguments.cache_dir,
+                native=observed_native, scanner=observation["scanner"],
+                workspace=observed_workspace,
+            )
+        except (ContractError, OSError, UnicodeError):
+            _write(arguments.output, unknown_result(
+                repository=arguments.repository, commit=arguments.commit,
+                failure_code="SCANNER_FAILURE", completed_at=completed_at,
+            ))
+            return 1
         result = admit(observation, policy)
     except (ContractError, KeyError, TypeError, UnicodeError, json.JSONDecodeError, OSError):
         _write(
@@ -938,8 +935,8 @@ def _parser() -> argparse.ArgumentParser:
 
     evaluate = commands.add_parser("evaluate")
     evaluate.add_argument("--native", type=Path, required=True)
-    evaluate.add_argument("--diagnostics", type=Path)
-    evaluate.add_argument("--cache-dir", type=Path)
+    evaluate.add_argument("--diagnostics", type=Path, required=True)
+    evaluate.add_argument("--cache-dir", type=Path, required=True)
     evaluate.add_argument("--database", type=Path, required=True)
     evaluate.add_argument("--policy", type=Path, required=True)
     evaluate.add_argument("--repository", required=True)
