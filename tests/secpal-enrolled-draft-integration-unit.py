@@ -9,6 +9,7 @@ from contextlib import ExitStack
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import tempfile
 from dataclasses import replace
@@ -221,10 +222,22 @@ class EnrolledDraftAuthorityTests(TestCase):
             with self.assertRaises(enrolled.authority.LifecycleAuthorityError):
                 enrolled.normalize_authorization(candidate)
 
-    def test_registry_only_registers_closed_operation_for_two_repositories(self):
+    def test_documented_enrolled_draft_registrations_match_registry(self):
+        documentation = (ROOT / "scripts/README.md").read_text()
+        paragraph = documentation.split(
+            "The central `enrolled_draft_integration_policy`", 1
+        )[1].split("Historical pre-enrollment absence", 1)[0]
+        documented = set(re.findall(r"`(SecPal/[^`]+)`", paragraph))
+        registered = {
+            entry["repository"] for entry in draft.actions.load_registry()["repositories"]
+            if "enrolled_draft_integration_policy" in entry
+        }
+        self.assertEqual(documented, registered)
+
+    def test_registry_only_registers_closed_operation_for_delivery_repositories(self):
         registry = draft.actions.load_registry()
         admitted = {entry["repository"] for entry in registry["repositories"] if "enrolled_draft_integration_policy" in entry}
-        self.assertEqual(admitted, {"SecPal/.github", "SecPal/deployment"})
+        self.assertEqual(admitted, {"SecPal/.github", "SecPal/api", "SecPal/frontend", "SecPal/contracts", "SecPal/android", "SecPal/secpal.app", "SecPal/deployment"})
         for repository in admitted:
             entry = draft.actions.select_repository(registry, repository)
             self.assertEqual(entry["enrolled_draft_integration_policy"], enrolled.POLICY)
@@ -236,6 +249,94 @@ class EnrolledDraftAuthorityTests(TestCase):
             modified["repositories"][0]["enrolled_draft_integration_policy"][key] = value
             with self.subTest(key=key), self.assertRaises(draft.actions.RegistryError):
                 draft.actions.validate_registry(modified)
+
+
+class FrontendEnrolledDraftPolicyTests(TestCase):
+    repository = "SecPal/frontend"
+
+    def setUp(self):
+        self.registry = draft.actions.load_registry()
+        self.entry = draft.actions.select_repository(self.registry, self.repository)
+
+    def test_exact_policy_and_maintained_projections_agree(self):
+        self.assertEqual(self.entry["enrolled_draft_integration_policy"], enrolled.POLICY)
+        self.assertIn("lifecycle_authority_policy", self.entry)
+        # The historical reviewer fixture uses the legacy module name.
+        with mock.patch.dict(sys.modules, {"secpal_pr_review": ready.review_package}):
+            resolver = load_fixture("enrolled_policy_resolver", "scripts/secpal-resolve-fixed-threads.py")
+        binding = enrolled.fast_path.validation_registry_projection(self.entry)
+        self.assertEqual(binding, draft.actions._fast_registry_binding(self.entry))
+        self.assertEqual(binding, resolver._validation_registry_binding(self.entry))
+        self.assertEqual(enrolled._entry(draft.actions, self.repository), (self.entry, binding))
+        self.assertIn("BRANCH_WRITE", self.entry["unsupported_operations"])
+        with self.assertRaises(draft.actions.RegistryError):
+            draft.actions.select_repository(self.registry, "Other/frontend")
+
+    def dispatch(self, fixture, *, admitted):
+        class Selected(Exception):
+            pass
+        arguments = SimpleNamespace(apply=True, repo=self.repository, repo_root=str(ROOT))
+        for command in (enrolled.prepare, enrolled.integrate):
+            with (
+                self.subTest(command=command.__name__),
+                mock.patch.object(enrolled, "_trusted_source", return_value="b" * 40),
+                mock.patch.object(draft.actions, "load_registry", return_value=fixture),
+                mock.patch.object(draft.actions, "_require_distinct_candidate_repository_root", side_effect=Selected) as selected,
+                mock.patch.object(draft.actions, "_create_signed_pre_enrollment_commit") as candidate,
+                mock.patch.object(draft.actions, "_read_pre_enrollment_json") as read,
+                mock.patch.object(enrolled.publication, "verify_current_lifecycle_authority") as current,
+                mock.patch.object(enrolled.publication, "claim_enrolled_draft_integration") as claim,
+                mock.patch.object(enrolled, "_push_exact") as push,
+                self.assertRaises(Selected if admitted else (draft.actions.RegistryError, enrolled.fast_path.SecurityBlocker)),
+            ):
+                command(draft.actions, arguments)
+            self.assertEqual(selected.call_count, int(admitted))
+            candidate.assert_not_called()
+            read.assert_not_called()
+            current.assert_not_called()
+            claim.assert_not_called()
+            push.assert_not_called()
+
+    def test_executor_selects_target_before_mutation(self):
+        self.dispatch(self.registry, admitted=True)
+
+    def test_missing_target_policy_is_not_supplied_by_other_repositories(self):
+        fixture = copy.deepcopy(self.registry)
+        next(entry for entry in fixture["repositories"] if entry["repository"] == self.repository).pop("enrolled_draft_integration_policy", None)
+        self.assertEqual(draft.actions.select_repository(fixture, "SecPal/.github")["enrolled_draft_integration_policy"], enrolled.POLICY)
+        self.dispatch(fixture, admitted=False)
+
+    def test_malformed_and_widened_policy_reject_in_schema_and_executor(self):
+        mutations = (
+            ("schema_version", "2.0"), ("command", "push"),
+            ("topology_kind", "ARBITRARY_MERGE"), ("allowed_mutation", "BRANCH_WRITE"),
+            ("maximum_candidates", 2), ("maximum_pushes", 2),
+            ("force_push", True), ("automatic_retry", True),
+            ("merge_pull_request", True), ("caller_policy", True),
+        )
+        for key, value in mutations:
+            fixture = copy.deepcopy(self.registry)
+            target = next(entry for entry in fixture["repositories"] if entry["repository"] == self.repository)
+            target["enrolled_draft_integration_policy"] = {**enrolled.POLICY, key: value}
+            with self.subTest(key=key), self.assertRaises(draft.actions.RegistryError):
+                draft.actions.validate_registry(fixture)
+            self.dispatch(fixture, admitted=False)
+
+
+class ApiEnrolledDraftPolicyTests(FrontendEnrolledDraftPolicyTests):
+    repository = "SecPal/api"
+
+
+class ContractsEnrolledDraftPolicyTests(FrontendEnrolledDraftPolicyTests):
+    repository = "SecPal/contracts"
+
+
+class SecpalAppEnrolledDraftPolicyTests(FrontendEnrolledDraftPolicyTests):
+    repository = "SecPal/secpal.app"
+
+
+class AndroidEnrolledDraftPolicyTests(FrontendEnrolledDraftPolicyTests):
+    repository = "SecPal/android"
 
 
 class EnrolledDraftJournalTests(TestCase):

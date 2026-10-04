@@ -1570,6 +1570,10 @@ SAFE_SYS_MODULES_STORES = {
         ),
         DynamicImportCall(
             ("_load_lifecycle_publication_helpers",),
+            "sys.modules['scripts']",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers",),
             "sys.modules[package_name]",
         ),
         DynamicImportCall(
@@ -2839,6 +2843,21 @@ def self_test() -> None:
     )
     if inspect_source(owner_module_read, "secpal-pr-review-actions.py", ()):
         raise SystemExit("closed provider-owner module read was rejected")
+
+    scripts_namespace = (
+        "import sys\nimport types\ndef _load_lifecycle_publication_helpers():\n"
+        "    scripts_package = types.ModuleType('scripts')\n"
+        "    scripts_package.__path__ = [str(REPOSITORY_ROOT / 'scripts')]\n"
+        "    sys.modules['scripts'] = scripts_package\n"
+    )
+    if inspect_source(scripts_namespace, "secpal-pr-review-actions.py", ()):
+        raise SystemExit("closed lifecycle scripts namespace was rejected")
+    for substituted in (
+        scripts_namespace.replace("['scripts']", "['subprocess']"),
+        scripts_namespace.replace("_load_lifecycle_publication_helpers", "arbitrary_loader"),
+    ):
+        if not inspect_source(substituted, "secpal-pr-review-actions.py", ()):
+            raise SystemExit("substituted lifecycle namespace was accepted")
 
     source_specific_unsafe = (
         (

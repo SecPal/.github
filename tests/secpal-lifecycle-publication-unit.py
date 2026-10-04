@@ -127,7 +127,8 @@ class Chain:
         self.checkpoint: dict[str, Any] | None = None
 
     def append(self, transition: str, *, head: str | None = None,
-               replacement_pull_request: int | None = None) -> None:
+               replacement_pull_request: int | None = None,
+               current_head_evidence: Any = None) -> None:
         resulting_head = head or self.head
         event = authority.create_transition_authorization(
             event_id=(f"genesis:{self.initialization['initialization_digest']}"
@@ -154,6 +155,7 @@ class Chain:
                 accepted_event_signers=frozenset({SIGNER}),
                 accepted_authority_signers=frozenset({SIGNER}),
                 signature_verifier=verify_signature,
+                current_head_evidence=current_head_evidence,
             )
         self.events.append(event)
         self.authorities.append(snapshot)
@@ -4693,6 +4695,116 @@ class LifecyclePublicationTests(TestCase):
             )
         self.assertEqual(self.remote_tip(), first)
 
+    def reacquisition_claim_fixture(self, *, prior_assessment=False):
+        from scripts.secpal_pr_review import provider_reacquisition as r
+        spec = importlib.util.spec_from_file_location("reacquisition_transport_fixture", Path(__file__).with_name("secpal-lifecycle-orchestration-unit.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _, feedback, _, _, _, fixture_current, raw = module.first_fallback_growth()
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        chain.append("DRAFT_TO_READY")
+        chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+        evidence = verified_validation_evidence(head=HEADS[1], tree=HEADS[3], parent=HEADS[0])
+        chain.append("REMEDIATION_COMPLETED", head=HEADS[1], current_head_evidence=evidence)
+        if prior_assessment:
+            chain.append("ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED")
+        _, current = self.enroll(chain)
+        old_head, old_pr = feedback.head_sha, feedback.pull_request_number
+        text = json.dumps(raw).replace(old_head, current.lifecycle.head_sha).replace(old_head[:10], current.lifecycle.head_sha[:10]).replace(old_head[:7], current.lifecycle.head_sha[:7])
+        raw = json.loads(text)
+        raw["data"]["repository"]["pullRequest"]["number"] = PR
+        for node in raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]:
+            if node["__typename"] == "IssueComment":
+                node["body"] = node["body"].replace('"pullRequestNumber": ' + str(old_pr), '"pullRequestNumber": ' + str(PR))
+                node["body"] = node["body"].replace('"pullRequestNumber":' + str(old_pr), '"pullRequestNumber":' + str(PR))
+        feedback.head_sha = current.lifecycle.head_sha
+        feedback.pull_request_number = PR
+        for review in feedback.feedback["reviews"]:
+            review["commit_oid"] = current.lifecycle.head_sha
+        module.first_fallback_feedback(feedback, raw)
+        observed = r.acquisition._normalize_observation(raw)
+        summary = next(e["body"] for e in observed["events"] if fast_path.CODEX_REVIEW_SUMMARY_MARKER in e.get("body", ""))
+        feedback.provider_summary_body = summary
+        feedback.feedback["reviews"][0]["body_digest"] = fast_path.digest_text(next(e["body"] for e in observed["events"] if e["kind"] == "PullRequestReview"))
+        feedback.refresh_digests()
+        survey = {"source_history": tuple((e["head"], current.lifecycle.tree_sha if e["head"] == current.lifecycle.head_sha else "8" * 40) for e in observed["events"] if e["kind"] == "COMMIT"),
+                  "source_packages": (), "journal_packages": (), "historical_digest_identities": r._retained_package_digests(current),
+                  "maintained_stores": r.MAINTAINED_STORES, "unsearched_stores": (),
+                  "retained_local_store": "NO_MAINTAINED_RETAINED_STORE", "output_scope": "GITIGNORED_WORKSPACE_LOCAL",
+                  "authoritative_head_publication": None}
+        loss = r._admit_loss(current, feedback, observed, survey)
+        fields = r._authorization_fields(loss, "2026-10-01T17:00:00Z", SIGNER)
+        signed = {**fields, "signature": signer_for()(fast_path.canonical_json_bytes(fields), r.AUTHORIZATION_DOMAIN)}
+        document = {**signed, "authorization_digest": fast_path.digest_json(signed)}
+        verified = r.verify_authorization(document, current)
+        return current, document, r.derive_dispatch_keys(verified, current)
+
+    def test_reacquisition_rejects_ordinary_claim_in_exact_scope(self):
+        current, document, keys = self.reacquisition_claim_fixture(prior_assessment=True)
+        ordinary = replace(keys[0], assessment_authority_digest=current.lifecycle.authority_digest)
+        publication._publish_provider_dispatch_claim(ordinary, eligibility_evidence_digest="9" * 64,
+            signer_identity=SIGNER, signer=signer_for())
+        for key in keys:
+            with self.assertRaisesRegex(publication.LifecyclePublicationError, "ordinary provider dispatch"):
+                publication._publish_provider_dispatch_claim(key, eligibility_evidence_digest=document["loss_proof_digest"],
+                    signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=document)
+        self.assertEqual(publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE), current)
+
+    def test_ordinary_claim_cannot_follow_reacquisition_in_same_scope(self):
+        current, document, keys = self.reacquisition_claim_fixture(prior_assessment=True)
+        publication._publish_provider_dispatch_claim(keys[0], eligibility_evidence_digest=document["loss_proof_digest"],
+            signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=document)
+        ordinary = replace(keys[1], assessment_authority_digest=current.lifecycle.authority_digest)
+        with self.assertRaisesRegex(publication.LifecyclePublicationError, "ordinary provider dispatch"):
+            publication._publish_provider_dispatch_claim(ordinary, eligibility_evidence_digest="9" * 64,
+                signer_identity=SIGNER, signer=signer_for())
+
+    def test_reacquisition_claims_preserve_current_and_both_journal_readers(self):
+        current, document, keys = self.reacquisition_claim_fixture()
+        for key in keys:
+            claim = publication._publish_provider_dispatch_claim(key, eligibility_evidence_digest=document["loss_proof_digest"],
+                signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=document)
+            self.assertEqual(fast_path.canonical_json_bytes(claim.reacquisition_authorization), fast_path.canonical_json_bytes(document))
+            with self.assertRaisesRegex(publication.LifecyclePublicationError, "already exists"):
+                publication._publish_provider_dispatch_claim(key, eligibility_evidence_digest=document["loss_proof_digest"],
+                    signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=document)
+        self.assertEqual(publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE), current)
+        publication._observe_remote_current_once(self.probe, str(self.remote), BRANCH)
+        enrolled, admitted = publication._walk_journal_identity_projection(self.probe, self.remote_tip(), BRANCH)
+        self.assertIn((REPOSITORY, ISSUE), enrolled)
+
+    def test_reacquisition_same_head_competing_authorization_is_rejected(self):
+        current, document, keys = self.reacquisition_claim_fixture()
+        publication._publish_provider_dispatch_claim(keys[0], eligibility_evidence_digest=document["loss_proof_digest"],
+            signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=document)
+        from scripts.secpal_pr_review import provider_reacquisition as r
+        fields = {k:v for k,v in document.items() if k not in {"signature", "authorization_digest"}}
+        fields["authorized_at"] = "2026-10-01T17:00:01Z"
+        signed = {**fields, "signature": signer_for()(fast_path.canonical_json_bytes(fields), r.AUTHORIZATION_DOMAIN)}
+        other = {**signed, "authorization_digest": fast_path.digest_json(signed)}
+        for key in keys:
+            with self.assertRaises(publication.LifecyclePublicationError):
+                publication._publish_provider_dispatch_claim(key, eligibility_evidence_digest=other["loss_proof_digest"],
+                    signer_identity=SIGNER, signer=signer_for(), reacquisition_authorization=other)
+
+    def test_reacquisition_cas_race_has_one_winner(self):
+        current, document, keys = self.reacquisition_claim_fixture()
+        publication._observe_remote_current_once(self.probe, str(self.remote), BRANCH)
+        successors = []
+        for attempt in ("1" * 64, "2" * 64):
+            fields = publication._provider_dispatch_claim_fields(keys[0], eligibility_evidence_digest=document["loss_proof_digest"],
+                publication_branch=BRANCH, journal_predecessor_oid=current.publication_oid,
+                signer_identity=SIGNER, attempt_id=attempt, reacquisition_authorization=document)
+            successors.append(publication._write_publication_object(self.probe,
+                publication._sign_provider_dispatch_claim(fields, signer_for()), current.publication_oid))
+        publication._cas_remote_ref(self.probe, str(self.remote), BRANCH, successors[0], current.publication_oid)
+        with self.assertRaises(publication.LifecyclePublicationError):
+            publication._cas_remote_ref(self.probe, str(self.remote), BRANCH, successors[1], current.publication_oid)
+        _, _, _, _, claims = publication._walk_journal(self.probe, self.remote_tip(), BRANCH, include_claims=True)
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(self.remote_tip(), successors[0])
+
     def test_provider_dispatch_claim_is_ancillary_and_unique(self) -> None:
         _, enrolled, key = self.provider_claim_fixture()
         claim = publication._publish_provider_dispatch_claim(
@@ -5586,6 +5698,7 @@ class FrontendLifecyclePolicyTests(ContractsLifecyclePolicyTests):
     """The Frontend registration consumes the existing lifecycle contract."""
 
     repository = "SecPal/frontend"
+    expected_ruleset_id = 24431481
 
     def test_registry_and_consumer_projections_agree(self) -> None:
         modules = []
@@ -5676,11 +5789,11 @@ class FrontendLifecyclePolicyTests(ContractsLifecyclePolicyTests):
                 reference,
                 repository=self.repository,
                 publication_remote_url=f"https://github.com/{self.repository}.git",
-                publication_ruleset_id=24431481,
+                publication_ruleset_id=self.expected_ruleset_id,
             ),
         )
         self.assertEqual(self.accepted_policy.accepted_formats, frozenset({"ssh"}))
-        self.assertEqual(self.accepted_policy.publication_ruleset_id, 24431481)
+        self.assertEqual(self.accepted_policy.publication_ruleset_id, self.expected_ruleset_id)
         self.assertEqual(self.accepted_policy.initialization_anchors, ())
 
     def test_registration_rejects_missing_malformed_and_widened_authority(self) -> None:
@@ -5714,6 +5827,20 @@ class FrontendLifecyclePolicyTests(ContractsLifecyclePolicyTests):
                     authority.canonical_json_bytes(registry), self.repository
                 )
             git.assert_not_called()
+
+
+class ApiLifecyclePolicyTests(FrontendLifecyclePolicyTests):
+    """API uses the same repository-bound public lifecycle authority."""
+
+    repository = "SecPal/api"
+    expected_ruleset_id = 24438764
+
+
+class AndroidLifecyclePolicyTests(FrontendLifecyclePolicyTests):
+    """Android governance uses the existing repository-bound lifecycle."""
+
+    repository = "SecPal/android"
+    expected_ruleset_id = 24443992
 
 
 if __name__ == "__main__":

@@ -60,7 +60,7 @@ class DeploymentIntegrationPolicyTests(TestCase):
             entry["repository"] for entry in self.registry["repositories"]
             if "pre_enrollment_integration_policy" in entry
         }
-        self.assertEqual(admitted, {"SecPal/.github", "SecPal/deployment", "SecPal/secpal.app"})
+        self.assertEqual(admitted, {"SecPal/.github", "SecPal/api", "SecPal/contracts", "SecPal/android", "SecPal/secpal.app", "SecPal/deployment"})
         self.assertEqual(
             actions.select_repository(self.registry, "SecPal/.github")[
                 "pre_enrollment_integration_policy"
@@ -147,12 +147,12 @@ class SecpalAppIntegrationPolicyTests(DeploymentIntegrationPolicyTests):
     delivery_issue = 332
     pull_request = 333
 
-    def test_policy_on_another_repository_does_not_admit_secpal_app(self) -> None:
+    def test_policy_on_another_repository_does_not_admit_target(self) -> None:
         fixture = copy.deepcopy(self.registry)
         for entry in fixture["repositories"]:
             if entry["repository"] == self.repository:
                 entry.pop("pre_enrollment_integration_policy", None)
-            if entry["repository"] == "SecPal/api":
+            if entry["repository"] == "SecPal/.github":
                 entry["pre_enrollment_integration_policy"] = copy.deepcopy(
                     registry()["pre_enrollment_integration_policy"]
                 )
@@ -172,7 +172,7 @@ class SecpalAppIntegrationPolicyTests(DeploymentIntegrationPolicyTests):
     def test_caller_evidence_cannot_substitute_repository_or_policy(self) -> None:
         selected = self.selected_evidence()
         for mutation in (
-            {"repository": "SecPal/api"},
+            {"repository": "SecPal/.github"},
             {"pre_enrollment_integration_policy": registry()["pre_enrollment_integration_policy"]},
         ):
             with self.subTest(mutation=mutation):
@@ -189,6 +189,24 @@ class SecpalAppIntegrationPolicyTests(DeploymentIntegrationPolicyTests):
                 tree.assert_not_called()
                 candidate.assert_not_called()
                 push.assert_not_called()
+
+
+class ApiIntegrationPolicyTests(SecpalAppIntegrationPolicyTests):
+    repository = "SecPal/api"
+    delivery_issue = 900001
+    pull_request = 900002
+
+
+class ContractsIntegrationPolicyTests(SecpalAppIntegrationPolicyTests):
+    repository = "SecPal/contracts"
+    delivery_issue = 900001
+    pull_request = 900002
+
+
+class AndroidIntegrationPolicyTests(SecpalAppIntegrationPolicyTests):
+    repository = "SecPal/android"
+    delivery_issue = 900001
+    pull_request = 900002
 
 
 class PreEnrollmentIntegrationBoundaryTests(TestCase):

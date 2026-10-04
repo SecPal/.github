@@ -245,6 +245,9 @@ def _load_lifecycle_publication_helpers(
 
     if return_collision and not include_orchestration:
         raise RuntimeError("collision helper requires lifecycle orchestration")
+    scripts_package = types.ModuleType("scripts")
+    scripts_package.__path__ = [str(REPOSITORY_ROOT / "scripts")]
+    sys.modules["scripts"] = scripts_package
     package_name = "secpal_ready_integration_lifecycle"
     package = types.ModuleType(package_name)
     package.__path__ = [str(LIFECYCLE_AUTHORITY_HELPER.parent)]
@@ -2334,9 +2337,12 @@ def _require_review_providers_terminal(
     repository: str | None = None,
     pull_request_number: int | None = None,
     ready_source_provider_binding: Any = None,
+    require_terminal: bool = True,
 ) -> None:
     """Reject visible non-terminal automated review-provider evidence."""
 
+    if not require_terminal and ready_source_provider_binding is not None:
+        raise MutationBlocked("provider observation cannot use historical head authority")
     historical_summary = (
         _provider_binding_uses_historical_summary(ready_source_provider_binding)
         if ready_source_provider_binding is not None else False
@@ -2381,13 +2387,14 @@ def _require_review_providers_terminal(
                     body,
                     head_sha=head_sha,
                     repository=(
-                        repository if ready_source_provider_binding is not None else None
+                        repository if ready_source_provider_binding is not None or not require_terminal else None
                     ),
                     pull_request_number=(
                         pull_request_number
-                        if ready_source_provider_binding is not None
+                        if ready_source_provider_binding is not None or not require_terminal
                         else None
                     ),
+                    require_terminal=require_terminal,
                 )
         except (RuntimeError, AttributeError, TypeError, ValueError) as exc:
             if (
@@ -2673,6 +2680,7 @@ class LiveGitHub:
         budget: dict[str, int],
         *,
         ready_source_provider_binding: Any = None,
+        require_provider_terminal: bool = True,
     ) -> dict[str, Any]:
         owner, name = plan["repository"].split("/", 1)
         base_variables = {
@@ -2792,7 +2800,11 @@ class LiveGitHub:
             "nodes": comments,
             "pageInfo": {"hasNextPage": False},
         }
-        if ready_source_provider_binding is None:
+        if not require_provider_terminal:
+            _require_review_providers_terminal(provider_state, repository=plan["repository"],
+                pull_request_number=plan["pull_request_number"], require_terminal=False,
+                ready_source_provider_binding=ready_source_provider_binding)
+        elif ready_source_provider_binding is None:
             _require_review_providers_terminal(provider_state)
         else:
             _require_review_providers_terminal(
@@ -4017,6 +4029,20 @@ class FastPathGateway:
                 raise fast_path.SecurityBlocker("approval policy rule is malformed")
             approval_required = approval_required or required > 0
         return approval_required
+
+    def observe_provider_acquisition_feedback(self, repository: str, pull_request_number: int) -> dict[str, Any]:
+        """Complete bounded read for acquisition reconciliation, without terminal authority."""
+
+        if self.registry_entry.get("repository") != repository or self.ready_source_provider_binding is not None:
+            raise fast_path.SecurityBlocker("provider observation scope or historical authority differs")
+        try:
+            return self.github._read_current_feedback_once(
+                {"repository": repository, "pull_request_number": pull_request_number},
+                self.registry_entry, {"calls": 0}, require_provider_terminal=False)
+        except (ActionCommandFailure, MutationFailure) as exc:
+            raise fast_path.TransientReadFailure(str(exc)) from exc
+        except (MutationBlocked, RegistryError) as exc:
+            raise fast_path.SecurityBlocker(str(exc)) from exc
 
     def capture_stable_feedback(self, repository: str, pull_request_number: int) -> Any:
         result = self.observe_stable_feedback(repository, pull_request_number)
@@ -6839,6 +6865,7 @@ def _require_accepted_main_tooling_blobs(
     required_paths = {
         "scripts/secpal-pr-review-actions.py",
         "scripts/secpal-pr-review.py",
+        "scripts/secpal-provider-reacquisition.py",
         ".agents/skills/secpal-pr-review/references/repositories.json",
         ".agents/skills/secpal-pr-review/references/repositories.schema.json",
         "policies/legacy-enrolled-package-loss.json",
