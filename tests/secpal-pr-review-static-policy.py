@@ -581,6 +581,7 @@ ALLOWED_IMPORTS = {
         "from contextlib import contextmanager",
         "from dataclasses import dataclass",
         "import hashlib",
+        "import json",
         "import os",
         "from pathlib import Path",
         "import re",
