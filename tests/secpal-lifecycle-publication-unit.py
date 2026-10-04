@@ -5836,5 +5836,12 @@ class ApiLifecyclePolicyTests(FrontendLifecyclePolicyTests):
     expected_ruleset_id = 24438764
 
 
+class AndroidLifecyclePolicyTests(FrontendLifecyclePolicyTests):
+    """Android governance uses the existing repository-bound lifecycle."""
+
+    repository = "SecPal/android"
+    expected_ruleset_id = 24443992
+
+
 if __name__ == "__main__":
     main()
