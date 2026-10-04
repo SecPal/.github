@@ -300,6 +300,49 @@ FAST_PATH_CALLS = (*FAST_PATH_CALLS,
 RESOLVER_CALLS = (
     ProcessCall(
         None,
+        "_verify_exact_helper_source",
+        "[executable, 'ls-tree', 'HEAD', '--', relative]",
+        "",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("cwd", "REPOSITORY_ROOT"),
+            ("encoding", "'utf-8'"),
+            ("env", "evidence.command_environment('git')"),
+            ("errors", "'replace'"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("text", "True"),
+            ("timeout", "30"),
+        ),
+    ),
+    ProcessCall(
+        None,
+        "_run_exact_prerequisite_get",
+        "[executable, 'api', '--hostname', 'github.com', endpoint]",
+        "",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("env", "evidence.command_environment('gh')"),
+            ("stdin", "subprocess.DEVNULL"),
+            ("timeout", "30"),
+        ),
+    ),
+    ProcessCall(
+        None,
+        "_verify_exact_prerequisite_ssh_signature",
+        "[executable, '-Y', 'check-novalidate', '-n', 'git', '-s', str(signature_path)]",
+        "",
+        (
+            ("capture_output", "True"),
+            ("check", "False"),
+            ("env", "late_disposition.signing_environment()"),
+            ("input", "payload.encode('utf-8')"),
+            ("timeout", "30"),
+        ),
+    ),
+    ProcessCall(
+        None,
         "_run_gh",
         "executable",
         "arguments",
@@ -527,6 +570,11 @@ ALLOWED_IMPORTS = {
         "from pathlib import Path",
         "from typing import Any, Callable, TypeVar",
         "from . import qualified_remediation_successor_loss as successor_loss",
+        "from . import enrolled_draft_integration as integration",
+        "from . import lifecycle_publication as publication",
+        "from . import lifecycle_authority, lifecycle_execution",
+        "from . import provider_acquisition",
+        "from . import provider_reacquisition",
     },
     "exact_source_safety.py": {
         "from __future__ import annotations",
@@ -534,6 +582,7 @@ ALLOWED_IMPORTS = {
         "from contextlib import contextmanager",
         "from dataclasses import dataclass",
         "import hashlib",
+        "import json",
         "import os",
         "from pathlib import Path",
         "import re",
@@ -565,6 +614,9 @@ ALLOWED_IMPORTS = {
         "import stat",
         "import subprocess",
         "import sys",
+        "import tempfile",
+        "from secpal_pr_review import unchanged_head_prerequisite as source",
+        "from secpal_pr_review import unchanged_head_prerequisite_evidence as detached",
         "from dataclasses import dataclass",
         "from enum import Enum",
         "from pathlib import Path",
@@ -691,7 +743,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "importlib": {"util"},
         "subprocess": {"DEVNULL", "TimeoutExpired", "run"},
         "sys": {"modules"},
-        "tempfile": {"mkstemp"},
+        "tempfile": {"mkstemp", "TemporaryDirectory"},
     },
     "exact_source_safety.py": {
         "os": {"fdopen", "fsync", "replace"},
@@ -708,6 +760,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "importlib": {"util"},
         "operator": {"attrgetter"},
         "sys": {"argv", "modules", "path", "stderr"},
+        "tempfile": {"TemporaryDirectory"},
     },
     "late_disposition.py": {
         "errno": {"EINVAL", "ENOTSUP"},
@@ -835,6 +888,8 @@ LOADED_MODULE_ATTRIBUTES = {
         },
     },
     "fast_path.py": {
+        "provider_acquisition": {"require_verified_acquisitions"},
+        "provider_reacquisition": {"require_verified_fresh_acquisitions"},
         "evidence": {
             "CommandPolicyError",
             "ContractError",
@@ -917,6 +972,8 @@ LOADED_MODULE_ATTRIBUTES = {
             "read_signing_configuration",
             "sign_artifact",
             "signer_from_git_verification",
+            "_trusted_executable",
+            "signing_environment",
             "disposition_schema_version_for_decision",
             "schema_version_for_decision",
         },
@@ -943,6 +1000,18 @@ LOADED_MODULE_ATTRIBUTES = {
 }
 DYNAMIC_IMPORT_CALLS = {
     "secpal-pr-review-actions.py": {
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "importlib.util.spec_from_file_location(module_name, FAST_PATH_HELPER.with_name('enrolled_draft_integration.py'))",
+        ),
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "importlib.util.module_from_spec(spec)",
+        ),
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "spec.loader.exec_module(module)",
+        ),
         DynamicImportCall(
             ("_load_exact_source_safety_helper",),
             "importlib.util.spec_from_file_location("
@@ -1220,6 +1289,10 @@ SAFE_GETATTR_CALLS = {
         ),
         DynamicImportCall(
             ("_command_attest_validation",),
+            "getattr(arguments, 'prior_integration_chain', None)",
+        ),
+        DynamicImportCall(
+            ("_command_attest_validation",),
             "getattr(arguments, 'expected_prior_authority_signer', None)",
         ),
         DynamicImportCall(
@@ -1237,6 +1310,10 @@ SAFE_GETATTR_CALLS = {
         DynamicImportCall(
             ("_verify_ready_integration_prior_authority",),
             "getattr(arguments, 'prior_attestation', None)",
+        ),
+        DynamicImportCall(
+            ("_verify_ready_integration_prior_authority",),
+            "getattr(arguments, 'prior_integration_chain', None)",
         ),
         DynamicImportCall(
             ("_verify_ready_integration_prior_authority",),
@@ -1315,6 +1392,14 @@ SAFE_GETATTR_CALLS = {
 SAFE_SYS_MODULES_CALLS = {
     "secpal-pr-review-actions.py": {
         DynamicImportCall(
+            ("_provider_binding_uses_historical_summary",),
+            "sys.modules.get(f'{package}.{owner}')",
+        ),
+        DynamicImportCall(
+            ("_command_enrolled_draft_integration",),
+            "sys.modules.get(__name__)",
+        ),
+        DynamicImportCall(
             ("_load_exact_source_safety_helper",),
             "sys.modules.get(spec.name)",
         ),
@@ -1380,6 +1465,14 @@ SAFE_SYS_MODULES_CALLS = {
         ),
     },
     "secpal-resolve-fixed-threads.py": {
+        DynamicImportCall(
+            ("_load_exact_prerequisite_helpers",),
+            "sys.modules.get('secpal_pr_review.unchanged_head_prerequisite')",
+        ),
+        DynamicImportCall(
+            ("_load_exact_prerequisite_helpers",),
+            "sys.modules.get('secpal_pr_review.unchanged_head_prerequisite_evidence')",
+        ),
         DynamicImportCall(
             ("_load_evidence_helper",),
             "sys.modules.get('secpal_pr_review_evidence_shared')",
@@ -1451,6 +1544,18 @@ SAFE_SYS_MODULES_CALLS = {
 SAFE_SYS_MODULES_STORES = {
     "secpal-pr-review-actions.py": {
         DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "sys.modules['scripts']",
+        ),
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "sys.modules[package_name]",
+        ),
+        DynamicImportCall(
+            ("_load_enrolled_draft_integration_helper",),
+            "sys.modules[module_name]",
+        ),
+        DynamicImportCall(
             ("_load_exact_source_safety_helper",),
             "sys.modules[package_name]",
         ),
@@ -1465,6 +1570,10 @@ SAFE_SYS_MODULES_STORES = {
         DynamicImportCall(
             ("_load_fast_path_helper",),
             "sys.modules[spec.name]",
+        ),
+        DynamicImportCall(
+            ("_load_lifecycle_publication_helpers",),
+            "sys.modules['scripts']",
         ),
         DynamicImportCall(
             ("_load_lifecycle_publication_helpers",),
@@ -1541,6 +1650,16 @@ SAFE_SYS_MODULES_STORES = {
     },
 }
 RESOLVER_TOP_LEVEL_FUNCTIONS = {
+    "_verify_exact_helper_source",
+    "_load_exact_prerequisite_helpers",
+    "_ensure_exact_prerequisite_helpers",
+    "_run_exact_prerequisite_get",
+    "_exact_prerequisite_git_text",
+    "_verify_exact_prerequisite_ssh_signature",
+    "_exact_prerequisite_case",
+    "_authenticate_exact_prerequisite",
+    "create_exact_prerequisite_late_evidence",
+    "resolve_exact_prerequisite_late_thread",
     "_body_digest",
     "_canonical_json_bytes",
     "_consume_api_call",
@@ -1618,6 +1737,13 @@ RESOLVER_CLASS_SHAPES = {
     "ValidationEvidence": ClassShape((), (), ("dataclass(frozen=True)",)),
 }
 SAFE_RESOLVER_FUNCTION_REFERENCES = {
+    DynamicImportCall(("_run_exact_prerequisite_get",), "_reject_nonfinite_json_constant"),
+    DynamicImportCall(("_run_exact_prerequisite_get",), "_reject_duplicate_json_object"),
+    DynamicImportCall(("create_exact_prerequisite_late_evidence",), "_run_gh"),
+    DynamicImportCall(("resolve_exact_prerequisite_late_thread",), "_run_gh"),
+    DynamicImportCall(("_authenticate_exact_prerequisite",), "_run_exact_prerequisite_get"),
+    DynamicImportCall(("_authenticate_exact_prerequisite",), "_exact_prerequisite_git_text"),
+    DynamicImportCall(("_authenticate_exact_prerequisite",), "_verify_exact_prerequisite_ssh_signature"),
     DynamicImportCall(
         ("load_reviewed_state",),
         "_reject_nonfinite_json_constant",
@@ -1720,6 +1846,12 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     ),
 }
 RESOLVER_LOOP_SITES = {
+    LoopSite("for", ("_load_exact_prerequisite_helpers",), "((source, 'unchanged_head_prerequisite.py'), (detached, 'unchanged_head_prerequisite_evidence.py'))"),
+    LoopSite("comprehension", ("_ensure_exact_prerequisite_helpers",), "source.CASES.values()"),
+    LoopSite("comprehension", ("_ensure_exact_prerequisite_helpers",), "(case.pr_endpoint, case.commits_endpoint, case.commit_endpoint, case.comment_endpoint, case.agents_endpoint)"),
+    LoopSite("comprehension", ("parse_args",), "forbidden"),
+    LoopSite("comprehension", ("parse_args",), "(arguments.late_disposition_evidence, arguments.late_disposition_signature, arguments.late_classification_evidence, arguments.late_classification_signature)"),
+    LoopSite("comprehension", ("resolve_exact_prerequisite_late_thread",), "target.thread.comments"),
     LoopSite(
         "comprehension",
         ("_load_qualified_remediation_successor_validation",),
@@ -2402,6 +2534,20 @@ def inspect_source(
 
 
 def self_test() -> None:
+    fresh_import = "from . import provider_reacquisition\n"
+    safe_fresh = fresh_import + "provider_reacquisition.require_verified_fresh_acquisitions(value, current, feedback)\n"
+    if inspect_source(safe_fresh, "fast_path.py", ()):
+        raise SystemExit("static policy sealed fresh acquisition fixture was rejected")
+    for method in ("authenticate_fresh_provider_acquisitions", "issue_authorization", "dispatch_next", "authenticate_assessment"):
+        if not inspect_source(fresh_import + f"provider_reacquisition.{method}(value)\n", "fast_path.py", ()):
+            raise SystemExit("static policy fresh acquisition side-effect interface was not detected")
+    acquisition_import = "from . import provider_acquisition\n"
+    safe_acquisition = acquisition_import + "provider_acquisition.require_verified_acquisitions(value, feedback)\n"
+    if inspect_source(safe_acquisition, "fast_path.py", ()):
+        raise SystemExit("static policy read-only acquisition fixture was rejected")
+    for method in ("authenticate_claim_eligibility", "write_claimed_replacement", "reconcile_claimed_replacement"):
+        if not inspect_source(acquisition_import + f"provider_acquisition.{method}(value)\n", "fast_path.py", ()):
+            raise SystemExit("static policy replacement interface fixture was not detected")
     safe_call = ProcessCall(
         None,
         "safe_runner",
@@ -2699,7 +2845,41 @@ def self_test() -> None:
                 f"{name}: {findings}"
             )
 
+    owner_module_read = (
+        "import sys\ndef _provider_binding_uses_historical_summary(value):\n"
+        "    package = 'secpal_pr_review'\n"
+        "    owner = 'validation_evidence_loss'\n"
+        "    return sys.modules.get(f'{package}.{owner}')\n"
+    )
+    if inspect_source(owner_module_read, "secpal-pr-review-actions.py", ()):
+        raise SystemExit("closed provider-owner module read was rejected")
+
+    scripts_namespace = (
+        "import sys\nimport types\ndef _load_lifecycle_publication_helpers():\n"
+        "    scripts_package = types.ModuleType('scripts')\n"
+        "    scripts_package.__path__ = [str(REPOSITORY_ROOT / 'scripts')]\n"
+        "    sys.modules['scripts'] = scripts_package\n"
+    )
+    if inspect_source(scripts_namespace, "secpal-pr-review-actions.py", ()):
+        raise SystemExit("closed lifecycle scripts namespace was rejected")
+    for substituted in (
+        scripts_namespace.replace("['scripts']", "['subprocess']"),
+        scripts_namespace.replace("_load_lifecycle_publication_helpers", "arbitrary_loader"),
+    ):
+        if not inspect_source(substituted, "secpal-pr-review-actions.py", ()):
+            raise SystemExit("substituted lifecycle namespace was accepted")
+
     source_specific_unsafe = (
+        (
+            "secpal-pr-review-actions.py",
+            "import sys\ndef _provider_binding_uses_historical_summary(value):\n"
+            "    return sys.modules.get(value)\n",
+        ),
+        (
+            "secpal-pr-review-actions.py",
+            "def _provider_binding_uses_historical_summary(value):\n"
+            "    return getattr(value, 'provider_binding_sources')\n",
+        ),
         (
             "secpal-pr-review.py",
             "import sys\nlauncher = sys.modules['subprocess'].run\nlauncher(argv)\n",

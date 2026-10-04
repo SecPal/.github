@@ -90,6 +90,11 @@
           "purpose": "Run persistent lifecycle-authority unit tests"
         },
         {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-app-352-loss-admission-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run exact secpal.app admission current-safety regressions"
+        },
+        {
           "argv": ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
           "working_directory": ".",
           "purpose": "Run exact bootstrap source-admission unit tests"
@@ -138,6 +143,11 @@
           "argv": ["./tests/secpal-pr-review-skill-integration.sh"],
           "working_directory": ".",
           "purpose": "Run fake-GitHub and temporary-HOME integration tests"
+        },
+        {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-enrolled-draft-integration-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run enrolled initial Draft current-main integration regressions"
         }
       ],
       "required_local_validation": [
@@ -504,7 +514,18 @@
       "maximum_items": 10000,
       "maximum_threads": 500,
       "maximum_comments": 200,
-      "maximum_reactions": 50
+      "maximum_reactions": 50,
+      "enrolled_draft_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-enrolled-draft",
+        "topology_kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      }
     },
     {
       "repository": "SecPal/api",
@@ -555,7 +576,62 @@
       "maximum_items": 10000,
       "maximum_threads": 500,
       "maximum_comments": 200,
-      "maximum_reactions": 50
+      "maximum_reactions": 50,
+      "lifecycle_authority_policy": {
+        "schema_version": "1.0",
+        "accepted_formats": ["ssh"],
+        "signers": [
+          {
+            "identity": "aroviqen@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDDKiPWdlHKFaHJL+GQ3EQRs9St95lITw217D17rZ2qB"
+            ],
+            "openpgp_fingerprints": []
+          },
+          {
+            "identity": "lifecycle-legacy-adoption@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH2v+HkwUVduXOuLQONPPHAfEUT+NmEVMtp7JZMrnzrn"
+            ],
+            "openpgp_fingerprints": []
+          }
+        ],
+        "transition_signer_identities": ["aroviqen@secpal.app"],
+        "authority_signer_identities": ["aroviqen@secpal.app"],
+        "publication_signer_identities": ["aroviqen@secpal.app"],
+        "genesis_admission_signer_identities": ["aroviqen@secpal.app"],
+        "legacy_adoption_signer_identities": ["lifecycle-legacy-adoption@secpal.app"],
+        "publication_branch": "refs/heads/secpal-lifecycle-publications",
+        "publication_remote_url": "https://github.com/SecPal/api.git",
+        "publication_ruleset_id": 24438764,
+        "publication_required_rules": ["deletion", "non_fast_forward"],
+        "bootstrap_genesis_repairs": [],
+        "bootstrap_source_admissions": [],
+        "historical_compatibility_publications": [],
+        "delivery_initializations": []
+      },
+      "pre_enrollment_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-pre-enrollment-draft",
+        "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      },
+      "enrolled_draft_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-enrolled-draft",
+        "topology_kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      }
     },
     {
       "repository": "SecPal/frontend",
@@ -654,7 +730,51 @@
       "maximum_items": 10000,
       "maximum_threads": 500,
       "maximum_comments": 200,
-      "maximum_reactions": 50
+      "maximum_reactions": 50,
+      "lifecycle_authority_policy": {
+        "schema_version": "1.0",
+        "accepted_formats": ["ssh"],
+        "signers": [
+          {
+            "identity": "aroviqen@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDDKiPWdlHKFaHJL+GQ3EQRs9St95lITw217D17rZ2qB"
+            ],
+            "openpgp_fingerprints": []
+          },
+          {
+            "identity": "lifecycle-legacy-adoption@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH2v+HkwUVduXOuLQONPPHAfEUT+NmEVMtp7JZMrnzrn"
+            ],
+            "openpgp_fingerprints": []
+          }
+        ],
+        "transition_signer_identities": ["aroviqen@secpal.app"],
+        "authority_signer_identities": ["aroviqen@secpal.app"],
+        "publication_signer_identities": ["aroviqen@secpal.app"],
+        "genesis_admission_signer_identities": ["aroviqen@secpal.app"],
+        "legacy_adoption_signer_identities": ["lifecycle-legacy-adoption@secpal.app"],
+        "publication_branch": "refs/heads/secpal-lifecycle-publications",
+        "publication_remote_url": "https://github.com/SecPal/frontend.git",
+        "publication_ruleset_id": 24431481,
+        "publication_required_rules": ["deletion", "non_fast_forward"],
+        "bootstrap_genesis_repairs": [],
+        "bootstrap_source_admissions": [],
+        "historical_compatibility_publications": [],
+        "delivery_initializations": []
+      },
+      "enrolled_draft_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-enrolled-draft",
+        "topology_kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      }
     },
     {
       "repository": "SecPal/contracts",
@@ -737,7 +857,29 @@
       "maximum_items": 10000,
       "maximum_threads": 500,
       "maximum_comments": 200,
-      "maximum_reactions": 50
+      "maximum_reactions": 50,
+      "pre_enrollment_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-pre-enrollment-draft",
+        "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      },
+      "enrolled_draft_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-enrolled-draft",
+        "topology_kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      }
     },
     {
       "repository": "SecPal/android",
@@ -808,13 +950,79 @@
       "maximum_items": 10000,
       "maximum_threads": 500,
       "maximum_comments": 200,
-      "maximum_reactions": 50
+      "maximum_reactions": 50,
+      "lifecycle_authority_policy": {
+        "schema_version": "1.0",
+        "accepted_formats": ["ssh"],
+        "signers": [
+          {
+            "identity": "aroviqen@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDDKiPWdlHKFaHJL+GQ3EQRs9St95lITw217D17rZ2qB"
+            ],
+            "openpgp_fingerprints": []
+          },
+          {
+            "identity": "lifecycle-legacy-adoption@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH2v+HkwUVduXOuLQONPPHAfEUT+NmEVMtp7JZMrnzrn"
+            ],
+            "openpgp_fingerprints": []
+          }
+        ],
+        "transition_signer_identities": ["aroviqen@secpal.app"],
+        "authority_signer_identities": ["aroviqen@secpal.app"],
+        "publication_signer_identities": ["aroviqen@secpal.app"],
+        "genesis_admission_signer_identities": ["aroviqen@secpal.app"],
+        "legacy_adoption_signer_identities": ["lifecycle-legacy-adoption@secpal.app"],
+        "publication_branch": "refs/heads/secpal-lifecycle-publications",
+        "publication_remote_url": "https://github.com/SecPal/android.git",
+        "publication_ruleset_id": 24443992,
+        "publication_required_rules": ["deletion", "non_fast_forward"],
+        "bootstrap_genesis_repairs": [],
+        "bootstrap_source_admissions": [],
+        "historical_compatibility_publications": [],
+        "delivery_initializations": []
+      },
+      "pre_enrollment_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-pre-enrollment-draft",
+        "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      },
+      "enrolled_draft_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-enrolled-draft",
+        "topology_kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      }
     },
     {
       "repository": "SecPal/secpal.app",
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/secpal.app"],
       "reviewer_identities": [],
+      "pre_enrollment_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-pre-enrollment-draft",
+        "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      },
       "focused_validation": [
         {
           "argv": ["npm", "run", "test"],
@@ -849,6 +1057,39 @@
           "purpose": "Build the static site"
         }
       ],
+      "lifecycle_authority_policy": {
+        "schema_version": "1.0",
+        "accepted_formats": ["ssh"],
+        "signers": [
+          {
+            "identity": "aroviqen@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDDKiPWdlHKFaHJL+GQ3EQRs9St95lITw217D17rZ2qB"
+            ],
+            "openpgp_fingerprints": []
+          },
+          {
+            "identity": "lifecycle-legacy-adoption@secpal.app",
+            "ssh_public_keys": [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH2v+HkwUVduXOuLQONPPHAfEUT+NmEVMtp7JZMrnzrn"
+            ],
+            "openpgp_fingerprints": []
+          }
+        ],
+        "transition_signer_identities": ["aroviqen@secpal.app"],
+        "authority_signer_identities": ["aroviqen@secpal.app"],
+        "publication_signer_identities": ["aroviqen@secpal.app"],
+        "genesis_admission_signer_identities": ["aroviqen@secpal.app"],
+        "legacy_adoption_signer_identities": ["lifecycle-legacy-adoption@secpal.app"],
+        "publication_branch": "refs/heads/secpal-lifecycle-publications",
+        "publication_remote_url": "https://github.com/SecPal/secpal.app.git",
+        "publication_ruleset_id": 24267563,
+        "publication_required_rules": ["deletion", "non_fast_forward"],
+        "bootstrap_genesis_repairs": [],
+        "bootstrap_source_admissions": [],
+        "historical_compatibility_publications": [],
+        "delivery_initializations": []
+      },
       "signature_policy": {
         "require_github_verified": true,
         "require_local_verified": true,
@@ -876,13 +1117,35 @@
       "maximum_items": 10000,
       "maximum_threads": 500,
       "maximum_comments": 200,
-      "maximum_reactions": 50
+      "maximum_reactions": 50,
+      "enrolled_draft_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-enrolled-draft",
+        "topology_kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      }
     },
     {
       "repository": "SecPal/deployment",
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/deployment"],
       "reviewer_identities": [],
+      "pre_enrollment_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-pre-enrollment-draft",
+        "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      },
       "focused_validation": [
         {
           "argv": ["./scripts/local-integration.sh"],
@@ -960,7 +1223,18 @@
       "maximum_items": 10000,
       "maximum_threads": 500,
       "maximum_comments": 200,
-      "maximum_reactions": 50
+      "maximum_reactions": 50,
+      "enrolled_draft_integration_policy": {
+        "schema_version": "1.0",
+        "command": "integrate-enrolled-draft",
+        "topology_kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false
+      }
     }
   ]
 }

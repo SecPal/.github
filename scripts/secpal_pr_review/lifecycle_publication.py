@@ -6,18 +6,22 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import copy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields, replace
+from datetime import datetime
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
 import subprocess
+import sys
 import tempfile
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 from . import lifecycle_authority as authority
+from . import fast_path
 from .fast_path import SecurityBlocker, canonical_json_bytes, digest_json
 
 
@@ -29,8 +33,35 @@ GENESIS_ADMISSION_KIND = "SECPAL_NATIVE_LIFECYCLE_GENESIS_ADMISSION"
 GENESIS_ADMISSION_DOMAIN = "secpal.native-lifecycle-genesis-admission/v1"
 READY_SOURCE_RECOVERY_KIND = "SECPAL_READY_SOURCE_RECOVERY_PUBLICATION"
 READY_SOURCE_RECOVERY_DOMAIN = "secpal.ready-source-recovery-publication/v1"
+READY_SOURCE_CORRECTION_KIND = "SECPAL_READY_SOURCE_RECOVERY_CORRECTION"
+READY_SOURCE_CORRECTION_DOMAIN = "secpal.ready-source-recovery-correction/v1"
+# One immutable historical exception, following the exact compatibility admission
+# pattern. This is not a caller-extensible registry or a recovery selector.
+_ZERO_RECEIPT_RECOVERY_CORRECTION_TARGET = (
+    "SecPal/.github", 711, 951,
+    "4effffb44cfd27ae9c32e3270479a3a4c0336ce7",
+    "7683e615f84601d3d482e02e319010c7ccc0a1b3505c54f825183cd5985be54c",
+    "f9a8f3e209ecaf33419a54b65110b04d08816791",
+    "e3ba395ac5e276002037c54bc8aaaf6fc82ee38d4bba01f0ca363e1308d2623a",
+    "a234e1a6c87e94916c32abb8388cb7ffc6c2fa40",
+    "21f63cc34ed6b2244c7045010596a789456922d903534173a452e1d9ea2548b0",
+)
+PROVIDER_DISPATCH_CLAIM_KIND = "SECPAL_PROVIDER_DISPATCH_CLAIM"
+PROVIDER_DISPATCH_CLAIM_DOMAIN = "secpal.provider-dispatch-claim/v1"
+ENROLLED_DRAFT_CLAIM_KIND = "SECPAL_ENROLLED_DRAFT_INTEGRATION_CLAIM"
+ENROLLED_DRAFT_CLAIM_DOMAIN = "secpal.enrolled-draft-integration-claim/v1"
+ENROLLED_DRAFT_CLAIM_FIELDS = frozenset({
+    "schema_version", "kind", "domain", "authorization", "publication_branch",
+    "journal_predecessor_oid", "signer_identity", "signature", "publication_digest",
+})
+PROVIDER_DISPATCH_TRIGGERS = {
+    "CODE": "@codex review",
+    "SECURITY": "@codex security review",
+}
 JOURNAL_KINDS = frozenset(
-    {PUBLICATION_KIND, GENESIS_ADMISSION_KIND, READY_SOURCE_RECOVERY_KIND}
+    {PUBLICATION_KIND, GENESIS_ADMISSION_KIND, READY_SOURCE_RECOVERY_KIND,
+     PROVIDER_DISPATCH_CLAIM_KIND, ENROLLED_DRAFT_CLAIM_KIND,
+     READY_SOURCE_CORRECTION_KIND}
 )
 ORDINARY_REMEDIATION_SUFFIX = "ORDINARY_REMEDIATION_SUFFIX"
 EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION = (
@@ -85,6 +116,20 @@ READY_SOURCE_RECOVERY_FIELDS = frozenset(
         "publication_digest",
     }
 )
+PROVIDER_DISPATCH_KEY_FIELDS = frozenset({
+    "repository", "delivery_issue", "pull_request", "lifecycle_id",
+    "current_head_sha", "current_authority_digest", "current_publication_oid",
+    "current_publication_digest", "review_type", "assessment_authority_digest",
+    "original_fallback_comment_node_id", "original_fallback_comment_database_id",
+    "original_fallback_body_digest", "original_fallback_actor_node_id",
+    "original_fallback_actor_database_id", "original_fallback_created_at",
+})
+PROVIDER_DISPATCH_CLAIM_FIELDS = PROVIDER_DISPATCH_KEY_FIELDS | {
+    "schema_version", "kind", "domain", "eligibility_evidence_digest", "claim_id",
+    "attempt_id",
+    "publication_branch", "journal_predecessor_oid", "signer_identity",
+    "signature", "publication_digest",
+}
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _AUTHOR_ENVIRONMENT = frozenset(
     {
@@ -96,6 +141,10 @@ _AUTHOR_ENVIRONMENT = frozenset(
 
 class LifecyclePublicationError(ValueError):
     """Publication is absent, stale, ambiguous, malformed, or unauthorized."""
+
+
+class LifecyclePublicationAmbiguousWrite(LifecyclePublicationError):
+    """A protected CAS was attempted, but its transport result is uncertain."""
 
 
 def _classify_journal_document(raw: bytes) -> tuple[str, dict[str, Any]]:
@@ -206,6 +255,78 @@ class VerifiedReadySourceRecovery:
     historical_evidence_loss_proof_digest: str
     lifecycle_state: dict[str, Any]
     recovery_safety_facts: dict[str, Any]
+    historical_evidence_correction: bytes | None = None
+
+
+@dataclass(frozen=True)
+class ProviderDispatchKey:
+    """Complete logical identity of one already-authorized fallback replacement."""
+
+    repository: str
+    delivery_issue: int
+    pull_request: int
+    lifecycle_id: str
+    current_head_sha: str
+    current_authority_digest: str
+    current_publication_oid: str
+    current_publication_digest: str
+    review_type: str
+    assessment_authority_digest: str
+    original_fallback_comment_node_id: str
+    original_fallback_comment_database_id: int
+    original_fallback_body_digest: str
+    original_fallback_actor_node_id: str
+    original_fallback_actor_database_id: int
+    original_fallback_created_at: str
+
+
+@dataclass(frozen=True)
+class VerifiedProviderDispatchClaim:
+    """Signed journal evidence; observing this never confers dispatch authority."""
+
+    publication_oid: str
+    publication_digest: str
+    journal_predecessor_oid: str
+    claim_id: str
+    key: ProviderDispatchKey
+    eligibility_evidence_digest: str
+    reacquisition_authorization: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ProviderDispatchEligibility:
+    """Projection returned by the maintained complete fallback verifier."""
+
+    key: ProviderDispatchKey
+    eligibility_evidence_digest: str
+
+
+@dataclass(frozen=True)
+class ProviderDispatchNoLongerRequired:
+    """Fresh post-claim evidence proves provider acknowledgement or completion."""
+
+
+@dataclass(frozen=True)
+class ProviderDispatchReconciliation:
+    """Authenticated complete request-history count after the one write attempt."""
+
+    replacement_count: int
+    replacement_comment_database_id: int | None
+
+
+@dataclass(frozen=True)
+class ProviderDispatchResult:
+    status: str
+    replacement_comment_database_id: int | None
+    write_attempts: int
+
+
+class AmbiguousProviderDispatchWrite(RuntimeError):
+    """The transport cannot prove whether its one provider POST persisted."""
+
+
+class ProviderDispatchHistoryUnavailable(RuntimeError):
+    """Complete authenticated request history cannot currently be read."""
 
 
 @dataclass(frozen=True)
@@ -226,6 +347,8 @@ class VerifiedReadySourceRecoveryProviderBinding:
     provider_binding_sources: tuple[str, ...] = (ORDINARY_REMEDIATION_SUFFIX,)
     historical_provider_binding: Any = None
     adopted_remediation_observation_digest: str | None = None
+    head_advanced_event_digests: tuple[str, ...] = ()
+    ready_integrations: tuple[tuple[Any, Any], ...] = ()
 
     def provider_head(
         self, *, repository: str, pull_request: int, current_head_sha: str
@@ -820,7 +943,9 @@ def _cas_remote_ref(
         extra_environment=credential_environment,
     )
     if result.returncode != 0:
-        raise LifecyclePublicationError("publication journal changed during compare-and-swap")
+        raise LifecyclePublicationAmbiguousWrite(
+            "publication journal changed during compare-and-swap"
+        )
 
 
 def _reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -859,6 +984,22 @@ def _native_bundle(value: Mapping[str, Any]) -> Mapping[str, Any]:
             )
         return value["lifecycle_evidence"]
     return value
+
+
+def _require_native_genesis_only(bundle: Mapping[str, Any]) -> None:
+    """Do not import unissued transitions through native admission or enrollment."""
+
+    events = bundle.get("transition_authorizations")
+    snapshots = bundle.get("authority_chain")
+    if (
+        not isinstance(events, list)
+        or not isinstance(snapshots, list)
+        or len(events) != 1
+        or len(snapshots) != 1
+        or not isinstance(events[0], dict)
+        or events[0].get("transition_kind") != "INITIALIZED_DRAFT"
+    ):
+        raise LifecyclePublicationError("native enrollment requires genesis only")
 
 
 def _verify_genesis_admission_document(
@@ -1585,11 +1726,426 @@ def _verify_ready_source_recovery_document(
     )
 
 
+def _require_provider_dispatch_key(key: ProviderDispatchKey) -> None:
+    if type(key) is not ProviderDispatchKey or {
+        item.name for item in fields(key)
+    } != PROVIDER_DISPATCH_KEY_FIELDS:
+        raise LifecyclePublicationError("provider dispatch key is not closed")
+    authority._require_repository(key.repository)
+    authority._require_positive_int(key.delivery_issue, "provider dispatch issue")
+    authority._require_positive_int(key.pull_request, "provider dispatch PR")
+    authority._require_identity(key.lifecycle_id, "provider dispatch lifecycle")
+    authority._require_oid(key.current_head_sha, "provider dispatch head")
+    authority._require_oid(key.current_publication_oid, "provider dispatch CURRENT")
+    for name in (
+        "current_authority_digest", "current_publication_digest",
+        "assessment_authority_digest", "original_fallback_body_digest",
+    ):
+        authority._require_digest(getattr(key, name), name)
+    if key.review_type not in PROVIDER_DISPATCH_TRIGGERS:
+        raise LifecyclePublicationError("provider dispatch review type is invalid")
+    if key.original_fallback_body_digest != hashlib.sha256(
+        PROVIDER_DISPATCH_TRIGGERS[key.review_type].encode("utf-8")
+    ).hexdigest():
+        raise LifecyclePublicationError("provider dispatch first fallback body is not canonical")
+    for name in ("original_fallback_comment_node_id", "original_fallback_actor_node_id"):
+        authority._require_identity(getattr(key, name), name)
+    for name in (
+        "original_fallback_comment_database_id", "original_fallback_actor_database_id"
+    ):
+        authority._require_positive_int(getattr(key, name), name)
+    created = key.original_fallback_created_at
+    if (
+        not isinstance(created, str)
+        or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", created) is None
+    ):
+        raise LifecyclePublicationError("provider dispatch first fallback timestamp is invalid")
+    try:
+        datetime.fromisoformat(created.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise LifecyclePublicationError(
+            "provider dispatch first fallback timestamp is invalid"
+        ) from exc
+
+
+def provider_dispatch_claim_id(key: ProviderDispatchKey) -> str:
+    """Derive one stable ID from every closed dispatch-key field."""
+
+    _require_provider_dispatch_key(key)
+    return digest_json({"domain": PROVIDER_DISPATCH_CLAIM_DOMAIN, **asdict(key)})
+
+
+def _provider_dispatch_claim_fields(
+    key: ProviderDispatchKey, *, eligibility_evidence_digest: str,
+    publication_branch: str, journal_predecessor_oid: str,
+    signer_identity: str, attempt_id: str,
+    reacquisition_authorization: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    claim_id = provider_dispatch_claim_id(key)
+    return {
+        "schema_version": SCHEMA_VERSION if reacquisition_authorization is None else "1.1",
+        "kind": PROVIDER_DISPATCH_CLAIM_KIND,
+        "domain": PROVIDER_DISPATCH_CLAIM_DOMAIN,
+        **asdict(key),
+        "eligibility_evidence_digest": authority._require_digest(
+            eligibility_evidence_digest, "provider dispatch eligibility evidence"
+        ),
+        "claim_id": claim_id,
+        "attempt_id": attempt_id,
+        "publication_branch": publication_branch,
+        "journal_predecessor_oid": journal_predecessor_oid,
+        "signer_identity": authority._require_identity(
+            signer_identity, "provider dispatch publication signer"
+        ),
+        **({} if reacquisition_authorization is None else {
+            "reacquisition_authorization": copy.deepcopy(reacquisition_authorization)
+        }),
+    }
+
+
+def _sign_provider_dispatch_claim(
+    values: Mapping[str, Any], signer: authority.Signer,
+) -> bytes:
+    signature = authority._normalize_signature(
+        signer(canonical_json_bytes(values), PROVIDER_DISPATCH_CLAIM_DOMAIN),
+        values["signer_identity"],
+    )
+    signed = {**copy.deepcopy(dict(values)), "signature": signature}
+    return canonical_json_bytes({
+        **signed, "publication_digest": digest_json(signed),
+    })
+
+
+def _verify_provider_dispatch_claim_document(
+    raw: bytes, *, object_oid: str, expected_branch: str,
+    current_oid: str, current_document: Mapping[str, Any],
+    current_lifecycle: authority.VerifiedLifecycleAuthority,
+) -> tuple[dict[str, Any], VerifiedProviderDispatchClaim]:
+    try:
+        document = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LifecyclePublicationError("provider dispatch claim is malformed") from exc
+    if (
+        not isinstance(document, dict)
+        or canonical_json_bytes(document) != raw
+        or frozenset(document) != (PROVIDER_DISPATCH_CLAIM_FIELDS
+            if document.get("schema_version") == SCHEMA_VERSION else
+            PROVIDER_DISPATCH_CLAIM_FIELDS | {"reacquisition_authorization"})
+    ):
+        raise LifecyclePublicationError("provider dispatch claim is not closed canonical JSON")
+    if (
+        not isinstance(document["schema_version"], str)
+        or document["schema_version"] not in {SCHEMA_VERSION, "1.1"}
+        or document["kind"] != PROVIDER_DISPATCH_CLAIM_KIND
+        or document["domain"] != PROVIDER_DISPATCH_CLAIM_DOMAIN
+    ):
+        raise LifecyclePublicationError("provider dispatch claim kind is invalid")
+    key = ProviderDispatchKey(**{
+        name: document[name] for name in PROVIDER_DISPATCH_KEY_FIELDS
+    })
+    if document["claim_id"] != provider_dispatch_claim_id(key):
+        raise LifecyclePublicationError("provider dispatch claim identity changed")
+    if (
+        not isinstance(document["attempt_id"], str)
+        or re.fullmatch(r"[0-9a-f]{64}", document["attempt_id"]) is None
+    ):
+        raise LifecyclePublicationError("provider dispatch claim attempt is invalid")
+    authority._require_digest(
+        document["eligibility_evidence_digest"], "provider dispatch eligibility evidence"
+    )
+    policy = authority._load_lifecycle_trust_policy(key.repository)
+    if (
+        expected_branch != policy.publication_branch
+        or document["publication_branch"] != expected_branch
+    ):
+        raise LifecyclePublicationError("provider dispatch claim branch binding is invalid")
+    predecessor = document["journal_predecessor_oid"]
+    if not isinstance(predecessor, str) or not _OID.fullmatch(predecessor):
+        raise LifecyclePublicationError("provider dispatch claim predecessor is invalid")
+    if (
+        key.repository != current_lifecycle.repository
+        or key.delivery_issue != current_lifecycle.delivery_issue
+        or key.pull_request != current_lifecycle.pull_request
+        or key.lifecycle_id != current_lifecycle.lifecycle_id
+        or key.current_head_sha != current_lifecycle.head_sha
+        or key.current_authority_digest != current_lifecycle.authority_digest
+        or key.current_publication_oid != current_oid
+        or key.current_publication_digest != current_document["publication_digest"]
+        or current_lifecycle.state.get("ready") is not True
+        or current_lifecycle.state.get("ready_transition_count") != 1
+        or current_lifecycle.state.get("unrestricted_review_count") != 1
+        or current_lifecycle.state.get("cycle_3_absent") is not True
+    ):
+        raise LifecyclePublicationError("provider dispatch claim does not bind CURRENT Ready")
+    reacquisition_authorization = document.get("reacquisition_authorization")
+    if document["schema_version"] == "1.1":
+        from . import provider_reacquisition
+        current = VerifiedLifecyclePublication(
+            current_oid, current_document["publication_digest"], expected_branch,
+            current_document["journal_predecessor_oid"], current_document.get("predecessor_publication_oid"),
+            current_lifecycle, canonical_json_bytes(current_document["lifecycle_evidence"]))
+        try:
+            verified = provider_reacquisition.verify_authorization(reacquisition_authorization, current)
+            if key not in provider_reacquisition.derive_dispatch_keys(verified, current):
+                raise SecurityBlocker("reacquisition claim key differs from signed authority")
+            if document["eligibility_evidence_digest"] != reacquisition_authorization["loss_proof_digest"]:
+                raise SecurityBlocker("reacquisition claim loss proof changed")
+        except SecurityBlocker as exc:
+            raise LifecyclePublicationError("provider reacquisition claim authority is invalid") from exc
+    else:
+        _require_latest_provider_dispatch_assessment(key, current_document)
+    signer = authority._require_identity(
+        document["signer_identity"], "provider dispatch publication signer"
+    )
+    signed = {name: copy.deepcopy(value) for name, value in document.items()
+              if name != "publication_digest"}
+    if document["publication_digest"] != digest_json(signed):
+        raise LifecyclePublicationError("provider dispatch publication digest mismatch")
+    try:
+        authority._verify_signature(
+            canonical_json_bytes(authority._unsigned(
+                document, "publication_digest", "signature"
+            )),
+            document["signature"], signer, PROVIDER_DISPATCH_CLAIM_DOMAIN,
+            policy.publication_signer_identities,
+            authority._policy_signature_verifier(policy),
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecyclePublicationError(
+            f"provider dispatch object {object_oid} signature policy failed"
+        ) from exc
+    return document, VerifiedProviderDispatchClaim(
+        publication_oid=object_oid,
+        publication_digest=document["publication_digest"],
+        journal_predecessor_oid=predecessor,
+        claim_id=document["claim_id"],
+        key=key,
+        eligibility_evidence_digest=document["eligibility_evidence_digest"],
+        reacquisition_authorization=reacquisition_authorization,
+    )
+
+
+def _require_latest_provider_dispatch_assessment(
+    key: ProviderDispatchKey, current_document: Mapping[str, Any],
+) -> None:
+    """Preserve the exact #1053 latest-assessment replacement predicate."""
+
+    bundle = _lifecycle_bundle(current_document)
+    events = bundle.get("transition_authorizations")
+    snapshots = bundle.get("authority_chain")
+    if not isinstance(events, list) or not isinstance(snapshots, list) or len(events) != len(snapshots):
+        raise LifecyclePublicationError("provider dispatch assessment history is malformed")
+    last_assessment_boundary = max(
+        (index for index, event in enumerate(events)
+         if isinstance(event, dict)
+         and (
+             event.get("resulting_head_sha") != key.current_head_sha
+             or event.get("transition_kind") in {
+                 "PR_REBOUND", "READY_TO_DRAFT", "DRAFT_TO_READY",
+                 "INVALID_REVIEW_CONSUMPTION_CORRECTED",
+                 "INVALID_REVIEW_DERIVED_READY_CORRECTED",
+             }
+         )),
+        default=-1,
+    )
+    assessments = [
+        snapshot.get("authority_digest")
+        for index, (event, snapshot) in enumerate(zip(events, snapshots))
+        if isinstance(event, dict) and isinstance(snapshot, dict)
+        and index > last_assessment_boundary
+        and event.get("transition_kind") == "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED"
+        and event.get("resulting_head_sha") == key.current_head_sha
+        and event.get("pull_request") == key.pull_request
+        and snapshot.get("pull_request") == key.pull_request
+    ]
+    if not assessments or key.assessment_authority_digest != assessments[-1]:
+        raise LifecyclePublicationError("provider dispatch assessment is not the latest authorized assessment")
+
+
+def _require_reacquisition_claim_uniqueness(
+    key: ProviderDispatchKey, authorization: dict[str, Any] | None,
+    claims: Mapping[str, VerifiedProviderDispatchClaim],
+) -> None:
+    scope = (key.repository, key.delivery_issue, key.pull_request, key.lifecycle_id, key.current_head_sha)
+    for claim in claims.values():
+        prior = claim.key
+        if scope != (prior.repository, prior.delivery_issue, prior.pull_request, prior.lifecycle_id, prior.current_head_sha):
+            continue
+        if authorization is None and claim.reacquisition_authorization is None:
+            continue
+        if authorization is None or claim.reacquisition_authorization is None:
+            raise LifecyclePublicationError("ordinary provider dispatch conflicts with provider reacquisition")
+        if prior.review_type == key.review_type:
+            raise LifecyclePublicationError("provider reacquisition claim already exists")
+        if canonical_json_bytes(claim.reacquisition_authorization) != canonical_json_bytes(authorization):
+            raise LifecyclePublicationError("provider reacquisition has competing signed authorizations")
+
+
+def _recovery_root_historical_evidence(
+    current_document: Mapping[str, Any],
+    current_lifecycle: authority.VerifiedLifecycleAuthority,
+) -> dict[str, Any] | None:
+    """Select typed absence only through the canonical authenticated root owner."""
+
+    bundle = current_document.get("lifecycle_evidence")
+    proof = bundle.get("exact_state_adoption_proof") if isinstance(bundle, Mapping) else None
+    loss = proof.get("validation_evidence_loss_admission") if isinstance(proof, Mapping) else None
+    if not isinstance(loss, Mapping) or loss.get("schema_version") != "1.2":
+        return None
+    try:
+        return authority.recovered_adoption_root_historical_evidence(
+            current_lifecycle, bundle, current_document.get("predecessor_publication_oid")
+        )
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecyclePublicationError("recovery zero-receipt root is invalid") from exc
+
+
+def _require_effective_recovery_historical_evidence(
+    recovery: VerifiedReadySourceRecovery,
+    current_document: Mapping[str, Any],
+    current_lifecycle: authority.VerifiedLifecycleAuthority,
+) -> None:
+    historical = _recovery_root_historical_evidence(current_document, current_lifecycle)
+    if historical is not None and (
+        recovery.historical_validation_receipt_digest != historical["validation_receipt_digest"]
+        or recovery.historical_final_attestation_digest != historical["final_attestation_digest"]
+    ):
+        raise LifecyclePublicationError("recovery historical evidence contradicts authenticated source truth")
+
+
+def _ready_source_correction_fields(
+    previous: tuple[str, Mapping[str, Any], authority.VerifiedLifecycleAuthority],
+    recovery: VerifiedReadySourceRecovery,
+    *, publication_branch: str, journal_predecessor_oid: str,
+    signer_identity: str,
+) -> dict[str, Any]:
+    """Derive the sole permitted correction; accept no historical/result inputs."""
+
+    current_oid, current_document, lifecycle = previous
+    target = _ZERO_RECEIPT_RECOVERY_CORRECTION_TARGET
+    if (
+        (recovery.repository, recovery.delivery_issue, recovery.pull_request,
+         current_oid, current_document["publication_digest"],
+         recovery.publication_oid, recovery.publication_digest) != target[:7]
+        or recovery.historical_evidence_correction is not None
+        or recovery.current_publication_oid != current_oid
+        or recovery.current_publication_digest != current_document["publication_digest"]
+        or recovery.current_authority_digest != lifecycle.authority_digest
+        or recovery.lifecycle_id != lifecycle.lifecycle_id
+        or recovery.repository != lifecycle.repository
+        or recovery.delivery_issue != lifecycle.delivery_issue
+        or recovery.pull_request != lifecycle.pull_request
+        or recovery.head_sha != lifecycle.head_sha
+        or recovery.tree_sha != lifecycle.tree_sha
+        or recovery.lifecycle_state != lifecycle.state
+        or recovery.journal_predecessor_oid != current_oid
+        or signer_identity != "aroviqen@secpal.app"
+    ):
+        raise LifecyclePublicationError("Ready-source correction does not bind its exact historical target")
+    historical = _recovery_root_historical_evidence(current_document, lifecycle)
+    if historical is None or historical["state"] != "ABSENT_NEVER_ISSUED":
+        raise LifecyclePublicationError("Ready-source correction requires authenticated zero-receipt history")
+    proof = current_document["lifecycle_evidence"]["exact_state_adoption_proof"]
+    loss = proof["validation_evidence_loss_admission"]
+    if (
+        recovery.historical_validation_receipt_digest != loss["current_safety"]["receipt_digest"]
+        or recovery.historical_final_attestation_digest != loss["admission_digest"]
+        or recovery.expected_commit_signer != {"kind": "SSH_PRINCIPAL", "identity": loss["source_signer_identity"]}
+        or recovery.parent_shas != (loss["parent_sha"],)
+        or lifecycle.state["remediation_cycle_count"] != 1
+    ):
+        raise LifecyclePublicationError("Ready-source correction historical contradiction changed")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": READY_SOURCE_CORRECTION_KIND,
+        "domain": READY_SOURCE_CORRECTION_DOMAIN,
+        "operation": "CORRECT_ZERO_RECEIPT_HISTORICAL_PROJECTION",
+        "reason": "CURRENT_SAFETY_MISCLAIMED_AS_HISTORICAL_EVIDENCE",
+        "bounded_uses": 1,
+        "repository": recovery.repository,
+        "delivery_issue": recovery.delivery_issue,
+        "pull_request": recovery.pull_request,
+        "lifecycle_id": lifecycle.lifecycle_id,
+        "head_sha": recovery.head_sha,
+        "tree_sha": recovery.tree_sha,
+        "current_publication_oid": current_oid,
+        "current_publication_digest": current_document["publication_digest"],
+        "current_authority_digest": lifecycle.authority_digest,
+        "recovery_publication_oid": recovery.publication_oid,
+        "recovery_publication_digest": recovery.publication_digest,
+        "recovery_journal_predecessor_oid": recovery.journal_predecessor_oid,
+        "recovery_authorization_id": recovery.authorization_id,
+        "recovery_authorization_digest": recovery.authorization_digest,
+        "invalid_historical_validation_receipt_digest": recovery.historical_validation_receipt_digest,
+        "invalid_historical_final_attestation_digest": recovery.historical_final_attestation_digest,
+        "loss_admission_digest": loss["admission_digest"],
+        "historical_receipt_provenance_digest": loss["historical_receipt_provenance_digest"],
+        "historical_evidence": historical,
+        "prior_authority_tag_oid": target[7],
+        "original_prior_authority_digest": target[8],
+        "publication_branch": publication_branch,
+        "journal_predecessor_oid": journal_predecessor_oid,
+        "signer_identity": signer_identity,
+    }
+
+
+def _verify_ready_source_correction_document(
+    raw: bytes,
+    *, object_oid: str, expected_branch: str, parent: str | None,
+    previous: tuple[str, Mapping[str, Any], authority.VerifiedLifecycleAuthority],
+    recovery: VerifiedReadySourceRecovery,
+) -> VerifiedReadySourceRecovery:
+    """Verify signed append-only compensation and return the effective projection."""
+
+    try:
+        document = authority.loads_closed_json(raw)
+        if not isinstance(document, dict) or canonical_json_bytes(document) != raw:
+            raise LifecyclePublicationError("Ready-source correction is not canonical")
+        if parent is None or not _OID.fullmatch(parent) or not _OID.fullmatch(object_oid):
+            raise LifecyclePublicationError("Ready-source correction ancestry is invalid")
+        expected = _ready_source_correction_fields(
+            previous, recovery, publication_branch=expected_branch,
+            journal_predecessor_oid=parent, signer_identity=document.get("signer_identity"),
+        )
+        if (
+            set(document) != set(expected) | {"signature", "publication_digest"}
+            or canonical_json_bytes(authority._unsigned(document, "signature", "publication_digest"))
+            != canonical_json_bytes(expected)
+        ):
+            raise LifecyclePublicationError("Ready-source correction scope or projection changed")
+        signed = {key: value for key, value in document.items() if key != "publication_digest"}
+        if document["publication_digest"] != digest_json(signed):
+            raise LifecyclePublicationError("Ready-source correction digest mismatch")
+        policy = authority._load_lifecycle_trust_policy(recovery.repository)
+        if policy.publication_branch != expected_branch:
+            raise LifecyclePublicationError("Ready-source correction branch changed")
+        authority._verify_signature(
+            canonical_json_bytes(expected), document["signature"], expected["signer_identity"],
+            READY_SOURCE_CORRECTION_DOMAIN, policy.publication_signer_identities,
+            authority._policy_signature_verifier(policy),
+        )
+    except (authority.LifecycleAuthorityError, KeyError, TypeError, ValueError) as exc:
+        raise LifecyclePublicationError("Ready-source correction is invalid") from exc
+    return replace(
+        recovery, historical_validation_receipt_digest=None,
+        historical_final_attestation_digest=None, historical_evidence_correction=raw,
+    )
+
+
+def _ready_source_correction_key(candidate: Mapping[str, Any]) -> tuple[str, int]:
+    try:
+        return (authority._require_repository(candidate.get("repository")),
+                authority._require_positive_int(candidate.get("delivery_issue"), "correction delivery issue"))
+    except authority.LifecycleAuthorityError as exc:
+        raise LifecyclePublicationError("Ready-source correction identity is malformed") from exc
+
+
 def _walk_journal(
     repository_root: Path, tip_oid: str, publication_branch: str,
-    *, include_recoveries: bool = False,
+    *, include_recoveries: bool = False, include_claims: bool = False,
+    include_integrations: bool = False,
 ) -> Any:
-    """Verify the journal; optionally expose ancillary recovery authorities."""
+    """Verify the journal; optionally expose ancillary authorities and claims."""
     reversed_entries: list[tuple[str, bytes, str | None]] = []
     seen: set[str] = set()
     oid: str | None = tip_oid
@@ -1628,12 +2184,32 @@ def _walk_journal(
     entries: list[tuple[str, dict[str, Any], authority.VerifiedLifecycleAuthority]] = []
     latest: dict[tuple[str, int], tuple[str, dict[str, Any], authority.VerifiedLifecycleAuthority]] = {}
     recoveries: dict[tuple[str, int], VerifiedReadySourceRecovery] = {}
+    claims: dict[str, VerifiedProviderDispatchClaim] = {}
+    integrations: dict[str, dict[str, Any]] = {}
     recovery_authorization_ids: set[tuple[str, str]] = set()
     recovery_authorization_digests: set[tuple[str, str]] = set()
     seen_bootstrap_targets: set[str] = set()
     for position, (oid, raw, parent) in enumerate(chronological):
         kind, candidate = _classify_journal_document(raw)
         if kind == GENESIS_ADMISSION_KIND:
+            continue
+        if kind == READY_SOURCE_CORRECTION_KIND:
+            key = _ready_source_correction_key(candidate)
+            previous, recovery = latest.get(key), recoveries.get(key)
+            if previous is None or recovery is None:
+                raise LifecyclePublicationError("Ready-source correction precedes its source authority")
+            recoveries[key] = _verify_ready_source_correction_document(
+                raw, object_oid=oid, expected_branch=publication_branch,
+                parent=parent, previous=previous, recovery=recovery,
+            )
+            continue
+        if kind == ENROLLED_DRAFT_CLAIM_KIND:
+            selected = candidate.get("authorization", {}).get("evidence", {})
+            previous = latest.get((selected.get("repository"), selected.get("delivery_issue")))
+            if previous is None:
+                raise LifecyclePublicationError("enrolled Draft integration claim precedes CURRENT")
+            document = _verify_enrolled_draft_claim_document(raw, expected_branch=publication_branch, parent=parent, previous=previous)
+            _add_enrolled_draft_claim(integrations, document)
             continue
         if kind == READY_SOURCE_RECOVERY_KIND:
             candidate_repository = candidate.get("repository")
@@ -1672,6 +2248,31 @@ def _walk_journal(
             recoveries[key] = recovery
             recovery_authorization_ids.add(authorization_id)
             recovery_authorization_digests.add(authorization_digest)
+            continue
+        if kind == PROVIDER_DISPATCH_CLAIM_KIND:
+            previous = latest.get((
+                candidate.get("repository"), candidate.get("delivery_issue")
+            ))
+            if previous is None:
+                raise LifecyclePublicationError(
+                    "provider dispatch claim precedes CURRENT lifecycle publication"
+                )
+            current_oid, current_document, current_lifecycle = previous
+            document, claim = _verify_provider_dispatch_claim_document(
+                raw, object_oid=oid, expected_branch=publication_branch,
+                current_oid=current_oid, current_document=current_document,
+                current_lifecycle=current_lifecycle,
+            )
+            if document["journal_predecessor_oid"] != parent:
+                raise LifecyclePublicationError(
+                    "provider dispatch claim journal parent binding is invalid"
+                )
+            if claim.claim_id in claims:
+                raise LifecyclePublicationError(
+                    "provider dispatch claim already exists in ancestry"
+                )
+            _require_reacquisition_claim_uniqueness(claim.key, claim.reacquisition_authorization, claims)
+            claims[claim.claim_id] = claim
             continue
         candidate_repository = (
             candidate.get("repository") if isinstance(candidate, dict) else None
@@ -1763,6 +2364,10 @@ def _walk_journal(
                 raise LifecyclePublicationError(
                     "bootstrap repair target is absent from immutable journal ancestry"
                 )
+    if include_integrations:
+        return entries, latest, admissions, integrations
+    if include_claims:
+        return entries, latest, admissions, recoveries, claims
     if include_recoveries:
         return entries, latest, admissions, recoveries
     return entries, latest, admissions
@@ -1780,6 +2385,7 @@ def admit_native_genesis(
     native = _native_bundle(bundle)
     native_raw = canonical_json_bytes(native)
     verified = authority.verify_native_lifecycle_for_genesis_admission(native_raw)
+    _require_native_genesis_only(native)
     initialization = native.get("delivery_initialization")
     if not isinstance(initialization, dict):
         raise LifecyclePublicationError("native lifecycle initialization is malformed")
@@ -1936,6 +2542,8 @@ def enroll_existing_lifecycle(
         if is_native
         else authority.verify_lifecycle_authority_for_publication(bundle_raw)
     )
+    if is_native:
+        _require_native_genesis_only(_native_bundle(bundle))
     if exact_adoption and bundle["exact_state_adoption_proof"].get("proof_version") == authority.EXACT_ADOPTION_LOSS_VERSION:
         authority.verify_pre_enrollment_validation_evidence_loss_admission(
             canonical_json_bytes(bundle["exact_state_adoption_proof"]["validation_evidence_loss_admission"])
@@ -2063,10 +2671,26 @@ def advance_current_terminal(
             },
         )
         successor_events = lifecycle_bundle.get("transition_authorizations")
+        if not isinstance(successor_events, list) or not successor_events:
+            raise LifecyclePublicationError("successor transition is unavailable")
+        latest_event = successor_events[-1]
+        try:
+            authority.require_forward_transition(
+                predecessor.state,
+                latest_event["transition_kind"],
+                latest_event["event_digest"],
+                allow_adopted_observations=(
+                    predecessor.historical_proof_mode
+                    == authority.EXACT_ADOPTION_PROOF_MODE
+                ),
+                adoption_review_submitted=predecessor.adoption_review_submitted,
+            )
+        except authority.LifecycleAuthorityError as exc:
+            raise LifecyclePublicationError(
+                "successor violates canonical forward lifecycle order"
+            ) from exc
         if (
-            isinstance(successor_events, list)
-            and successor_events
-            and successor_events[-1].get("transition_kind")
+            successor_events[-1].get("transition_kind")
             in {
                 "INVALID_REVIEW_CONSUMPTION_CORRECTED",
                 "INVALID_REVIEW_DERIVED_READY_CORRECTED",
@@ -2239,6 +2863,9 @@ def publish_ready_source_recovery(
             if existing.authorization_digest == verified_authorization[
                 "authorization_digest"
             ]:
+                _require_effective_recovery_historical_evidence(
+                    existing, current_document, current_lifecycle
+                )
                 return existing
             raise LifecyclePublicationError(
                 "delivery already has a different Ready-source recovery"
@@ -2259,6 +2886,9 @@ def publish_ready_source_recovery(
             current_document=current_document,
             current_lifecycle=current_lifecycle,
         )
+        _require_effective_recovery_historical_evidence(
+            recovered, current_document, current_lifecycle
+        )
         _walk_journal(
             root,
             object_oid,
@@ -2274,6 +2904,362 @@ def publish_ready_source_recovery(
             credential_environment=credential_environment,
         )
     return recovered
+
+
+def _verify_enrolled_draft_claim_document(
+    raw: bytes, *, expected_branch: str, parent: str | None,
+    previous: tuple[Any, Any, Any], verify_lifecycle: bool = True,
+) -> dict[str, Any]:
+    from . import enrolled_draft_integration as integration
+
+    document = authority.loads_closed_json(raw)
+    if (not isinstance(document, dict) or frozenset(document) != ENROLLED_DRAFT_CLAIM_FIELDS
+            or canonical_json_bytes(document) != raw
+            or document["schema_version"] != "1.0"
+            or document["kind"] != ENROLLED_DRAFT_CLAIM_KIND
+            or document["domain"] != ENROLLED_DRAFT_CLAIM_DOMAIN
+            or document["publication_branch"] != expected_branch
+            or document["journal_predecessor_oid"] != parent or parent is None):
+        raise LifecyclePublicationError("enrolled Draft integration claim is not canonical or bound")
+    authorization = integration.normalize_authorization(document["authorization"], allow_preparation=True)
+    evidence = authorization["evidence"]
+    oid, predecessor, lifecycle = previous
+    if (
+        evidence["current_publication_oid"] != oid
+        or evidence["current_publication_digest"] != predecessor["publication_digest"]
+        or evidence["predecessor_authority_digest"] != predecessor["terminal_authority_digest"]
+        or evidence["draft_head_sha"] != predecessor["head_sha"]
+        or evidence["lifecycle_id"] != predecessor["lifecycle_id"]
+        or evidence["initialization_evidence_digest"] != predecessor["initialization_evidence_digest"]
+        or evidence["repository"] != predecessor["repository"]
+        or evidence["delivery_issue"] != predecessor["delivery_issue"]
+        or evidence["pull_request"] != predecessor["pull_request"]
+        or predecessor["historical_proof_mode"] != authority.NATIVE_PROOF_MODE
+    ):
+        raise LifecyclePublicationError("enrolled Draft integration claim CURRENT binding changed")
+    if verify_lifecycle:
+        current = VerifiedLifecyclePublication(oid, predecessor["publication_digest"], expected_branch, predecessor["journal_predecessor_oid"], predecessor["predecessor_publication_oid"], lifecycle, canonical_json_bytes(predecessor["lifecycle_evidence"]))
+        integration.require_predecessor(current, evidence)
+    policy = authority._load_lifecycle_trust_policy(evidence["repository"])
+    if policy.publication_branch != expected_branch:
+        raise LifecyclePublicationError("enrolled Draft claim publication branch changed")
+    if document["signature"].get("format") != "ssh":
+        raise LifecyclePublicationError("new enrolled Draft integration claims require SSH")
+    fields = {key: value for key, value in document.items() if key not in {"signature", "publication_digest"}}
+    authority._verify_signature(
+        canonical_json_bytes(fields), document["signature"], document["signer_identity"],
+        ENROLLED_DRAFT_CLAIM_DOMAIN, policy.publication_signer_identities,
+        authority._policy_signature_verifier(policy),
+    )
+    if document["publication_digest"] != digest_json({**fields, "signature": document["signature"]}):
+        raise LifecyclePublicationError("enrolled Draft integration claim digest mismatch")
+    return document
+
+
+def _add_enrolled_draft_claim(claims, document) -> None:
+    from . import enrolled_draft_integration as integration
+
+    selected = document["authorization"]
+    evidence = selected["evidence"]
+    preparation = selected["kind"] == integration.PREPARATION_AUTHORIZATION_KIND
+    if not preparation:
+        prior = claims.get(selected["preparation_authorization_digest"])
+        if prior is None:
+            raise LifecyclePublicationError("enrolled Draft candidate has no protected preparation reservation")
+        old = prior["authorization"]
+        if old["kind"] != integration.PREPARATION_AUTHORIZATION_KIND or any(
+            old[key] != selected[key] for key in ("authorization_id", "evidence", "validation_receipt", "signer_identity")
+        ):
+            raise LifecyclePublicationError("enrolled Draft candidate differs from preparation reservation")
+    for prior in claims.values():
+        old = prior["authorization"]
+        if (old["kind"] == integration.PREPARATION_AUTHORIZATION_KIND) != preparation:
+            continue
+        if old["evidence"]["repository"] == evidence["repository"] and (
+            old["authorization_id"] == selected["authorization_id"]
+            or old["evidence"]["current_publication_oid"] == evidence["current_publication_oid"]
+            or (not preparation and old["final_attestation"]["candidate_head_sha"] == selected["final_attestation"]["candidate_head_sha"])
+        ):
+            raise LifecyclePublicationError("enrolled Draft authorization or predecessor already claimed")
+    claims[selected["authorization_digest"]] = document
+
+
+def claim_enrolled_draft_integration(
+    authorization: Mapping[str, Any], *, signer_identity: str, signer: authority.Signer,
+) -> None:
+    """Consume one exact branch-push attempt in the existing protected journal.
+
+    An uncertain CAS never confers ownership, even if read-back finds the claim.
+    The operator may only explicitly reconcile its already live candidate.
+    """
+    from . import enrolled_draft_integration as integration
+
+    selected = integration.normalize_authorization(dict(authorization), allow_preparation=True)
+    evidence = selected["evidence"]
+    policy = authority._load_lifecycle_trust_policy(evidence["repository"])
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=True) as (root, credential_environment):
+        tip = _observe_remote_current_once(root, policy.publication_remote_url, policy.publication_branch, credential_environment=credential_environment)
+        if tip is None:
+            raise LifecyclePublicationError("enrolled Draft CURRENT is unavailable")
+        _, latest, _, claims = _walk_journal(root, tip, policy.publication_branch, include_integrations=True)
+        previous = latest.get((evidence["repository"], evidence["delivery_issue"]))
+        if previous is None:
+            raise LifecyclePublicationError("enrolled Draft CURRENT is unavailable")
+        fields = {
+            "schema_version": "1.0", "kind": ENROLLED_DRAFT_CLAIM_KIND,
+            "domain": ENROLLED_DRAFT_CLAIM_DOMAIN, "authorization": selected,
+            "publication_branch": policy.publication_branch, "journal_predecessor_oid": tip,
+            "signer_identity": signer_identity,
+        }
+        signed = {**fields, "signature": dict(signer(canonical_json_bytes(fields), ENROLLED_DRAFT_CLAIM_DOMAIN))}
+        raw = canonical_json_bytes({**signed, "publication_digest": digest_json(signed)})
+        document = _verify_enrolled_draft_claim_document(raw, expected_branch=policy.publication_branch, parent=tip, previous=previous)
+        _add_enrolled_draft_claim(claims, document)
+        oid = _write_publication_object(root, raw, tip)
+        _walk_journal(root, oid, policy.publication_branch)
+        _cas_remote_ref(root, policy.publication_remote_url, policy.publication_branch, oid, tip, credential_environment=credential_environment)
+
+
+def verify_enrolled_draft_integration_claim(authorization: Mapping[str, Any]) -> None:
+    """Exact authenticated journal read-back; this never authorizes another push."""
+    from . import enrolled_draft_integration as integration
+
+    selected = integration.normalize_authorization(dict(authorization))
+    evidence = selected["evidence"]
+    policy = authority._load_lifecycle_trust_policy(evidence["repository"])
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=False) as (root, credential_environment):
+        tip = _observe_remote_current_once(root, policy.publication_remote_url, policy.publication_branch, credential_environment=credential_environment)
+        if tip is None:
+            raise LifecyclePublicationError("enrolled Draft integration journal is unavailable")
+        _, _, _, claims = _walk_journal(root, tip, policy.publication_branch, include_integrations=True)
+        claim = claims.get(selected["authorization_digest"])
+        if claim is None or claim["authorization"] != selected:
+            raise LifecyclePublicationError("exact enrolled Draft integration claim is unavailable")
+
+
+def _publish_provider_dispatch_claim(
+    key: ProviderDispatchKey, *, eligibility_evidence_digest: str,
+    signer_identity: str, signer: authority.Signer,
+    reacquisition_authorization: dict[str, Any] | None = None,
+) -> VerifiedProviderDispatchClaim:
+    """Reserve one exact dispatch on the protected journal; never reuse a claim.
+
+    The caller must first authenticate complete fallback eligibility. The result
+    is durable evidence, not a reusable capability to write a provider comment.
+    """
+
+    claim_id = provider_dispatch_claim_id(key)
+    authority._require_digest(
+        eligibility_evidence_digest, "provider dispatch eligibility evidence"
+    )
+    policy = authority._load_lifecycle_trust_policy(key.repository)
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=True) as (root, credential_environment):
+        tip = _observe_remote_current_once(
+            root, policy.publication_remote_url, policy.publication_branch,
+            credential_environment=credential_environment,
+        )
+        if tip is None:
+            raise LifecyclePublicationError("current lifecycle publication is unavailable")
+        _, latest, _, _, claims = _walk_journal(
+            root, tip, policy.publication_branch, include_claims=True,
+        )
+        if claim_id in claims:
+            raise LifecyclePublicationError("provider dispatch claim already exists")
+        _require_reacquisition_claim_uniqueness(key, reacquisition_authorization, claims)
+        previous = latest.get((key.repository, key.delivery_issue))
+        if previous is None:
+            raise LifecyclePublicationError("current lifecycle publication is unavailable")
+        current_oid, current_document, current_lifecycle = previous
+        values = _provider_dispatch_claim_fields(
+            key, eligibility_evidence_digest=eligibility_evidence_digest,
+            publication_branch=policy.publication_branch,
+            journal_predecessor_oid=tip,
+            signer_identity=signer_identity,
+            attempt_id=secrets.token_hex(32),
+            reacquisition_authorization=reacquisition_authorization,
+        )
+        raw = _sign_provider_dispatch_claim(values, signer)
+        object_oid = _write_publication_object(root, raw, tip)
+        _, claim = _verify_provider_dispatch_claim_document(
+            raw, object_oid=object_oid, expected_branch=policy.publication_branch,
+            current_oid=current_oid, current_document=current_document,
+            current_lifecycle=current_lifecycle,
+        )
+        _walk_journal(root, object_oid, policy.publication_branch)
+        try:
+            _cas_remote_ref(
+                root, policy.publication_remote_url, policy.publication_branch,
+                object_oid, tip, credential_environment=credential_environment,
+            )
+        except LifecyclePublicationError as exc:
+            observed = _observe_remote_current_once(
+                root, policy.publication_remote_url, policy.publication_branch,
+                credential_environment=credential_environment,
+            )
+            if observed == object_oid:
+                _, _, _, _, accepted = _walk_journal(
+                    root, observed, policy.publication_branch, include_claims=True,
+                )
+                if accepted.get(claim_id) == claim:
+                    return claim
+            elif observed is not None:
+                _, _, _, _, accepted = _walk_journal(
+                    root, observed, policy.publication_branch, include_claims=True,
+                )
+                if claim_id in accepted:
+                    raise LifecyclePublicationError(
+                        "provider dispatch claim already exists"
+                    ) from exc
+            raise LifecyclePublicationError(
+                "provider dispatch claim compare-and-swap did not prove ownership"
+            ) from exc
+    return claim
+
+
+def _require_provider_dispatch_current(key: ProviderDispatchKey) -> None:
+    current = verify_current_lifecycle_authority(key.repository, key.delivery_issue)
+    if (
+        current.publication_oid != key.current_publication_oid
+        or current.publication_digest != key.current_publication_digest
+        or current.lifecycle.authority_digest != key.current_authority_digest
+        or current.lifecycle.lifecycle_id != key.lifecycle_id
+        or current.lifecycle.pull_request != key.pull_request
+        or current.lifecycle.head_sha != key.current_head_sha
+        or current.lifecycle.state.get("ready") is not True
+    ):
+        raise LifecyclePublicationError("provider dispatch CURRENT changed")
+
+
+def _require_provider_dispatch_eligibility(
+    value: ProviderDispatchEligibility,
+) -> None:
+    if type(value) is not ProviderDispatchEligibility:
+        raise LifecyclePublicationError("provider dispatch eligibility is not verifier-derived")
+    provider_dispatch_claim_id(value.key)
+    authority._require_digest(
+        value.eligibility_evidence_digest, "provider dispatch eligibility evidence"
+    )
+
+
+def _execute_provider_dispatch_with_claim(
+    authenticate: Callable[[], ProviderDispatchEligibility | ProviderDispatchNoLongerRequired],
+    write: Callable[[str], int | None],
+    reconcile: Callable[[ProviderDispatchKey, int | None], ProviderDispatchReconciliation],
+    *, signer_identity: str, signer: authority.Signer,
+    reacquisition_authorization: dict[str, Any] | None = None,
+) -> ProviderDispatchResult:
+    """Own the ephemeral CAS winner capability through one bounded provider write.
+
+    This private seam permits hermetic transport tests. The public entry point
+    selects the maintained verifier and writer; callers cannot inject either.
+    """
+
+    initial = authenticate()
+    if reacquisition_authorization is not None and type(initial) is ProviderDispatchNoLongerRequired:
+        return ProviderDispatchResult("REACQUISITION_NO_LONGER_REQUIRED", None, 0)
+    _require_provider_dispatch_eligibility(initial)
+    current = authenticate()
+    _require_provider_dispatch_eligibility(current)
+    if current != initial:
+        raise LifecyclePublicationError("provider dispatch eligibility changed before claim")
+    _require_provider_dispatch_current(initial.key)
+    claimed = _publish_provider_dispatch_claim(
+        initial.key, eligibility_evidence_digest=initial.eligibility_evidence_digest,
+        signer_identity=signer_identity, signer=signer,
+        **({} if reacquisition_authorization is None else {
+            "reacquisition_authorization": reacquisition_authorization
+        }),
+    )
+    _require_provider_dispatch_current(initial.key)
+    final = authenticate()
+    if type(final) is ProviderDispatchNoLongerRequired:
+        return ProviderDispatchResult("REPLACEMENT_NO_LONGER_REQUIRED", None, 0)
+    _require_provider_dispatch_eligibility(final)
+    if final != initial:
+        raise LifecyclePublicationError("provider dispatch eligibility changed after claim")
+    if reacquisition_authorization is not None:
+        owned_current, owned_claims = verify_provider_dispatch_claims(initial.key.repository, initial.key.delivery_issue)
+        if (claimed not in owned_claims
+                or owned_current.publication_oid != initial.key.current_publication_oid
+                or owned_current.publication_digest != initial.key.current_publication_digest):
+            raise LifecyclePublicationError("provider dispatch claim ownership or CURRENT changed before write")
+    response_id: int | None = None
+    try:
+        response_id = write(PROVIDER_DISPATCH_TRIGGERS[initial.key.review_type])
+    except AmbiguousProviderDispatchWrite:
+        response_id = None
+    if response_id is not None:
+        authority._require_positive_int(response_id, "replacement comment ID")
+    try:
+        result = reconcile(initial.key, response_id)
+    except ProviderDispatchHistoryUnavailable:
+        return ProviderDispatchResult("INCOMPLETE_UNKNOWN_WRITE_RESULT", None, 1)
+    if type(result) is not ProviderDispatchReconciliation:
+        raise LifecyclePublicationError("replacement reconciliation is not authenticated")
+    if result.replacement_count == 0 and result.replacement_comment_database_id is None:
+        return ProviderDispatchResult("INCOMPLETE_UNKNOWN_WRITE_RESULT", None, 1)
+    if (
+        result.replacement_count != 1
+        or type(result.replacement_comment_database_id) is not int
+        or result.replacement_comment_database_id <= 0
+        or response_id is not None
+        and response_id != result.replacement_comment_database_id
+    ):
+        raise LifecyclePublicationError("replacement request history is duplicate or invalid")
+    return ProviderDispatchResult(
+        "DISPATCH_PERSISTED", result.replacement_comment_database_id, 1,
+    )
+
+
+def execute_provider_dispatch_with_claim(
+    repository: str, delivery_issue: int, review_type: str, *,
+    signer_identity: str, signer: authority.Signer,
+) -> ProviderDispatchResult:
+    """Dispatch only through the maintained complete fallback verifier.
+
+    The #1053 consumer supplies that verifier and its transport functions. Until
+    they are accepted, this entry point fails closed before claiming or posting.
+    """
+
+    repository = authority._require_repository(repository)
+    delivery_issue = authority._require_positive_int(
+        delivery_issue, "provider dispatch issue"
+    )
+    if review_type not in PROVIDER_DISPATCH_TRIGGERS:
+        raise LifecyclePublicationError("provider dispatch review type is invalid")
+    try:
+        from . import provider_fallback
+    except ImportError as exc:
+        raise LifecyclePublicationError(
+            "maintained provider fallback verifier is unavailable"
+        ) from exc
+    authenticate = getattr(provider_fallback, "authenticate_claim_eligibility", None)
+    write = getattr(provider_fallback, "write_claimed_replacement", None)
+    reconcile = getattr(provider_fallback, "reconcile_claimed_replacement", None)
+    if any(not callable(value) for value in (authenticate, write, reconcile)):
+        raise LifecyclePublicationError(
+            "maintained provider fallback verifier is unavailable"
+        )
+
+    def observe() -> ProviderDispatchEligibility | ProviderDispatchNoLongerRequired:
+        result = authenticate(repository, delivery_issue, review_type)
+        if type(result) is ProviderDispatchEligibility and (
+            result.key.repository != repository
+            or result.key.delivery_issue != delivery_issue
+            or result.key.review_type != review_type
+        ):
+            raise LifecyclePublicationError("maintained provider fallback scope changed")
+        return result
+
+    return _execute_provider_dispatch_with_claim(
+        observe,
+        lambda body: write(repository, delivery_issue, review_type, body),
+        lambda key, response_id: reconcile(key, response_id),
+        signer_identity=signer_identity, signer=signer,
+    )
 
 
 def require_unenrolled_delivery(repository: str, delivery_issue: int) -> None:
@@ -2296,16 +3282,113 @@ def require_unenrolled_delivery(repository: str, delivery_issue: int) -> None:
                 raise LifecyclePublicationError("delivery is already enrolled or natively admitted")
 
 
-def verify_current_ready_source_recovery(
+def publish_zero_receipt_ready_source_correction() -> VerifiedReadySourceRecovery:
+    """Append the accepted exact correction, without changing delivery CURRENT.
+
+    No caller supplies a delivery, recovery, desired state, signer or authority
+    object. Candidate tooling cannot publish the correction that accepts itself.
+    """
+
+    from . import bootstrap_source_admission as transport
+    from . import lifecycle_execution as execution
+
+    helper = transport._load_actions_helper()
+    repository, issue, pr = _ZERO_RECEIPT_RECOVERY_CORRECTION_TARGET[:3]
+    accepted_main = helper._require_accepted_main_bridge_source(repository)
+    policy = authority._load_lifecycle_trust_policy(repository)
+    _verify_live_protection(policy)
+    binding = helper.select_repository(helper.load_registry(), repository)
+    signer_identity, signer = execution._policy_role_signer(
+        policy, policy.publication_signer_identities, "publication signer role",
+        allow_routine_default=True,
+    )
+    with _isolated_repository(policy, write=True) as (root, credential_environment):
+        tip = _observe_remote_current_once(
+            root, policy.publication_remote_url, policy.publication_branch,
+            credential_environment=credential_environment,
+        )
+        if tip is None:
+            raise LifecyclePublicationError("Ready-source correction requires protected ancestry")
+        _, latest, _, recoveries = _walk_journal(root, tip, policy.publication_branch, include_recoveries=True)
+        previous, recovery = latest.get((repository, issue)), recoveries.get((repository, issue))
+        if previous is None or recovery is None:
+            raise LifecyclePublicationError("Ready-source correction source is unavailable")
+        live = execution._read_live_github(repository, pr)
+        if (live.repository, live.pull_request, live.state, live.head_sha, live.draft) != (
+            repository, pr, "OPEN", recovery.head_sha, False
+        ):
+            raise LifecyclePublicationError("Ready-source correction live source changed")
+        if recovery.historical_evidence_correction is not None:
+            _require_effective_recovery_historical_evidence(recovery, previous[1], previous[2])
+            return recovery
+        fields = _ready_source_correction_fields(
+            previous, recovery, publication_branch=policy.publication_branch,
+            journal_predecessor_oid=tip, signer_identity=signer_identity,
+        )
+        tag_ref = (
+            f"refs/tags/secpal-ready-integration-prior-authority-{issue}-{pr}-{recovery.head_sha}"
+        )
+        fetched = _run_git(root, ["fetch", "--no-tags", policy.publication_remote_url, f"{tag_ref}:{tag_ref}"])
+        if fetched.returncode != 0 or _resolve_current_once(root, tag_ref) != fields["prior_authority_tag_oid"]:
+            raise LifecyclePublicationError("Ready-source correction immutable tag changed")
+        tag_oid = fields["prior_authority_tag_oid"]
+        tag = helper._run_attestation_git(root, ["cat-file", "tag", tag_oid]).stdout
+        signature = helper._run_attestation_git(root, ["verify-tag", "--raw", tag_oid], allow_failure=True)
+        local_signature = helper.evidence.interpret_local_signature(
+            signature.returncode, f"{signature.stdout}\n{signature.stderr}", signature_format_hint="ssh",
+        )
+        helper._verify_signature_policy_identity(tag_oid, local_signature, binding["signature_policy"])
+        helper._verify_integration_signer(f"{signature.stdout}\n{signature.stderr}", recovery.expected_commit_signer)
+        if (
+            helper._prior_authority_tag_target(tag) != recovery.head_sha
+            or helper._prior_authority_tag_digest(tag) != fields["original_prior_authority_digest"]
+        ):
+            raise LifecyclePublicationError("Ready-source correction historical tag binding changed")
+        source = helper._verified_prior_delivery_commit(
+            root, recovery.head_sha, recovery.expected_commit_signer["identity"], binding,
+        )
+        if source["tree_sha"] != recovery.tree_sha or tuple(source["parent_shas"]) != recovery.parent_shas:
+            raise LifecyclePublicationError("Ready-source correction signed source changed")
+        signature = authority._normalize_signature(
+            signer(canonical_json_bytes(fields), READY_SOURCE_CORRECTION_DOMAIN), signer_identity,
+        )
+        signed = {**fields, "signature": signature}
+        raw = canonical_json_bytes({**signed, "publication_digest": digest_json(signed)})
+        object_oid = _write_publication_object(root, raw, tip)
+        _walk_journal(root, object_oid, policy.publication_branch, include_recoveries=True)
+        helper._require_accepted_main_bridge_source(repository, expected_main=accepted_main)
+        if execution._read_live_github(repository, pr) != live:
+            raise LifecyclePublicationError("Ready-source correction live source drifted before CAS")
+        try:
+            _cas_remote_ref(
+                root, policy.publication_remote_url, policy.publication_branch, object_oid, tip,
+                credential_environment=credential_environment,
+            )
+        except LifecyclePublicationAmbiguousWrite:
+            # One exact read-back may prove our append; never retry the write.
+            recovered = verify_current_ready_source_recovery(repository, issue)
+            if recovered.historical_evidence_correction != raw:
+                raise
+            return recovered
+    recovered = verify_current_ready_source_recovery(repository, issue)
+    if recovered.historical_evidence_correction != raw:
+        raise LifecyclePublicationError("Ready-source correction protected read-back differs")
+    return recovered
+
+
+def _verify_ready_source_recovery_publication(
     repository: str,
     delivery_issue: int,
-) -> VerifiedReadySourceRecovery:
-    """Authenticate one recovered prior-Ready authority and its still-CURRENT source."""
+    *, source_publication_oid: str | None = None,
+) -> tuple[VerifiedLifecyclePublication, VerifiedReadySourceRecovery]:
+    """Reverify recovery and its exact source through protected journal ancestry."""
 
     repository = authority._require_repository(repository)
     issue = authority._require_positive_int(
         delivery_issue, "Ready-source recovery issue"
     )
+    if source_publication_oid is not None:
+        source_publication_oid = authority._require_oid(source_publication_oid, "recovery source publication")
     policy = authority._load_lifecycle_trust_policy(repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=False) as (root, credential_environment):
@@ -2319,7 +3402,7 @@ def verify_current_ready_source_recovery(
             raise LifecyclePublicationError(
                 "Ready-source recovery publication is unavailable"
             )
-        _, latest, _, recoveries = _walk_journal(
+        entries, latest, _, recoveries = _walk_journal(
             root,
             tip,
             policy.publication_branch,
@@ -2328,6 +3411,12 @@ def verify_current_ready_source_recovery(
         key = (repository, issue)
         recovery = recoveries.get(key)
         current = latest.get(key)
+        if source_publication_oid is not None:
+            matches = [entry for entry in entries if entry[0] == source_publication_oid
+                       and (entry[1]["repository"], entry[1]["delivery_issue"]) == key]
+            if len(matches) != 1 or recovery is None or recovery.historical_evidence_correction is None:
+                raise LifecyclePublicationError("corrected historical recovery source is unavailable")
+            current = matches[0]
         if recovery is None or current is None:
             raise LifecyclePublicationError(
                 "Ready-source recovery publication is unavailable"
@@ -2343,7 +3432,23 @@ def verify_current_ready_source_recovery(
             raise LifecyclePublicationError(
                 "Ready-source recovery no longer binds CURRENT lifecycle"
             )
-    return recovery
+        _require_effective_recovery_historical_evidence(
+            recovery, current_document, current_lifecycle
+        )
+    source = VerifiedLifecyclePublication(
+        current_oid, current_document["publication_digest"], policy.publication_branch,
+        current_document["journal_predecessor_oid"], current_document["predecessor_publication_oid"],
+        current_lifecycle, canonical_json_bytes(current_document["lifecycle_evidence"]),
+    )
+    return source, recovery
+
+
+def verify_current_ready_source_recovery(
+    repository: str, delivery_issue: int,
+) -> VerifiedReadySourceRecovery:
+    """Authenticate one recovered prior-Ready authority and its still-CURRENT source."""
+
+    return _verify_ready_source_recovery_publication(repository, delivery_issue)[1]
 
 
 def verify_current_lifecycle_authority(
@@ -2376,6 +3481,32 @@ def verify_current_lifecycle_authority(
         document["predecessor_publication_oid"], lifecycle,
         canonical_json_bytes(document["lifecycle_evidence"]),
     )
+
+
+def verify_provider_dispatch_claims(
+    repository: str, delivery_issue: int,
+) -> tuple[VerifiedLifecyclePublication, tuple[VerifiedProviderDispatchClaim, ...]]:
+    """Observe CURRENT and ancillary claims from one authenticated journal tip."""
+
+    issue = authority._require_positive_int(delivery_issue, "provider dispatch issue")
+    policy = authority._load_lifecycle_trust_policy(repository)
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=False) as (root, environment):
+        tip = _observe_remote_current_once(root, policy.publication_remote_url,
+            policy.publication_branch, credential_environment=environment)
+        if tip is None:
+            raise LifecyclePublicationError("current lifecycle publication is unavailable")
+        _, latest, _, _, claims = _walk_journal(root, tip, policy.publication_branch, include_claims=True)
+        selected = latest.get((repository, issue))
+        if selected is None:
+            raise LifecyclePublicationError("current lifecycle publication is unavailable")
+        oid, document, lifecycle = selected
+    current = VerifiedLifecyclePublication(oid, document["publication_digest"],
+        policy.publication_branch, document["journal_predecessor_oid"],
+        document["predecessor_publication_oid"], lifecycle,
+        canonical_json_bytes(document["lifecycle_evidence"]))
+    return current, tuple(claim for claim in claims.values()
+        if claim.key.repository == repository and claim.key.delivery_issue == issue)
 
 
 def derive_ready_source_recovery_current_head_trailers(
@@ -2721,6 +3852,7 @@ def _ready_source_provider_binding_fields(
         "current_publication_oid": value.current_publication_oid,
         "current_publication_digest": value.current_publication_digest,
         "remediation_event_digests": list(value.remediation_event_digests),
+        "head_advanced_event_digests": list(value.head_advanced_event_digests),
         "lifecycle_evidence_digest": value.lifecycle_evidence_digest,
         "provider_binding_sources": list(value.provider_binding_sources),
         "historical_provider_binding": historical_fields,
@@ -3044,8 +4176,351 @@ def _derive_provider_backed_adopted_ready_remediation(
     return provider_head, digest_json(remediation)
 
 
+def _exact_reviewed_ready_root_head(
+    current: VerifiedLifecyclePublication, bundle: Mapping[str, Any],
+) -> str | None:
+    """Admit an unchanged reviewed root only underneath authenticated integrations."""
+
+    events = bundle.get("transition_authorizations", [])
+    proof = bundle.get("exact_state_adoption_proof")
+    if (
+        isinstance(proof, Mapping)
+        and proof.get("proof_version") == authority.EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION
+        and current.lifecycle.adoption_review_submitted is True
+    ):
+        # The canonical root verifier authenticates observation-backed review
+        # history. Integration neither publishes a Ready event nor loses it.
+        authority.recovered_adoption_root_historical_evidence(
+            current.lifecycle, bundle, current.predecessor_publication_oid,
+        )
+        return current.lifecycle.head_sha
+    reviews = [index for index, event in enumerate(events)
+               if event.get("transition_kind") == "UNRESTRICTED_REVIEW_CONSUMED"]
+    state = current.lifecycle.state
+    if (
+        frozenset(bundle) == authority.BUNDLE_FIELDS
+        and len(reviews) == 1
+        and events[reviews[0]].get("resulting_head_sha") == current.lifecycle.head_sha
+        and all(event.get("transition_kind") == "DRAFT_TO_READY"
+                and event.get("resulting_head_sha") == current.lifecycle.head_sha
+                for event in events[reviews[0] + 1:])
+        and state.get("unrestricted_review_count") == 1
+        and state.get("ready_transition_count") == 1
+        and state.get("draft") is False and state.get("ready") is True
+        and state.get("cycle_3_absent") is True
+        and state.get("exceptional_recovery_count") == 0
+        and state.get("exceptional_continuation_count") == 0
+    ):
+        return current.lifecycle.head_sha
+    return None
+
+
+def _authenticate_provider_integration_verifier() -> None:
+    """Authenticate the existing integration verifier, independently of this Leaf."""
+
+    from . import bootstrap_source_admission as transport
+
+    helper = transport._load_actions_helper()
+    main = helper._authenticate_protected_bridge_main("SecPal/.github")
+    transport._git(
+        helper.REPOSITORY_ROOT,
+        ["fetch", "--quiet", "--no-tags", transport.PROTECTED_MAIN_REMOTE_URL, main],
+    )
+    # Authenticate loaded modules as well as their files: a pristine file must
+    # not conceal a verifier imported from a different candidate path.
+    modules = {"actions": helper, "evidence": helper.evidence}
+    paths = {
+        "actions": helper.REPOSITORY_ROOT / "scripts/secpal-pr-review-actions.py",
+        "evidence": helper.REPOSITORY_ROOT / "scripts/secpal-pr-review.py",
+    }
+    for name, module in tuple(sys.modules.items()):
+        if name.startswith(("secpal_pr_review.", "scripts.secpal_pr_review.")):
+            filename = name.rsplit(".", 1)[1]
+            # fast_path owns this existing alias for the standalone evidence
+            # helper; its origin remains the same fixed accepted-main file.
+            paths[name] = (
+                helper.EVIDENCE_HELPER if filename == "integration_evidence_helper"
+                else helper.FAST_PATH_HELPER.with_name(filename + ".py")
+            )
+            modules[name] = module
+    # Include execution references even if a substituted module was not
+    # registered under its canonical package name.
+    for name, module, filename in (
+        ("authority", authority, "lifecycle_authority.py"),
+        ("publication", sys.modules[__name__], "lifecycle_publication.py"),
+        ("transport", transport, "bootstrap_source_admission.py"),
+        ("fast_path", fast_path, "fast_path.py"),
+        ("helper_fast_path", helper.fast_path, "fast_path.py"),
+        ("local_follow_up", fast_path.follow_up, "follow_up.py"),
+        ("follow_up", helper.fast_path.follow_up, "follow_up.py"),
+        ("pre_enrollment", helper.pre_enrollment, "pre_enrollment_integration.py"),
+    ):
+        modules[name] = module
+        paths[name] = helper.FAST_PATH_HELPER.with_name(filename)
+    try:
+        helper._require_bridge_import_provenance(
+            {name: (getattr(module, "__file__", None),
+                    getattr(getattr(module, "__spec__", None), "origin", None))
+             for name, module in modules.items()},
+            paths,
+        )
+        # Publication composition is part of the production verifier too.
+        # Candidate tooling can qualify behavior only in a hermetic test seam.
+        verifier_paths = {
+            path.relative_to(helper.REPOSITORY_ROOT).as_posix()
+            for path in paths.values()
+        }
+        verifier_paths.update({
+            "scripts/secpal-pr-review-actions.py", "scripts/secpal-pr-review.py",
+            "scripts/secpal_pr_review/fast_path.py",
+            "scripts/secpal_pr_review/follow_up.py",
+            "scripts/secpal_pr_review/pre_enrollment_integration.py",
+            "scripts/secpal_pr_review/lifecycle_authority.py",
+            "scripts/secpal_pr_review/lifecycle_publication.py",
+            "scripts/secpal_pr_review/lifecycle_orchestration.py",
+            "scripts/secpal_pr_review/bootstrap_source_admission.py",
+            "scripts/secpal_pr_review/exact_source_safety.py",
+            ".agents/skills/secpal-pr-review/references/repositories.json",
+            ".agents/skills/secpal-pr-review/references/repositories.schema.json",
+        })
+        for path in sorted(verifier_paths):
+            helper._require_exact_accepted_main_blob(helper.REPOSITORY_ROOT, main, path)
+    except helper.fast_path.SecurityBlocker as exc:
+        raise LifecyclePublicationError(
+            "Ready-source provider integration verifier is not accepted main"
+        ) from exc
+
+
+def verify_ready_integration_predecessor(
+    current: VerifiedLifecyclePublication,
+    validation: fast_path.VerifiedValidationEvidence,
+    prior_authority: Any,
+    *,
+    require_current: bool = True,
+) -> tuple[VerifiedLifecyclePublication, fast_path.StableFeedbackState, str | None]:
+    """Compose the canonical typed verifier with its exact protected publication."""
+
+    reviewed, eligibility = fast_path.verified_ready_integration_review_context(validation)
+    provenance = json.loads(validation._verification_seal.provenance_json)
+    integration = provenance["integration_evidence"]
+    if current.predecessor_publication_oid is None:
+        raise LifecyclePublicationError("Ready integration has no published predecessor")
+    transition = _verify_historical_lifecycle_transition(
+        current.lifecycle.repository, current.lifecycle.delivery_issue,
+        current.predecessor_publication_oid,
+        expected_current_publication_oid=current.publication_oid if require_current else None,
+    )
+    predecessor = transition.predecessor.lifecycle
+    if (
+        transition.successor != current
+        or transition.transition_kind != "HEAD_ADVANCED"
+        or transition.predecessor_authority_digest != predecessor.authority_digest
+        or transition.predecessor_head_sha != predecessor.head_sha
+        or transition.resulting_head_sha != current.lifecycle.head_sha
+        or transition.initialization_evidence_digest != predecessor.initialization_evidence_digest
+        or predecessor.repository != current.lifecycle.repository
+        or predecessor.delivery_issue != current.lifecycle.delivery_issue
+        or predecessor.pull_request != current.lifecycle.pull_request
+        or predecessor.lifecycle_id != current.lifecycle.lifecycle_id
+        or predecessor.state != current.lifecycle.state
+        or predecessor.head_sha != integration["prior_delivery_head_sha"]
+        or predecessor.lifecycle_id != integration["eligibility"]["lifecycle_identity"]
+        or validation.repository != current.lifecycle.repository
+        or validation.delivery_issue_number != current.lifecycle.delivery_issue
+        or validation.pull_request_number != current.lifecycle.pull_request
+        or validation.head_sha != current.lifecycle.head_sha
+        or validation.tree_sha != current.lifecycle.tree_sha
+        or validation.validation_receipt_digest != current.lifecycle.validation_receipt_digest
+        or validation.final_attestation_digest != current.lifecycle.adoption_source_evidence_digest
+        or validation.source_validation_evidence_digest != current.lifecycle.source_validation_evidence_digest
+        or any(
+            integration["eligibility"][field] != current.lifecycle.state[state_field]
+            for field, state_field in (
+                ("unrestricted_reviews_after", "unrestricted_review_count"),
+                ("remediation_cycles_after", "remediation_cycle_count"),
+                ("exceptional_recoveries_after", "exceptional_recovery_count"),
+                ("exceptional_continuations_after", "exceptional_continuation_count"),
+            )
+        )
+    ):
+        raise LifecyclePublicationError("Ready integration validation differs from the published advancement")
+    manifest = fast_path.normalize_ready_integration_prior_authority(prior_authority)
+    independent_root = manifest.get("source_authority_mode") in {
+        "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
+        "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
+    }
+    if (
+        fast_path.digest_json(manifest) != integration["prior_authority_digest"]
+        or manifest["repository"] != predecessor.repository
+        or manifest["delivery_issue_number"] != predecessor.delivery_issue
+        or manifest["pull_request_number"] != predecessor.pull_request
+        or manifest["prior_delivery_head_sha"] != predecessor.head_sha
+        or manifest["prior_delivery_tree_sha"] != predecessor.tree_sha
+        or (not independent_root and (
+            manifest["prior_validation_receipt_digest"] != predecessor.validation_receipt_digest
+            or manifest["prior_final_attestation_digest"] != predecessor.adoption_source_evidence_digest
+        ))
+        or manifest["expected_signer"] != integration["expected_signer"]
+        or manifest["publication"] != {
+            "object_oid": transition.predecessor.publication_oid,
+            "publication_digest": transition.predecessor.publication_digest,
+        }
+        or manifest["lifecycle"]["current_authority_digest"] != predecessor.authority_digest
+        or manifest["lifecycle"]["historical_proof_mode"] != predecessor.historical_proof_mode
+    ):
+        raise LifecyclePublicationError("Ready integration prior authority differs from the protected predecessor")
+    from . import bootstrap_source_admission as transport
+
+    actions = transport._load_actions_helper()
+    try:
+        actions._verify_ready_integration_lifecycle_authority(manifest, integration, reviewed_state=reviewed)
+        if independent_root:
+            # Immutable predecessor fields remain provenance. Only complete
+            # maintained derivation authenticates the distinct root projection.
+            actions._require_exact_adopted_ready_manifest(
+                manifest,
+                actions._derive_exact_state_adoption_ready_prior_authority(
+                    repository_root=Path(provenance["repository_root"]),
+                    repository=predecessor.repository, delivery_issue=predecessor.delivery_issue,
+                    pull_request=predecessor.pull_request, binding=provenance["registry"],
+                    reviewed_state_digest=reviewed.state_digest,
+                    reviewed_feedback_digest=reviewed.feedback_digest,
+                    source_publication_oid=transition.predecessor.publication_oid,
+                ),
+            )
+        actions._verify_prior_authority_tag(
+            repository_root=Path(provenance["repository_root"]),
+            tag_ref=actions._canonical_ready_prior_authority_tag_ref(manifest),
+            authority=manifest, integration_evidence=integration, binding=provenance["registry"],
+            source_publication_oid=transition.predecessor.publication_oid if independent_root else None,
+        )
+    except actions.fast_path.SecurityBlocker as exc:
+        raise SecurityBlocker("Ready integration prior authority authentication failed") from exc
+    # Historical target_base is authenticated by the signed receipt/commit and
+    # protected authority publication. Re-observing today's main as parent 2
+    # would change the meaning of immutable, previously authorized evidence.
+    return transition.predecessor, reviewed, eligibility
+
+
+@dataclass(frozen=True)
+class VerifiedReadyIntegrationPriorAuthority:
+    """Verifier-owned projection; no ordinary remediation authority is issued."""
+
+    manifest_json: str
+    integration_evidence_digest: str
+    source_validation_evidence_digest: str
+    head_advanced_event_digests: tuple[str, ...]
+
+
+def _walk_ready_integration_chain(
+    current: VerifiedLifecyclePublication,
+    ready_integrations: tuple[tuple[Any, Any], ...],
+) -> tuple[VerifiedLifecyclePublication, tuple[str, ...], tuple[str, ...]]:
+    """Verify the exact complete publication suffix, without recursive trust."""
+
+    if not isinstance(ready_integrations, tuple) or not ready_integrations:
+        raise LifecyclePublicationError("Ready integration predecessor packages are missing")
+    root = current
+    seen: set[str] = set()
+    digests: list[str] = []
+    reviewed_heads: list[str] = []
+    for index, package in enumerate(reversed(ready_integrations)):
+        if not isinstance(package, tuple) or len(package) != 2:
+            raise LifecyclePublicationError("Ready integration predecessor package is malformed")
+        if root.publication_oid in seen or root.lifecycle.head_sha in seen:
+            raise LifecyclePublicationError("Ready integration predecessor chain repeats")
+        seen.update((root.publication_oid, root.lifecycle.head_sha))
+        before = root
+        root, reviewed, _ = verify_ready_integration_predecessor(
+            root, *package, require_current=index == 0,
+        )
+        reviewed_heads.append(reviewed.head_sha)
+        raw = authority._load_canonical_json(before.serialized_lifecycle_evidence, "integration lifecycle")
+        bundle = raw.get("lifecycle_evidence", raw)
+        digests.append(bundle["transition_authorizations"][-1]["event_digest"])
+    raw = authority._load_canonical_json(root.serialized_lifecycle_evidence, "integration predecessor lifecycle")
+    bundle = raw.get("lifecycle_evidence", raw)
+    events = bundle.get("transition_authorizations")
+    if not isinstance(events, list):
+        raise LifecyclePublicationError("Ready integration predecessor history is malformed")
+    if events and events[-1]["transition_kind"] == "HEAD_ADVANCED":
+        raise LifecyclePublicationError("Ready integration predecessor chain has a gap")
+    return root, tuple(reversed(digests)), tuple(reviewed_heads)
+
+
+def verify_ready_integration_prior_authority(
+    current: VerifiedLifecyclePublication,
+    ready_integrations: tuple[tuple[Any, Any], ...],
+) -> VerifiedReadyIntegrationPriorAuthority:
+    """Derive the existing signed-manifest projection from typed publications."""
+
+    _authenticate_provider_integration_verifier()
+    _, digests, _ = _walk_ready_integration_chain(current, ready_integrations)
+    validation, _ = ready_integrations[-1]
+    # The chain owner has independently reverified this seal and CURRENT.
+    provenance = json.loads(validation._verification_seal.provenance_json)
+    integration = provenance["integration_evidence"]
+    lifecycle = current.lifecycle
+    state = lifecycle.state
+    if state["ready_transition_count"] != 1:
+        raise LifecyclePublicationError("Ready integration prior authority has extra Ready history")
+    manifest = fast_path.normalize_ready_integration_prior_authority({
+        "schema_version": "1.1", "kind": fast_path.READY_INTEGRATION_PRIOR_AUTHORITY_KIND,
+        "repository": lifecycle.repository, "delivery_issue_number": lifecycle.delivery_issue,
+        "pull_request_number": lifecycle.pull_request,
+        "prior_delivery_head_sha": lifecycle.head_sha, "prior_delivery_tree_sha": lifecycle.tree_sha,
+        "prior_validation_receipt_digest": validation.validation_receipt_digest,
+        "prior_final_attestation_digest": validation.final_attestation_digest,
+        "expected_signer": integration["expected_signer"],
+        "lifecycle": {
+            "identity": lifecycle.lifecycle_id, "current_authority_digest": lifecycle.authority_digest,
+            "historical_proof_mode": lifecycle.historical_proof_mode,
+            "draft": state["draft"], "ready": state["ready"], "ready_transition": False,
+            "unrestricted_reviews": state["unrestricted_review_count"],
+            "remediation_cycles": state["remediation_cycle_count"],
+            "exceptional_recoveries": state["exceptional_recovery_count"],
+            "exceptional_continuations": state["exceptional_continuation_count"],
+            "cycle_3": not state["cycle_3_absent"],
+        },
+        "publication": {"object_oid": current.publication_oid,
+                        "publication_digest": current.publication_digest},
+    })
+    return VerifiedReadyIntegrationPriorAuthority(
+        fast_path.canonical_json_bytes(manifest).decode("utf-8"), fast_path.digest_json(integration),
+        validation.source_validation_evidence_digest, digests,
+    )
+
+
+def _verify_ready_source_integration_suffix(
+    current: VerifiedLifecyclePublication,
+    ready_integrations: tuple[tuple[Any, Any], ...],
+) -> tuple[VerifiedLifecyclePublication, tuple[str, ...], tuple[str, ...]]:
+    """Peel a complete typed integration suffix before existing provider derivation."""
+
+    if not isinstance(ready_integrations, tuple) or not ready_integrations:
+        raise LifecyclePublicationError("Ready-source provider HEAD_ADVANCED evidence is missing")
+    try:
+        _authenticate_provider_integration_verifier()
+        root, digests, reviewed_heads = _walk_ready_integration_chain(current, ready_integrations)
+        state = current.lifecycle.state
+        if (
+            state.get("unrestricted_review_count") != 1
+            or state.get("ready_transition_count") != 1
+            or state.get("draft") is not False or state.get("ready") is not True
+            or state.get("cycle_3_absent") is not True
+            or state.get("exceptional_recovery_count") != 0
+            or state.get("exceptional_continuation_count") != 0
+        ):
+            raise LifecyclePublicationError("Ready-source provider integration changed finite lifecycle")
+    except (SecurityBlocker, authority.LifecycleAuthorityError, KeyError, TypeError, ValueError) as exc:
+        raise LifecyclePublicationError("Ready-source provider typed integration lineage is invalid") from exc
+    return root, digests, reviewed_heads
+
+
 def derive_ready_source_recovery_provider_binding(
     current: VerifiedLifecyclePublication,
+    *,
+    ready_integrations: tuple[tuple[Any, Any], ...] = (),
 ) -> VerifiedReadySourceRecoveryProviderBinding:
     """Derive every admissible provider head from authenticated CURRENT."""
 
@@ -3092,15 +4567,26 @@ def derive_ready_source_recovery_provider_binding(
         raise LifecyclePublicationError(
             "Ready-source provider lifecycle shape is unsupported"
         )
-    ordinary = _derive_ordinary_ready_source_provider_binding(current, bundle)
-    historical = _derive_exact_adoption_historical_provider_binding(
-        current, bundle
-    )
-    adopted = _derive_provider_backed_adopted_ready_remediation(current, bundle)
+    events = bundle.get("transition_authorizations")
+    root = current
+    integration_digests: tuple[str, ...] = ()
+    reviewed_heads: tuple[str, ...] = ()
+    if isinstance(events, list) and events and events[-1].get("transition_kind") == "HEAD_ADVANCED":
+        root, integration_digests, reviewed_heads = _verify_ready_source_integration_suffix(
+            current, ready_integrations
+        )
+        root_raw = authority._load_canonical_json(root.serialized_lifecycle_evidence, "provider root lifecycle")
+        bundle = root_raw.get("lifecycle_evidence", root_raw)
+    elif ready_integrations:
+        raise LifecyclePublicationError("Ready-source provider integration evidence is unconsumed")
+    ordinary = _derive_ordinary_ready_source_provider_binding(root, bundle)
+    exact_head = _exact_reviewed_ready_root_head(root, bundle) if integration_digests else None
+    historical = _derive_exact_adoption_historical_provider_binding(root, bundle)
+    adopted = _derive_provider_backed_adopted_ready_remediation(root, bundle)
     candidates = [
         item
         for item in (
-            ordinary[0] if ordinary is not None else None,
+            ordinary[0] if ordinary is not None else exact_head,
             historical.provider_head_sha if historical is not None else None,
             adopted[0] if adopted is not None else None,
         )
@@ -3110,7 +4596,7 @@ def derive_ready_source_recovery_provider_binding(
         raise LifecyclePublicationError(
             "Ready-source provider remediation lineage is incomplete"
         )
-    if len(set(candidates)) != 1:
+    if len(set(candidates)) != 1 or any(head != candidates[0] for head in reviewed_heads):
         raise LifecyclePublicationError(
             "Ready-source provider heads conflict across authenticated sources"
         )
@@ -3118,7 +4604,7 @@ def derive_ready_source_recovery_provider_binding(
     sources = tuple(
         source
         for source, present in (
-            (ORDINARY_REMEDIATION_SUFFIX, ordinary is not None),
+            (ORDINARY_REMEDIATION_SUFFIX, ordinary is not None or exact_head is not None),
             (
                 EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
                 historical is not None,
@@ -3138,6 +4624,8 @@ def derive_ready_source_recovery_provider_binding(
         "current_publication_oid": current.publication_oid,
         "current_publication_digest": current.publication_digest,
         "remediation_event_digests": event_digests,
+        "head_advanced_event_digests": integration_digests,
+        "ready_integrations": copy.deepcopy(ready_integrations),
         "lifecycle_evidence_digest": digest_json(parsed),
         "provider_binding_sources": sources,
         "historical_provider_binding": historical,
@@ -3172,7 +4660,9 @@ def ready_source_recovery_provider_head(
         value.repository,
         value.delivery_issue,
     )
-    authenticated = derive_ready_source_recovery_provider_binding(current)
+    authenticated = derive_ready_source_recovery_provider_binding(
+        current, ready_integrations=value.ready_integrations
+    )
     if _ready_source_provider_binding_fields(authenticated) != (
         _ready_source_provider_binding_fields(value)
     ):
@@ -3207,7 +4697,9 @@ def verify_ready_source_recovery_historical_provider_summary(
         value.repository,
         value.delivery_issue,
     )
-    authenticated = derive_ready_source_recovery_provider_binding(current)
+    authenticated = derive_ready_source_recovery_provider_binding(
+        current, ready_integrations=value.ready_integrations
+    )
     if _ready_source_provider_binding_fields(authenticated) != (
         _ready_source_provider_binding_fields(value)
     ):
@@ -3225,7 +4717,7 @@ def verify_ready_source_recovery_historical_provider_summary(
         body=body,
         repository=repository,
         pull_request=pull_request,
-        current_head_sha=current_head_sha,
+        current_head_sha=historical.current_head_sha,
     )
 
 
@@ -3460,11 +4952,69 @@ def _walk_journal_identity_projection(
         tuple[str, int], tuple[str, dict[str, Any], bytes]
     ] = {}
     recovery_keys: set[tuple[str, int]] = set()
+    recoveries: dict[tuple[str, int], VerifiedReadySourceRecovery] = {}
     recovery_authorization_ids: set[tuple[str, str]] = set()
     recovery_authorization_digests: set[tuple[str, str]] = set()
+    integrations: dict[str, dict[str, Any]] = {}
+    claims: dict[str, VerifiedProviderDispatchClaim] = {}
     for position, (object_oid, raw, parent) in enumerate(chronological):
         kind, candidate = _classify_journal_document(raw)
         if kind == GENESIS_ADMISSION_KIND:
+            continue
+        if kind == READY_SOURCE_CORRECTION_KIND:
+            key = _ready_source_correction_key(candidate)
+            previous, recovery = publications.get(key), recoveries.get(key)
+            if previous is None or recovery is None:
+                raise LifecyclePublicationError("Ready-source correction precedes its source authority")
+            current_oid, current_document, _ = previous
+            try:
+                lifecycle = authority._verify_lifecycle_authority_for_journal(
+                    canonical_json_bytes(current_document["lifecycle_evidence"])
+                )
+            except authority.LifecycleAuthorityError as exc:
+                raise LifecyclePublicationError("Ready-source correction root is invalid") from exc
+            # Reopen the exact historical recovery under full root verification;
+            # identity-only recovery projection never grants correction authority.
+            recovery_raw, recovery_parent = _read_publication_object(repository_root, recovery.publication_oid)
+            _, original = _verify_ready_source_recovery_document(
+                recovery_raw, object_oid=recovery.publication_oid,
+                expected_branch=publication_branch, current_oid=current_oid,
+                current_document=current_document, current_lifecycle=lifecycle,
+            )
+            if recovery_parent != original.journal_predecessor_oid:
+                raise LifecyclePublicationError("Ready-source correction recovery ancestry changed")
+            if recovery.historical_evidence_correction is not None:
+                raise LifecyclePublicationError("Ready-source correction was replayed")
+            recoveries[key] = _verify_ready_source_correction_document(
+                raw, object_oid=object_oid, expected_branch=publication_branch,
+                parent=parent, previous=(current_oid, current_document, lifecycle),
+                recovery=original,
+            )
+            continue
+        if kind == ENROLLED_DRAFT_CLAIM_KIND:
+            selected = candidate.get("authorization", {}).get("evidence", {})
+            previous = publications.get((selected.get("repository"), selected.get("delivery_issue")))
+            if previous is None:
+                raise LifecyclePublicationError("enrolled Draft integration claim precedes CURRENT")
+            document = _verify_enrolled_draft_claim_document(raw, expected_branch=publication_branch, parent=parent, previous=previous, verify_lifecycle=False)
+            _add_enrolled_draft_claim(integrations, document)
+            continue
+        if kind == PROVIDER_DISPATCH_CLAIM_KIND:
+            previous = publications.get((candidate.get("repository"), candidate.get("delivery_issue")))
+            if previous is None:
+                raise LifecyclePublicationError("provider dispatch claim precedes CURRENT lifecycle publication")
+            current_oid, current_document, _ = previous
+            lifecycle = authority._verify_lifecycle_authority_for_journal(
+                canonical_json_bytes(current_document["lifecycle_evidence"]))
+            document, claim = _verify_provider_dispatch_claim_document(
+                raw, object_oid=object_oid, expected_branch=publication_branch,
+                current_oid=current_oid, current_document=current_document, current_lifecycle=lifecycle)
+            if document["journal_predecessor_oid"] != parent:
+                raise LifecyclePublicationError("provider dispatch claim journal parent binding is invalid")
+            if claim.claim_id in claims:
+                raise LifecyclePublicationError("provider dispatch claim already exists in ancestry")
+            _require_reacquisition_claim_uniqueness(claim.key, claim.reacquisition_authorization, claims)
+            claims[claim.claim_id] = claim
             continue
         if kind == READY_SOURCE_RECOVERY_KIND:
             try:
@@ -3510,6 +5060,7 @@ def _walk_journal_identity_projection(
                     "Ready-source recovery authorization was replayed"
                 )
             recovery_keys.add(key)
+            recoveries[key] = recovery
             recovery_authorization_ids.add(authorization_id)
             recovery_authorization_digests.add(authorization_digest)
             continue

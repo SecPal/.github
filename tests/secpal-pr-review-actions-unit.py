@@ -4123,6 +4123,8 @@ class RegistryTests(TestCase):
                 "required_local_validation",
                 "signature_policy",
                 "lifecycle_authority_policy",
+                "pre_enrollment_integration_policy",
+                "enrolled_draft_integration_policy",
                 "check_policy",
                 "manual_gates",
                 "unsupported_operations",
@@ -4323,7 +4325,7 @@ class RegistryTests(TestCase):
             ["./tests/review-governance-suite.sh"],
             [command["argv"] for command in commands],
         )
-        self.assertEqual(len(commands), 20)
+        self.assertEqual(len(commands), 22)
 
     def test_locked_node_preparation_requires_exact_staged_manifest_identities(
         self,
@@ -13986,6 +13988,23 @@ class FastPathTests(TestCase):
             "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": False}},
         }
 
+    def test_bounded_provider_observation_keeps_pending_feedback_without_terminal_authority(self):
+        pending = self._codex_provider_state(code_status='🔄 **Running** since <relative-time datetime="2026-10-01T17:00:00Z">2026-10-01T17:00:00Z</relative-time>')
+        pending["comments"]["nodes"][0]["body"] = pending["comments"]["nodes"][0]["body"].replace('"status":"completed"', '"status":"running"')
+        pending["comments"]["nodes"][0].update(id="SUMMARY", databaseId=90, updatedAt="2026-10-01T17:00:00Z", reactions={"nodes":[],"pageInfo":{"hasNextPage":False}})
+        pending.update(id="PR_1", state="OPEN", baseRefName="main", baseRefOid=p21.BASE, reviewDecision=None,
+            reactions={"nodes":[],"pageInfo":{"hasNextPage":False}}, reviews={"nodes":[],"pageInfo":{"hasNextPage":False}}, reviewThreads={"nodes":[],"pageInfo":{"hasNextPage":False}})
+        github=actions.LiveGitHub(SimpleNamespace(run=mock.Mock(return_value={"data":{"repository":{"pullRequest":pending}}})))
+        gateway=actions.FastPathGateway(REPO_ROOT,registry_entry("SecPal/.github"),github=github)
+        observed=gateway.observe_provider_acquisition_feedback("SecPal/.github",1)
+        self.assertEqual(observed["provider_summary_body"],pending["comments"]["nodes"][0]["body"])
+        self.assertEqual(observed["feedback"]["threads"],[])
+        with self.assertRaisesRegex(actions.fast_path.SecurityBlocker,"not terminal"):
+            gateway.observe_stable_feedback("SecPal/.github",1)
+        pending["comments"]["nodes"][0]["body"]=pending["comments"]["nodes"][0]["body"].replace(p21.HEAD,"9"*40)
+        with self.assertRaises(actions.fast_path.SecurityBlocker):
+            gateway.observe_provider_acquisition_feedback("SecPal/.github",1)
+
     def test_visible_codex_nonterminal_states_block_stable_feedback(self) -> None:
         for status in ("queued", "pending", "running", "failed", "indeterminate"):
             with self.subTest(status=status):
@@ -14427,6 +14446,218 @@ class FastPathTests(TestCase):
             ],
         )
 
+    def _loss_provider_gateway(self, *, binding=None, body=None):
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        provider_head = "f" * 40
+        provider_state = self._codex_provider_state(metadata_head=provider_head)
+        summary = provider_state["comments"]["nodes"][0]["body"].replace(
+            "| head |", f"| `{provider_head[:7]}` |"
+        )
+        if binding is None:
+            record = {
+                "admission_schema_version": "1.1",
+                "repository": "SecPal/.github", "pull_request": 1,
+                "head_sha": p21.HEAD,
+                "historical_provider_summary_digest": digest(summary),
+            }
+            commits = (
+                loss.CommitFacts(provider_head, "a" * 40, ("0" * 40,),
+                                 "2026-09-01T00:00:00Z", True),
+                loss.CommitFacts(p21.HEAD, "b" * 40, (provider_head,),
+                                 "2026-09-02T00:00:00Z", True),
+            )
+            binding = loss._historical_provider_binding_for_ready(
+                record, commits, "2026-09-01T01:00:00Z"
+            )
+        provider_state["comments"]["nodes"][0].update(
+            id="SUMMARY_1", body=summary if body is None else body,
+            updatedAt="2026-09-02T01:00:00Z", reactions={"nodes": [], "pageInfo": {"hasNextPage": False}},
+        )
+        provider_state.update(
+            id="PR_1", baseRefName="main", baseRefOid=p21.BASE,
+            state="OPEN", reviewDecision=None, reactions={"nodes": [], "pageInfo": {"hasNextPage": False}},
+            reviews={"nodes": [], "pageInfo": {"hasNextPage": False}},
+            reviewThreads={"nodes": [], "pageInfo": {"hasNextPage": False}},
+        )
+        github = actions.LiveGitHub()
+        github.runner = SimpleNamespace(run=mock.Mock(return_value={
+            "data": {"repository": {"pullRequest": provider_state}}
+        }))
+        gateway = actions.FastPathGateway(
+            REPO_ROOT, registry_entry("SecPal/.github"), github=github,
+            ready_source_provider_binding=binding,
+        )
+        return gateway, binding, summary
+
+    def test_independent_loss_binding_through_actual_gateway_summary_path(self) -> None:
+        gateway, binding, summary = self._loss_provider_gateway()
+        observed = gateway.observe_stable_feedback("SecPal/.github", 1)
+        self.assertEqual(observed["provider_summary_body"], summary)
+        self.assertEqual(binding.provider_binding_sources, (
+            lifecycle_publication.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
+        ))
+
+    def test_loss_binding_scope_digest_and_caller_substitution_reject(self) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        _, binding, summary = self._loss_provider_gateway()
+        for field, value in (
+            ("repository", "Other/project"), ("pull_request", 2),
+            ("current_head_sha", "e" * 40), ("provider_head_sha", "e" * 40),
+            ("summary_digest", "0" * 64),
+        ):
+            with self.subTest(field=field):
+                changed = replace(binding, **{field: value})
+                gateway, _, _ = self._loss_provider_gateway(binding=changed)
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    gateway.observe_stable_feedback("SecPal/.github", 1)
+        fabricated = loss.HistoricalProviderBinding(
+            binding.repository, binding.pull_request, binding.current_head_sha,
+            binding.provider_head_sha, binding.summary_digest,
+        )
+        for sources in (None, (), ("CALLER_SELECTED",),
+                        binding.provider_binding_sources * 2,
+                        ("ORDINARY_REMEDIATION_SUFFIX",)):
+            with self.subTest(sources=sources):
+                forged = SimpleNamespace(
+                    repository=binding.repository,
+                    pull_request=binding.pull_request,
+                    current_head_sha=binding.current_head_sha,
+                    provider_binding_sources=sources,
+                    provider_head=lambda **_kwargs: binding.provider_head_sha,
+                    verify_historical_provider_summary=lambda **_kwargs: None,
+                )
+                gateway, _, _ = self._loss_provider_gateway(binding=forged)
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    gateway.observe_stable_feedback("SecPal/.github", 1)
+        gateway, _, _ = self._loss_provider_gateway(binding=fabricated)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            gateway.observe_stable_feedback("SecPal/.github", 1)
+        gateway, _, _ = self._loss_provider_gateway(body=summary + "\nchanged")
+        with self.assertRaises(fast_path.SecurityBlocker):
+            gateway.observe_stable_feedback("SecPal/.github", 1)
+
+    def test_loss_binding_rejects_equality_spoofed_or_malformed_seal(self) -> None:
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+
+        class EqualitySpoof:
+            def __eq__(self, _other):
+                return True
+
+        class TupleSpoof(tuple):
+            def __eq__(self, _other):
+                return True
+
+            def __ne__(self, _other):
+                return False
+
+        _, genuine, _ = self._loss_provider_gateway()
+        fields = [genuine.repository, genuine.pull_request,
+                  genuine.current_head_sha, genuine.provider_head_sha,
+                  genuine.summary_digest]
+        for seal in (
+            (EqualitySpoof(), *fields), TupleSpoof((None, *fields)),
+            EqualitySpoof(), None, (), (None,), (None, *fields),
+        ):
+            with self.subTest(seal_type=type(seal).__name__):
+                fabricated = loss.HistoricalProviderBinding(*fields)
+                # Frozen/slotted dataclasses support state restoration. It
+                # cannot authenticate a caller's equality-compatible token.
+                fabricated.__setstate__([*fields, seal])
+                gateway, _, _ = self._loss_provider_gateway(binding=fabricated)
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    gateway.observe_stable_feedback("SecPal/.github", 1)
+                with self.assertRaises(loss.fast_path.SecurityBlocker):
+                    fabricated.provider_head(
+                        repository=genuine.repository,
+                        pull_request=genuine.pull_request,
+                        current_head_sha=genuine.current_head_sha,
+                    )
+
+        for index in range(len(fields)):
+            with self.subTest(substituted_scope_field=index):
+                fabricated = loss.HistoricalProviderBinding(*fields)
+                changed = list(fields)
+                changed[index] = EqualitySpoof()
+                fabricated.__setstate__([*changed, genuine._verification])
+                with self.assertRaises(loss.fast_path.SecurityBlocker):
+                    _ = fabricated.provider_binding_sources
+
+        for field in ("repository", "pull_request", "current_head_sha"):
+            with self.subTest(caller_scope_field=field):
+                scope = {
+                    "repository": genuine.repository,
+                    "pull_request": genuine.pull_request,
+                    "current_head_sha": genuine.current_head_sha,
+                }
+                scope[field] = EqualitySpoof()
+                with self.assertRaises(loss.fast_path.SecurityBlocker):
+                    genuine.provider_head(**scope)
+
+    def test_loss_binding_provenance_is_immutable_and_not_constructor_selected(self) -> None:
+        _, binding, _ = self._loss_provider_gateway()
+        with self.assertRaises((AttributeError, TypeError)):
+            binding.provider_binding_sources = ("ORDINARY_REMEDIATION_SUFFIX",)
+        with self.assertRaises((TypeError, ValueError)):
+            replace(binding, provider_binding_sources=("CALLER_SELECTED",))
+
+    def test_loss_summary_cannot_substitute_current_head_or_other_delivery(self) -> None:
+        _, binding, summary = self._loss_provider_gateway()
+        for repository, pull_request, head in (
+            ("Other/project", 1, p21.HEAD),
+            ("SecPal/.github", 2, p21.HEAD),
+            ("SecPal/.github", 1, "e" * 40),
+        ):
+            with self.subTest(repository=repository, pull_request=pull_request, head=head):
+                with self.assertRaises(RuntimeError):
+                    binding.verify_historical_provider_summary(
+                        body=summary, repository=repository,
+                        pull_request=pull_request, current_head_sha=head,
+                    )
+        # A perfectly ordinary terminal current-head summary still cannot
+        # replace the historical body authenticated by the loss verifier.
+        current_summary = self._codex_provider_state()["comments"]["nodes"][0]["body"]
+        gateway, _, _ = self._loss_provider_gateway(body=current_summary)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "summary is invalid"):
+            gateway.observe_stable_feedback("SecPal/.github", 1)
+
+    def test_gateway_rejects_missing_duplicate_unknown_and_substituted_provenance(self) -> None:
+        original = self._ready_source_provider_binding()
+        for sources in (
+            (), ("CALLER_SELECTED",), original.provider_binding_sources * 2,
+            ("EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING", "CALLER_SELECTED"),
+            ["ORDINARY_REMEDIATION_SUFFIX"], (None,),
+        ):
+            with self.subTest(sources=sources):
+                forged = replace(original, provider_binding_sources=sources)
+                with self.assertRaisesRegex(actions.MutationBlocked, "provenance is invalid"):
+                    actions._require_review_providers_terminal(
+                        self._codex_provider_state(), repository="SecPal/.github",
+                        pull_request_number=1, ready_source_provider_binding=forged,
+                    )
+        _, historical, _ = self._loss_provider_gateway()
+        from scripts.secpal_pr_review import validation_evidence_loss as loss
+        with mock.patch.object(loss, "__file__", str(REPO_ROOT / ".context/candidate.py")):
+            with self.assertRaisesRegex(actions.MutationBlocked, "not verifier-owned"):
+                actions._require_review_providers_terminal(
+                    self._codex_provider_state(), repository="SecPal/.github",
+                    pull_request_number=1, ready_source_provider_binding=historical,
+                )
+        ordinary = actions._ReadyRemediationProviderBinding(
+            {"repository": "SecPal/.github", "pull_request": 1,
+             "current_head_sha": p21.HEAD, "provider_head_sha": "f" * 40},
+            repository="SecPal/.github", pull_request=1,
+        )
+        ordinary.provider_binding_sources = (
+            lifecycle_publication.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
+        )
+        with self.assertRaisesRegex(actions.MutationBlocked, "provenance changed"):
+            actions._require_review_providers_terminal(
+                self._codex_provider_state(), repository="SecPal/.github",
+                pull_request_number=1, ready_source_provider_binding=ordinary,
+            )
+
     def test_ready_source_accepts_exact_v11_historical_provider_summary(self) -> None:
         binding = replace(
             self._ready_source_provider_binding(),
@@ -14452,6 +14683,65 @@ class FastPathTests(TestCase):
                 pull_request_number=1,
                 ready_source_provider_binding=binding,
             )
+        verify_summary.assert_called_once_with(
+            body=provider_state["comments"]["nodes"][0]["body"],
+            repository="SecPal/.github",
+            pull_request=1,
+            current_head_sha=p21.HEAD,
+        )
+
+    def test_stale_summary_retains_ordinary_ready_remediation_capture(self) -> None:
+        provider_head = "f" * 40
+        binding = actions._ReadyRemediationProviderBinding(
+            {
+                "repository": "SecPal/.github",
+                "pull_request": 1,
+                "current_head_sha": p21.HEAD,
+                "provider_head_sha": provider_head,
+            },
+            repository="SecPal/.github",
+            pull_request=1,
+        )
+        provider_state = self._codex_provider_state(metadata_head=provider_head)
+        provider_state["comments"]["nodes"][0]["body"] = (
+            provider_state["comments"]["nodes"][0]["body"].replace(
+                "| head |", f"| `{provider_head[:7]}` |"
+            )
+        )
+        actions._require_review_providers_terminal(
+            provider_state,
+            repository="SecPal/.github",
+            pull_request_number=1,
+            ready_source_provider_binding=binding,
+        )
+
+    def test_stale_dual_row_historical_summary_requires_exact_binding(self) -> None:
+        binding = replace(
+            self._ready_source_provider_binding(),
+            provider_binding_sources=(
+                lifecycle_publication.
+                EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
+            ),
+        )
+        provider_state = self._codex_provider_state(metadata_head="f" * 40)
+        with mock.patch.object(
+            type(binding), "provider_head", return_value="f" * 40
+        ), mock.patch.object(
+            type(binding), "verify_historical_provider_summary",
+            side_effect=fast_path.SecurityBlocker(
+                "historical review-provider summary is invalid"
+            ),
+        ) as verify_summary:
+            with self.assertRaisesRegex(
+                actions.MutationBlocked,
+                "historical review-provider summary is invalid",
+            ):
+                actions._require_review_providers_terminal(
+                    provider_state,
+                    repository="SecPal/.github",
+                    pull_request_number=1,
+                    ready_source_provider_binding=binding,
+                )
         verify_summary.assert_called_once_with(
             body=provider_state["comments"]["nodes"][0]["body"],
             repository="SecPal/.github",

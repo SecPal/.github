@@ -6,7 +6,10 @@
 from __future__ import annotations
 
 import copy
-from contextlib import nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
+from dataclasses import fields, replace
+import hashlib
+import inspect
 import importlib.util
 import json
 from pathlib import Path
@@ -595,6 +598,28 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                 reviewed_state_digest=reviewed_state_digest,
                 reviewed_feedback_digest=reviewed_feedback_digest,
             )
+
+    def test_public_recovery_reader_rejects_false_historical_current_safety_claims(self) -> None:
+        current, recovery = recovered_root()
+        recovery.historical_validation_receipt_digest = current.lifecycle.validation_receipt_digest
+        recovery.historical_final_attestation_digest = current.lifecycle.adoption_source_evidence_digest
+        document = {
+            "publication_digest": current.publication_digest,
+            "lifecycle_evidence": json.loads(current.serialized_lifecycle_evidence),
+            "predecessor_publication_oid": None,
+        }
+        key = (REPOSITORY, ISSUE)
+        with (
+            mock.patch.object(lifecycle_authority, "_load_lifecycle_trust_policy",
+                              return_value=SimpleNamespace(publication_remote_url="fixture", publication_branch="fixture")),
+            mock.patch.object(lifecycle_authority, "verify_exact_state_adoption_proof", return_value=current.lifecycle),
+            mock.patch.object(lifecycle_publication, "_verify_live_protection"),
+            mock.patch.object(lifecycle_publication, "_isolated_repository", return_value=nullcontext((ROOT, None))),
+            mock.patch.object(lifecycle_publication, "_observe_remote_current_once", return_value="1" * 40),
+            mock.patch.object(lifecycle_publication, "_walk_journal", return_value=([], {key: (current.publication_oid, document, current.lifecycle)}, {}, {key: recovery})),
+            self.assertRaisesRegex(lifecycle_publication.LifecyclePublicationError, "historical evidence contradicts"),
+        ):
+            lifecycle_publication.verify_current_ready_source_recovery(REPOSITORY, ISSUE)
 
     def test_recovered_v3_enrollment_root_derives_existing_ready_authority(self) -> None:
         current, recovery = recovered_root()
@@ -2463,6 +2488,332 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                 live_observation=None,
             )
         bridge.assert_not_called()
+
+
+class ReadySourceCorrectionTests(TestCase):
+    @contextmanager
+    def fixture(self):
+        current, source = recovered_root()
+        current.lifecycle.state["remediation_cycle_count"] = 1
+        source.lifecycle_state["remediation_cycle_count"] = 1
+        source.publication_branch = "refs/heads/fixture-publications"
+        source.journal_predecessor_oid = current.publication_oid
+        source.historical_validation_receipt_digest = current.lifecycle.validation_receipt_digest
+        source.historical_final_attestation_digest = current.lifecycle.adoption_source_evidence_digest
+        source.historical_evidence_correction = None
+        recovery = lifecycle_publication.VerifiedReadySourceRecovery(**{
+            item.name: getattr(source, item.name) for item in fields(lifecycle_publication.VerifiedReadySourceRecovery)
+        })
+        document = {
+            "kind": lifecycle_publication.PUBLICATION_KIND,
+            "operation": "ENROLL_EXISTING_LIFECYCLE",
+            "repository": REPOSITORY, "delivery_issue": ISSUE,
+            "head_sha": HEAD, "historical_proof_mode": "exact_state_adoption",
+            "publication_digest": current.publication_digest,
+            "journal_predecessor_oid": None, "predecessor_publication_oid": None,
+            "lifecycle_evidence": json.loads(current.serialized_lifecycle_evidence),
+        }
+        # The historical fixture represents the same defect class: a signed
+        # recovery incorrectly labels the root's fresh safety/admission digests.
+        loss = document["lifecycle_evidence"]["exact_state_adoption_proof"]["validation_evidence_loss_admission"]
+        document["lifecycle_evidence"]["exact_state_adoption_proof"]["intended_state"] = copy.deepcopy(current.lifecycle.state)
+        loss["parent_sha"] = PARENT
+        loss["admission_digest"] = current.lifecycle.adoption_source_evidence_digest
+        current.serialized_lifecycle_evidence = fast_path.canonical_json_bytes(document["lifecycle_evidence"])
+        target = (REPOSITORY, ISSUE, PR, current.publication_oid, current.publication_digest,
+                  recovery.publication_oid, recovery.publication_digest, "d" * 40, "e" * 64)
+        policy = SimpleNamespace(publication_branch=source.publication_branch,
+                                 publication_signer_identities=frozenset({SIGNER}))
+        def sign(payload, domain):
+            return {"format": "ssh", "signer_identity": SIGNER,
+                    "value": hashlib.sha256(domain.encode() + payload).hexdigest()}
+        def verify(payload, signature, identity, domain):
+            if identity != SIGNER or signature != sign(payload, domain):
+                raise ValueError("bad fixture signature")
+            return lifecycle_authority.VerifiedSignature(identity, "ssh")
+        with ExitStack() as stack:
+            for owner, name, value in (
+                (lifecycle_publication, "_ZERO_RECEIPT_RECOVERY_CORRECTION_TARGET", target),
+                (lifecycle_authority, "_load_lifecycle_trust_policy", mock.Mock(return_value=policy)),
+                (lifecycle_authority, "_policy_signature_verifier", mock.Mock(return_value=verify)),
+                (lifecycle_authority, "verify_exact_state_adoption_proof", mock.Mock(return_value=current.lifecycle)),
+            ):
+                stack.enter_context(mock.patch.object(owner, name, value))
+            yield current, document, recovery, sign
+
+    def signed(self, fields_value, sign):
+        signature = sign(fast_path.canonical_json_bytes(fields_value), lifecycle_publication.READY_SOURCE_CORRECTION_DOMAIN)
+        signed = {**fields_value, "signature": signature}
+        return fast_path.canonical_json_bytes({**signed, "publication_digest": fast_path.digest_json(signed)})
+
+    def correction_fields(self, current, document, recovery):
+        return lifecycle_publication._ready_source_correction_fields(
+            (current.publication_oid, document, current.lifecycle), recovery,
+            publication_branch=recovery.publication_branch,
+            journal_predecessor_oid=recovery.publication_oid, signer_identity=SIGNER,
+        )
+
+    def verify(self, raw, current, document, recovery, parent=None):
+        return lifecycle_publication._verify_ready_source_correction_document(
+            raw, object_oid="c" * 40, expected_branch=recovery.publication_branch,
+            parent=parent or recovery.publication_oid,
+            previous=(current.publication_oid, document, current.lifecycle), recovery=recovery,
+        )
+
+    def test_signed_correction_preserves_original_and_derives_effective_absence(self):
+        with self.fixture() as (current, document, recovery, sign):
+            original = copy.deepcopy(recovery)
+            raw = self.signed(self.correction_fields(current, document, recovery), sign)
+            projected = self.verify(raw, current, document, recovery)
+            self.assertEqual(recovery, original)
+            self.assertIsNone(projected.historical_validation_receipt_digest)
+            self.assertIsNone(projected.historical_final_attestation_digest)
+            self.assertEqual(projected.historical_evidence_correction, raw)
+            for item in fields(recovery):
+                if item.name not in {"historical_validation_receipt_digest", "historical_final_attestation_digest", "historical_evidence_correction"}:
+                    self.assertEqual(getattr(projected, item.name), getattr(recovery, item.name))
+            lifecycle_publication._require_effective_recovery_historical_evidence(projected, document, current.lifecycle)
+            with self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                self.verify(raw, current, document, projected)
+
+    def test_signed_correction_rejects_changed_scope_projection_and_ancestry(self):
+        with self.fixture() as (current, document, recovery, sign):
+            expected = self.correction_fields(current, document, recovery)
+            alternatives = {
+                "historical_evidence": {"state": "UNAVAILABLE", "validation_receipt_digest": "1" * 64},
+                "bounded_uses": True, "delivery_issue": ISSUE + 1, "pull_request": PR + 1,
+                "repository": "SecPal/other", "signer_identity": "other@example.invalid",
+            }
+            for key, value in expected.items():
+                altered = copy.deepcopy(expected)
+                altered[key] = alternatives.get(key, ("f" * 40 if isinstance(value, str) and len(value) == 40 else "changed"))
+                with self.subTest(field=key), self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                    self.verify(self.signed(altered, sign), current, document, recovery)
+            for state in ("PRESENT", "UNAVAILABLE"):
+                altered = copy.deepcopy(expected)
+                altered["historical_evidence"]["state"] = state
+                with self.subTest(state=state), self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                    self.verify(self.signed(altered, sign), current, document, recovery)
+            altered = copy.deepcopy(expected)
+            altered["historical_evidence"]["bytes_reconstructed"] = 0
+            with self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                self.verify(self.signed(altered, sign), current, document, recovery)
+            aliased = json.loads(self.signed(expected, sign))
+            aliased["historical_evidence"]["bytes_reconstructed"] = 0
+            aliased["publication_digest"] = fast_path.digest_json({k: v for k, v in aliased.items() if k != "publication_digest"})
+            with self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                self.verify(fast_path.canonical_json_bytes(aliased), current, document, recovery)
+            altered = {**expected, "caller_historical_digest": "a" * 64}
+            with self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                self.verify(self.signed(altered, sign), current, document, recovery)
+            with self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                self.verify(self.signed(expected, sign), current, document, recovery, parent="f" * 40)
+
+    def test_correction_rejects_unsigned_partial_and_noncanonical_documents(self):
+        with self.fixture() as (current, document, recovery, sign):
+            raw = self.signed(self.correction_fields(current, document, recovery), sign)
+            value = json.loads(raw)
+            variants = [b"null\n", b"{", raw + b" ", fast_path.canonical_json_bytes({})]
+            for key in value:
+                altered = {name: item for name, item in value.items() if name != key}
+                variants.append(fast_path.canonical_json_bytes(altered))
+            altered = copy.deepcopy(value)
+            altered["signature"]["value"] = "forged"
+            altered["publication_digest"] = fast_path.digest_json({k: v for k, v in altered.items() if k != "publication_digest"})
+            variants.append(fast_path.canonical_json_bytes(altered))
+            for variant in variants:
+                with self.subTest(variant=variant[:30]), self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                    self.verify(variant, current, document, recovery)
+
+    def test_correction_rejects_stale_current_and_substituted_recovery(self):
+        with self.fixture() as (current, document, recovery, sign):
+            raw = self.signed(self.correction_fields(current, document, recovery), sign)
+            for name in ("repository", "delivery_issue", "pull_request", "publication_oid", "publication_digest",
+                         "current_publication_oid", "current_publication_digest", "current_authority_digest",
+                         "lifecycle_id", "head_sha", "tree_sha", "parent_shas", "expected_commit_signer",
+                         "historical_validation_receipt_digest", "historical_final_attestation_digest",
+                         "lifecycle_state", "journal_predecessor_oid"):
+                altered = replace(recovery, **{name: None})
+                with self.subTest(field=name), self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                    self.verify(raw, current, document, altered)
+            altered = copy.deepcopy(document)
+            altered["publication_digest"] = "f" * 64
+            with self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                self.verify(raw, current, altered, recovery)
+
+    def test_correction_requires_canonical_zero_receipt_root(self):
+        with self.fixture() as (current, document, recovery, sign):
+            raw = self.signed(self.correction_fields(current, document, recovery), sign)
+            for field, value in (("schema_version", "1.1"), ("historical_package_status", "PRESENT"),
+                                 ("historical_validation_receipt_digest", "f" * 64),
+                                 ("historical_final_attestation_digest", "f" * 64),
+                                 ("historical_bytes_reconstructed", True)):
+                altered = copy.deepcopy(document)
+                loss = altered["lifecycle_evidence"]["exact_state_adoption_proof"]["validation_evidence_loss_admission"]
+                loss[field] = value
+                with self.subTest(field=field), self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                    self.verify(raw, current, altered, recovery)
+
+    def test_publisher_accepts_no_caller_authority_and_rejects_candidate_tooling(self):
+        self.assertEqual(list(inspect.signature(lifecycle_publication.publish_zero_receipt_ready_source_correction).parameters), [])
+        from secpal_ready_integration_lifecycle import bootstrap_source_admission as transport
+        helper = SimpleNamespace(_require_accepted_main_bridge_source=mock.Mock(side_effect=fast_path.SecurityBlocker("candidate-local")))
+        with mock.patch.object(transport, "_load_actions_helper", return_value=helper), mock.patch.object(lifecycle_publication, "_isolated_repository") as writer:
+            with self.assertRaisesRegex(fast_path.SecurityBlocker, "candidate-local"):
+                lifecycle_publication.publish_zero_receipt_ready_source_correction()
+            writer.assert_not_called()
+
+    def test_full_and_identity_journal_readers_agree_and_preserve_current(self):
+        with self.fixture() as (current, document, recovery, sign):
+            original_document = {"kind": lifecycle_publication.READY_SOURCE_RECOVERY_KIND,
+                                 "repository": REPOSITORY, "delivery_issue": ISSUE,
+                                 "journal_predecessor_oid": current.publication_oid}
+            raw = self.signed(self.correction_fields(current, document, recovery), sign)
+            oid = "c" * 40
+            objects = {
+                current.publication_oid: (fast_path.canonical_json_bytes(document), None),
+                recovery.publication_oid: (fast_path.canonical_json_bytes(original_document), current.publication_oid),
+                oid: (raw, recovery.publication_oid),
+            }
+            # Historical signature/root verification is supplied as authenticated
+            # fixture input. The new correction signature, ordering and projection
+            # are exercised by both actual maintained journal readers.
+            with (
+                mock.patch.object(lifecycle_publication, "_read_publication_object", side_effect=lambda root, object_oid: objects[object_oid]),
+                mock.patch.object(lifecycle_publication, "_verify_publication_document", return_value=(document, current.lifecycle)),
+                mock.patch.object(lifecycle_publication, "_verify_publication_envelope", return_value=document),
+                mock.patch.object(lifecycle_publication, "_verify_ready_source_recovery_document", return_value=(original_document, recovery)),
+                mock.patch.object(lifecycle_authority, "_verify_lifecycle_authority_for_journal", return_value=current.lifecycle),
+            ):
+                entries, latest, admissions, projected = lifecycle_publication._walk_journal(ROOT, oid, recovery.publication_branch, include_recoveries=True)
+                key = (REPOSITORY, ISSUE)
+                self.assertEqual(len(entries), 1)
+                self.assertEqual(latest[key], (current.publication_oid, document, current.lifecycle))
+                self.assertIsNone(projected[key].historical_validation_receipt_digest)
+                self.assertEqual(lifecycle_publication._walk_journal_identity_projection(ROOT, oid, recovery.publication_branch), ({key}, set()))
+                second_fields = self.correction_fields(current, document, recovery)
+                second_fields["journal_predecessor_oid"] = oid
+                objects["f" * 40] = (self.signed(second_fields, sign), oid)
+                for reader in (lifecycle_publication._walk_journal, lifecycle_publication._walk_journal_identity_projection):
+                    with self.subTest(reader=reader.__name__), self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                        reader(ROOT, "f" * 40, recovery.publication_branch)
+                for altered in (raw + b" ", b"{}\n"):
+                    objects[oid] = (altered, recovery.publication_oid)
+                    for reader in (lifecycle_publication._walk_journal, lifecycle_publication._walk_journal_identity_projection):
+                        with self.subTest(reader=reader.__name__, malformed=altered[:20]), self.assertRaises(lifecycle_publication.LifecyclePublicationError):
+                            reader(ROOT, oid, recovery.publication_branch)
+
+    def test_preserved_tag_accepts_only_authenticated_corrected_projection(self):
+        with self.fixture() as (current, document, recovery, sign):
+            projected = self.verify(self.signed(self.correction_fields(current, document, recovery), sign), current, document, recovery)
+            manifest = AdoptedReadyPriorAuthorityTests().derive(current, recovery=projected)
+            tag_oid, marker = "d" * 40, "e" * 64
+            tag = f"object {HEAD}\ntype commit\ntag fixture\ntagger fixture\n\nSecPal-Prior-Authority: {marker}\n"
+            def git(root, argv, **kwargs):
+                output = tag_oid if argv[0] == "rev-parse" else "tag" if argv[0] == "cat-file" and argv[1] == "-t" else tag
+                return subprocess.CompletedProcess(argv, 0, output, "")
+            with (
+                mock.patch.object(actions, "_run_attestation_git", side_effect=git),
+                mock.patch.object(actions, "_load_lifecycle_publication_helpers", return_value=(lifecycle_authority, lifecycle_publication)),
+                mock.patch.object(actions.evidence, "interpret_local_signature", return_value={}),
+                mock.patch.object(actions, "_verify_signature_policy_identity"),
+                mock.patch.object(actions, "_verify_integration_signer"),
+                mock.patch.object(actions, "_derive_exact_state_adoption_ready_prior_authority", return_value=manifest),
+                mock.patch.object(lifecycle_publication, "verify_current_ready_source_recovery", return_value=projected) as reader,
+            ):
+                def check(value=manifest):
+                    actions._verify_prior_authority_tag(repository_root=ROOT, tag_ref="refs/tags/fixture", authority=value,
+                        integration_evidence={"prior_authority_tag_object_sha": tag_oid}, binding={"signature_policy": {}})
+                check()
+                reader.return_value = recovery
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    check()
+                reader.return_value = replace(projected, publication_digest="f" * 64)
+                with self.assertRaises(fast_path.SecurityBlocker):
+                    check()
+                reader.return_value = projected
+                for field in ("repository", "delivery_issue_number", "pull_request_number", "prior_delivery_head_sha", "prior_delivery_tree_sha"):
+                    altered = {**manifest, field: "wrong"}
+                    with self.subTest(field=field), self.assertRaises((fast_path.SecurityBlocker, ValueError)):
+                        check(altered)
+
+    @contextmanager
+    def publisher_fixture(self, *, ambiguous=False, drift=False, existing=False, wrong_readback=False):
+        from secpal_ready_integration_lifecycle import bootstrap_source_admission as transport
+        from secpal_ready_integration_lifecycle import lifecycle_execution as execution
+        with self.fixture() as (current, document, recovery, sign), ExitStack() as stack:
+            target = lifecycle_publication._ZERO_RECEIPT_RECOVERY_CORRECTION_TARGET
+            policy = SimpleNamespace(publication_branch=recovery.publication_branch, publication_remote_url="fixture",
+                                     publication_signer_identities=frozenset({SIGNER}))
+            live = SimpleNamespace(repository=REPOSITORY, pull_request=PR, state="OPEN", head_sha=HEAD, draft=False)
+            historical_tag = f"object {HEAD}\ntype commit\ntag fixture\ntagger fixture\n\nSecPal-Prior-Authority: {target[8]}\n"
+            helper = SimpleNamespace(
+                _require_accepted_main_bridge_source=mock.Mock(return_value="f" * 40),
+                load_registry=mock.Mock(return_value={}), select_repository=mock.Mock(return_value={"signature_policy": {}}),
+                _run_attestation_git=mock.Mock(return_value=subprocess.CompletedProcess([], 0, historical_tag, "")),
+                evidence=SimpleNamespace(interpret_local_signature=mock.Mock(return_value={})),
+                _verify_signature_policy_identity=mock.Mock(), _verify_integration_signer=mock.Mock(),
+                _prior_authority_tag_target=actions._prior_authority_tag_target,
+                _prior_authority_tag_digest=actions._prior_authority_tag_digest,
+                _verified_prior_delivery_commit=mock.Mock(return_value={"tree_sha": TREE, "parent_shas": [PARENT]}),
+            )
+            written = {}
+            def write(root, raw, parent):
+                written.update(raw=raw, parent=parent)
+                return "c" * 40
+            initial_raw = self.signed(self.correction_fields(current, document, recovery), sign)
+            def projected():
+                raw = written.get("raw", initial_raw)
+                return self.verify(raw, current, document, recovery)
+            def journal(root, tip, branch, **kwargs):
+                value = projected() if existing or tip == "c" * 40 else recovery
+                return [], {(REPOSITORY, ISSUE): (current.publication_oid, document, current.lifecycle)}, {}, {(REPOSITORY, ISSUE): value}
+            def readback(repository, issue):
+                result = projected()
+                return replace(result, historical_evidence_correction=b"wrong") if wrong_readback else result
+            cas = mock.Mock(side_effect=lifecycle_publication.LifecyclePublicationAmbiguousWrite("unknown") if ambiguous else None)
+            live_reader = mock.Mock(side_effect=[live, {"changed": True}] if drift else None, return_value=live)
+            for owner, name, value in (
+                (transport, "_load_actions_helper", mock.Mock(return_value=helper)),
+                (lifecycle_authority, "_load_lifecycle_trust_policy", mock.Mock(return_value=policy)),
+                (execution, "_policy_role_signer", mock.Mock(return_value=(SIGNER, sign))),
+                (execution, "_read_live_github", live_reader),
+                (lifecycle_publication, "_verify_live_protection", mock.Mock()),
+                (lifecycle_publication, "_isolated_repository", mock.Mock(return_value=nullcontext((ROOT, None)))),
+                (lifecycle_publication, "_observe_remote_current_once", mock.Mock(return_value=recovery.publication_oid)),
+                (lifecycle_publication, "_walk_journal", mock.Mock(side_effect=journal)),
+                (lifecycle_publication, "_run_git", mock.Mock(return_value=subprocess.CompletedProcess([], 0, b"", b""))),
+                (lifecycle_publication, "_resolve_current_once", mock.Mock(return_value=target[7])),
+                (lifecycle_publication, "_write_publication_object", mock.Mock(side_effect=write)),
+                (lifecycle_publication, "_cas_remote_ref", cas),
+                (lifecycle_publication, "verify_current_ready_source_recovery", mock.Mock(side_effect=readback)),
+            ):
+                stack.enter_context(mock.patch.object(owner, name, value))
+            yield cas, written
+
+    def test_publisher_cas_is_append_only_and_uncertain_write_never_retries(self):
+        for ambiguous in (False, True):
+            with self.subTest(ambiguous=ambiguous), self.publisher_fixture(ambiguous=ambiguous) as (cas, written):
+                result = lifecycle_publication.publish_zero_receipt_ready_source_correction()
+                self.assertEqual(result.historical_evidence_correction, written["raw"])
+                self.assertEqual(written["parent"], "a" * 40)
+                cas.assert_called_once()
+                self.assertEqual(cas.call_args.args[3:5], ("c" * 40, "a" * 40))
+        with self.publisher_fixture(existing=True) as (cas, written):
+            result = lifecycle_publication.publish_zero_receipt_ready_source_correction()
+            self.assertIsNotNone(result.historical_evidence_correction)
+            self.assertEqual(written, {})
+            cas.assert_not_called()
+
+    def test_publisher_rejects_live_drift_and_wrong_uncertain_readback(self):
+        with self.publisher_fixture(drift=True) as (cas, _written):
+            with self.assertRaisesRegex(lifecycle_publication.LifecyclePublicationError, "drifted"):
+                lifecycle_publication.publish_zero_receipt_ready_source_correction()
+            cas.assert_not_called()
+        with self.publisher_fixture(ambiguous=True, wrong_readback=True) as (cas, _written):
+            with self.assertRaises(lifecycle_publication.LifecyclePublicationAmbiguousWrite):
+                lifecycle_publication.publish_zero_receipt_ready_source_correction()
+            cas.assert_called_once()
 
 
 if __name__ == "__main__":

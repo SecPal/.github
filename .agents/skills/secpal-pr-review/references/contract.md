@@ -260,6 +260,14 @@ creating `late-disposition.schema.json`. Both documents are detached-signed by
 that same OS-account identity without a Git commit. New SecPal artifacts use
 SSH signatures, trusted absolute executables, bounded timeouts, the OS account
 home and configuration roots, and neutralized Git environment overrides.
+The schema-1.8 disposition is restricted to the two exact Issue #1048
+external-prerequisite findings. It binds a fresh authenticated-source digest
+instead of a nonexistent final receipt: original valid comment and reviewed
+commit, unchanged candidate HEAD/TREE and SSH signer, absent historical anchor,
+and exact merged/current canonical `.github/main` anchor. The existing stable
+target rechecks and sole named resolution mutation remain mandatory. This
+closed member cannot enroll a repository or thread for ordinary resolution and
+grants no source, Ready, review, validation, counter, or merge authority.
 OpenPGP verification remains only for immutable historical/provider evidence;
 it grants no new SecPal signing authority.
 Artifact and signature inputs are verified from owned immutable byte snapshots.
@@ -626,8 +634,11 @@ push, CI, or review authority never implies either transition.
 
 Review submissions, comments, threads, CI observations, reopen events, and
 validated Ready-integration observations are bounded evidence, not lifecycle
-transitions. They consume no counter and select no review request, Ready/Draft
-change, recovery, or recursive pass. One separately authorized additional
+transitions. After terminal provider feedback on a new ordinary Ready lifecycle,
+the maintained publisher binds the complete qualifying review-object set to
+one explicit `UNRESTRICTED_REVIEW_CONSUMED` successor before remediation.
+Individual review objects consume no counter and select no review request,
+Ready/Draft change, recovery, or recursive pass. One separately authorized additional
 review first appends `ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED`, then permits
 one current-head assessment and stops. The same-head transition changes no
 finite counter or Ready state, but its CURRENT predecessor binding makes replay
@@ -643,10 +654,11 @@ Exceptional Recovery or Continuation. The candidate's verifier-sealed
 validation evidence authenticates the complete reviewed state at H1 and its
 commit-bound ordinary eligibility.
 
-The maintained verifier derives the unique Copilot request event, exactly one
-added Copilot review committed to H0, their chronology, and the complete set of
-added provider-owned threads, comment-body digests, and comment-to-review
-identities. The first remediation's authenticated eligibility derives the
+The maintained verifier preserves the historical single-Copilot H0 form and
+derives the complete bounded Copilot and Codex set for a Ready-head H1
+assessment. It authenticates their chronology and all added provider threads,
+comment-body digests, and comment-to-review identities. The first
+remediation's authenticated eligibility derives the
 only predecessor threads allowed to become resolved, and an independent live
 capture must equal the candidate-bound H1 state. The added-thread set must
 equal the existing
@@ -770,7 +782,7 @@ This owner preserves the useful decision/execution boundary and composes the
 existing authorities without adding a permanent lifecycle concept.
 `NEW_PERMANENT_CONCEPT=NO`.
 
-The executor also owns one closed two-successor convergence shape. A pending,
+The executor also owns one closed historical two-successor convergence shape. A pending,
 authenticated `DRAFT_TO_READY` at H0 may be followed only by one independently
 authenticated `REMEDIATION_COMPLETED` from H0 to its sole-child H1 when a
 complete live GitHub timeline proves the Ready mutation preceded that source
@@ -779,8 +791,11 @@ Existing orchestration must reject the remediation against Draft H0 and accept
 it against the derived Ready midpoint, making the order unique. Existing sealed
 validation evidence and signed-commit authentication must bind the exact issue,
 PR, heads, tree, receipt, final attestation, finding IDs, signer, and signature.
-The two ordinary successors publish sequentially through the existing CAS and
-historical read-back boundary; predecessor, midpoint, and final states are
+New ordinary Ready-at-Review-0/1 delivery must publish finite review
+consumption after terminal feedback before remediation. Historical convergence
+cannot skip that forward policy. The two authenticated successors publish
+sequentially through the existing CAS and historical read-back boundary;
+predecessor, midpoint, and final states are
 idempotently resumable without another GitHub Ready write.
 
 The maintained autonomy rule is:

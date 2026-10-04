@@ -610,6 +610,24 @@ history and is never blindly retried. This is neither a review retry loop nor a
 new lifecycle review. A known persisted request with no provider acknowledgement
 is distinct from an unknown mutation result.
 
+Fresh provider reacquisition is a distinct reconciliation case, not a second
+first fallback. The maintained bounded survey must independently prove
+`REQUIRED_HISTORICAL_ACQUISITION_EVIDENCE_UNAVAILABLE`; that finding leaves the
+original acquisition validity unprovable, without declaring it valid or invalid.
+Only the same authenticated unchanged Ready head at Review 1/1, Remediation
+1/2, one Ready transition, Cycle 3 absent, and no Recovery or Continuation may
+receive one signed, exact, one-use reacquisition authorization. The maintained
+verifier derives every required provider type. Protected per-type dispatch CAS
+claims serialize at most one fresh canonical Code request and one fresh
+canonical Security request; conflicting ordinary claims and duplicate requests
+fail closed. Each fresh request and result retains its own chronology and
+identity. Completion requires all fresh exact-head terminal results and complete
+Stable Feedback, with no caller-selected findings or providers. This
+reconciliation consumes no review, remediation, Ready, Recovery, or Continuation
+counter and does not validate or rewrite historical first-fallback chronology.
+The implementation and bounded observations are maintained in the existing
+provider acquisition and dispatch architecture.
+
 ### 5.3.2 Signing Authority
 
 `SECPAL_SIGNING_FORMAT: SSH`. SSH is the sole SecPal-controlled signing

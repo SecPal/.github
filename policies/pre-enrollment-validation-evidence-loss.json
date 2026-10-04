@@ -725,6 +725,255 @@
           }
         ]
       }
+    },
+    {
+      "admission_schema_version": "1.2",
+      "repository": "SecPal/secpal.app",
+      "pull_request": 353,
+      "head_sha": "e8278afee25dc6b8290349eaef067437ec0b0053",
+      "historical_provider_summary_digest": "d77dfa1bb683477404062ebd1bfdb990d867e3d77951eb402e99d8c37270431e",
+      "observed_pre_enrollment_history": [
+        {
+          "sequence": 1,
+          "kind": "PR_CREATED_DRAFT",
+          "observed_at": "2026-09-29T20:20:10Z",
+          "head_sha": "44a4a4cdf8440278d7b086329826e5abe7d1cee5",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 2,
+          "kind": "DRAFT_TO_READY_OBSERVED",
+          "observed_at": "2026-09-29T20:20:45Z",
+          "head_sha": "44a4a4cdf8440278d7b086329826e5abe7d1cee5",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 3,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-09-29T20:25:38Z",
+          "head_sha": "0dbc15899577bf8f327befa4959d68b85d132350",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 4,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-09-30T17:57:32Z",
+          "head_sha": "e8278afee25dc6b8290349eaef067437ec0b0053",
+          "reviewed_head_sha": null
+        }
+      ],
+      "intended_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 2,
+        "cycle_3_absent": true,
+        "draft": false,
+        "ready": true,
+        "ready_transition_count": 1,
+        "ready_history": [
+          {
+            "sequence": 1,
+            "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": "5661bd50340837c67bdcc3603ea8dcd65281f64a8a48083cffefa02937848dfb"
+          }
+        ],
+        "exceptional_recovery_count": 0,
+        "exceptional_recovery_history": [],
+        "exceptional_continuation_count": 0,
+        "exceptional_continuation_history": []
+      },
+      "delivery_issue": 352,
+      "tree_sha": "7b96eb34020fbcf61e03b4678d5156a6d6e720c8",
+      "parent_sha": "0dbc15899577bf8f327befa4959d68b85d132350",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "historical_package_status": "UNAVAILABLE",
+      "historical_final_attestation_digest": null,
+      "historical_bytes_reconstructed": false,
+      "feedback_digest": "638da6536ad802a5d3588178d2e03d7de269b6c9e266acc4e71c21b4cdb203ee",
+      "technical_decisions": [
+        {
+          "source_id": "REVIEW:PRR_kwDORn9WD88AAAABP1xSjA",
+          "source_digest": "5d805dfde0a146bb1e9c35a64430d8a7685048df04ed06ea9dff2472affb3afe",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "4c5473d16fa5e0df8f1ada678dbbcd4b7821004a64a05185090dff2d0599d32c"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDORn9WD88AAAABP1y0ig",
+          "source_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "167c2f2765a8dbc0985b3237c614d2b27e8fea042816234397bf3f973b8648f3"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDORn9WD88AAAABQA8_ow",
+          "source_digest": "58046eb4313fab56072afec2b533e08f56b1db5d9ff60ed1d7bb08506d7baae4",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "53501f7d577b49ed388aad2eaf94cf58b383a75dc753f8c8152f0db23986a3d0"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDORn9WD88AAAABQBTisQ",
+          "source_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "a2de481ff436dec4da0fa0cf6770827b7f6a6dcb302d255e64b6faa9811849fb"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDORn9WD88AAAABX40cyQ",
+          "source_digest": "619c9f9f66a93f7e7ea60049aa147d2cf183fb706a71e11a710216ed2ba19d92",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "b88f69d5f64adf0b52dea2900789c9bd5a31505c0baaf93d6547c43f2ebea02d"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDORn9WD88AAAABX40mHw",
+          "source_digest": "d77dfa1bb683477404062ebd1bfdb990d867e3d77951eb402e99d8c37270431e",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "db8cea55c6dc98e65ce7401a51992bb1953fb6215d10f00c83e8b6b9584f2964"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDORn9WD88AAAABYKIY1Q",
+          "source_digest": "7750379659fbba413136c8bf4f500a59f1e03f0c36c0ab16b0a2475eb13ecb1a",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "815f8e1cca30e32745a560425042782f05ee231a87ff937c6162e216f7e6144a"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDORn9WD88AAAABYKIiRw",
+          "source_digest": "f8831ff13591b5a038c6882d37e6b3c2ecd84b365bb9e7a04fd8f8a060b22097",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "0969c20afeaed34e5f3a5b4af131fc3261593d3ebec36a20b4aac2d8c7f15a0f"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDORn9WD88AAAABYKMskw",
+          "source_digest": "39ae8d0b7331a019056861f39f164eed7e4d57c8ab8990721f60d5dd2e67de2d",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "f3879fa07e35652035ff0f22c6bcf96974c4b0657d161b894a7199f40e584328"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDORn9WD88AAAABYKR8Jw",
+          "source_digest": "23eeb90a9c13d480a0dd97f059ac56527172c30716da1d59fde0b84d00a5e0cd",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "cf930dbaa3f7f104f25605b76166bdfaca7190da0735ee88dd0bac1664369f7b"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDORn9WD872pDhS",
+          "source_digest": "603a8e721cae1db6ba6a8951d9dafecde00b95f5c49683220ded58faeaf0d6cc",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "f3b91bedb684cd113d48e6830305785fadd2877408984b1d6365eb39106d7455"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDORn9WD872pIIs",
+          "source_digest": "b695a6903f1f1564b529b2b9ce37eef9bfa33769c5233407fc6cca784ae14dae",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "f60f687e14335bc34c698cc8a5bfebc09dc9ae16abd53f91d43199e475833e60"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDORn9WD873NKDG",
+          "source_digest": "96788e19bf271941469793effebc41e25719824f168dd328541b58172d6fc2a5",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "81c63236b1c010898a956149791c0528fed26f6eff78398d92882e5d3ad75987"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDORn9WD873OWYr",
+          "source_digest": "2bca6d131331355ade02b726d51246fd692556ba6b3d16a94897f7c795f9bb08",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "8490cdbf95a78853bfc58d92eab2faa67e919d5af21d1999c512e66d976e55aa"
+        }
+      ],
+      "current_safety_harness_path": "tests/pre-enrollment-secpal-app-352-current-safety.py",
+      "registered_validation_projection": {
+        "provenance": "ACCEPTED_RECOVERY_RECORD_EXACT_SOURCE",
+        "repository": "SecPal/secpal.app",
+        "head_sha": "e8278afee25dc6b8290349eaef067437ec0b0053",
+        "tree_sha": "7b96eb34020fbcf61e03b4678d5156a6d6e720c8",
+        "files": [
+          {
+            "path": "tests/android-distribution.test.mjs",
+            "mode": "100644",
+            "blob_oid": "1f0c7efdaa19ca515494855175007d4b98a89480",
+            "size": 22211
+          },
+          {
+            "path": "tests/cta-section.test.mjs",
+            "mode": "100644",
+            "blob_oid": "e6b2c88256c7cfdad7728cca7af97e01144a6490",
+            "size": 6185
+          },
+          {
+            "path": "tests/development-status.test.mjs",
+            "mode": "100644",
+            "blob_oid": "8d330f23f23acdd4e43c7a3607bf1ee542b4a8ff",
+            "size": 7442
+          },
+          {
+            "path": "tests/features-section.test.mjs",
+            "mode": "100644",
+            "blob_oid": "6bfdc9d7402026d7768bb48fca93de8d63211def",
+            "size": 3930
+          },
+          {
+            "path": "tests/locale-redirect.test.mjs",
+            "mode": "100644",
+            "blob_oid": "df6f61f7229b8cd20bc388dea3b884ef3fd4c7a7",
+            "size": 1040
+          },
+          {
+            "path": "tests/mobile-safe-area.test.mjs",
+            "mode": "100644",
+            "blob_oid": "1c661ff4a86f5d979975eef91977dbb6e1cbf821",
+            "size": 11377
+          },
+          {
+            "path": "tests/navigation-structure.test.mjs",
+            "mode": "100644",
+            "blob_oid": "22263ba5d399e28922c1c45836a23c0c106a0d10",
+            "size": 8905
+          },
+          {
+            "path": "tests/outcomes-section.test.mjs",
+            "mode": "100644",
+            "blob_oid": "9e0114bd15c231f794ba5798fe14e01df5644f8a",
+            "size": 6353
+          },
+          {
+            "path": "tests/preflight-changed-files.test.mjs",
+            "mode": "100644",
+            "blob_oid": "52fc11208f9ebe21b3a5580c7acff8b6b357aebb",
+            "size": 5957
+          },
+          {
+            "path": "tests/preflight-large-pr.test.mjs",
+            "mode": "100644",
+            "blob_oid": "4b98ff747cd2901b32101afa1d380c889e967630",
+            "size": 3466
+          },
+          {
+            "path": "tests/privacy-pages.test.mjs",
+            "mode": "100644",
+            "blob_oid": "4aa564e465f75026fa8feb4d2cd4fb343b8efc1d",
+            "size": 10932
+          },
+          {
+            "path": "tests/retired-domain.test.mjs",
+            "mode": "100644",
+            "blob_oid": "ef94820eae032b6f877c1d981efdb3862a51bb2f",
+            "size": 4361
+          },
+          {
+            "path": "tests/roadmap-copy.test.mjs",
+            "mode": "100644",
+            "blob_oid": "8e5febba8a021e1c5a234ff18a619c204e87d7b8",
+            "size": 2927
+          },
+          {
+            "path": "tests/workflow-action-pins.test.mjs",
+            "mode": "100644",
+            "blob_oid": "acd9a2b4fb54ac41d4ab23d5f3cd187393b97c05",
+            "size": 8658
+          },
+          {
+            "path": "tests/workflow-section.test.mjs",
+            "mode": "100644",
+            "blob_oid": "ab9075ef5cba311fcc2f46871ab5f064f91c488c",
+            "size": 4994
+          }
+        ]
+      }
     }
   ]
 }

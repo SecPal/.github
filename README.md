@@ -10,6 +10,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 This repository contains general project documentation, settings, and community health files for the [SecPal organization](https://github.com/SecPal).
 
+Find current architecture authority and technical contract owners in the [architecture navigation](docs/architecture.md).
+
 ## About SecPal
 
 SecPal is the operations software for German private security services. Everything the day-to-day operation needs — in one system that just works.

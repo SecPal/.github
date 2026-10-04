@@ -30,6 +30,7 @@ from . import fast_path
 from . import follow_up
 from . import lifecycle_authority as authority
 from . import lifecycle_publication as publication
+from . import provider_acquisition
 from . import late_disposition
 from . import version_collision
 
@@ -1149,6 +1150,22 @@ def _ordinary_ready_remediation_finding_authority_projection(
     }
 
 
+def _ready_integration_remediation_predecessor_context(
+    current: publication.VerifiedLifecyclePublication,
+    validation: fast_path.VerifiedValidationEvidence,
+    prior_authority: Any,
+) -> tuple[fast_path.StableFeedbackState, str | None]:
+    """Compose canonical integration validation with its protected advancement."""
+
+    try:
+        _, reviewed, eligibility = publication.verify_ready_integration_predecessor(
+            current, validation, prior_authority
+        )
+    except publication.LifecyclePublicationError as exc:
+        raise LifecycleOrchestrationError(str(exc)) from exc
+    return reviewed, eligibility
+
+
 def verify_ready_remediation_provider_growth_authority(
     current: publication.VerifiedLifecyclePublication,
     *,
@@ -1156,6 +1173,7 @@ def verify_ready_remediation_provider_growth_authority(
     candidate_validation: fast_path.VerifiedValidationEvidence,
     predecessor_eligibility_evidence: Any,
     eligibility_evidence: Any,
+    predecessor_prior_authority: Any = None,
 ) -> VerifiedOrdinaryReadyRemediationFindingAuthority:
     """Compose existing CURRENT, validation, feedback, and eligibility authority."""
 
@@ -1165,10 +1183,27 @@ def verify_ready_remediation_provider_growth_authority(
         )
     lifecycle = current.lifecycle
     try:
-        state = authority._validate_state(copy.deepcopy(lifecycle.state))
-        reviewed, predecessor_eligibility = (
-            fast_path.verified_validation_review_context(predecessor_validation)
+        state = authority._validate_state(
+            copy.deepcopy(lifecycle.state),
+            allow_adopted_observations=(
+                lifecycle.historical_proof_mode == authority.EXACT_ADOPTION_PROOF_MODE
+            ),
         )
+        try:
+            reviewed, predecessor_eligibility = (
+                fast_path.verified_validation_review_context(predecessor_validation)
+            )
+        except fast_path.SecurityBlocker:
+            reviewed, predecessor_eligibility = (
+                _ready_integration_remediation_predecessor_context(
+                    current, predecessor_validation, predecessor_prior_authority
+                )
+            )
+            provider = None
+        else:
+            provider = publication.derive_ready_source_recovery_provider_binding(
+                current
+            )
         resulting, candidate_eligibility = (
             fast_path.verified_validation_review_context(candidate_validation)
         )
@@ -1184,16 +1219,15 @@ def verify_ready_remediation_provider_growth_authority(
                 reviewed_state=reviewed,
             )
         )
-        provider = publication.derive_ready_source_recovery_provider_binding(
-            current
-        )
         live_resulting = _capture_current_stable_feedback(
             lifecycle.repository,
             lifecycle.pull_request,
             ready_remediation_provider_binding=provider,
+            capture_provider_summary=provider is None,
         )
     except (
         authority.LifecycleAuthorityError,
+        bootstrap_source_admission.BootstrapSourceAdmissionError,
         fast_path.SecurityBlocker,
         publication.LifecyclePublicationError,
     ) as exc:
@@ -1211,7 +1245,9 @@ def verify_ready_remediation_provider_growth_authority(
         or state["ready_transition_count"] != 1
         or state["exceptional_recovery_count"] != 0
         or state["exceptional_continuation_count"] != 0
-        or predecessor_eligibility is None
+        or (predecessor_eligibility is None and (
+            provider is not None or predecessor_eligibility_document["eligible_threads"]
+        ))
         or predecessor_validation.repository != lifecycle.repository
         or predecessor_validation.delivery_issue_number != lifecycle.delivery_issue
         or predecessor_validation.pull_request_number != lifecycle.pull_request
@@ -1231,35 +1267,40 @@ def verify_ready_remediation_provider_growth_authority(
         or live_resulting.to_dict() != resulting.to_dict()
         or reviewed.repository != lifecycle.repository
         or reviewed.pull_request_number != lifecycle.pull_request
-        or provider.repository != lifecycle.repository
-        or provider.delivery_issue != lifecycle.delivery_issue
-        or provider.pull_request != lifecycle.pull_request
-        or provider.lifecycle_id != lifecycle.lifecycle_id
-        or provider.current_head_sha != lifecycle.head_sha
-        or provider.current_authority_digest != lifecycle.authority_digest
-        or provider.current_publication_oid != current.publication_oid
-        or provider.current_publication_digest != current.publication_digest
-        or not (
-            (
-                publication.ORDINARY_REMEDIATION_SUFFIX
-                in provider.provider_binding_sources
-                and len(provider.remediation_event_digests) == 1
-            )
-            or (
-                publication.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION
-                in provider.provider_binding_sources
-                and not provider.remediation_event_digests
-                and isinstance(
-                    provider.adopted_remediation_observation_digest, str
+        or (provider is not None and (
+            provider.repository != lifecycle.repository
+            or provider.delivery_issue != lifecycle.delivery_issue
+            or provider.pull_request != lifecycle.pull_request
+            or provider.lifecycle_id != lifecycle.lifecycle_id
+            or provider.current_head_sha != lifecycle.head_sha
+            or provider.current_authority_digest != lifecycle.authority_digest
+            or provider.current_publication_oid != current.publication_oid
+            or provider.current_publication_digest != current.publication_digest
+            or not (
+                (
+                    publication.ORDINARY_REMEDIATION_SUFFIX
+                    in provider.provider_binding_sources
+                    and len(provider.remediation_event_digests) == 1
                 )
-                and authority._DIGEST.fullmatch(
-                    provider.adopted_remediation_observation_digest
+                or (
+                    publication.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION
+                    in provider.provider_binding_sources
+                    and not provider.remediation_event_digests
+                    and isinstance(
+                        provider.adopted_remediation_observation_digest, str
+                    )
+                    and authority._DIGEST.fullmatch(
+                        provider.adopted_remediation_observation_digest
+                    )
                 )
             )
+            or reviewed.head_sha != provider.provider_head_sha
+        ))
+        or (
+            predecessor_eligibility is not None
+            and predecessor_eligibility
+            != fast_path.digest_json(predecessor_eligibility_document)
         )
-        or reviewed.head_sha != provider.provider_head_sha
-        or predecessor_eligibility
-        != fast_path.digest_json(predecessor_eligibility_document)
         or candidate_eligibility != fast_path.digest_json(eligibility)
     ):
         raise LifecycleOrchestrationError(
@@ -1267,10 +1308,43 @@ def verify_ready_remediation_provider_growth_authority(
         )
 
     try:
+        added_reviews = [
+            item for item in resulting.feedback["reviews"]
+            if item["node_id"] not in {
+                prior["node_id"] for prior in reviewed.feedback["reviews"]
+            }
+        ]
+        first_fallback_acquisitions = None
+        fresh_provider_acquisitions = None
+        if added_reviews and all(
+            item.get("actor") == fast_path.CODEX_REVIEW_PROVIDER
+            and item.get("commit_oid") == lifecycle.head_sha
+            for item in added_reviews
+        ):
+            claim_current, claims = publication.verify_provider_dispatch_claims(
+                lifecycle.repository, lifecycle.delivery_issue
+            )
+            if claim_current != current:
+                raise fast_path.SecurityBlocker("ordinary Ready acquisition CURRENT changed")
+            if any(
+                claim.reacquisition_authorization is not None
+                and claim.key.current_publication_oid == current.publication_oid
+                and claim.key.current_head_sha == lifecycle.head_sha
+                for claim in claims
+            ):
+                from . import provider_reacquisition
+
+                fresh_provider_acquisitions = provider_reacquisition.authenticate_fresh_provider_acquisitions(
+                    current, live_resulting
+                )
+            else:
+                first_fallback_acquisitions = provider_acquisition.authenticate_first_fallback_acquisitions(
+                    current, live_resulting
+                )
         growth = fast_path.verify_ordinary_ready_remediation_provider_growth(
             reviewed,
             resulting,
-            provider_head_sha=provider.provider_head_sha,
+            provider_head_sha=reviewed.head_sha,
             predecessor_eligibility_evidence=predecessor_eligibility_document,
             eligibility_evidence=eligibility,
             provider_summary_body=getattr(
@@ -1279,11 +1353,18 @@ def verify_ready_remediation_provider_growth_authority(
             review_database_ids=getattr(
                 live_resulting, "review_database_ids", None
             ),
+            first_fallback_acquisitions=first_fallback_acquisitions,
+            fresh_provider_acquisitions=fresh_provider_acquisitions,
+            current_publication=current,
         )
-    except fast_path.SecurityBlocker as exc:
+    except (fast_path.SecurityBlocker, publication.LifecyclePublicationError) as exc:
         raise LifecycleOrchestrationError(
             "ordinary Ready provider growth is incomplete or unauthenticated"
         ) from exc
+    if provider is None and growth.assessment_head_sha != lifecycle.head_sha:
+        raise LifecycleOrchestrationError(
+            "Ready integration remediation requires exact CURRENT provider growth"
+        )
     fields = {
         "repository": lifecycle.repository,
         "delivery_issue": lifecycle.delivery_issue,
@@ -1292,7 +1373,7 @@ def verify_ready_remediation_provider_growth_authority(
         "current_publication_oid": current.publication_oid,
         "current_publication_digest": current.publication_digest,
         "current_authority_digest": lifecycle.authority_digest,
-        "provider_head_sha": provider.provider_head_sha,
+        "provider_head_sha": reviewed.head_sha,
         "current_head_sha": lifecycle.head_sha,
         "resulting_head_sha": candidate_validation.head_sha,
         "predecessor_state_digest": growth.predecessor_state_digest,
@@ -1808,6 +1889,7 @@ def _capture_current_stable_feedback(
     ready_remediation_provider_binding: (
         publication.VerifiedReadySourceRecoveryProviderBinding | None
     ) = None,
+    capture_provider_summary: bool = False,
 ) -> fast_path.StableFeedbackState:
     """Reuse the maintained bounded provider capture without duplicating it."""
 
@@ -1855,9 +1937,8 @@ def _capture_current_stable_feedback(
                         str(provider_binding),
                     ]
                 )
-                arguments.extend(
-                    ["--capture-provider-summary", str(summary_output)]
-                )
+            if ready_remediation_provider_binding is not None or capture_provider_summary:
+                arguments.extend(["--capture-provider-summary", str(summary_output)])
             result = bootstrap_source_admission._run_isolated_python(
                 arguments,
                 cwd=repository_root,
@@ -1871,7 +1952,15 @@ def _capture_current_stable_feedback(
             captured = fast_path.verify_reviewed_state_evidence(
                 authority.loads_closed_json(output.read_bytes())
             )
-            if ready_remediation_provider_binding is not None:
+            if ready_remediation_provider_binding is not None and (
+                captured.repository != ready_remediation_provider_binding.repository
+                or captured.pull_request_number != ready_remediation_provider_binding.pull_request
+                or captured.head_sha != ready_remediation_provider_binding.current_head_sha
+            ):
+                raise LifecycleOrchestrationError(
+                    "current feedback differs from the authenticated provider lineage CURRENT"
+                )
+            if ready_remediation_provider_binding is not None or capture_provider_summary:
                 summary = authority.loads_closed_json(summary_output.read_bytes())
                 if not isinstance(summary, dict) or set(summary) != {
                     "body",
@@ -4948,13 +5037,19 @@ def _base_decision(
 
 
 def _prove_transition_is_finite(
-    state: Mapping[str, Any], transition: str, event_id: str
+    state: Mapping[str, Any], transition: str, event_id: str,
+    *, adopted_predecessor: bool = False,
+    adoption_review_submitted: bool = False,
 ) -> None:
     event_digest = authority.digest_json(
         {"event_id": event_id, "transition_kind": transition}
     )
     try:
-        authority.derive_state(state, transition, event_digest)
+        authority.require_forward_transition(
+            state, transition, event_digest,
+            allow_adopted_observations=adopted_predecessor,
+            adoption_review_submitted=adoption_review_submitted,
+        )
     except authority.LifecycleAuthorityError as exc:
         raise LifecycleOrchestrationError(str(exc)) from exc
 
@@ -5304,7 +5399,14 @@ def _orchestrate_event(
             lifecycle=lifecycle,
             verifier=authorization_verifier,
         )
-        _prove_transition_is_finite(state, event_kind, event_id)
+        _prove_transition_is_finite(
+            state, event_kind, event_id,
+            adopted_predecessor=(
+                lifecycle.historical_proof_mode
+                == authority.EXACT_ADOPTION_PROOF_MODE
+            ),
+            adoption_review_submitted=lifecycle.adoption_review_submitted,
+        )
         return _base_decision(
             observed,
             lifecycle,

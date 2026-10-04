@@ -18,6 +18,7 @@ import copy
 from dataclasses import replace
 import hashlib
 import inspect
+import json
 from pathlib import Path
 import sys
 from typing import Any
@@ -103,7 +104,6 @@ class Chain:
         self.authorities: list[dict[str, Any]] = []
         self.head = HEAD
         self.append("INITIALIZED_DRAFT")
-        self.append("UNRESTRICTED_REVIEW_CONSUMED")
 
     def append(self, transition: str, *, head: str | None = None) -> None:
         predecessor = self.authorities[-1] if self.authorities else None
@@ -274,7 +274,7 @@ class Harness:
             self.current = target
         if self.publication_mode == "SUCCESS":
             return target
-        raise publication.LifecyclePublicationError("ambiguous fixture publication")
+        raise publication.LifecyclePublicationAmbiguousWrite("ambiguous fixture publication")
 
     def historical_reader(self, repository: str, issue: int, predecessor_oid: str):
         if (repository, issue) != (REPOSITORY, ISSUE):
@@ -423,6 +423,414 @@ class LifecycleExecutionTests(TestCase):
         chain.append("DRAFT_TO_READY")
         return Harness(chain)
 
+    def test_historical_ready_delta_uses_pure_derivation(self) -> None:
+        lifecycle = self.draft_harness().predecessor.lifecycle
+        historical_review = authority.derive_state(
+            lifecycle.state, "UNRESTRICTED_REVIEW_CONSUMED", "1" * 64
+        )
+        historical = replace(lifecycle, state=historical_review)
+        self.assertTrue(
+            execution._derive_transition_state(
+                historical, "DRAFT_TO_READY", "2" * 64
+            )["ready"]
+        )
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "first Draft-to-Ready"
+        ):
+            execution._authorize_transition_state(
+                historical, "DRAFT_TO_READY", "2" * 64
+            )
+
+    def test_clean_terminal_provider_assessment_needs_no_review_object(self) -> None:
+        current = self.ready_harness().current
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        ready = publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 1, "READY_EVENT", "author", "2026-10-01T00:00:00Z",
+        )
+
+        def summary(head: str = HEAD, repo: str = REPOSITORY, pr: int = PR,
+                    status: str = "completed") -> str:
+            metadata = json.dumps({"headSha": head, "pullRequestNumber": pr,
+                                   "repository": repo, "status": status},
+                                  sort_keys=True, separators=(",", ":"))
+            return (
+                "<!-- codex-pull-request-review-summary -->\n"
+                f"<!-- codex-security-review:v1 {metadata} -->\n"
+                "| Review | Status | Commit | Review trigger |\n"
+                "| --- | --- | --- | --- |\n"
+                "| **Code Review** | **Completed** | head | ready |\n"
+                "| **Security Review** | **Completed** | head | ready |"
+            )
+
+        def feedback(body: str, *, actor: str = "chatgpt-codex-connector",
+                     updated: str = "2026-10-01T02:00:00Z",
+                     reviews: list[dict[str, Any]] | None = None) -> fast_path.StableFeedbackState:
+            return fast_path.StableFeedbackState(
+                repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+                base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+                feedback={"pull_request_reactions": [], "reviews": reviews or [],
+                          "threads": [], "conversation_comments": [{
+                              "node_id": "SUMMARY_1",
+                              "body_digest": fast_path.digest_text(body),
+                              "actor": {"login": actor, "node_id": "BOT_1", "database_id": 5},
+                              "updated_at": updated, "reactions": [],
+                          }]},
+            )
+
+        body = summary()
+        scope = execution._review_consumption_scope(
+            current, live, feedback(body), (ready,), provider_summary_body=body,
+        )
+        self.assertEqual(scope["review_cycle"], [{
+            "kind": "TERMINAL_PROVIDER_ASSESSMENT",
+            "comment_node_id": "SUMMARY_1",
+            "body_digest": fast_path.digest_text(body),
+            "updated_at": "2026-10-01T02:00:00Z",
+        }])
+        self.assertEqual(
+            scope["review_cycle_digest"], authority.digest_json(scope["review_cycle"])
+        )
+        stale = {
+            "node_id": "OLD_REVIEW", "body_digest": "b" * 64,
+            "actor": {"login": "independent", "node_id": "ACTOR_1", "database_id": 6},
+            "state": "COMMENTED", "commit_oid": "c" * 40,
+            "submitted_at": "2026-10-01T01:00:00Z", "reactions": [],
+        }
+        stale_scope = execution._review_consumption_scope(
+            current, live, feedback(body, reviews=[stale]), (ready,),
+            provider_summary_body=body,
+        )
+        self.assertEqual(stale_scope["review_cycle"], scope["review_cycle"])
+        for bad_body, bad_actor, updated in (
+            (summary(status="running"), "chatgpt-codex-connector", "2026-10-01T02:00:00Z"),
+            (summary(head="c" * 40), "chatgpt-codex-connector", "2026-10-01T02:00:00Z"),
+            (summary(repo="SecPal/other"), "chatgpt-codex-connector", "2026-10-01T02:00:00Z"),
+            (summary(pr=PR + 1), "chatgpt-codex-connector", "2026-10-01T02:00:00Z"),
+            (body, "untrusted", "2026-10-01T02:00:00Z"),
+            (body, "chatgpt-codex-connector", "2026-09-30T23:00:00Z"),
+        ):
+            with self.subTest(body=bad_body, actor=bad_actor, updated=updated):
+                with self.assertRaises((execution.LifecycleExecutionError,
+                                        fast_path.SecurityBlocker)):
+                    execution._review_consumption_scope(
+                        current, live, feedback(bad_body, actor=bad_actor,
+                                                updated=updated), (ready,),
+                        provider_summary_body=bad_body,
+                    )
+        with self.assertRaises(execution.LifecycleExecutionError):
+            execution._review_consumption_scope(current, live, feedback(body), (ready,))
+
+    def test_post_ready_review_scope_requires_independent_exact_head_review(self) -> None:
+        current = self.ready_harness().current
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        ready_event = publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 1, "READY_EVENT", "author",
+            "2026-10-01T00:00:00Z",
+        )
+        review = {
+            "node_id": "REVIEW_1", "body_digest": "a" * 64,
+            "actor": {"login": "independent", "node_id": "ACTOR_1", "database_id": 5},
+            "state": "COMMENTED", "commit_oid": HEAD,
+            "submitted_at": "2026-10-01T01:00:00Z", "reactions": [],
+        }
+
+        def feedback(item: dict[str, Any]) -> fast_path.StableFeedbackState:
+            return fast_path.StableFeedbackState(
+                repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+                base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+                feedback={"pull_request_reactions": [], "reviews": [item],
+                          "conversation_comments": [], "threads": []},
+            )
+
+        scope = execution._review_consumption_scope(
+            current, live, feedback(review), (ready_event,)
+        )
+        self.assertEqual(scope["review_cycle"][0]["node_id"], "REVIEW_1")
+        for candidate_live, candidate_review in (
+            (replace(live, draft=True), review),
+            (live, {**review, "actor": {"login": "author", "node_id": "ACTOR_1", "database_id": 5}}),
+            (live, {**review, "commit_oid": "c" * 40}),
+            (live, {**review, "submitted_at": "2026-09-30T23:00:00Z"}),
+            (live, {**review, "submitted_at": None}),
+        ):
+            with self.subTest(candidate=candidate_review), self.assertRaises(
+                execution.LifecycleExecutionError
+            ):
+                execution._review_consumption_scope(
+                    current, candidate_live, feedback(candidate_review), (ready_event,)
+                )
+
+    def test_post_ready_review_cycle_binds_every_review_on_one_head(self) -> None:
+        current = self.ready_harness().current
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        ready = publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 1, "READY_EVENT", "author",
+            "2026-10-01T00:00:00Z",
+        )
+        first = {
+            "node_id": "REVIEW_1", "body_digest": "a" * 64,
+            "actor": {"login": "copilot", "node_id": "ACTOR_1", "database_id": 5},
+            "state": "COMMENTED", "commit_oid": HEAD,
+            "submitted_at": "2026-10-01T01:00:00Z", "reactions": [],
+        }
+        second = {
+            **first, "node_id": "REVIEW_2", "body_digest": "b" * 64,
+            "actor": {"login": "codex", "node_id": "ACTOR_2", "database_id": 6},
+            "submitted_at": "2026-10-01T02:00:00Z",
+        }
+
+        def feedback(
+            reviews: list[dict[str, Any]], requests: list[dict[str, Any]] | None = None
+        ) -> fast_path.StableFeedbackState:
+            return fast_path.StableFeedbackState(
+                repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+                base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+                feedback={"pull_request_reactions": [], "reviews": reviews,
+                          "conversation_comments": [], "threads": [],
+                          "provider_review_requests": requests or []},
+            )
+
+        scope = execution._review_consumption_scope(
+            current, live, feedback([first, second]), (ready,)
+        )
+        self.assertEqual(
+            [item["node_id"] for item in scope["review_cycle"]],
+            ["REVIEW_1", "REVIEW_2"],
+        )
+        stale_scope = execution._review_consumption_scope(
+            current, live,
+            feedback([first, {**second, "commit_oid": "c" * 40}]),
+            (ready,),
+        )
+        self.assertEqual(
+            [item["node_id"] for item in stale_scope["review_cycle"]],
+            ["REVIEW_1"],
+        )
+        with self.assertRaises(fast_path.SecurityBlocker):
+            feedback([first, first])
+        request = {
+            "node_id": "REQUEST_1", "created_at": "2026-10-01T00:30:00Z",
+            "actor": {"login": "author", "node_id": "ACTOR_3", "database_id": 7},
+            "requested_reviewer": fast_path.COPILOT_REVIEW_PROVIDER,
+        }
+        with self.assertRaises(execution.LifecycleExecutionError):
+            execution._review_consumption_scope(
+                current, live,
+                feedback([first, second], [request, {**request, "node_id": "REQUEST_2"}]),
+                (ready,),
+            )
+        extra_epoch = Chain()
+        extra_epoch.append("DRAFT_TO_READY")
+        extra_epoch.append("ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED")
+        with self.assertRaises(execution.LifecycleExecutionError):
+            execution._review_consumption_scope(
+                Harness(extra_epoch).current, live, feedback([first, second]), (ready,)
+            )
+
+    def test_review_request_only_orders_its_provider_and_stale_head_is_excluded(self) -> None:
+        current = self.ready_harness().current
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        ready = publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 1, "READY_EVENT", "author", "2026-10-01T00:00:00Z",
+        )
+        codex = {
+            "node_id": "CODEX_REVIEW", "body_digest": "a" * 64,
+            "actor": {"login": "codex", "node_id": "CODEX_ACTOR", "database_id": 6},
+            "state": "COMMENTED", "commit_oid": HEAD,
+            "submitted_at": "2026-10-01T00:15:00Z", "reactions": [],
+        }
+        stale = {
+            **codex, "node_id": "STALE_REVIEW", "commit_oid": "c" * 40,
+            "submitted_at": "2026-10-01T00:45:00Z",
+        }
+        copilot = {
+            **codex, "node_id": "COPILOT_REVIEW", "body_digest": "b" * 64,
+            "actor": fast_path.COPILOT_REVIEW_PROVIDER,
+            "submitted_at": "2026-10-01T01:00:00Z",
+        }
+        request = {
+            "node_id": "COPILOT_REQUEST", "created_at": "2026-10-01T00:30:00Z",
+            "actor": {"login": "author", "node_id": "AUTHOR", "database_id": 7},
+            "requested_reviewer": fast_path.COPILOT_REVIEW_PROVIDER,
+        }
+
+        def feedback(reviews: list[dict[str, Any]]) -> fast_path.StableFeedbackState:
+            return fast_path.StableFeedbackState(
+                repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+                base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+                feedback={"pull_request_reactions": [], "reviews": reviews,
+                          "conversation_comments": [], "threads": [],
+                          "provider_review_requests": [request]},
+            )
+
+        complete = feedback([codex, stale, copilot])
+        scope = execution._review_consumption_scope(current, live, complete, (ready,))
+        self.assertEqual(
+            [item["node_id"] for item in scope["review_cycle"]],
+            ["CODEX_REVIEW", "COPILOT_REVIEW"],
+        )
+        self.assertEqual(scope["feedback_state_digest"], complete.state_digest)
+        with self.assertRaises(execution.LifecycleExecutionError):
+            execution._review_consumption_scope(
+                current, live,
+                feedback([codex, {**copilot, "submitted_at": "2026-10-01T00:20:00Z"}]),
+                (ready,),
+            )
+
+    def test_review_publication_preserves_deterministic_failure(self) -> None:
+        harness = self.ready_harness()
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        feedback = fast_path.StableFeedbackState(
+            repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+            base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+            feedback={"pull_request_reactions": [], "reviews": [{
+                "node_id": "REVIEW_1", "body_digest": "a" * 64,
+                "actor": {"login": "independent", "node_id": "ACTOR_1", "database_id": 5},
+                "state": "COMMENTED", "commit_oid": HEAD,
+                "submitted_at": "2026-10-01T01:00:00Z", "reactions": [],
+            }], "conversation_comments": [], "threads": []},
+        )
+        timeline = (publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 1, "READY_EVENT", "author", "2026-10-01T00:00:00Z",
+        ),)
+        with (
+            mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=harness.current_reader),
+            mock.patch.object(publication, "advance_current_terminal", side_effect=publication.LifecyclePublicationError("protection verification failed")),
+            mock.patch.object(publication, "_observe_pull_request_lifecycle_timeline", return_value=timeline),
+            mock.patch.object(execution, "_read_live_github", return_value=live),
+            mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=feedback),
+            mock.patch.object(execution, "_production_signing_authorities", return_value=fixture_signing_authorities()),
+        ):
+            with self.assertRaisesRegex(
+                publication.LifecyclePublicationError, "protection verification failed"
+            ):
+                execution.publish_review_consumption(REPOSITORY, ISSUE)
+
+    def test_review_publication_reconciles_ambiguous_remote_success(self) -> None:
+        harness = self.ready_harness()
+        harness.publication_mode = "AMBIGUOUS_TARGET"
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        review = {
+            "node_id": "REVIEW_1", "body_digest": "a" * 64,
+            "actor": {"login": "independent", "node_id": "ACTOR_1", "database_id": 5},
+            "state": "COMMENTED", "commit_oid": HEAD,
+            "submitted_at": "2026-10-01T01:00:00Z", "reactions": [],
+        }
+        feedback = fast_path.StableFeedbackState(
+            repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+            base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+            feedback={"pull_request_reactions": [], "reviews": [review],
+                      "conversation_comments": [], "threads": []},
+        )
+        timeline = (publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 1, "READY_EVENT", "author",
+            "2026-10-01T00:00:00Z",
+        ),)
+        with (
+            mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=harness.current_reader),
+            mock.patch.object(publication, "advance_current_terminal", side_effect=harness.publisher),
+            mock.patch.object(publication, "_verify_historical_lifecycle_transition", side_effect=harness.historical_reader),
+            mock.patch.object(publication, "_observe_pull_request_lifecycle_timeline", return_value=timeline),
+            mock.patch.object(execution, "_read_live_github", return_value=live),
+            mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=feedback),
+            mock.patch.object(execution, "_production_signing_authorities", return_value=fixture_signing_authorities()),
+        ):
+            result = execution.publish_review_consumption(REPOSITORY, ISSUE)
+            self.assertEqual(result.lifecycle.state["unrestricted_review_count"], 1)
+            self.assertEqual(len(harness.publication_writes), 1)
+
+    def test_review_publication_rejects_unrelated_current_after_ambiguous_write(self) -> None:
+        harness = self.ready_harness()
+        harness.publication_mode = "AMBIGUOUS_TARGET"
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        review = {
+            "node_id": "REVIEW_1", "body_digest": "a" * 64,
+            "actor": {"login": "independent", "node_id": "ACTOR_1", "database_id": 5},
+            "state": "COMMENTED", "commit_oid": HEAD,
+            "submitted_at": "2026-10-01T01:00:00Z", "reactions": [],
+        }
+        feedback = fast_path.StableFeedbackState(
+            repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+            base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+            feedback={"pull_request_reactions": [], "reviews": [review],
+                      "conversation_comments": [], "threads": []},
+        )
+        timeline = (publication.GitHubPullRequestTimelineEvent(
+            "READY_FOR_REVIEW", 1, "READY_EVENT", "author",
+            "2026-10-01T00:00:00Z",
+        ),)
+
+        def ambiguous_wrong_current(raw: bytes, **kwargs: Any) -> Any:
+            try:
+                harness.publisher(raw, **kwargs)
+            except publication.LifecyclePublicationError:
+                assert harness.target is not None
+                harness.current = replace(harness.target, publication_oid="f" * 40)
+                raise
+
+        with (
+            mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=harness.current_reader),
+            mock.patch.object(publication, "advance_current_terminal", side_effect=ambiguous_wrong_current),
+            mock.patch.object(publication, "_verify_historical_lifecycle_transition", side_effect=harness.historical_reader),
+            mock.patch.object(publication, "_observe_pull_request_lifecycle_timeline", return_value=timeline),
+            mock.patch.object(execution, "_read_live_github", return_value=live),
+            mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=feedback),
+            mock.patch.object(execution, "_production_signing_authorities", return_value=fixture_signing_authorities()),
+        ):
+            with self.assertRaises(execution.LifecycleExecutionError):
+                execution.publish_review_consumption(REPOSITORY, ISSUE)
+        self.assertEqual(len(harness.publication_writes), 1)
+
+    def test_post_ready_review_is_published_once_then_remediation_is_allowed(self) -> None:
+        harness = self.ready_harness()
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        feedback = fast_path.StableFeedbackState(
+            repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+            base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+            feedback={
+                "pull_request_reactions": [], "conversation_comments": [], "threads": [],
+                "reviews": [{
+                    "node_id": "REVIEW_1", "body_digest": "a" * 64,
+                    "actor": {"login": "independent", "node_id": "ACTOR_1", "database_id": 5},
+                    "state": "COMMENTED", "commit_oid": HEAD,
+                    "submitted_at": "2026-10-01T01:00:00Z", "reactions": [],
+                }, {
+                    "node_id": "REVIEW_2", "body_digest": "b" * 64,
+                    "actor": {"login": "second", "node_id": "ACTOR_2", "database_id": 6},
+                    "state": "APPROVED", "commit_oid": HEAD,
+                    "submitted_at": "2026-10-01T02:00:00Z", "reactions": [],
+                }],
+            },
+        )
+        timeline = (
+            publication.GitHubPullRequestTimelineEvent(
+                "READY_FOR_REVIEW", 1, "READY_EVENT", "author",
+                "2026-10-01T00:00:00Z",
+            ),
+        )
+        with (
+            mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=harness.current_reader),
+            mock.patch.object(publication, "advance_current_terminal", side_effect=harness.publisher),
+            mock.patch.object(publication, "_verify_historical_lifecycle_transition", side_effect=harness.historical_reader),
+            mock.patch.object(publication, "_observe_pull_request_lifecycle_timeline", return_value=timeline),
+            mock.patch.object(execution, "_read_live_github", return_value=live),
+            mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=feedback),
+            mock.patch.object(execution, "_production_signing_authorities", return_value=fixture_signing_authorities()),
+        ):
+            result = execution.publish_review_consumption(REPOSITORY, ISSUE)
+            self.assertEqual(result.lifecycle.state["unrestricted_review_count"], 1)
+            self.assertEqual(result.lifecycle.state["ready_transition_count"], 1)
+            self.assertEqual(len(harness.publication_writes), 1)
+            self.assertEqual(
+                authority.require_forward_transition(
+                    result.lifecycle.state, "REMEDIATION_COMPLETED", "1" * 64
+                )["remediation_cycle_count"],
+                1,
+            )
+            with self.assertRaises(execution.LifecycleExecutionError):
+                execution.publish_review_consumption(REPOSITORY, ISSUE)
+            self.assertEqual(len(harness.publication_writes), 1)
+
     def converge_fixture(
         self,
         harness: Harness,
@@ -455,46 +863,24 @@ class LifecycleExecutionTests(TestCase):
                 source_commit_authenticator=lambda *_args, **_kwargs: commit,
             )
 
-    def test_failing_first_pending_ready_converges_across_one_remediation(self) -> None:
+    def test_pending_ready_cannot_skip_review_before_remediation(self) -> None:
         harness, ready, remediation, validation, commit, history = convergence_fixture()
 
         with self.assertRaisesRegex(
             execution.LifecycleExecutionError, "head|identity or state changed"
         ):
             harness.execute(ready)
-
-        result = self.converge_fixture(
-            harness, ready, remediation, validation, commit, history
-        )
-
-        self.assertEqual(result.status, "COMPLETE")
-        self.assertEqual(result.observed_case, "COMPOSED_HEAD_ADVANCEMENT")
-        self.assertEqual(result.head_sha, validation.head_sha)
-        self.assertEqual(result.github_write_attempts, 0)
-        self.assertEqual(result.publication_write_attempts, 2)
-        self.assertEqual(
-            [
-                transition.successor.lifecycle.state
-                for transition in harness.transitions.values()
-            ][-1]["remediation_cycle_count"],
-            1,
-        )
-        self.assertEqual(
-            [
-                transition.transition_kind
-                for transition in harness.transitions.values()
-            ],
-            ["DRAFT_TO_READY", "REMEDIATION_COMPLETED"],
-        )
+        with self.assertRaisesRegex(
+            execution.LifecycleExecutionError,
+            "remediation source-change authorization is invalid",
+        ):
+            self.converge_fixture(
+                harness, ready, remediation, validation, commit, history
+            )
         self.assertEqual(harness.github_writes, [])
-        replay = self.converge_fixture(
-            harness, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(replay.status, "COMPLETE")
-        self.assertEqual(replay.publication_write_attempts, 0)
-        self.assertEqual(len(harness.publication_writes), 2)
+        self.assertEqual(harness.publication_writes, [])
 
-    def test_composed_midpoint_resumes_and_complete_replay_is_zero_write(self) -> None:
+    def test_pending_ready_midpoint_still_requires_review(self) -> None:
         harness, ready, remediation, validation, commit, history = convergence_fixture()
         ready_fields = orchestration._verify_signed_user_authorization(
             ready, REPOSITORY
@@ -505,64 +891,26 @@ class LifecycleExecutionTests(TestCase):
             fixture_signing_authorities(),
         )
         harness.publisher(ready_raw)
+        with self.assertRaisesRegex(
+            execution.LifecycleExecutionError,
+            "remediation source-change authorization is invalid",
+        ):
+            self.converge_fixture(
+                harness, ready, remediation, validation, commit, history
+            )
+        self.assertEqual(len(harness.publication_writes), 1)
 
-        result = self.converge_fixture(
-            harness, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(result.status, "COMPLETE")
-        self.assertEqual(result.publication_write_attempts, 1)
-        self.assertEqual(len(harness.publication_writes), 2)
-
-    def test_composed_partial_publication_resumes_only_from_exact_state(self) -> None:
+    def test_pending_ready_partial_publication_still_requires_review(self) -> None:
         harness, ready, remediation, validation, commit, history = convergence_fixture()
         harness.publication_mode = "AMBIGUOUS_PREDECESSOR"
-        first = self.converge_fixture(
-            harness, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(first.status, "PUBLICATION_PENDING")
-        self.assertEqual(first.publication_write_attempts, 1)
-        self.assertEqual(harness.current, harness.predecessor)
-
-        harness.publication_mode = "SUCCESS"
-        completed = self.converge_fixture(
-            harness, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(completed.status, "COMPLETE")
-        self.assertEqual(completed.publication_write_attempts, 2)
-
-        midpoint, ready, remediation, validation, commit, history = convergence_fixture()
-        ready_fields = orchestration._verify_signed_user_authorization(
-            ready, REPOSITORY
-        )
-        midpoint.publisher(
-            execution._append_successor_evidence(
-                midpoint.predecessor,
-                ready_fields,
-                fixture_signing_authorities(),
+        with self.assertRaisesRegex(
+            execution.LifecycleExecutionError,
+            "remediation source-change authorization is invalid",
+        ):
+            self.converge_fixture(
+                harness, ready, remediation, validation, commit, history
             )
-        )
-        midpoint.publication_mode = "AMBIGUOUS_PREDECESSOR"
-        pending = self.converge_fixture(
-            midpoint, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(pending.status, "PUBLICATION_PENDING")
-        self.assertEqual(pending.publication_write_attempts, 1)
-        self.assertTrue(midpoint.current.lifecycle.state["ready"])
-        self.assertEqual(midpoint.current.lifecycle.state["remediation_cycle_count"], 0)
-
-        midpoint.publication_mode = "SUCCESS"
-        completed = self.converge_fixture(
-            midpoint, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(completed.status, "COMPLETE")
-        self.assertEqual(completed.publication_write_attempts, 1)
-        self.assertEqual(midpoint.current.lifecycle.state["remediation_cycle_count"], 1)
-
-        replay = self.converge_fixture(
-            harness, ready, remediation, validation, commit, history
-        )
-        self.assertEqual(replay.publication_write_attempts, 0)
-        self.assertEqual(len(harness.publication_writes), 3)
+        self.assertEqual(harness.publication_writes, [])
 
     def test_composed_chronology_ambiguity_fails_before_publication(self) -> None:
         mutations = {
@@ -923,9 +1271,10 @@ class LifecycleExecutionTests(TestCase):
 
     def test_case_20_later_ready_preserves_exhausted_counters_and_history(self) -> None:
         chain = Chain()
+        chain.append("DRAFT_TO_READY")
+        chain.append("UNRESTRICTED_REVIEW_CONSUMED")
         chain.append("REMEDIATION_COMPLETED", head="b" * 40)
         chain.append("REMEDIATION_COMPLETED", head="c" * 40)
-        chain.append("DRAFT_TO_READY")
         chain.append("READY_TO_DRAFT")
         harness = Harness(chain)
         before = copy.deepcopy(harness.current.lifecycle.state)

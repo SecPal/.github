@@ -74,6 +74,15 @@ Create a dedicated directory for all SecPal repositories. This mirrors the GitHu
 
    ```
 
+3. **Install the pinned Python validation dependencies** in your development
+   virtual environment before running the complete preflight:
+
+   ```bash
+   python3 -m venv .venv
+   . .venv/bin/activate
+   python3 -m pip install -r requirements/vulnerability-policy.txt
+   ```
+
 ### Local Development Workflow
 
 While iterating, run the smallest validation relevant to the files you changed.
