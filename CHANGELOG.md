@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-04 - Harden Trivy Repository Scan Admission
+
+**Fixed:**
+
+- Include development dependencies and all secret paths; reject gitlinks and
+  caller-owned inline scanner suppression before scanning.
+- Bind the trusted scan configuration bundle, scope exceptions to an exact
+  repository, and require fresh database evidence for successful admission.
+- Isolate Python imports, keep normalization replayable, and verify secret
+  redaction against immutable source before publishing bounded evidence.
+
 ## 2026-10-04 - Authenticate Chained Ready Integration
 
 **Fixed:**
@@ -253,6 +264,14 @@ Log of notable changes to SecPal organization defaults (newest first).
   retaining Dependabot's upstream `docker` ecosystem identifier.
 - Require complete parity evidence and removal of superseded active publisher
   paths when an existing publisher migrates away from BuildKit or Buildx.
+
+## 2026-09-16 - Add Pinned Pre-Build Repository Scanning
+
+**Added:**
+
+- Add the reusable pinned Trivy pre-build repository scan, central actionability
+  and exception policy, deterministic secret-safe evidence schema, and native
+  vulnerability, secret, misconfiguration, and failure-path fixtures.
 
 ## 2026-09-16 - Authenticate Detached Recovered-Ready Thread Authority
 
