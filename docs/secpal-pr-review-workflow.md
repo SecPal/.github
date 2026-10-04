@@ -874,6 +874,37 @@ composition so a main transition requires a fresh run. Schema `1.1` remains the
 ordinary companion-backed form;
 malformed or incomplete `1.1` input cannot fall through to `1.2`.
 
+A direct Exact-State-Adoption v4 Governance-Amendment reviewed Ready root uses
+the closed schema-1.2 source mode
+`EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT`. This adds a separately
+authenticated source variant to the adopted prior-authority family; issued
+ordinary, v3, recovered-v3, and legacy manifests retain their bytes and meanings.
+It introduces no evidence/attestation version or tag family. The maintained
+derivation independently authenticates the v4 proof, signed amendment and
+adoption authorization, registered source and proof-bound registration tip,
+exact signed head/tree and signer, intended state and observed Ready/review
+history, and protected enrollment publication. Only a root with no predecessor
+publication or transition suffix qualifies. Representation normalization grants
+no authority: caller manifests must equal complete maintained derivation before
+the existing signed prior-authority tag can authenticate them.
+
+Its historical receipt, source-validation, and final-attestation evidence stay
+null with status `ABSENT_NEVER_ISSUED` and reconstructed bytes false. The non-null
+current adoption-source digest is independently bound to amendment authority;
+it is never compared with the historical final-attestation field. No recovery
+publication is manufactured. Observation-backed Ready history remains unchanged;
+integration creates no post-adoption Ready publication. The tag binds the
+authenticated adoption feedback identity and complete finding inventory. The
+integration receipt/attestation separately bind the current reviewed-state
+identity and complete current feedback, which may differ from adoption-time
+observations. Every authenticated root finding must remain in the unresolved
+thread inventory. Historical read-back uses the verified integration's sealed
+snapshot rather than today's feedback. Known unresolved findings do not prevent integration.
+`HEAD_ADVANCED` preserves the complete lifecycle state, and the existing typed
+integration chain, provider-lineage, and ordinary-remediation consumers can
+authenticate the resulting predecessor without consuming another review,
+remediation, Ready transition, Recovery, or Continuation.
+
 One closed source variant of that same schema-1.2 bridge authenticates the
 legacy-enrolled package loss for `SecPal/.github` issue 792 / PR 793. It is not
 the version-3 pre-enrollment loss admission: protected main authenticates the
