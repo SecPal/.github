@@ -2341,9 +2341,8 @@ def produce_observation(
         or pull.get("draft") is not False
         or pull.get("merged") is not False
         or pull.get("head_repository") != repository
-        or pull.get("base_sha") != (
-            protected_main if delivery_issue == 1053 else accepted_main
-        )
+        # Reviewed PR base SHA is platform history, not registration authority.
+        or (delivery_issue == 960 and pull.get("base_sha") != accepted_main)
         or pull.get("base_ref") != "main"
         or pull.get("base_repository") != repository
         or issue != {"number": delivery_issue, "state": "open"}
