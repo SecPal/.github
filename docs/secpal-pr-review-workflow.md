@@ -1749,6 +1749,21 @@ remain required. This composition changes neither bounded provider acquisition
 nor review, remediation, Ready, Recovery or Continuation budgets. The broader
 provider-lineage contract remains owned by #1031.
 
+The #1129 corrective composition extends the #1078 bootstrap to mixed published
+successors in either order, including alternating integrations and ordinary
+remediations within the existing finite limits. One backward walk starts at
+exact CURRENT and authenticates each `HEAD_ADVANCED` through the canonical typed
+integration verifier and each `REMEDIATION_COMPLETED` through its exact protected
+predecessor and canonical native/adopted State delta. The ordered integration
+pairs must agree with the encountered publications and be consumed exactly once.
+The walk stops at an independently authenticated provider root, never an
+arbitrary ancestor. Signed legacy enrollment histories retain their existing
+root derivation. Binding reauthentication reconstructs mixed event order from
+the protected publications while retaining complete per-type event digests and
+integration packages; it adds no durable schema. Historical terminality belongs
+only to the provider root, and fresh feedback belongs only to exact CURRENT.
+The #1078 historical contract and issued artifacts remain unchanged.
+
 Ordinary remediation and recovery continue to require one parent. A separately
 user-authorized mechanical integration into an already-Ready delivery PR uses
 `attest-validation --integration-evidence` and the closed
