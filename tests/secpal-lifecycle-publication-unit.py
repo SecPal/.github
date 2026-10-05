@@ -1859,15 +1859,49 @@ class LifecyclePublicationTests(TestCase):
         )
         # A transport wrapper must not alter the protected publication identity.
         wrapped = replace(current, serialized_lifecycle_evidence=serialized)
-        transition = publication._verify_historical_lifecycle_transition(
-            REPOSITORY, chain.issue, predecessor.publication_oid,
-            expected_current_publication_oid=current.publication_oid,
-        )
-        with patch.object(publication, "_verify_historical_lifecycle_transition",
-                          return_value=replace(transition, successor=wrapped)):
-            binding = publication.derive_ready_source_recovery_provider_binding(wrapped)
+        binding = publication.derive_ready_source_recovery_provider_binding(wrapped)
 
         self.assertEqual(binding.provider_head_sha, HEADS[0])
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "predecessor is invalid"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(
+                replace(wrapped, publication_digest="f" * 64)
+            )
+
+    def test_exact_adoption_remediation_cannot_import_a_missing_publication(self) -> None:
+        from scripts.secpal_pr_review import lifecycle_execution as execution
+
+        raw, _ = exact_adoption_evidence(ready_before_remediation=True)
+        lifecycle = authority.verify_lifecycle_authority_for_publication(raw)
+        fixture = publication.VerifiedLifecyclePublication(
+            "b" * 40, "c" * 64, BRANCH, None, None, lifecycle, raw,
+        )
+        signers = execution.SigningAuthorities(
+            SIGNER, signer_for(), SIGNER, signer_for(), SIGNER, signer_for(),
+        )
+        validation = verified_validation_evidence(
+            head=HEADS[1], tree=HEADS[3], parent=lifecycle.head_sha,
+        )
+        successor = execution._append_successor_evidence(
+            fixture, {"authorization_digest": "d" * 64,
+                      "operation": "REMEDIATION_COMPLETED"},
+            signers, resulting_head_sha=HEADS[1], current_head_evidence=validation,
+        )
+        # Valid signed successors still require their exact protected predecessor.
+        verified = authority._verify_lifecycle_authority_for_journal(successor)
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "enrollment must begin at its proof baseline"
+        ):
+            publication.enroll_existing_lifecycle(
+                successor, signer_identity=SIGNER, signer=signer_for(),
+            )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "remediation predecessor is missing"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(
+                replace(fixture, lifecycle=verified, serialized_lifecycle_evidence=successor)
+            )
 
     def test_provider_backed_adoption_direct_ready_successor_derives_review_head(self) -> None:
         h0 = "ff85970362d3cd889e6418ba34b69930506e9b0d"

@@ -4590,8 +4590,18 @@ def _verify_ready_source_successor_chain(
             predecessor = transition.predecessor
             before = predecessor.lifecycle
             after = root.lifecycle
+            successor_raw = authority._load_canonical_json(
+                transition.successor.serialized_lifecycle_evidence,
+                "provider remediation successor lifecycle",
+            )
+            successor_bundle = successor_raw.get("lifecycle_evidence", successor_raw)
+            # Accepted transport wrappers do not change the authenticated
+            # publication identity or its canonical inner lifecycle evidence.
             if (
-                transition.successor != root
+                replace(
+                    transition.successor,
+                    serialized_lifecycle_evidence=canonical_json_bytes(successor_bundle),
+                ) != replace(root, serialized_lifecycle_evidence=canonical_json_bytes(bundle))
                 or predecessor.publication_oid != root.predecessor_publication_oid
                 or predecessor.publication_branch != root.publication_branch
                 or transition.transition_kind != kind
