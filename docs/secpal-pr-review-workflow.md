@@ -535,6 +535,15 @@ only, with no new candidate or retry. See the [maintained source operation
 interface](../scripts/README.md#ordinary-enrolled-draft-source-advancement).
 This operation is outside the completed-feedback skill's remediation scope.
 
+An expired authorization whose exact signed candidate remains unpublished after
+a consumed push claim has one additional bounded path within the same source
+family. It requires fresh explicit exact user reauthorization and one protected
+replacement claim, preserving all original candidate and validation identities.
+Successful exact push/readback uses the existing `HEAD_ADVANCED` transition.
+See [exact unpublished source push reacquisition](../scripts/README.md#exact-unpublished-source-push-reacquisition)
+for policy compatibility, immutable object/history proof and terminal
+uncertain-write behavior. Reconciliation itself remains branch-read-only.
+
 ## Pre-enrollment Draft current-main integration
 
 An open Draft delivery that has not entered lifecycle authority may use the

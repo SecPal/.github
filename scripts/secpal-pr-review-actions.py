@@ -228,10 +228,17 @@ def _load_enrolled_draft_integration_helper() -> Any:
 
 def _command_enrolled_draft_integration(arguments: argparse.Namespace) -> int:
     module = _load_enrolled_draft_integration_helper()
-    action = module.prepare if arguments.command.startswith("prepare-") else module.integrate
+    recovery = {
+        "qualify-enrolled-draft-source-reacquisition": module.qualify_source_reacquisition,
+        "authorize-enrolled-draft-source-reacquisition": module.authorize_source_reacquisition,
+        "reacquire-enrolled-draft-source-push": module.reacquire_source_push,
+    }
+    action = recovery.get(arguments.command)
+    if action is None:
+        action = module.prepare if arguments.command.startswith("prepare-") else module.integrate
     kind = module.SOURCE_KIND if "source" in arguments.command else module.KIND
     try:
-        return action(sys.modules.get(__name__), arguments, kind=kind)
+        return action(sys.modules.get(__name__), arguments, **({} if arguments.command in recovery else {"kind": kind}))
     except (module.authority.LifecycleAuthorityError,
             module.publication.LifecyclePublicationError,
             module.execution.LifecycleExecutionError,
@@ -5200,6 +5207,25 @@ def build_parser() -> argparse.ArgumentParser:
         else:
             enrolled.add_argument("--authorization", required=True)
             enrolled.add_argument("--reconcile", action="store_true")
+    for name in ("qualify-enrolled-draft-source-reacquisition",
+                 "authorize-enrolled-draft-source-reacquisition",
+                 "reacquire-enrolled-draft-source-push"):
+        recovery = subparsers.add_parser(name)
+        recovery.add_argument("--repo", required=True)
+        recovery.add_argument("--pr", required=True, type=_positive_integer)
+        recovery.add_argument("--delivery-issue", required=True, type=_positive_integer)
+        recovery.add_argument("--repo-root", required=True)
+        recovery.add_argument("--authorization", required=True)
+        if name.startswith("reacquire-"):
+            recovery.add_argument("--reauthorization", required=True)
+        else:
+            recovery.add_argument("--output", required=True)
+        if not name.startswith("qualify-"):
+            recovery.add_argument("--apply", action="store_true")
+        if name.startswith("authorize-"):
+            recovery.add_argument("--operation-id", required=True)
+            recovery.add_argument("--expected-binding-digest", required=True)
+            recovery.add_argument("--expires-at", required=True, type=_positive_integer)
     qualified_parser = subparsers.add_parser(
         "advance-qualified-remediation-successor-loss"
     )
@@ -10726,7 +10752,7 @@ def main(argv: list[str] | None = None) -> int:
             return _command_attest_validation(arguments)
         if arguments.command == "resolve-batch":
             return _command_resolve_batch(arguments)
-        if arguments.command in {"prepare-enrolled-draft-integration", "integrate-enrolled-draft", "prepare-enrolled-draft-source", "advance-enrolled-draft-source"}:
+        if arguments.command in {"prepare-enrolled-draft-integration", "integrate-enrolled-draft", "prepare-enrolled-draft-source", "advance-enrolled-draft-source", "qualify-enrolled-draft-source-reacquisition", "authorize-enrolled-draft-source-reacquisition", "reacquire-enrolled-draft-source-push"}:
             return _command_enrolled_draft_integration(arguments)
         if arguments.command == "integrate-pre-enrollment-draft":
             return _command_integrate_pre_enrollment_draft(arguments)

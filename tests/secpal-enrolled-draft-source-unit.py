@@ -211,6 +211,20 @@ class SourcePreparationTests(TestCase):
             setattr(self.arguments, name, old)
         self.assertEqual(self.events, [])
 
+    def test_expensive_validation_expiry_stops_before_reservation_or_candidate(self):
+        expiry = self.arguments.expires_at
+        with mock.patch.object(owner.time, "time", return_value=expiry - 1) as clock:
+            def validate(*args):
+                self.events.append("validate")
+                clock.return_value = expiry
+                return True
+            self.actions._run_registered_validations.side_effect = validate
+            with self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "stale"):
+                owner.prepare(self.actions, self.arguments, kind=owner.SOURCE_KIND)
+        self.assertEqual(self.events, ["validate"])
+        owner.publication.claim_enrolled_draft_integration.assert_not_called()
+        self.actions._create_signed_pre_enrollment_commit.assert_not_called()
+
     def test_failed_validation_and_changed_staged_tree_never_create(self):
         self.actions._run_registered_validations.side_effect = None
         self.actions._run_registered_validations.return_value = False
@@ -290,6 +304,32 @@ class SourceExecutionTests(TestCase):
         with self.assertRaises(owner.fast_path.SecurityBlocker):
             self.advance()
         self.assertEqual(self.calls, ["claim", "claim"])
+        self.assertEqual(owner._push_exact.call_count, 1)
+
+    def test_expired_consumed_claim_requires_exact_fresh_reacquisition(self):
+        # Production ordering: the original claim wins, then authorization
+        # expires at the final freshness boundary before any branch dispatch.
+        expiry = self.evidence["user_authorization"]["expires_at"]
+        with mock.patch.object(owner.time, "time", side_effect=[expiry - 1, expiry]):
+            with self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "stale"):
+                self.advance()
+        self.assertTrue(self.claimed)
+        self.assertEqual(self.branch, self.evidence["draft_head_sha"])
+        self.assertEqual(self.harness.current.lifecycle.head_sha, self.branch)
+        owner._push_exact.assert_not_called()
+        with self.assertRaises(owner.publication.LifecyclePublicationError):
+            self.advance()
+        self.arguments.reconcile = True
+        with self.assertRaises(owner.fast_path.SecurityBlocker):
+            self.advance()
+        owner._push_exact.assert_not_called()
+        # The new maintained boundary must admit only this existing package;
+        # ordinary retry and read-only reconciliation remain prohibited above.
+        with mock.patch.object(owner.time, "time", return_value=expiry + 1):
+            install_reacquisition_fixture(self)
+            self.assertEqual(owner.reacquire_source_push(self.actions, self.arguments), 0)
+        self.assertEqual(self.branch, self.head)
+        self.assertEqual(self.harness.transition.transition_kind, "HEAD_ADVANCED")
         self.assertEqual(owner._push_exact.call_count, 1)
 
     def test_main_can_advance_without_becoming_a_parent(self):
@@ -467,6 +507,36 @@ class SourceRealGitTests(TestCase):
             candidate = package["final_attestation"]["candidate_head_sha"]
             self.assertEqual(self.git("rev-list", "--parents", "-n", "1", candidate).split(), [candidate, self.parent1])
 
+    def test_reacquisition_authenticates_retained_object_without_creating_another(self):
+        original = self.package()
+        preparation, _ = authorizations(original["evidence"])
+        predecessor = fixtures.native.Harness(fixtures.native.Chain()).current
+        current = replace(predecessor, lifecycle=replace(predecessor.lifecycle, head_sha=self.parent1))
+        path = self.root / "original.json"
+        path.write_text(json.dumps(original))
+        actions = SimpleNamespace(
+            _require_distinct_candidate_repository_root=mock.Mock(),
+            _read_pre_enrollment_json=fixtures.draft.actions._read_pre_enrollment_json,
+            _run_attestation_git=fixtures.draft.actions._run_attestation_git,
+            _commit_trailer_digest=fixtures.draft.actions._commit_trailer_digest,
+            _authenticate_protected_bridge_main=mock.Mock(return_value="b" * 40),
+            _create_signed_pre_enrollment_commit=mock.Mock(),
+            _run_registered_validations=mock.Mock(),
+            LiveGitHub=lambda: SimpleNamespace(observe_ready_integration_authority=lambda *_: {"head_sha": self.parent1}),
+        )
+        arguments = SimpleNamespace(repo=fixtures.native.REPOSITORY, delivery_issue=fixtures.native.ISSUE,
+            pr=fixtures.native.PR, repo_root=str(self.root), authorization=str(path))
+        before = self.git("count-objects", "-v")
+        claims = ({"authorization": preparation, "publication_digest": "1" * 64},
+                  {"authorization": original, "publication_digest": "2" * 64})
+        with self.policy_context(), mock.patch.object(owner, "_trusted_source", return_value="9" * 40), mock.patch.object(owner, "_entry", return_value=({}, {"validation": []})), mock.patch.object(owner, "_live"), mock.patch.object(owner, "_graph", return_value="d" * 64), mock.patch.object(owner, "_require_unpublished_source_history"), mock.patch.object(owner.publication, "verify_current_lifecycle_authority", return_value=current), mock.patch.object(owner.publication, "verify_enrolled_draft_source_claims", return_value=claims):
+            _, authenticated, binding = owner._qualify_source_reacquisition(actions, arguments, unused=True)
+        self.assertEqual(authenticated, original)
+        self.assertEqual(binding["candidate_head_sha"], original["final_attestation"]["candidate_head_sha"])
+        self.assertEqual(self.git("count-objects", "-v"), before)
+        actions._create_signed_pre_enrollment_commit.assert_not_called()
+        actions._run_registered_validations.assert_not_called()
+
     def test_merge_rewrite_unsigned_and_missing_duplicate_or_wrong_receipt(self):
         good = self.package()
         item = good["evidence"]
@@ -563,6 +633,333 @@ class SourceJournalTests(TestCase):
                 self.assertEqual(after.lifecycle.state, current.lifecycle.state)
                 with self.assertRaises(owner.publication.LifecyclePublicationError):
                     owner.publication.claim_enrolled_draft_integration(final, signer_identity=fixtures.native.SIGNER, signer=signer)
+
+
+def install_reacquisition_fixture(case):
+    case.protected_claims = {}
+    preparation = {"authorization": case.preparation, "publication_digest": "1" * 64}
+    consumed = {"authorization": case.authorization, "publication_digest": "2" * 64}
+    for item in (preparation, consumed):
+        owner.publication._add_enrolled_draft_claim(case.protected_claims, item)
+    binding = {**owner._original_reacquisition_binding(case.authorization),
+        "preparation_claim_digest": preparation["publication_digest"],
+        "original_push_claim_digest": consumed["publication_digest"],
+        "accepted_main_sha": "9" * 40,
+        "policy_digest": owner.fast_path.digest_json(owner.REACQUISITION_POLICY),
+        "work_graph_digest": case.evidence["work_graph_digest"]}
+    now = int(owner.time.time())
+    case.reauthorization = fixtures.sign_fields({"schema_version": "1.0",
+        "kind": owner.REACQUISITION_KIND, "operation_id": "replacement-001",
+        "binding": binding, "issued_at": now, "expires_at": now + 600,
+        "signer_identity": fixtures.native.SIGNER}, owner.REACQUISITION_DOMAIN)
+    case.arguments.reauthorization = str(Path(case.temporary.name) / "reauthorization.json")
+    Path(case.arguments.reauthorization).write_text(json.dumps(case.reauthorization))
+    case.actions.LiveGitHub = lambda: SimpleNamespace(observe_ready_integration_authority=lambda *_: {"head_sha": case.branch})
+    case.actions._write_fast_report = lambda path, value: Path(path).write_text(json.dumps(value))
+    def read(original, *, require_unused_reacquisition=False, required_reacquisition=None):
+        if case.harness.current.publication_oid != case.evidence["current_publication_oid"]:
+            raise owner.publication.LifecyclePublicationError("CURRENT advanced")
+        if original != consumed["authorization"]:
+            raise owner.publication.LifecyclePublicationError("original substituted")
+        if require_unused_reacquisition and any(v.get("reacquisition_authorization") for v in case.protected_claims.values()):
+            raise owner.publication.LifecyclePublicationError("reacquisition already consumed")
+        if required_reacquisition is not None:
+            owned = case.protected_claims.get(required_reacquisition["authorization_digest"])
+            if owned is None or owned.get("reacquisition_authorization") != required_reacquisition:
+                raise owner.publication.LifecyclePublicationError("replacement ownership missing")
+        return preparation, consumed
+    def claim(original, **kwargs):
+        case.calls.append("replacement-claim")
+        owner.publication._add_enrolled_draft_claim(case.protected_claims,
+            {"authorization": original, "reacquisition_authorization": kwargs["reacquisition_authorization"]})
+    owner.publication.claim_enrolled_draft_integration.side_effect = claim
+    for module, name, kwargs in (
+        (owner.publication, "verify_enrolled_draft_source_claims", {"side_effect": read}),
+        (owner, "_require_unpublished_source_history", {}),
+    ):
+        patch = mock.patch.object(module, name, **kwargs)
+        patch.start()
+        case.addCleanup(patch.stop)
+    return binding
+
+
+class SourceReacquisitionExecutionTests(TestCase):
+    validation = SourceExecutionTests.validation
+    live = SourceExecutionTests.live
+    claim = SourceExecutionTests.claim
+    read_claim = SourceExecutionTests.read_claim
+    push = SourceExecutionTests.push
+
+    def setUp(self):
+        SourceExecutionTests.setUp(self)
+        self.evidence["user_authorization"] = {"issued_at": 1000, "expires_at": 1600}
+        self.preparation, self.authorization = authorizations(self.evidence)
+        Path(self.arguments.authorization).write_text(json.dumps(self.authorization))
+        owner.fast_path.verify_enrolled_draft_validation_evidence.return_value = self.validation()
+        self.claimed = True
+        self.binding = install_reacquisition_fixture(self)
+
+    def recover(self):
+        return owner.reacquire_source_push(self.actions, self.arguments)
+
+    def test_closed_cli_cannot_request_force_rewrite_or_candidate_creation(self):
+        parser = fixtures.draft.actions.build_parser()
+        base = ["reacquire-enrolled-draft-source-push", "--repo", fixtures.native.REPOSITORY,
+            "--delivery-issue", str(fixtures.native.ISSUE), "--pr", str(fixtures.native.PR),
+            "--repo-root", str(ROOT), "--authorization", "original.json", "--reauthorization", "fresh.json"]
+        selected = parser.parse_args(base)
+        self.assertFalse(selected.apply)
+        with self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "requires --apply"):
+            owner.reacquire_source_push(self.actions, selected)
+        for flag in ("--force", "--rebase", "--amend", "--candidate", "--head-ref", "--reconcile"):
+            with self.subTest(flag=flag), self.assertRaises(fixtures.draft.actions.fast_path.RecoverableLocalError):
+                parser.parse_args(base + [flag])
+
+    def test_one_existing_candidate_push_then_ordinary_head_advanced(self):
+        before = self.harness.current
+        self.assertEqual(self.recover(), 0)
+        self.assertEqual(self.calls, ["replacement-claim", "push"])
+        self.assertEqual(self.harness.current.lifecycle.state, before.lifecycle.state)
+        self.assertEqual(self.harness.transition.transition_kind, "HEAD_ADVANCED")
+        owner._push_exact.assert_called_once()
+        # Subsequent live-candidate invocation uses exact reconciliation only.
+        self.assertEqual(self.recover(), 0)
+        owner._push_exact.assert_called_once()
+
+    def test_live_candidate_uses_historical_read_only_reconciliation(self):
+        self.branch = self.head
+        owner._entry.return_value = ({}, {"validation": ["new policy"]})
+        self.assertEqual(self.recover(), 0)
+        self.assertEqual(self.calls, [])
+        owner._push_exact.assert_not_called()
+        owner.publication.claim_enrolled_draft_integration.assert_not_called()
+
+    def test_uncertain_nonpersisted_write_is_terminal_across_operation_ids(self):
+        owner._push_exact.side_effect = owner.fast_path.SecurityBlocker("uncertain write")
+        with self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "terminal stop"):
+            self.recover()
+        for operation in ("replacement-001", "replacement-002"):
+            altered = {key: val for key, val in self.reauthorization.items() if key not in {"signature", "authorization_digest"}}
+            altered["operation_id"] = operation
+            Path(self.arguments.reauthorization).write_text(json.dumps(fixtures.sign_fields(altered, owner.REACQUISITION_DOMAIN)))
+            with self.assertRaisesRegex(owner.publication.LifecyclePublicationError, "already consumed"):
+                self.recover()
+        owner._push_exact.assert_called_once()
+
+    def test_uncertain_persisted_write_reconciles_without_retry(self):
+        def uncertain(*args):
+            self.push(*args)
+            raise owner.fast_path.SecurityBlocker("response lost")
+        owner._push_exact.side_effect = uncertain
+        self.assertEqual(self.recover(), 0)
+        self.assertEqual(self.harness.transition.transition_kind, "HEAD_ADVANCED")
+        owner._push_exact.assert_called_once()
+
+    def test_fresh_authority_substitution_and_expiry_reject_before_claim(self):
+        for key, value in (("candidate_head_sha", "f" * 40),
+                           ("validated_tree_sha", "f" * 40),
+                           ("draft_head_sha", "f" * 40),
+                           ("expected_signer", "other@secpal.app"),
+                           ("validation_receipt_digest", "f" * 64),
+                           ("final_attestation_digest", "f" * 64),
+                           ("repository", "Other/repository"),
+                           ("delivery_issue", 987), ("pull_request", 988),
+                           ("preparation_claim_digest", "f" * 64),
+                           ("original_push_claim_digest", "f" * 64),
+                           ("accepted_main_sha", "f" * 40),
+                           ("policy_digest", "f" * 64),
+                           ("work_graph_digest", "f" * 64)):
+            fields = {k: copy.deepcopy(v) for k, v in self.reauthorization.items() if k not in {"signature", "authorization_digest"}}
+            fields["binding"][key] = value
+            Path(self.arguments.reauthorization).write_text(json.dumps(fixtures.sign_fields(fields, owner.REACQUISITION_DOMAIN)))
+            with self.subTest(key=key), self.assertRaises((ValueError, owner.fast_path.SecurityBlocker)):
+                self.recover()
+        Path(self.arguments.reauthorization).write_text(json.dumps(self.reauthorization))
+        with mock.patch.object(owner.time, "time", return_value=self.reauthorization["expires_at"]), self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "stale"):
+            self.recover()
+        owner.publication.claim_enrolled_draft_integration.assert_not_called()
+        owner._push_exact.assert_not_called()
+
+    def test_policy_branch_current_and_delivery_drift_reject(self):
+        with mock.patch.object(owner, "_entry", return_value=({}, {"validation": ["changed"]})), self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "incompatible"):
+            self.recover()
+        self.branch = "e" * 40
+        with self.assertRaises(owner.fast_path.SecurityBlocker):
+            self.recover()
+        self.branch = self.evidence["draft_head_sha"]
+        for key in ("repo", "delivery_issue", "pr"):
+            before = getattr(self.arguments, key)
+            setattr(self.arguments, key, "Other/repository" if key == "repo" else 999)
+            with self.subTest(key=key), self.assertRaises(owner.fast_path.SecurityBlocker):
+                self.recover()
+            setattr(self.arguments, key, before)
+        current = self.harness.current
+        self.harness.current = replace(current, publication_oid="e" * 40)
+        with self.assertRaises(owner.fast_path.SecurityBlocker):
+            self.recover()
+        self.harness.current = current
+        owner._push_exact.assert_not_called()
+
+    def test_changed_graph_after_claim_cannot_dispatch_or_retry(self):
+        original_read = owner._qualify_source_reacquisition
+        def qualify(*args, **kwargs):
+            if not kwargs["unused"]:
+                owner._graph.return_value = "f" * 64
+            return original_read(*args, **kwargs)
+        with mock.patch.object(owner, "_qualify_source_reacquisition", side_effect=qualify), self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "after claim"):
+            self.recover()
+        with self.assertRaisesRegex(owner.publication.LifecyclePublicationError, "already consumed"):
+            self.recover()
+        owner._push_exact.assert_not_called()
+
+    def test_post_claim_expiry_consumes_the_only_replacement(self):
+        original_read = owner._qualify_source_reacquisition
+        def qualify(*args, **kwargs):
+            result = original_read(*args, **kwargs)
+            if not kwargs["unused"]:
+                self.clock.return_value = self.reauthorization["expires_at"]
+            return result
+        with mock.patch.object(owner.time, "time", return_value=self.reauthorization["issued_at"]) as self.clock, mock.patch.object(owner, "_qualify_source_reacquisition", side_effect=qualify):
+            with self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "stale"):
+                self.recover()
+        with self.assertRaisesRegex(owner.publication.LifecyclePublicationError, "already consumed"):
+            self.recover()
+        owner._push_exact.assert_not_called()
+
+    def test_read_only_qualification_and_explicit_exact_authorization(self):
+        self.arguments.output = str(Path(self.temporary.name) / "qualification.json")
+        self.assertEqual(owner.qualify_source_reacquisition(self.actions, self.arguments), 0)
+        report = json.loads(Path(self.arguments.output).read_text())
+        self.assertEqual(report["binding"], self.binding)
+        self.arguments.expected_binding_digest = "f" * 64
+        self.arguments.operation_id = "replacement-user"
+        self.arguments.expires_at = int(time.time()) + 600
+        with self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "explicit user"):
+            owner.authorize_source_reacquisition(self.actions, self.arguments)
+        self.arguments.expected_binding_digest = report["binding_digest"]
+        self.assertEqual(owner.authorize_source_reacquisition(self.actions, self.arguments), 0)
+        selected = json.loads(Path(self.arguments.output).read_text())
+        self.assertEqual(owner.normalize_reacquisition_authorization(selected, self.authorization), selected)
+        owner.publication.claim_enrolled_draft_integration.assert_not_called()
+        owner._push_exact.assert_not_called()
+
+
+
+class SourceReacquisitionJournalTests(TestCase):
+    def test_canonical_replacement_is_one_use_across_fresh_clones_and_ids(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as temporary:
+            remote = Path(temporary) / "journal.git"
+            subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+            policy = replace(fixtures.native.policy_for(), publication_remote_url=str(remote), genesis_admission_signer_identities=frozenset({fixtures.native.SIGNER}))
+            with fixtures.signature_context(), mock.patch.object(owner.authority, "_load_lifecycle_trust_policy", return_value=policy), mock.patch.object(owner.publication, "_verify_live_protection"):
+                chain = fixtures.native.Chain()
+                signer = fixtures.native.signer_for()
+                owner.publication.admit_native_genesis(chain.raw(), signer_identity=fixtures.native.SIGNER, signer=signer)
+                current = owner.publication.enroll_existing_lifecycle(chain.raw(), signer_identity=fixtures.native.SIGNER, signer=signer)
+                item = {**evidence(), **owner.current_binding(current)}
+                item["ordered_parent_shas"] = [current.lifecycle.head_sha]
+                preparation, original = authorizations(item)
+                with self.assertRaises(owner.publication.LifecyclePublicationError):
+                    owner.publication.verify_enrolled_draft_source_claims(original)
+                owner.publication.claim_enrolled_draft_integration(preparation, signer_identity=fixtures.native.SIGNER, signer=signer)
+                with self.assertRaises(owner.publication.LifecyclePublicationError):
+                    owner.publication.verify_enrolled_draft_source_claims(original)
+                owner.publication.claim_enrolled_draft_integration(original, signer_identity=fixtures.native.SIGNER, signer=signer)
+                reserved, consumed = owner.publication.verify_enrolled_draft_source_claims(original, require_unused_reacquisition=True)
+                binding = {**owner._original_reacquisition_binding(original),
+                    "preparation_claim_digest": reserved["publication_digest"],
+                    "original_push_claim_digest": consumed["publication_digest"],
+                    "accepted_main_sha": "9" * 40, "policy_digest": owner.fast_path.digest_json(owner.REACQUISITION_POLICY),
+                    "work_graph_digest": "d" * 64}
+                fields = {"schema_version": "1.0", "kind": owner.REACQUISITION_KIND,
+                    "operation_id": "replacement-001", "binding": binding,
+                    "issued_at": int(time.time()), "expires_at": int(time.time()) + 600,
+                    "signer_identity": fixtures.native.SIGNER}
+                replacement = fixtures.sign_fields(fields, owner.REACQUISITION_DOMAIN)
+                for key in ("preparation_claim_digest", "original_push_claim_digest"):
+                    changed = {**fields, "binding": {**binding, key: "f" * 64}}
+                    with self.subTest(key=key), self.assertRaises(owner.publication.LifecyclePublicationError):
+                        owner.publication.claim_enrolled_draft_integration(original, signer_identity=fixtures.native.SIGNER, signer=signer, reacquisition_authorization=fixtures.sign_fields(changed, owner.REACQUISITION_DOMAIN))
+                # Persisted but unacknowledged claim grants no ephemeral winner
+                # capability. Its canonical record still burns the opportunity.
+                real_cas = owner.publication._cas_remote_ref
+                def uncertain(*args, **kwargs):
+                    real_cas(*args, **kwargs)
+                    raise owner.publication.LifecyclePublicationAmbiguousWrite("claim response lost")
+                with mock.patch.object(owner.publication, "_cas_remote_ref", side_effect=uncertain), self.assertRaises(owner.publication.LifecyclePublicationAmbiguousWrite):
+                    owner.publication.claim_enrolled_draft_integration(original, signer_identity=fixtures.native.SIGNER, signer=signer, reacquisition_authorization=replacement)
+                for operation in ("replacement-001", "replacement-another-clone"):
+                    other = fixtures.sign_fields({**fields, "operation_id": operation}, owner.REACQUISITION_DOMAIN)
+                    with self.subTest(operation=operation), self.assertRaisesRegex(owner.publication.LifecyclePublicationError, "already consumed"):
+                        owner.publication.claim_enrolled_draft_integration(original, signer_identity=fixtures.native.SIGNER, signer=signer, reacquisition_authorization=other)
+                with self.assertRaisesRegex(owner.publication.LifecyclePublicationError, "already consumed"):
+                    owner.publication.verify_enrolled_draft_source_claims(original, require_unused_reacquisition=True)
+                after = owner.publication.verify_current_lifecycle_authority(fixtures.native.REPOSITORY, fixtures.native.ISSUE)
+                self.assertEqual(after.publication_oid, current.publication_oid)
+                self.assertEqual(after.lifecycle.state, current.lifecycle.state)
+                tip = subprocess.check_output(["git", "--git-dir", str(remote), "rev-parse", fixtures.native.BRANCH], text=True).strip()
+                owner.publication._walk_journal_identity_projection(remote, tip, fixtures.native.BRANCH)
+                with self.assertRaises(owner.publication.LifecyclePublicationError):
+                    owner.publication.claim_enrolled_draft_integration(original, signer_identity=fixtures.native.SIGNER, signer=signer)
+
+    def test_competing_candidate_or_missing_original_claim_cannot_recover(self):
+        preparation, original = authorizations()
+        claims = {}
+        for authorization in (preparation, original):
+            owner.publication._add_enrolled_draft_claim(claims, {"authorization": authorization, "publication_digest": "1" * 64})
+        # Untrusted workspace claims cannot nominate a second candidate, even
+        # with another operation ID and a correctly signed fresh authorization.
+        wrong = copy.deepcopy(original)
+        wrong["final_attestation"]["candidate_head_sha"] = "f" * 40
+        replacement = {"binding": {}}
+        for selected, inventory in ((wrong, claims), (original, {})):
+            with self.subTest(selected=selected["final_attestation"]["candidate_head_sha"]), self.assertRaises(owner.publication.LifecyclePublicationError):
+                owner.publication._add_enrolled_draft_claim(inventory, {"authorization": selected, "reacquisition_authorization": replacement})
+
+
+class SourceReacquisitionHistoryTests(TestCase):
+    def observation(self):
+        return {"data": {"repository": {"nameWithOwner": "SecPal/.github", "pullRequest": {
+            "number": fixtures.native.PR, "state": "OPEN", "isDraft": True,
+            "headRefName": "delivery", "headRefOid": "a" * 40,
+            "timelineItems": {"pageInfo": {"hasNextPage": False}, "nodes": [
+                {"__typename": "PullRequestCommit", "id": "COMMIT_PREDECESSOR", "commit": {"oid": "a" * 40}},
+            ]}}}}}
+
+    def test_complete_provider_representation_normalizes_and_admits_without_rewrite(self):
+        _, original = authorizations()
+        raw = self.observation()
+        normalized = owner.normalize_source_branch_history(raw)
+        self.assertEqual(owner.admit_unpublished_source_history(normalized, original), None)
+        with mock.patch.object(owner.publication, "_run_gh", return_value=SimpleNamespace(returncode=0, stdout=json.dumps(raw).encode())) as observed:
+            owner._require_unpublished_source_history(original)
+        self.assertIn("HEAD_REF_RESTORED_EVENT", observed.call_args.args[0][5])
+
+    def test_incomplete_ambiguous_or_persisted_history_never_proves_absence(self):
+        _, original = authorizations()
+        for event in ("HeadRefForcePushedEvent", "HeadRefDeletedEvent", "HeadRefRestoredEvent", "PullRequestCommit", "UnknownEvent"):
+            raw = self.observation()
+            raw["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"].append({"__typename": event, "id": "OTHER", "commit": {"oid": original["final_attestation"]["candidate_head_sha"]}})
+            with self.subTest(event=event), self.assertRaises(owner.fast_path.SecurityBlocker):
+                owner.admit_unpublished_source_history(owner.normalize_source_branch_history(raw), original)
+        for mutation in ("pagination", "errors", "duplicate", "fork", "ready", "other_head"):
+            raw = self.observation()
+            pull = raw["data"]["repository"]["pullRequest"]
+            if mutation == "pagination":
+                pull["timelineItems"]["pageInfo"]["hasNextPage"] = True
+            elif mutation == "errors":
+                raw["errors"] = [{"message": "incomplete"}]
+            elif mutation == "duplicate":
+                pull["timelineItems"]["nodes"] *= 2
+            elif mutation == "fork":
+                raw["data"]["repository"]["nameWithOwner"] = "Other/repository"
+            elif mutation == "ready":
+                pull["isDraft"] = False
+            else:
+                pull["headRefOid"] = "f" * 40
+            with self.subTest(mutation=mutation), self.assertRaises(owner.fast_path.SecurityBlocker):
+                owner.admit_unpublished_source_history(owner.normalize_source_branch_history(raw), original)
 
 
 if __name__ == "__main__":
