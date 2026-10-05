@@ -1005,5 +1005,168 @@ class RepositoryScanContractTests(unittest.TestCase):
             self.assertEqual(result["operation"]["failure_code"], "POLICY_FAILURE")
 
 
+class FrontendBracesDispositionTests(unittest.TestCase):
+    """Exercise the reviewed frontend selector through normalization and admission."""
+
+    def setUp(self) -> None:
+        self.module = load_module()
+        self.policy = json.loads(POLICY.read_text(encoding="utf-8"))
+        native = native_result()
+        native["Results"] = native["Results"][:1]
+        native["Results"][0]["Vulnerabilities"] = [{
+            "VulnerabilityID": "CVE-2026-93687",
+            "PkgName": "braces",
+            "InstalledVersion": "3.0.3",
+            "Severity": "HIGH",
+            "Title": "braces: stack exhaustion through deeply nested patterns",
+        }]
+        self.observation = self.module.normalize_native(
+            native,
+            repository="SecPal/frontend",
+            commit="e5322a16ed71c08f0aa07f882e059e3536ff1975",
+            workspace=".",
+            scanner={
+                "name": "trivy",
+                "version": "0.74.0",
+                "immutable_id": "sha256:2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a",
+                "configuration_sha256": self.module.configuration_identity(),
+            },
+            database={
+                "status": "FRESH",
+                "identity": "sha256:" + "b" * 64,
+                "updated_at": "2026-10-05T10:00:00Z",
+                "next_update": "2026-10-06T10:00:00Z",
+                "downloaded_at": "2026-10-05T10:05:00Z",
+            },
+            completed_at="2026-10-05T14:19:36.710497Z",
+        )
+
+    def test_exact_selector_retains_complete_finding_and_exception_metadata(self) -> None:
+        self.assertEqual(len(self.policy["exceptions"]), 1)
+        exception = self.policy["exceptions"][0]
+        self.assertEqual(
+            {key: value for key, value in exception.items() if key != "rationale"},
+            {
+                "id": "frontend-braces-cve-2026-93687-not-affected-20261005",
+                "repository": "SecPal/frontend",
+                "class": "VULNERABILITY",
+                "rule_id": "CVE-2026-93687",
+                "path": "package-lock.json",
+                "disposition": "NOT_AFFECTED",
+                "expires_at": "2026-10-19T00:00:00Z",
+            },
+        )
+        self.assertTrue(exception["rationale"].strip())
+        without_exception = copy.deepcopy(self.policy)
+        without_exception["exceptions"] = []
+        before = self.module.admit(self.observation, without_exception)
+        result = self.module.admit(self.observation, self.policy)
+        import jsonschema
+        jsonschema.validate(result, json.loads(SCHEMA.read_text(encoding="utf-8")))
+        self.assertEqual(before["gate_state"], "ACTIONABLE")
+        self.assertEqual(before["summary"], {
+            "total": 1, "actionable": 1, "review_required": 0, "excepted": 0,
+        })
+        self.assertEqual(result["gate_state"], "CLEAN")
+        self.assertEqual(result["summary"], {
+            "total": 1, "actionable": 0, "review_required": 0, "excepted": 1,
+        })
+        finding = result["findings"][0]
+        self.assertEqual(
+            {key: value for key, value in finding.items() if key != "exception"},
+            before["findings"][0],
+        )
+        self.assertEqual(
+            {key: finding[key] for key in (
+                "class", "rule_id", "severity", "path", "package", "installed_version", "fingerprint",
+            )},
+            {
+                "class": "VULNERABILITY", "rule_id": "CVE-2026-93687",
+                "severity": "HIGH", "path": "package-lock.json", "package": "braces",
+                "installed_version": "3.0.3",
+                "fingerprint": "sha256:f760d086d31513e4888066e769cc03368d59bc680ca155751cbb938d484be966",
+            },
+        )
+        self.assertEqual(finding["exception"], {
+            key: exception[key] for key in ("id", "disposition", "expires_at")
+        })
+        for key in ("subject", "scanner", "database", "completed_at", "operation"):
+            self.assertEqual(result[key], before[key])
+        self.assertNotEqual(result["policy"]["sha256"], before["policy"]["sha256"])
+
+    def test_nonmatching_selectors_remain_actionable(self) -> None:
+        for field, value in (
+            ("repository", "SecPal/other"),
+            ("rule_id", "CVE-2026-93688"),
+            ("path", "nested/package-lock.json"),
+            ("class", "MISCONFIGURATION"),
+        ):
+            with self.subTest(field=field):
+                other = copy.deepcopy(self.observation)
+                target = other["subject"] if field == "repository" else other["findings"][0]
+                target[field] = value
+                result = self.module.admit(other, self.policy)
+                self.assertEqual(result["gate_state"], "ACTIONABLE")
+                self.assertEqual(result["summary"]["actionable"], 1)
+                self.assertEqual(result["summary"]["excepted"], 0)
+                self.assertNotIn("exception", result["findings"][0])
+
+    def test_unrelated_finding_still_blocks(self) -> None:
+        other = copy.deepcopy(self.observation["findings"][0])
+        other.update(rule_id="CVE-2021-23337", package="lodash", installed_version="4.17.20")
+        other["fingerprint"] = "sha256:" + "d" * 64
+        self.observation["findings"].append(other)
+        result = self.module.admit(self.observation, self.policy)
+        self.assertEqual(result["gate_state"], "ACTIONABLE")
+        self.assertEqual(result["summary"], {
+            "total": 2, "actionable": 1, "review_required": 0, "excepted": 1,
+        })
+        self.assertEqual(result["findings"][1], other)
+
+    def test_expired_exception_is_rejected_at_and_after_boundary(self) -> None:
+        for expiry in ("2026-10-05T14:19:36.710497Z", "2026-10-05T14:19:35Z"):
+            with self.subTest(expiry=expiry):
+                policy = copy.deepcopy(self.policy)
+                policy["exceptions"][0]["expires_at"] = expiry
+                with self.assertRaisesRegex(self.module.ContractError, "expired"):
+                    self.module.admit(self.observation, policy)
+
+    def test_duplicate_selector_and_id_are_rejected(self) -> None:
+        for duplicate_id in (False, True):
+            with self.subTest(duplicate_id=duplicate_id):
+                policy = copy.deepcopy(self.policy)
+                duplicate = copy.deepcopy(policy["exceptions"][0])
+                if not duplicate_id:
+                    duplicate["id"] += "-duplicate"
+                    duplicate["path"] = "./package-lock.json"
+                policy["exceptions"].append(duplicate)
+                with self.assertRaisesRegex(self.module.ContractError, "unique"):
+                    self.module.admit(self.observation, policy)
+
+    def test_malformed_or_wrong_class_dispositions_are_rejected(self) -> None:
+        for field, value in (
+            ("repository", "SecPal/*"), ("class", "SECRET"),
+            ("disposition", "FIXED"), ("expires_at", "not-a-date"),
+            ("rationale", ""), ("unexpected", True),
+        ):
+            with self.subTest(field=field):
+                policy = copy.deepcopy(self.policy)
+                policy["exceptions"][0][field] = value
+                with self.assertRaises(self.module.ContractError):
+                    self.module.admit(self.observation, policy)
+        policy = copy.deepcopy(self.policy)
+        del policy["exceptions"][0]["path"]
+        with self.assertRaisesRegex(self.module.ContractError, "malformed"):
+            self.module.admit(self.observation, policy)
+
+    def test_exception_cannot_override_stale_database(self) -> None:
+        self.observation["completed_at"] = "2026-10-06T10:00:00Z"
+        self.observation["database"]["status"] = "STALE"
+        result = self.module.admit(self.observation, self.policy)
+        self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+        self.assertEqual(result["operation"]["failure_code"], "DATABASE_FAILURE")
+        self.assertEqual(result["summary"]["excepted"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
