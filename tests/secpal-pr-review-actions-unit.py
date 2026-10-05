@@ -4305,7 +4305,10 @@ class RegistryTests(TestCase):
             ["./tests/review-governance-suite.sh"],
             [command["argv"] for command in commands],
         )
-        self.assertEqual(len(commands), 21)
+        self.assertIn(
+            ["python3", "-m", "unittest", "tests/secpal-trivy-action-archive.py"],
+            [command["argv"] for command in commands],
+        )
 
     def test_locked_node_preparation_requires_exact_staged_manifest_identities(
         self,

@@ -102,6 +102,17 @@ source, dependencies, artifacts, releases, deployments, or production.
 
 ## Validation fixtures
 
+Immutable GitHub action downloads honor the repository's export attributes.
+Only `.github/actions/trivy-repository-scan/` is exported from `.github`;
+workflows, templates, instructions, and unrelated actions remain excluded.
+`python3 -m unittest tests/secpal-trivy-action-archive.py` archives the exact
+tracked candidate bytes with Git's export semantics, verifies the complete
+runtime closure against its Git blobs, and exercises its existing configuration
+identity from the exported files. Negative cases prove that parent pruning,
+runtime file exclusions, and unrelated exports fail qualification. This check
+runs in preflight and complete registered validation; it supplements the native
+replay and the required genuine external GitHub Actions invocation.
+
 `tests/fixtures/trivy-repository-scan/workspace` contains a vulnerable source
 lockfile, a rejected container configuration, and a secret template whose test
 value is assembled only in a temporary directory. The native replay runs the
