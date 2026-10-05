@@ -516,6 +516,25 @@ exceptional-continuation counters; Cycle 3 remains absent. Native genesis is
 then admitted and enrolled through the admission-first publication boundary.
 The integration itself is not a lifecycle transition.
 
+## Ordinary source advancement before Ready
+
+An enrolled native initial unreviewed Draft delivery may use the closed
+`ENROLLED_DRAFT_SOURCE_ADVANCEMENT` operation from freshly authenticated
+accepted-main tooling. The exact registered repository, issue, primary PR and
+CURRENT binding must pass the maintained initial-Draft and work-graph guards.
+Fresh explicit user authorization binds one staged tree, sole CURRENT parent,
+maintained signer, one-use identity and expiry. Canonical Complete Validation,
+receipt, final attestation, protected reservations and isolated exact branch
+transport precede the existing `HEAD_ADVANCED` publication and CURRENT readback.
+No lifecycle state, counter or review budget changes.
+
+Source advancement and mechanically derived two-parent current-main integration
+remain separate operations. Repeated development requires fresh authority and
+validation on each successor. Uncertain mutation permits exact reconciliation
+only, with no new candidate or retry. See the [maintained source operation
+interface](../scripts/README.md#ordinary-enrolled-draft-source-advancement).
+This operation is outside the completed-feedback skill's remediation scope.
+
 ## Pre-enrollment Draft current-main integration
 
 An open Draft delivery that has not entered lifecycle authority may use the

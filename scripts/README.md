@@ -1214,6 +1214,65 @@ derives the frozen #81 CURRENT/main merge and proves byte equality with the
 accepted trusted qualification import closure, including #287's correction.
 It performs no downstream or provider mutation.
 
+#### Ordinary enrolled Draft source advancement
+
+The same maintained owner composes `ENROLLED_DRAFT_SOURCE_ADVANCEMENT` from
+its initial-native-Draft guard, staged-tree Complete Validation, signed receipt
+and final attestation, protected one-use reservations, isolated branch transport
+and existing `HEAD_ADVANCED` publication. This is ordinary implementation before
+Ready and consumes no lifecycle budget. It is distinct from current-main
+integration: source advancement requires exactly one CURRENT parent and never
+merges or rebases protected main. The integration mode retains its exact
+mechanically derived two-parent contract.
+
+The closed `enrolled_draft_source_advancement_policy` currently admits only
+`SecPal/.github` and `SecPal/deployment`, the proven callers. Other repositories
+must acquire an explicitly justified registry capability; there is no wildcard
+or generic `BRANCH_WRITE` grant.
+
+After explicit current user authorization of the exact repository, issue, PR,
+CURRENT predecessor, staged tree, signer, one-use operation ID and expiry, run
+accepted-main tooling against a distinct candidate repository:
+
+```bash
+python3 -I scripts/secpal-pr-review-actions.py prepare-enrolled-draft-source \
+  --repo OWNER/REPOSITORY --delivery-issue ISSUE --pr PR \
+  --repo-root /absolute/candidate/root --authorization-id unique-source-id \
+  --expected-predecessor CURRENT_SHA --authorized-tree EXACT_STAGED_TREE \
+  --expected-signer MAINTAINED_SSH_IDENTITY --expires-at UNIX_SECONDS \
+  --manual-gate-evidence /absolute/manual-gates.json \
+  --operation-directory /absolute/new-operation-directory --apply
+```
+
+The signed authorization bounds a maximum 900-second admission window. Complete
+Validation and unchanged local/index state must pass inside that window before
+the sole signed commit is created. Its `SecPal-Validation-Receipt` trailer binds
+the exact receipt; independent final attestation reauthenticates its sole parent,
+tree, accepted signer and exact trailer cardinality. Caller-held attestation
+objects are not validation authority.
+
+```bash
+python3 -I scripts/secpal-pr-review-actions.py advance-enrolled-draft-source \
+  --repo OWNER/REPOSITORY --delivery-issue ISSUE --pr PR \
+  --repo-root /absolute/candidate/root \
+  --authorization /absolute/new-operation-directory/authorization.json --apply
+```
+
+Preparation and execution reuse ancillary claims in the existing protected
+journal. Source and integration reservations compete for the same predecessor;
+changing operation, directory or ID cannot mint a second candidate or push.
+Freshness is rechecked before source mutation. The exact non-force branch push
+and CURRENT readback preserve initial Draft state, all counters and histories.
+A later initial-Draft CURRENT may advance again with a new explicit authorization
+and validation epoch; no invocation grants the next invocation's authority.
+
+An uncertain push consumes the attempt. Only the same execution command with
+`--reconcile` may authenticate the original authorization, candidate, protected
+claims and live branch, then publish an already-authorized missing successor.
+Reconciliation never creates or pushes another candidate, including after expiry.
+A claimed candidate that is not live cannot be retried. Independently advancing
+main is reconciled later through enrolled-Draft current-main integration.
+
 ### `secpal_pr_review/lifecycle_publication.py`
 
 Publishes lifecycle authority on one protected, append-only global journal

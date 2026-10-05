@@ -2961,19 +2961,20 @@ def _add_enrolled_draft_claim(claims, document) -> None:
 
     selected = document["authorization"]
     evidence = selected["evidence"]
-    preparation = selected["kind"] == integration.PREPARATION_AUTHORIZATION_KIND
+    preparation_kind = integration.authorization_kind(evidence["kind"], preparation=True)
+    preparation = selected["kind"] == preparation_kind
     if not preparation:
         prior = claims.get(selected["preparation_authorization_digest"])
         if prior is None:
             raise LifecyclePublicationError("enrolled Draft candidate has no protected preparation reservation")
         old = prior["authorization"]
-        if old["kind"] != integration.PREPARATION_AUTHORIZATION_KIND or any(
+        if old["kind"] != preparation_kind or any(
             old[key] != selected[key] for key in ("authorization_id", "evidence", "validation_receipt", "signer_identity")
         ):
             raise LifecyclePublicationError("enrolled Draft candidate differs from preparation reservation")
     for prior in claims.values():
         old = prior["authorization"]
-        if (old["kind"] == integration.PREPARATION_AUTHORIZATION_KIND) != preparation:
+        if (old["kind"] == integration.authorization_kind(old["evidence"]["kind"], preparation=True)) != preparation:
             continue
         if old["evidence"]["repository"] == evidence["repository"] and (
             old["authorization_id"] == selected["authorization_id"]

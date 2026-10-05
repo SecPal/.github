@@ -158,6 +158,7 @@ VALIDATION_REGISTRY_ENTRY_FIELDS = frozenset(
         "lifecycle_authority_policy",
         "pre_enrollment_integration_policy",
         "enrolled_draft_integration_policy",
+        "enrolled_draft_source_advancement_policy",
         "check_policy",
         "manual_gates",
         "unsupported_operations",
@@ -710,6 +711,8 @@ def validation_registry_projection(entry: Any) -> dict[str, Any]:
         binding["enrolled_draft_integration_policy"] = copy.deepcopy(
             entry["enrolled_draft_integration_policy"]
         )
+    if "enrolled_draft_source_advancement_policy" in entry:
+        binding["enrolled_draft_source_advancement_policy"] = copy.deepcopy(entry["enrolled_draft_source_advancement_policy"])
     return binding
 
 
@@ -6820,9 +6823,13 @@ def validation_commands_for_evidence(
 
 def create_enrolled_draft_validation_receipt(integration_evidence: dict[str, Any]) -> dict[str, Any]:
     """Typed receipt owned here; trusted issuance follows Complete Validation."""
+    kind = integration_evidence["kind"]
+    if kind not in {"ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION", "ENROLLED_DRAFT_SOURCE_ADVANCEMENT"}:
+        raise SecurityBlocker("unsupported enrolled Draft receipt operation")
+    source = kind == "ENROLLED_DRAFT_SOURCE_ADVANCEMENT"
     fields = {
         "schema_version": "1.0",
-        "kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION_VALIDATION_RECEIPT",
+        "kind": kind + "_VALIDATION_RECEIPT",
         "repository": integration_evidence["repository"], "delivery_issue": integration_evidence["delivery_issue"],
         "pull_request": integration_evidence["pull_request"], "lifecycle_id": integration_evidence["lifecycle_id"],
         "current_publication_oid": integration_evidence["current_publication_oid"],
@@ -6830,8 +6837,8 @@ def create_enrolled_draft_validation_receipt(integration_evidence: dict[str, Any
         "predecessor_authority_digest": integration_evidence["predecessor_authority_digest"],
         "ordered_parent_shas": copy.deepcopy(integration_evidence["ordered_parent_shas"]),
         "validated_tree_sha": integration_evidence["validated_tree_sha"],
-        "current_main": copy.deepcopy(integration_evidence["current_main"]),
-        "integration_evidence_digest": digest_json(integration_evidence),
+        **({"user_authorization": copy.deepcopy(integration_evidence["user_authorization"])} if source else {"current_main": copy.deepcopy(integration_evidence["current_main"])}),
+        ("source_advancement_evidence_digest" if source else "integration_evidence_digest"): digest_json(integration_evidence),
         "registry_digest": integration_evidence["registry_digest"],
         "command_set_digest": integration_evidence["command_set_digest"],
         "expected_signer": integration_evidence["expected_signer"], "successful_result": True,
@@ -6851,13 +6858,13 @@ def create_enrolled_draft_final_attestation(
         raise SecurityBlocker("enrolled Draft signer fingerprint is malformed")
     fields = {
         "schema_version": "1.0",
-        "kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION_FINAL_ATTESTATION",
+        "kind": integration_evidence["kind"] + "_FINAL_ATTESTATION",
         "candidate_head_sha": _require_oid(candidate_head_sha, "integrated candidate"),
         "candidate_tree_sha": integration_evidence["validated_tree_sha"],
         "ordered_parent_shas": copy.deepcopy(integration_evidence["ordered_parent_shas"]),
         "signature_fingerprint": signature_fingerprint,
         "expected_signer": integration_evidence["expected_signer"],
-        "integration_evidence_digest": digest_json(integration_evidence),
+        ("source_advancement_evidence_digest" if integration_evidence["kind"] == "ENROLLED_DRAFT_SOURCE_ADVANCEMENT" else "integration_evidence_digest"): digest_json(integration_evidence),
         "validation_receipt_digest": receipt["receipt_digest"],
     }
     return {**fields, "attestation_digest": digest_json(fields)}
@@ -7477,11 +7484,21 @@ def verify_enrolled_draft_validation_evidence(
         }
     ):
         raise SecurityBlocker("enrolled Draft validation candidate topology or signer changed")
-    observed = derive_ready_integration_tree_evidence(root, integration_evidence["ordered_parent_shas"], integration_evidence["validated_tree_sha"], schema_version="1.0", kind=integration.KIND)
-    if observed != integration_evidence["tree_evidence"]:
-        raise SecurityBlocker("enrolled Draft validation tree differs from mechanical integration")
+    if integration_evidence["kind"] == integration.KIND:
+        observed = derive_ready_integration_tree_evidence(root, integration_evidence["ordered_parent_shas"], integration_evidence["validated_tree_sha"], schema_version="1.0", kind=integration.KIND)
+        if observed != integration_evidence["tree_evidence"]:
+            raise SecurityBlocker("enrolled Draft validation tree differs from mechanical integration")
+    else:
+        predecessor_tree = _run_integration_commit_git(root, ["rev-parse", integration_evidence["draft_head_sha"] + "^{tree}"])
+        if predecessor_tree.returncode != 0 or predecessor_tree.stdout.strip() == commit.tree_sha:
+            raise SecurityBlocker("source successor has no authenticated source delta")
     raw = _run_integration_commit_git(root, ["cat-file", "commit", head])
-    for name, expected in zip(integration.TRAILERS, (digest_json(integration_evidence), selected["validation_receipt"]["receipt_digest"])):
+    for name, expected in zip(integration.validation_trailers(integration_evidence), (digest_json(integration_evidence), selected["validation_receipt"]["receipt_digest"])):
+        if integration_evidence["kind"] == integration.SOURCE_KIND:
+            parsed = _run_integration_commit_git(root, ["show", "-s", f"--format=%(trailers:key={name},valueonly,separator=%x00)", head])
+            values = [value.strip() for value in parsed.stdout.rstrip("\n").split("\x00") if value.strip()]
+            if parsed.returncode != 0 or values != [expected]:
+                raise SecurityBlocker("source validation signed trailers are missing, duplicated or substituted")
         if raw.returncode != 0 or re.findall(rf"^{re.escape(name)}: ([0-9a-f]{{64}})$", raw.stdout, re.MULTILINE) != [expected]:
             raise SecurityBlocker("enrolled Draft validation signed trailers differ")
     result = _unregistered_validation_evidence(
@@ -7492,7 +7509,7 @@ def verify_enrolled_draft_validation_evidence(
         source_validation_evidence_digest=digest_json(integration_evidence), delivery_issue_number=integration_evidence["delivery_issue"],
     )
     return _seal_validation_evidence(result, {
-        "kind": integration.KIND, "authorization": selected, "repository_root": str(root),
+        "kind": integration_evidence["kind"], "authorization": selected, "repository_root": str(root),
     })
 
 
@@ -7558,7 +7575,7 @@ def is_verified_validation_evidence(value: Any) -> bool:
             verified = qualified_remediation_successor_loss_validation_evidence(
                 provenance["admission"], provenance["safety_facts"]
             )
-        elif kind == "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION":
+        elif kind in {"ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION", "ENROLLED_DRAFT_SOURCE_ADVANCEMENT"}:
             verified = verify_enrolled_draft_validation_evidence(
                 provenance["authorization"], repository_root=provenance["repository_root"]
             )
