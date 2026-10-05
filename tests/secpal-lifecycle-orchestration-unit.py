@@ -7030,6 +7030,34 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
             list(inspect.signature(orchestration.orchestrate_event).parameters),
             ["repository", "delivery_issue", "request"],
         )
+        forged = replace(
+            current_lifecycle(), historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE,
+        )
+        request = {
+            "event_kind": "REVIEW_EVENT_OBSERVED", "event_id": "public-boundary",
+            "pull_request": PR, "head_sha": HEAD, "replacement_pull_request": None,
+            "classification": None, "follow_up": None, "authorization": None,
+        }
+        for field, value in (
+            ("current_reader", lambda *_args: forged), ("lifecycle", forged),
+            ("historical_proof_mode", authority.EXACT_ADOPTION_PROOF_MODE),
+            ("allow_adopted_observations", True),
+        ):
+            with self.subTest(field=field), mock.patch.object(
+                publication, "verify_current_lifecycle_authority",
+            ) as verifier:
+                with self.assertRaises(TypeError):
+                    orchestration.orchestrate_event(REPOSITORY, ISSUE, request, **{field: value})
+                with self.assertRaises(orchestration.LifecycleOrchestrationError):
+                    orchestration.orchestrate_event(REPOSITORY, ISSUE, {**request, field: value})
+                verifier.assert_not_called()
+        with mock.patch.object(
+            publication, "verify_current_lifecycle_authority",
+            side_effect=publication.LifecyclePublicationError("rejected hermetic CURRENT"),
+        ) as verifier:
+            with self.assertRaises(orchestration.LifecycleOrchestrationError):
+                orchestration.orchestrate_event(REPOSITORY, ISSUE, request)
+            verifier.assert_called_once_with(REPOSITORY, ISSUE)
 
     def test_review_event_is_bounded_evidence_not_a_lifecycle_transition(self) -> None:
         lifecycle = current_lifecycle()
