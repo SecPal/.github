@@ -228,9 +228,10 @@ def _load_enrolled_draft_integration_helper() -> Any:
 
 def _command_enrolled_draft_integration(arguments: argparse.Namespace) -> int:
     module = _load_enrolled_draft_integration_helper()
-    action = module.prepare if arguments.command == "prepare-enrolled-draft-integration" else module.integrate
+    action = module.prepare if arguments.command.startswith("prepare-") else module.integrate
+    kind = module.SOURCE_KIND if "source" in arguments.command else module.KIND
     try:
-        return action(sys.modules.get(__name__), arguments)
+        return action(sys.modules.get(__name__), arguments, kind=kind)
     except (module.authority.LifecycleAuthorityError,
             module.publication.LifecyclePublicationError,
             module.execution.LifecycleExecutionError,
@@ -5179,17 +5180,23 @@ def build_parser() -> argparse.ArgumentParser:
     pre_enrollment_parser.add_argument("--attestation-output", required=True)
     pre_enrollment_parser.add_argument("--apply", action="store_true")
 
-    for name in ("prepare-enrolled-draft-integration", "integrate-enrolled-draft"):
+    for name in ("prepare-enrolled-draft-integration", "integrate-enrolled-draft",
+                 "prepare-enrolled-draft-source", "advance-enrolled-draft-source"):
         enrolled = subparsers.add_parser(name)
         enrolled.add_argument("--repo", required=True)
         enrolled.add_argument("--pr", required=True, type=_positive_integer)
         enrolled.add_argument("--delivery-issue", required=True, type=_positive_integer)
         enrolled.add_argument("--repo-root", default=".")
         enrolled.add_argument("--apply", action="store_true")
-        if name == "prepare-enrolled-draft-integration":
+        if name.startswith("prepare-"):
             enrolled.add_argument("--operation-directory", required=True)
             enrolled.add_argument("--authorization-id", required=True)
             enrolled.add_argument("--manual-gate-evidence", required=True)
+            if name == "prepare-enrolled-draft-source":
+                enrolled.add_argument("--expected-predecessor", required=True)
+                enrolled.add_argument("--authorized-tree", required=True)
+                enrolled.add_argument("--expected-signer", required=True)
+                enrolled.add_argument("--expires-at", required=True, type=_positive_integer)
         else:
             enrolled.add_argument("--authorization", required=True)
             enrolled.add_argument("--reconcile", action="store_true")
@@ -10719,7 +10726,7 @@ def main(argv: list[str] | None = None) -> int:
             return _command_attest_validation(arguments)
         if arguments.command == "resolve-batch":
             return _command_resolve_batch(arguments)
-        if arguments.command in {"prepare-enrolled-draft-integration", "integrate-enrolled-draft"}:
+        if arguments.command in {"prepare-enrolled-draft-integration", "integrate-enrolled-draft", "prepare-enrolled-draft-source", "advance-enrolled-draft-source"}:
             return _command_enrolled_draft_integration(arguments)
         if arguments.command == "integrate-pre-enrollment-draft":
             return _command_integrate_pre_enrollment_draft(arguments)

@@ -4105,6 +4105,7 @@ class RegistryTests(TestCase):
                 "lifecycle_authority_policy",
                 "pre_enrollment_integration_policy",
                 "enrolled_draft_integration_policy",
+                "enrolled_draft_source_advancement_policy",
                 "check_policy",
                 "manual_gates",
                 "unsupported_operations",
