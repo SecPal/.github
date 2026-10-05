@@ -7030,6 +7030,34 @@ def create_ready_integration_attestation(normalized, eligibility_bound):
             list(inspect.signature(orchestration.orchestrate_event).parameters),
             ["repository", "delivery_issue", "request"],
         )
+        forged = replace(
+            current_lifecycle(), historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE,
+        )
+        request = {
+            "event_kind": "REVIEW_EVENT_OBSERVED", "event_id": "public-boundary",
+            "pull_request": PR, "head_sha": HEAD, "replacement_pull_request": None,
+            "classification": None, "follow_up": None, "authorization": None,
+        }
+        for field, value in (
+            ("current_reader", lambda *_args: forged), ("lifecycle", forged),
+            ("historical_proof_mode", authority.EXACT_ADOPTION_PROOF_MODE),
+            ("allow_adopted_observations", True),
+        ):
+            with self.subTest(field=field), mock.patch.object(
+                publication, "verify_current_lifecycle_authority",
+            ) as verifier:
+                with self.assertRaises(TypeError):
+                    orchestration.orchestrate_event(REPOSITORY, ISSUE, request, **{field: value})
+                with self.assertRaises(orchestration.LifecycleOrchestrationError):
+                    orchestration.orchestrate_event(REPOSITORY, ISSUE, {**request, field: value})
+                verifier.assert_not_called()
+        with mock.patch.object(
+            publication, "verify_current_lifecycle_authority",
+            side_effect=publication.LifecyclePublicationError("rejected hermetic CURRENT"),
+        ) as verifier:
+            with self.assertRaises(orchestration.LifecycleOrchestrationError):
+                orchestration.orchestrate_event(REPOSITORY, ISSUE, request)
+            verifier.assert_called_once_with(REPOSITORY, ISSUE)
 
     def test_review_event_is_bounded_evidence_not_a_lifecycle_transition(self) -> None:
         lifecycle = current_lifecycle()
@@ -15531,6 +15559,273 @@ class FreshProviderRemediationCompositionTests(TestCase):
         self.assertIsInstance(self.fresh, self.r.VerifiedFreshProviderAcquisitions)
         with self.assertRaisesRegex(fast_path.SecurityBlocker, "unauthenticated addition"):
             self.growth()
+
+
+class OrdinaryAdoptedCurrentTests(TestCase):
+    """Signed roots, ordinary execution and protected hermetic CURRENT read-back."""
+
+    @classmethod
+    def setUpClass(cls):
+        def load(name, filename):
+            spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "tests" / filename)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+            return module
+
+        cls.p = load("ordinary_adopted_publication", "secpal-lifecycle-publication-unit.py")
+        cls.g = load("ordinary_adopted_amendment", "secpal-governance-amendment-unit.py")
+        from scripts.secpal_pr_review import lifecycle_execution
+        cls.execution = lifecycle_execution
+
+    def setUp(self):
+        self.journal = self.p.LifecyclePublicationTests()
+        self.journal.setUp()
+        self.addCleanup(self.journal.tearDown)
+
+    def authorize(self, current, *, operation="REMEDIATION_COMPLETED", scope=None):
+        lifecycle = current.lifecycle
+        return orchestration.create_user_authorization(
+            authorization_id="ordinary:first-remediation", repository=lifecycle.repository,
+            delivery_issue=lifecycle.delivery_issue, lifecycle=lifecycle,
+            publication_oid=current.publication_oid, publication_digest=current.publication_digest,
+            operation=operation, reason="Correct the authenticated ordinary review findings",
+            scope=scope or {"pull_request": lifecycle.pull_request,
+                           "predecessor_head_sha": lifecycle.head_sha,
+                           "resulting_head_sha": "8" * 40, "finding_ids": ["ordinary-finding"]},
+            signer_identity=self.signers.transition_identity, signer=self.signers.transition_signer,
+        )
+
+    def decide(self, current, raw=None, **request_updates):
+        raw = self.authorize(current) if raw is None else raw
+        request = {
+            "event_kind": "REMEDIATION_COMMIT_PUSHED",
+            "event_id": "authorization:" + json.loads(raw)["authorization_digest"],
+            "pull_request": current.lifecycle.pull_request, "head_sha": "8" * 40,
+            "replacement_pull_request": None, "classification": None,
+            "follow_up": None, "authorization": raw,
+        }
+        request.update(request_updates)
+        return orchestration._orchestrate_event(
+            current.lifecycle.repository, current.lifecycle.delivery_issue, request,
+            current_reader=lambda *_args: current,
+        )
+
+    def enroll_v3(self):
+        self.signers = self.execution.SigningAuthorities(
+            self.p.SIGNER, self.p.signer_for(), self.p.SIGNER, self.p.signer_for(),
+            self.p.SIGNER, self.p.signer_for(),
+        )
+        raw, _ = self.p.exact_adoption_evidence(ready_before_remediation=True)
+        return publication.enroll_existing_lifecycle(
+            raw, signer_identity=self.p.SIGNER, signer=self.p.signer_for(),
+        )
+
+    def assert_first_remediation(self, current):
+        before = copy.deepcopy(current.lifecycle.state)
+        raw = self.authorize(current)
+        decision = self.decide(current, raw)
+        self.assertEqual(decision.lifecycle_transition, "REMEDIATION_COMPLETED")
+        self.assertTrue(decision.preserve_ready)
+        validation = self.p.verified_validation_evidence(
+            head="8" * 40, tree="7" * 40, parent=current.lifecycle.head_sha,
+            pull_request=current.lifecycle.pull_request, delivery_issue=current.lifecycle.delivery_issue,
+        )
+        successor_raw = self.execution._append_successor_evidence(
+            current, json.loads(raw), self.signers,
+            resulting_head_sha=validation.head_sha, current_head_evidence=validation,
+        )
+        verified = self.execution._verified_lifecycle_from_raw(successor_raw)
+        published = publication.advance_current_terminal(
+            successor_raw, signer_identity=self.signers.publication_identity,
+            signer=self.signers.publication_signer,
+        )
+        read_back = publication.verify_current_lifecycle_authority(
+            current.lifecycle.repository, current.lifecycle.delivery_issue,
+        )
+        self.assertEqual(published, read_back)
+        self.assertEqual(read_back.lifecycle, verified)
+        transition = publication._verify_historical_lifecycle_transition(
+            current.lifecycle.repository, current.lifecycle.delivery_issue,
+            current.publication_oid,
+            expected_current_publication_oid=read_back.publication_oid,
+        )
+        self.execution._validate_remediation_transition_delta(transition, json.loads(raw), validation)
+        expected = copy.deepcopy(before)
+        expected["remediation_cycle_count"] = 1
+        self.assertEqual(read_back.lifecycle.state, expected)
+        self.assertEqual(read_back.lifecycle.historical_proof_mode, current.lifecycle.historical_proof_mode)
+        self.assertEqual(read_back.lifecycle.state["ready_history"], before["ready_history"])
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.decide(read_back, raw)
+
+    def test_direct_v3_first_remediation_executes_and_reads_back(self):
+        self.assert_first_remediation(self.enroll_v3())
+
+    def test_direct_v4_first_remediation_executes_and_reads_back(self):
+        self.v4_first_remediation(advance_head=False)
+
+    def test_v4_root_and_typed_head_advanced_first_remediation(self):
+        self.v4_first_remediation(advance_head=True)
+
+    def v4_first_remediation(self, *, advance_head):
+        fixture = self.g.GovernanceAmendmentTests()
+        current_reader = publication.verify_current_lifecycle_authority
+        # The v4 amendment owner is exact-scope. Use its synthetic registered
+        # Ready identity and signatures; every publication goes to a temporary
+        # bare repository. No live target source or authority is used.
+        with fixture.ready_prior_root() as (_, _, root, _, directory, reviewed):
+            policy = replace(self.journal.policy,
+                             transition_signer_identities=frozenset({self.g.SIGNER}),
+                             authority_signer_identities=frozenset({self.g.SIGNER}))
+            with (
+                mock.patch.object(authority, "_load_lifecycle_trust_policy", return_value=policy),
+                mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=current_reader),
+            ):
+                self.signers = self.execution.SigningAuthorities(
+                    self.g.SIGNER, self.g.signer, self.g.SIGNER, self.g.signer,
+                    self.g.ROOT_SIGNER, self.g.root_signer,
+                )
+                enrolled = publication.enroll_existing_lifecycle(
+                    root.serialized_lifecycle_evidence,
+                    signer_identity=self.g.ROOT_SIGNER, signer=self.g.root_signer,
+                )
+                self.assertEqual(enrolled.lifecycle.state["remediation_cycle_count"], 0)
+                if not advance_head:
+                    self.assert_first_remediation(enrolled)
+                    return
+                integration, validation, _ = fixture.integration_package(
+                    publication, enrolled, {"prior_delivery_head_sha": enrolled.lifecycle.head_sha},
+                    directory, reviewed,
+                )
+                self.assertEqual(integration["eligibility"]["remediation_cycles_after"], 0)
+                advanced_raw = self.execution._append_successor_evidence(
+                    enrolled, {"operation": "HEAD_ADVANCED", "authorization_digest": "6" * 64},
+                    self.signers, resulting_head_sha=validation.head_sha,
+                    current_head_evidence=validation,
+                )
+                advanced = publication.advance_current_terminal(
+                    advanced_raw, signer_identity=self.g.ROOT_SIGNER, signer=self.g.root_signer,
+                )
+                self.assertEqual(advanced.lifecycle.historical_proof_mode, authority.EXACT_ADOPTION_PROOF_MODE)
+                self.assertEqual(advanced.lifecycle.state, enrolled.lifecycle.state)
+                self.assert_first_remediation(advanced)
+
+    def test_adjacent_adopted_proofs_preserve_existing_eligibility(self):
+        native_fixture = current_lifecycle
+
+        def adopted_fixture(**kwargs):
+            lifecycle = native_fixture(**kwargs)
+            state = copy.deepcopy(lifecycle.state)
+            first = state["ready_history"][0]
+            first["observation_digest"] = first.pop("event_authorization_digest")
+            return replace(lifecycle, state=state,
+                           historical_proof_mode=authority.EXACT_ADOPTION_PROOF_MODE)
+
+        cases = (
+            "test_replacement_rebinds_the_existing_exhausted_lifecycle",
+            "test_one_additional_review_is_authorized_without_counter_change",
+            "test_ready_recovery_requires_exact_bounded_authorization_and_stays_ready",
+            "test_exhausted_ready_recovery_can_select_one_authenticated_continuation",
+            "test_exhausted_exceptional_recovery_is_not_a_generic_escape_hatch",
+            "test_continuation_event_fails_closed_for_state_identity_and_finding_drift",
+        )
+        with mock.patch.dict(globals(), current_lifecycle=adopted_fixture):
+            for name in cases:
+                with self.subTest(case=name):
+                    getattr(LifecycleOrchestrationTests(name), name)()
+
+    def test_native_first_remediation_and_strict_history(self):
+        chain = self.p.Chain()
+        chain.append("INITIALIZED_DRAFT")
+        chain.append("DRAFT_TO_READY")
+        chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+        lifecycle = authority._verify_lifecycle_authority_for_journal(
+            chain.raw(), admitted_initialization=chain.initialization,
+        )
+        current = publication.VerifiedLifecyclePublication(
+            "3" * 40, "4" * 64, self.p.BRANCH, None, None, lifecycle, chain.raw(),
+        )
+        self.signers = self.execution.SigningAuthorities(
+            self.p.SIGNER, self.p.signer_for(), self.p.SIGNER, self.p.signer_for(),
+            self.p.SIGNER, self.p.signer_for(),
+        )
+        self.assertEqual(self.decide(current).lifecycle_transition, "REMEDIATION_COMPLETED")
+        self.assertIn("event_authorization_digest", lifecycle.state["ready_history"][0])
+        state = copy.deepcopy(lifecycle.state)
+        state["ready_history"][0] = {
+            "sequence": 1, "transition_kind": "DRAFT_TO_READY", "observation_digest": "d" * 64,
+        }
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.decide(replace(current, lifecycle=replace(lifecycle, state=state)))
+
+    def test_adopted_invalid_state_and_unverified_current_reject(self):
+        current = self.enroll_v3()
+        mutations = {
+            "missing observation": lambda s: s["ready_history"][0].pop("observation_digest"),
+            "malformed observation": lambda s: s["ready_history"][0].update(observation_digest="bad"),
+            "wrong transition": lambda s: s["ready_history"][0].update(transition_kind="HEAD_ADVANCED"),
+            "duplicate history": lambda s: s["ready_history"].append(copy.deepcopy(s["ready_history"][0])),
+            "Ready count": lambda s: s.update(ready_transition_count=0),
+            "Review count": lambda s: s.update(unrestricted_review_count=0),
+            "budget exhausted": lambda s: s.update(remediation_cycle_count=2),
+            "Draft": lambda s: s.update(draft=True, ready=False),
+            "not Ready": lambda s: s.update(ready=False),
+            "Cycle 3": lambda s: s.update(cycle_3_absent=False),
+            "Recovery drift": lambda s: s.update(exceptional_recovery_count=1),
+            "Continuation drift": lambda s: s.update(exceptional_continuation_count=1),
+        }
+        for label, mutate in mutations.items():
+            state = copy.deepcopy(current.lifecycle.state)
+            mutate(state)
+            changed = replace(current, lifecycle=replace(current.lifecycle, state=state))
+            with self.subTest(label=label), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.decide(changed)
+        for lifecycle in (
+            SimpleNamespace(**vars(current.lifecycle)),
+            replace(current.lifecycle, repository="SecPal/contracts"),
+            replace(current.lifecycle, delivery_issue=current.lifecycle.delivery_issue + 1),
+            replace(current.lifecycle, historical_proof_mode=authority.NATIVE_PROOF_MODE),
+        ):
+            with self.subTest(lifecycle=lifecycle), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                orchestration._authenticated_current(
+                    current.lifecycle.repository, current.lifecycle.delivery_issue,
+                    lambda *_args: replace(current, lifecycle=lifecycle),
+                )
+        # Provenance is verifier output, never an accepted serialized assertion.
+        bundle = json.loads(current.serialized_lifecycle_evidence)
+        bundle["historical_proof_mode"] = authority.EXACT_ADOPTION_PROOF_MODE
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            authority._verify_lifecycle_authority_for_journal(authority.canonical_json_bytes(bundle))
+
+    def test_signed_authority_scope_identity_and_mode_substitution_reject(self):
+        current = self.enroll_v3()
+        raw = self.authorize(current)
+        for updates in (
+            {"pull_request": current.lifecycle.pull_request + 1},
+            {"head_sha": current.lifecycle.head_sha},
+            {"allow_adopted_observations": True},
+            {"historical_proof_mode": authority.EXACT_ADOPTION_PROOF_MODE},
+        ):
+            with self.subTest(updates=updates), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.decide(current, raw, **updates)
+        for field, value in (("publication_oid", "5" * 40), ("publication_digest", "6" * 64)):
+            with self.subTest(field=field), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.decide(replace(current, **{field: value}), raw)
+        for field, value in (("repository", "SecPal/contracts"), ("delivery_issue", 999),
+                             ("pull_request", 998), ("head_sha", "9" * 40)):
+            with self.subTest(field=field), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.decide(replace(current, lifecycle=replace(current.lifecycle, **{field: value})), raw)
+        for scope in (
+            {"pull_request": current.lifecycle.pull_request, "predecessor_head_sha": "9" * 40,
+             "resulting_head_sha": "8" * 40, "finding_ids": ["ordinary-finding"]},
+            {"pull_request": current.lifecycle.pull_request, "predecessor_head_sha": current.lifecycle.head_sha,
+             "resulting_head_sha": "9" * 40, "finding_ids": ["ordinary-finding"]},
+        ):
+            with self.subTest(scope=scope), self.assertRaises(orchestration.LifecycleOrchestrationError):
+                self.decide(current, self.authorize(current, scope=scope))
+        with self.assertRaises(orchestration.LifecycleOrchestrationError):
+            self.decide(current, self.authorize(current, operation="EXCEPTIONAL_RECOVERY"))
 
 
 if __name__ == "__main__":
