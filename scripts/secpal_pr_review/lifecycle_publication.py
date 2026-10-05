@@ -3862,6 +3862,35 @@ def _ready_source_provider_binding_fields(
     }
 
 
+def _require_ordinary_ready_remediation_delta(
+    before: Mapping[str, Any], after: Mapping[str, Any], event_digest: str,
+    *, historical_proof_mode: str,
+) -> None:
+    """Use canonical State semantics for imported and published Ready remediation."""
+
+    try:
+        expected = authority._derive_state(
+            before, "REMEDIATION_COMPLETED", event_digest,
+            allow_adopted_observations=(
+                historical_proof_mode == authority.EXACT_ADOPTION_PROOF_MODE
+            ),
+        )
+        if (
+            before.get("unrestricted_review_count") != 1
+            or before.get("ready") is not True or before.get("draft") is not False
+            or before.get("ready_transition_count") != 1
+            or before.get("cycle_3_absent") is not True
+            or before.get("exceptional_recovery_count") != 0
+            or before.get("exceptional_continuation_count") != 0
+            or after != expected
+        ):
+            raise authority.LifecycleAuthorityError("finite Ready remediation changed State")
+    except (authority.LifecycleAuthorityError, TypeError, ValueError) as exc:
+        raise LifecyclePublicationError(
+            "Ready-source provider lifecycle is not the exact finite Ready remediation"
+        ) from exc
+
+
 def _derive_ordinary_ready_source_provider_binding(
     current: VerifiedLifecyclePublication,
     bundle: Mapping[str, Any],
@@ -3891,33 +3920,7 @@ def _derive_ordinary_ready_source_provider_binding(
     tail = list(zip(events[start:], snapshots[start:]))
     if not tail:
         return None
-    first_event, first_snapshot = tail[0]
-    before = first_snapshot.get("state_before")
-    final_state = current.lifecycle.state
-    if (
-        not isinstance(before, dict)
-        or before.get("unrestricted_review_count") != 1
-        or before.get("ready") is not True
-        or before.get("draft") is not False
-        or before.get("cycle_3_absent") is not True
-        or before.get("ready_transition_count") != 1
-        or before.get("exceptional_recovery_count") != 0
-        or before.get("exceptional_continuation_count") != 0
-        or final_state.get("unrestricted_review_count") != 1
-        or final_state.get("remediation_cycle_count") != before.get(
-            "remediation_cycle_count"
-        ) + len(tail)
-        or final_state.get("remediation_cycle_count") > authority.MAX_REMEDIATION_CYCLES
-        or final_state.get("ready") is not True
-        or final_state.get("draft") is not False
-        or final_state.get("cycle_3_absent") is not True
-        or final_state.get("ready_transition_count") != 1
-        or final_state.get("exceptional_recovery_count") != 0
-        or final_state.get("exceptional_continuation_count") != 0
-    ):
-        raise LifecyclePublicationError(
-            "Ready-source provider lifecycle is not the exact finite Ready remediation"
-        )
+    first_event, _ = tail[0]
     predecessor = first_event.get("predecessor_head_sha")
     expected_head = predecessor
     event_digests: list[str] = []
@@ -3939,6 +3942,10 @@ def _derive_ordinary_ready_source_provider_binding(
             raise LifecyclePublicationError(
                 "Ready-source provider remediation lineage is invalid"
             )
+        _require_ordinary_ready_remediation_delta(
+            snapshot["state_before"], snapshot["state_after"], event.get("event_digest"),
+            historical_proof_mode=current.lifecycle.historical_proof_mode,
+        )
         expected_head = event.get("resulting_head_sha")
         event_digests.append(event.get("event_digest"))
     if (
@@ -3946,6 +3953,7 @@ def _derive_ordinary_ready_source_provider_binding(
         or not _OID.fullmatch(predecessor)
         or predecessor == current.lifecycle.head_sha
         or expected_head != current.lifecycle.head_sha
+        or tail[-1][1].get("state_after") != current.lifecycle.state
         or any(not isinstance(item, str) or not authority._DIGEST.fullmatch(item)
                for item in event_digests)
     ):
@@ -4194,6 +4202,32 @@ def _exact_reviewed_ready_root_head(
             current.lifecycle, bundle, current.predecessor_publication_oid,
         )
         return current.lifecycle.head_sha
+    if (
+        isinstance(proof, Mapping)
+        and current.lifecycle.adoption_review_submitted is True
+        and events == [] and current.predecessor_publication_oid is None
+    ):
+        # Receipt-bearing adoption roots also authenticate their own review
+        # observations; a consumed review-budget admission is not provider review.
+        adopted = authority.verify_exact_state_adoption_proof(proof)
+        history = proof["observed_pre_enrollment_history"]
+        reviews = [index for index, item in enumerate(history)
+                   if item["kind"] == "REVIEW_SUBMITTED"]
+        state = current.lifecycle.state
+        if (
+            adopted == current.lifecycle and len(reviews) == 1
+            and history[reviews[0]]["reviewed_head_sha"] == current.lifecycle.head_sha
+            and all(item["kind"] == "DRAFT_TO_READY_OBSERVED"
+                    and item["head_sha"] == current.lifecycle.head_sha
+                    for item in history[reviews[0] + 1:])
+            and state["ready"] is True and state["draft"] is False
+            and state["ready_transition_count"] == 1
+            and state["unrestricted_review_count"] == 1
+            and state["cycle_3_absent"] is True
+            and state["exceptional_recovery_count"] == 0
+            and state["exceptional_continuation_count"] == 0
+        ):
+            return current.lifecycle.head_sha
     reviews = [index for index, event in enumerate(events)
                if event.get("transition_kind") == "UNRESTRICTED_REVIEW_CONSUMED"]
     state = current.lifecycle.state
@@ -4491,17 +4525,110 @@ def verify_ready_integration_prior_authority(
     )
 
 
-def _verify_ready_source_integration_suffix(
+def _verify_ready_source_successor_chain(
     current: VerifiedLifecyclePublication,
     ready_integrations: tuple[tuple[Any, Any], ...],
-) -> tuple[VerifiedLifecyclePublication, tuple[str, ...], tuple[str, ...]]:
-    """Peel a complete typed integration suffix before existing provider derivation."""
+) -> tuple[VerifiedLifecyclePublication, Mapping[str, Any], tuple[str, ...],
+           tuple[str, ...], tuple[str, ...]]:
+    """Walk exact protected successors backward in their publication order."""
 
-    if not isinstance(ready_integrations, tuple) or not ready_integrations:
-        raise LifecyclePublicationError("Ready-source provider HEAD_ADVANCED evidence is missing")
-    try:
+    if not isinstance(ready_integrations, tuple):
+        raise LifecyclePublicationError("Ready-source provider integration packages are malformed")
+    if ready_integrations:
         _authenticate_provider_integration_verifier()
-        root, digests, reviewed_heads = _walk_ready_integration_chain(current, ready_integrations)
+    root = current
+    integration_index = len(ready_integrations) - 1
+    remediation_digests: list[str] = []
+    integration_digests: list[str] = []
+    reviewed_heads: list[str] = []
+    seen: set[str] = set()
+    while True:
+        raw = authority._load_canonical_json(
+            root.serialized_lifecycle_evidence, "provider predecessor lifecycle",
+        )
+        bundle = raw.get("lifecycle_evidence", raw)
+        events = bundle.get("transition_authorizations")
+        if not isinstance(events, list):
+            raise LifecyclePublicationError("Ready-source provider successor history is malformed")
+        latest = events[-1] if events else None
+        kind = latest.get("transition_kind") if latest is not None else None
+        if kind not in {"REMEDIATION_COMPLETED", "HEAD_ADVANCED"}:
+            break
+        # A signed enrollment may import a closed ordinary remediation history.
+        # Its root derivation remains owned by the existing authenticated helper.
+        if kind == "REMEDIATION_COMPLETED" and root.predecessor_publication_oid is None:
+            if root.lifecycle.historical_proof_mode != authority.LEGACY_PROOF_MODE:
+                raise LifecyclePublicationError("Ready-source provider remediation predecessor is missing")
+            break
+        if root.publication_oid in seen:
+            raise LifecyclePublicationError("Ready-source provider successor chain repeats")
+        seen.add(root.publication_oid)
+        if kind == "HEAD_ADVANCED":
+            if integration_index < 0:
+                raise LifecyclePublicationError("Ready-source provider HEAD_ADVANCED evidence is missing")
+            package = ready_integrations[integration_index]
+            if not isinstance(package, tuple) or len(package) != 2:
+                raise LifecyclePublicationError("Ready integration predecessor package is malformed")
+            try:
+                predecessor, reviewed, _ = verify_ready_integration_predecessor(
+                    root, *package, require_current=root == current,
+                )
+            except (SecurityBlocker, authority.LifecycleAuthorityError, KeyError,
+                    TypeError, ValueError) as exc:
+                raise LifecyclePublicationError(
+                    "Ready-source provider typed integration lineage is invalid"
+                ) from exc
+            integration_index -= 1
+            integration_digests.append(latest["event_digest"])
+            reviewed_heads.append(reviewed.head_sha)
+        else:
+            transition = _verify_historical_lifecycle_transition(
+                root.lifecycle.repository, root.lifecycle.delivery_issue,
+                root.predecessor_publication_oid,
+                expected_current_publication_oid=(root.publication_oid if root == current else None),
+            )
+            predecessor = transition.predecessor
+            before = predecessor.lifecycle
+            after = root.lifecycle
+            successor_raw = authority._load_canonical_json(
+                transition.successor.serialized_lifecycle_evidence,
+                "provider remediation successor lifecycle",
+            )
+            successor_bundle = successor_raw.get("lifecycle_evidence", successor_raw)
+            # Accepted transport wrappers do not change the authenticated
+            # publication identity or its canonical inner lifecycle evidence.
+            if (
+                replace(
+                    transition.successor,
+                    serialized_lifecycle_evidence=canonical_json_bytes(successor_bundle),
+                ) != replace(root, serialized_lifecycle_evidence=canonical_json_bytes(bundle))
+                or predecessor.publication_oid != root.predecessor_publication_oid
+                or predecessor.publication_branch != root.publication_branch
+                or transition.transition_kind != kind
+                or transition.event_digest != latest.get("event_digest")
+                or transition.event_id != latest.get("event_id")
+                or transition.event_signer_identity != latest.get("signer_identity")
+                or transition.pull_request != after.pull_request
+                or transition.predecessor_authority_digest != before.authority_digest
+                or transition.predecessor_head_sha != before.head_sha
+                or transition.resulting_head_sha != after.head_sha
+                or before.head_sha == after.head_sha
+                or transition.initialization_evidence_digest != before.initialization_evidence_digest
+                or any(getattr(before, field) != getattr(after, field) for field in (
+                    "repository", "delivery_issue", "pull_request", "lifecycle_id",
+                    "initialization_evidence_digest", "historical_proof_mode",
+                ))
+            ):
+                raise LifecyclePublicationError("Ready-source provider remediation predecessor is invalid")
+            _require_ordinary_ready_remediation_delta(
+                before.state, after.state, transition.event_digest,
+                historical_proof_mode=before.historical_proof_mode,
+            )
+            remediation_digests.append(transition.event_digest)
+        root = predecessor
+    if integration_index != -1:
+        raise LifecyclePublicationError("Ready-source provider integration evidence is unconsumed")
+    if integration_digests:
         state = current.lifecycle.state
         if (
             state.get("unrestricted_review_count") != 1
@@ -4512,9 +4639,8 @@ def _verify_ready_source_integration_suffix(
             or state.get("exceptional_continuation_count") != 0
         ):
             raise LifecyclePublicationError("Ready-source provider integration changed finite lifecycle")
-    except (SecurityBlocker, authority.LifecycleAuthorityError, KeyError, TypeError, ValueError) as exc:
-        raise LifecyclePublicationError("Ready-source provider typed integration lineage is invalid") from exc
-    return root, digests, reviewed_heads
+    return (root, bundle, tuple(reversed(remediation_digests)),
+            tuple(reversed(integration_digests)), tuple(reviewed_heads))
 
 
 def derive_ready_source_recovery_provider_binding(
@@ -4567,20 +4693,14 @@ def derive_ready_source_recovery_provider_binding(
         raise LifecyclePublicationError(
             "Ready-source provider lifecycle shape is unsupported"
         )
-    events = bundle.get("transition_authorizations")
-    root = current
-    integration_digests: tuple[str, ...] = ()
-    reviewed_heads: tuple[str, ...] = ()
-    if isinstance(events, list) and events and events[-1].get("transition_kind") == "HEAD_ADVANCED":
-        root, integration_digests, reviewed_heads = _verify_ready_source_integration_suffix(
-            current, ready_integrations
-        )
-        root_raw = authority._load_canonical_json(root.serialized_lifecycle_evidence, "provider root lifecycle")
-        bundle = root_raw.get("lifecycle_evidence", root_raw)
-    elif ready_integrations:
-        raise LifecyclePublicationError("Ready-source provider integration evidence is unconsumed")
+    root, bundle, remediation_digests, integration_digests, reviewed_heads = (
+        _verify_ready_source_successor_chain(current, ready_integrations)
+    )
     ordinary = _derive_ordinary_ready_source_provider_binding(root, bundle)
-    exact_head = _exact_reviewed_ready_root_head(root, bundle) if integration_digests else None
+    exact_head = (
+        _exact_reviewed_ready_root_head(root, bundle)
+        if integration_digests or remediation_digests else None
+    )
     historical = _derive_exact_adoption_historical_provider_binding(root, bundle)
     adopted = _derive_provider_backed_adopted_ready_remediation(root, bundle)
     candidates = [
@@ -4600,7 +4720,7 @@ def derive_ready_source_recovery_provider_binding(
         raise LifecyclePublicationError(
             "Ready-source provider heads conflict across authenticated sources"
         )
-    event_digests = ordinary[1] if ordinary is not None else []
+    event_digests = (ordinary[1] if ordinary is not None else []) + list(remediation_digests)
     sources = tuple(
         source
         for source, present in (
