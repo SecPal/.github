@@ -114,6 +114,15 @@ appends once and verifies exact read-back; repeated invocation is idempotent
 only for that same authenticated correction. No Ready transition, review,
 remediation, recovery counter or lifecycle head is changed.
 
+`prepare-pre-enrollment-draft-integration` derives its complete evidence file
+from authenticated current observations, the registered validation projection,
+maintained authorization signing, and shared Git merge mechanics. See
+[preparation and invariant ownership](../docs/pre-enrollment-evidence-production.md).
+Run it with freshly authenticated accepted-main tooling and a separate candidate
+checkout; it exposes target selectors and an operation ID, with no caller facts
+or registry override. Preparation writes evidence only. Independent verifier
+admission re-observes current facts before accepting the package.
+
 `attest-validation --pre-enrollment-integration-evidence` is the distinct
 version-1.0 `PRE_ENROLLMENT_DRAFT_INTEGRATION` path. It applies only to an open
 Draft delivery with no CURRENT publication, native genesis, or lifecycle-aware

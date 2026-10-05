@@ -143,12 +143,13 @@ ACTION_CALLS = (
         None,
         "_run_pre_enrollment_work_graph",
         "sys.executable",
-        "arguments",
+        "isolated_arguments",
         (
             ("capture_output", "True"),
             ("check", "False"),
             ("cwd", "repository_root"),
             ("encoding", "'utf-8'"),
+            ("env", "environment"),
             ("errors", "'replace'"),
             ("stdin", "subprocess.DEVNULL"),
             ("text", "True"),
@@ -864,6 +865,16 @@ LOADED_MODULE_ATTRIBUTES = {
             "parse_follow_up",
         },
         "pre_enrollment": {
+            "_repository",
+            "_positive",
+            "_identity",
+            "admit_live_observation",
+            "assemble_live_observation",
+            "assemble_evidence",
+            "canonical_json_bytes",
+            "create_authorization",
+            "verify_combined_tree",
+            "verify_fresh_state",
             "__file__",
             "__spec__",
             "FrozenObservation",
@@ -1391,6 +1402,10 @@ SAFE_GETATTR_CALLS = {
 }
 SAFE_SYS_MODULES_CALLS = {
     "secpal-pr-review-actions.py": {
+        DynamicImportCall(
+            ("_command_prepare_pre_enrollment_draft_integration",),
+            "sys.modules.get(__name__)",
+        ),
         DynamicImportCall(
             ("_provider_binding_uses_historical_summary",),
             "sys.modules.get(f'{package}.{owner}')",
@@ -2853,6 +2868,19 @@ def self_test() -> None:
     )
     if inspect_source(owner_module_read, "secpal-pr-review-actions.py", ()):
         raise SystemExit("closed provider-owner module read was rejected")
+
+    producer_module_read = (
+        "import sys\ndef _command_prepare_pre_enrollment_draft_integration(arguments):\n"
+        "    return sys.modules.get(__name__)\n"
+    )
+    if inspect_source(producer_module_read, "secpal-pr-review-actions.py", ()):
+        raise SystemExit("closed producer source identity read was rejected")
+    for substituted in (
+        producer_module_read.replace("__name__", "arguments.module"),
+        producer_module_read.replace("_command_prepare_pre_enrollment_draft_integration", "arbitrary_producer"),
+    ):
+        if not inspect_source(substituted, "secpal-pr-review-actions.py", ()):
+            raise SystemExit("substituted producer module read was accepted")
 
     scripts_namespace = (
         "import sys\nimport types\ndef _load_lifecycle_publication_helpers():\n"
