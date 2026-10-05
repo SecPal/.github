@@ -28,15 +28,7 @@ from scripts.secpal_pr_review import lifecycle_publication as publication
 from scripts.secpal_pr_review import fast_path
 
 
-def load_actions() -> Any:
-    path = Path(__file__).resolve().parents[1] / "scripts/secpal-pr-review-actions.py"
-    spec = importlib.util.spec_from_file_location("secpal_actions_for_publication", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("cannot load action helper")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+from tests.secpal_actions_fixture import load_actions
 
 REPOSITORY = "SecPal/.github"
 CONTRACTS_REPOSITORY = "SecPal/contracts"
@@ -5771,6 +5763,9 @@ class FrontendLifecyclePolicyTests(ContractsLifecyclePolicyTests):
             ("frontend_policy_actions", "secpal-pr-review-actions.py"),
             ("frontend_policy_resolver", "secpal-resolve-fixed-threads.py"),
         ):
+            if script == "secpal-pr-review-actions.py":
+                modules.append(load_actions())
+                continue
             spec = importlib.util.spec_from_file_location(
                 name, Path(__file__).resolve().parents[1] / "scripts" / script
             )
@@ -5792,13 +5787,7 @@ class FrontendLifecyclePolicyTests(ContractsLifecyclePolicyTests):
             actions.select_repository(actions.load_registry(), "Other/frontend")
 
     def test_ready_integration_authenticates_repository_bound_current(self) -> None:
-        spec = importlib.util.spec_from_file_location(
-            "frontend_ready_actions",
-            Path(__file__).resolve().parents[1] / "scripts/secpal-pr-review-actions.py",
-        )
-        actions = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = actions
-        spec.loader.exec_module(actions)
+        actions = load_actions()
         chain = self.chain()
         chain.append("INITIALIZED_DRAFT")
         publication.admit_native_genesis(

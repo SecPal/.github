@@ -23,6 +23,9 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "scripts"))
+from tests.secpal_actions_fixture import load_actions
+
+actions = load_actions()
 from secpal_pr_review import fast_path, lifecycle_authority as authority, lifecycle_publication
 
 REPOSITORY = "example/project"
@@ -291,11 +294,6 @@ class CurrentSafety(unittest.TestCase):
                 self.verify(self.resign(document))
 
     def test_candidate_local_issuer_rejected(self):
-        spec = importlib.util.spec_from_file_location(
-            "current_safety_actions", ROOT / "scripts/secpal-pr-review-actions.py")
-        actions = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = actions
-        spec.loader.exec_module(actions)
         parameters = inspect.signature(actions.issue_ready_source_recovery_authorization).parameters
         for forbidden in ("registry", "command_set", "safety_facts", "current_lifecycle",
                           "_validation_runner", "_issuer_source_verifier"):

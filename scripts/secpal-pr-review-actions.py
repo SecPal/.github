@@ -23,6 +23,20 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote
 
+_ACTIONS_BRIDGE_NAME = "secpal_bootstrap_source_accepted_main_actions"
+_existing_bridge = sys.modules.get(_ACTIONS_BRIDGE_NAME)
+if _existing_bridge is not None and (
+    _existing_bridge is not sys.modules.get(__name__)
+    or getattr(_existing_bridge, "_ACTIONS_BRIDGE_INITIALIZED", False)
+):
+    raise RuntimeError("Cannot replace or re-execute the owned Actions bridge")
+_ACTIONS_BRIDGE_INITIALIZED = False
+for _shared_name in (
+    "secpal_pr_review.fast_path", "secpal_pr_review.pre_enrollment_integration",
+):
+    if sys.modules.get(_shared_name) is not None:
+        raise RuntimeError("Unowned preloaded maintained helper")
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE_HELPER = REPOSITORY_ROOT / "scripts/secpal-pr-review.py"
 PLAN_SCHEMA_PATH = (
@@ -75,129 +89,82 @@ BRIDGE_BYTECODE_CACHE = tempfile.TemporaryDirectory(
 sys.pycache_prefix = BRIDGE_BYTECODE_CACHE.name
 
 
-def _load_evidence_helper() -> Any:
-    spec = importlib.util.spec_from_file_location("secpal_pr_review_evidence_shared", EVIDENCE_HELPER)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load accepted evidence helper: {EVIDENCE_HELPER}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
+# Ephemeral ownership only: source acceptance and protected-main freshness are
+# still authenticated independently for each production operation.
+_BRIDGE_NAMESPACES: dict[str, Any] = {}
+_SCRIPTS_SPEC: Any = None
+_LIFECYCLE_MODULES: dict[str, tuple[Any, Path, str, dict[str, Any]]] = {}
+_LIFECYCLE_PACKAGE = "secpal_pr_review"
+_LOADER_ROOT = REPOSITORY_ROOT
+_LIFECYCLE_IMPORTERS = tuple(sys.meta_path)
+
+
+def _require_helper_origin(module: Any, path: Path) -> None:
+    """Require the exact regular maintained source, never a same-name import."""
     try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        if sys.modules.get(spec.name) is module:
-            sys.modules.pop(spec.name, None)
-        raise
+        if (
+            REPOSITORY_ROOT != _LOADER_ROOT
+            or (path.parent != _LOADER_ROOT / "scripts/secpal_pr_review"
+                and path != EVIDENCE_HELPER)
+            or module.__file__ != str(path)
+            or module.__spec__.origin != str(path)
+            or module.__spec__.name != module.__name__
+            or module.__spec__.loader is not module.__loader__
+            or path.resolve(strict=True) != path
+            or not path.is_file()
+        ):
+            raise RuntimeError("Maintained helper has an unexpected path or origin")
+    except (AttributeError, OSError, TypeError) as exc:
+        raise RuntimeError("Maintained helper has an unexpected path or origin") from exc
+
+
+def _helper_identity(module: Any, path: Path) -> tuple[Any, Path, str, dict[str, Any]]:
+    _require_helper_origin(module, path)
+    bindings = {
+        name: getattr(module, name)
+        for name in dir(module)
+        if name in {"__name__", "__package__", "__spec__", "__loader__"}
+        or isinstance(getattr(module, name), (type, types.FunctionType, types.ModuleType))
+        or type(getattr(module, name)) is object
+    }
+    return module, path, hashlib.sha256(path.read_bytes()).hexdigest(), bindings
+
+
+def _require_helper_identity(
+    name: str, owned: tuple[Any, Path, str, dict[str, Any]]
+) -> Any:
+    module, path, source_digest, bindings = owned
+    if sys.modules.get(name) is not module:
+        raise RuntimeError(
+            "Maintained helper identity changed; unexpected path or replacement"
+        )
+    _require_helper_origin(module, path)
+    if hashlib.sha256(path.read_bytes()).hexdigest() != source_digest:
+        raise RuntimeError("Executing helper source changed; a fresh process is required")
+    if any(getattr(module, key, None) is not value for key, value in bindings.items()):
+        raise RuntimeError("Maintained verifier class or token identity changed")
     return module
-
-
-evidence = _load_evidence_helper()
 
 
 def _load_fast_path_helper() -> Any:
-    loaded = sys.modules.get("secpal_pr_review.fast_path")
-    if loaded is not None:
-        try:
-            loaded_path = loaded.__file__
-        except AttributeError as exc:
-            raise RuntimeError(
-                "Canonical fast-path module has an unexpected path"
-            ) from exc
-        if Path(loaded_path).absolute() != FAST_PATH_HELPER.absolute():
-            raise RuntimeError("Canonical fast-path module has an unexpected path")
-    spec = importlib.util.spec_from_file_location(
-        "secpal_pr_review.fast_path", FAST_PATH_HELPER
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load fast-path helper: {FAST_PATH_HELPER}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        if sys.modules.get(spec.name) is module:
-            sys.modules.pop(spec.name, None)
-        raise
-    return module
-
-
-fast_path = _load_fast_path_helper()
-follow_up = fast_path.follow_up
-PROHIBITED_OPERATION_KINDS = tuple(fast_path.PROHIBITED_REGISTRY_OPERATIONS)
+    name = _LIFECYCLE_PACKAGE + ".fast_path"
+    if name in _LIFECYCLE_MODULES:
+        return _require_helper_identity(name, _LIFECYCLE_MODULES[name])
+    return importlib.import_module(_LIFECYCLE_PACKAGE + ".fast_path")
 
 
 def _load_exact_source_safety_helper() -> Any:
-    package_name = "secpal_exact_source_safety"
-    package = types.ModuleType(package_name)
-    package.__path__ = [str(EXACT_SOURCE_SAFETY_HELPER.parent)]
-    sys.modules[package_name] = package
-    try:
-        spec = importlib.util.spec_from_file_location(
-            f"{package_name}.exact_source_safety", EXACT_SOURCE_SAFETY_HELPER,
-        )
-        if spec is None or spec.loader is None:
-            raise RuntimeError("Cannot load exact-source safety helper")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-    except BaseException:
-        module_name = f"{package_name}.exact_source_safety"
-        sys.modules.pop(module_name, None)
-        if sys.modules.get(package_name) is package:
-            sys.modules.pop(package_name, None)
-        raise
-    return module
-
-
-exact_source_safety = _load_exact_source_safety_helper()
-
-
-READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH = (
-    "tests/ready-source-recovery-current-safety.py"
-)
-READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS = (
-    "candidate_issuer_separation",
-    "lifecycle_history",
-    "ordinary_prior_ready",
-    "prior_authority_scope",
-    "prior_authority_signer",
-    "stable_feedback_integrity",
-)
-READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS = tuple(
-    fast_path.READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS
-)
+    name = _LIFECYCLE_PACKAGE + ".exact_source_safety"
+    if name in _LIFECYCLE_MODULES:
+        return _require_helper_identity(name, _LIFECYCLE_MODULES[name])
+    return importlib.import_module(_LIFECYCLE_PACKAGE + ".exact_source_safety")
 
 
 def _load_pre_enrollment_integration_helper() -> Any:
-    module_name = "secpal_pr_review.pre_enrollment_integration"
-    loaded = sys.modules.get(module_name)
-    if loaded is not None:
-        try:
-            loaded_path = loaded.__file__
-        except AttributeError as exc:
-            raise RuntimeError(
-                "Canonical pre-enrollment module has an unexpected path"
-            ) from exc
-        if Path(loaded_path).absolute() != PRE_ENROLLMENT_INTEGRATION_HELPER.absolute():
-            raise RuntimeError(
-                "Canonical pre-enrollment module has an unexpected path"
-            )
-    spec = importlib.util.spec_from_file_location(
-        module_name, PRE_ENROLLMENT_INTEGRATION_HELPER
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Cannot load pre-enrollment integration helper")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        if sys.modules.get(module_name) is module:
-            sys.modules.pop(module_name, None)
-        raise
-    return module
-
-
-pre_enrollment = _load_pre_enrollment_integration_helper()
+    name = _LIFECYCLE_PACKAGE + ".pre_enrollment_integration"
+    if name in _LIFECYCLE_MODULES:
+        return _require_helper_identity(name, _LIFECYCLE_MODULES[name])
+    return importlib.import_module(_LIFECYCLE_PACKAGE + ".pre_enrollment_integration")
 
 
 def _read_pre_enrollment_json(path: str, label: str) -> Any:
@@ -208,21 +175,10 @@ def _read_pre_enrollment_json(path: str, label: str) -> Any:
 
 
 def _load_enrolled_draft_integration_helper() -> Any:
-    """Load the closed integration owner with isolated CLI package provenance."""
-    scripts_package = types.ModuleType("scripts")
-    scripts_package.__path__ = [str(REPOSITORY_ROOT / "scripts")]
-    sys.modules["scripts"] = scripts_package
-    package_name = "secpal_pr_review"
-    package = types.ModuleType(package_name)
-    package.__path__ = [str(FAST_PATH_HELPER.parent)]
-    sys.modules[package_name] = package
-    module_name = "secpal_pr_review.enrolled_draft_integration"
-    spec = importlib.util.spec_from_file_location(
-        module_name, FAST_PATH_HELPER.with_name("enrolled_draft_integration.py")
-    )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
+    """Extend the existing owned verifier graph without reconstructing it."""
+    _load_lifecycle_publication_helpers(include_orchestration=True)
+    module = importlib.import_module(_LIFECYCLE_PACKAGE + ".enrolled_draft_integration")
+    _require_lifecycle_graph()
     return module
 
 
@@ -239,76 +195,213 @@ def _command_enrolled_draft_integration(arguments: argparse.Namespace) -> int:
         raise fast_path.SecurityBlocker(str(exc)) from exc
 
 
+def _load_bridge_scripts_namespace() -> Any:
+    """Retain the bridge namespace or an independently verified native namespace."""
+    global _SCRIPTS_SPEC
+    path = str(_LOADER_ROOT / "scripts")
+    package = sys.modules.get("scripts")
+    owned = _BRIDGE_NAMESPACES.get("scripts")
+    if owned is not None:
+        if (
+            package is not owned
+            or package.__name__ != "scripts"
+            or package.__package__ != ("scripts" if _SCRIPTS_SPEC is not None else None)
+            or list(dict.fromkeys(package.__path__)) != [path]
+            or package.__spec__ is not _SCRIPTS_SPEC
+            or getattr(package, "__file__", None) is not None
+            or (
+                _SCRIPTS_SPEC is not None
+                and (
+                    _SCRIPTS_SPEC.origin is not None
+                    or _SCRIPTS_SPEC.name != "scripts"
+                    or list(dict.fromkeys(_SCRIPTS_SPEC.submodule_search_locations)) != [path]
+                )
+            )
+        ):
+            raise RuntimeError("Bridge scripts namespace identity changed")
+        return owned
+    if package is not None:
+        spec = package.__spec__
+        if (
+            spec is None or spec.name != "scripts" or spec.origin is not None
+            or list(dict.fromkeys(package.__path__)) != [path]
+            or list(dict.fromkeys(spec.submodule_search_locations)) != [path]
+        ):
+            raise RuntimeError("Untrusted scripts namespace")
+    else:
+        package = types.ModuleType("scripts")
+        package.__path__ = [path]
+        sys.modules["scripts"] = package
+    _SCRIPTS_SPEC = package.__spec__
+    _BRIDGE_NAMESPACES["scripts"] = package
+    return package
+
+
+def _rollback_lifecycle_modules(before: dict[str, Any]) -> None:
+    package = _BRIDGE_NAMESPACES.get(_LIFECYCLE_PACKAGE)
+    for name in _lifecycle_namespace_entries().keys() - before.keys():
+        module = sys.modules.pop(name, None)
+        _LIFECYCLE_MODULES.pop(name, None)
+        child = name.rsplit(".", 1)[-1]
+        if package is not None and getattr(package, child, None) is module:
+            delattr(package, child)
+
+
+class _LifecycleModuleLoader:
+    """Record normal relative imports at execution, before callers can replace them."""
+
+    def __init__(self, source_loader: Any, path: Path) -> None:
+        self.source_loader = source_loader
+        self.path = path
+
+    def create_module(self, spec: Any) -> None:
+        return None
+
+    def exec_module(self, module: Any) -> None:
+        name = module.__spec__.name
+        if name in _LIFECYCLE_MODULES:
+            raise RuntimeError("Cannot reload a live lifecycle verifier module")
+        _require_helper_origin(module, self.path)
+        before = _lifecycle_namespace_entries()
+        try:
+            self.source_loader.exec_module(module)
+            if name == _LIFECYCLE_PACKAGE + ".fast_path":
+                package = _BRIDGE_NAMESPACES[_LIFECYCLE_PACKAGE]
+                for short, child, path in (
+                    ("follow_up", module.follow_up, FAST_PATH_HELPER.with_name("follow_up.py")),
+                    ("integration_evidence_helper", module.evidence, EVIDENCE_HELPER),
+                ):
+                    child_name = _LIFECYCLE_PACKAGE + "." + short
+                    if sys.modules.get(child_name) is not child:
+                        raise RuntimeError("Constructed helper binding changed")
+                    setattr(package, short, child)
+                    _LIFECYCLE_MODULES[child_name] = _helper_identity(child, path)
+            if name == _LIFECYCLE_PACKAGE + ".bootstrap_source_admission":
+                module._ACTIONS_OWNER_LOADER = _require_owned_actions_bridge
+            _LIFECYCLE_MODULES[name] = _helper_identity(module, self.path)
+        except BaseException:
+            _rollback_lifecycle_modules(before)
+            raise
+
+
+
+_LIFECYCLE_SOURCE_NAMES = frozenset({
+    'bootstrap_source_admission',
+    'enrolled_draft_integration',
+    'exact_source_safety',
+    'exceptional_recovery',
+    'fast_path',
+    'follow_up',
+    'governance_amendment',
+    'late_disposition',
+    'legacy_enrolled_package_loss',
+    'lifecycle_authority',
+    'lifecycle_execution',
+    'lifecycle_orchestration',
+    'lifecycle_publication',
+    'pre_enrollment_integration',
+    'provider_acquisition',
+    'provider_reacquisition',
+    'qualified_remediation_successor_loss',
+    'unchanged_head_prerequisite',
+    'unchanged_head_prerequisite_evidence',
+    'validation_evidence_loss',
+    'version_collision',
+})
+
+
+class _LifecycleModuleFinder:
+    """Closed import scope: flat maintained files under the owned package only."""
+
+    def find_spec(self, fullname: str, path: Any, target: Any = None) -> Any:
+        if not fullname.startswith(_LIFECYCLE_PACKAGE + "."):
+            return None
+        name = fullname[len(_LIFECYCLE_PACKAGE) + 1:]
+        if (
+            name not in _LIFECYCLE_SOURCE_NAMES
+            or path != [str(LIFECYCLE_AUTHORITY_HELPER.parent)]
+            or target is not None
+        ):
+            raise RuntimeError("Untrusted lifecycle import or live verifier reload")
+        source = _LOADER_ROOT / "scripts/secpal_pr_review" / (name + ".py")
+        spec = importlib.util.spec_from_file_location(fullname, source)
+        if spec is None or spec.loader is None or not source.is_file():
+            raise RuntimeError("Cannot load maintained lifecycle helper")
+        spec.loader = _LifecycleModuleLoader(spec.loader, source)
+        return spec
+
+
+_LIFECYCLE_FINDER = _LifecycleModuleFinder()
+
+
+def _lifecycle_namespace_entries() -> dict[str, Any]:
+    return {
+        name: module for name, module in sys.modules.copy().items()
+        if name == _LIFECYCLE_PACKAGE or name.startswith(_LIFECYCLE_PACKAGE + ".")
+        or (
+            name.startswith(_LIFECYCLE_PACKAGE + "_")
+            and any(module is owned[0] for owned in _LIFECYCLE_MODULES.values())
+        )
+    }
+
+
+def _require_lifecycle_graph() -> None:
+    _require_owned_actions_bridge()
+    package = _BRIDGE_NAMESPACES[_LIFECYCLE_PACKAGE]
+    entries = _lifecycle_namespace_entries()
+    if (
+        entries.get(_LIFECYCLE_PACKAGE) is not package
+        or package.__path__ != [str(LIFECYCLE_AUTHORITY_HELPER.parent)]
+        or package.__spec__ is not None
+        or package.__name__ != _LIFECYCLE_PACKAGE
+        or package.__package__ is not None
+        or getattr(package, "__file__", None) is not None
+        or set(entries) != {_LIFECYCLE_PACKAGE, *_LIFECYCLE_MODULES}
+        or len(sys.meta_path) != len(_LIFECYCLE_IMPORTERS) + 1
+        or any(actual is not expected for actual, expected in zip(
+            sys.meta_path, (_LIFECYCLE_FINDER, *_LIFECYCLE_IMPORTERS)
+        ))
+    ):
+        raise RuntimeError("Maintained lifecycle package graph identity changed")
+    for name, owned in _LIFECYCLE_MODULES.items():
+        module = _require_helper_identity(name, owned)
+        if getattr(package, name.rsplit(".", 1)[1], None) is not module:
+            raise RuntimeError("Maintained lifecycle package binding changed")
+    _load_fast_path_helper()
+    _load_pre_enrollment_integration_helper()
+    _load_bridge_scripts_namespace()
+
+
 def _load_lifecycle_publication_helpers(
     *, include_orchestration: bool = False, return_collision: bool = False
 ) -> tuple[Any, ...]:
-    """Load the maintained lifecycle modules from this exact source tree."""
-
+    """Reuse one owned graph; optional orchestration extends it without reloads."""
     if return_collision and not include_orchestration:
         raise RuntimeError("collision helper requires lifecycle orchestration")
-    scripts_package = types.ModuleType("scripts")
-    scripts_package.__path__ = [str(REPOSITORY_ROOT / "scripts")]
-    sys.modules["scripts"] = scripts_package
-    package_name = "secpal_ready_integration_lifecycle"
-    package = types.ModuleType(package_name)
-    package.__path__ = [str(LIFECYCLE_AUTHORITY_HELPER.parent)]
-    sys.modules[package_name] = package
-    sys.modules[f"{package_name}.fast_path"] = _load_fast_path_helper()
-    sys.modules[f"{package_name}.pre_enrollment_integration"] = (
-        _load_pre_enrollment_integration_helper()
-    )
-
-    def load(name: str, path: Path) -> Any:
-        module_name = f"{package_name}.{name}"
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"Cannot load maintained lifecycle helper: {path}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        return module
-
+    package_name = _LIFECYCLE_PACKAGE
+    _require_lifecycle_graph()
+    before = _lifecycle_namespace_entries()
     try:
-        lifecycle_authority = load("lifecycle_authority", LIFECYCLE_AUTHORITY_HELPER)
-        lifecycle_publication = load(
-            "lifecycle_publication", LIFECYCLE_PUBLICATION_HELPER
-        )
-        user_authorization_verifier = None
-        diagnostic_authenticator = None
-        diagnostic_verifier = None
+        _load_bridge_scripts_namespace()
+
+        lifecycle_authority = importlib.import_module(_LIFECYCLE_PACKAGE + ".lifecycle_authority")
+        lifecycle_publication = importlib.import_module(_LIFECYCLE_PACKAGE + ".lifecycle_publication")
         if include_orchestration:
-            lifecycle_orchestration = load(
-                "lifecycle_orchestration", LIFECYCLE_ORCHESTRATION_HELPER
-            )
-            user_authorization_verifier = (
-                lifecycle_orchestration._verify_user_authorization
-            )
-            diagnostic_authenticator = (
-                lifecycle_orchestration._authenticate_diagnostic_recovery_source
-            )
-            diagnostic_verifier = (
-                lifecycle_orchestration._verify_diagnostic_recovery_admission
-            )
+            lifecycle_orchestration = importlib.import_module(_LIFECYCLE_PACKAGE + ".lifecycle_orchestration")
+        _require_lifecycle_graph()
     except BaseException:
-        for module_name in (
-            f"{package_name}.lifecycle_orchestration",
-            f"{package_name}.lifecycle_publication",
-            f"{package_name}.lifecycle_authority",
-            f"{package_name}.fast_path",
-            package_name,
-        ):
-            sys.modules.pop(module_name, None)
+        _rollback_lifecycle_modules(before)
         raise
-    if user_authorization_verifier is None:
+    if not include_orchestration:
         return lifecycle_authority, lifecycle_publication
     if return_collision:
         return lifecycle_orchestration.version_collision
     return (
         lifecycle_authority,
         lifecycle_publication,
-        user_authorization_verifier,
-        diagnostic_authenticator,
-        diagnostic_verifier,
+        lifecycle_orchestration._verify_user_authorization,
+        lifecycle_orchestration._authenticate_diagnostic_recovery_source,
+        lifecycle_orchestration._verify_diagnostic_recovery_admission,
     )
 
 
@@ -321,43 +414,97 @@ def _load_collision_validation_helper() -> Any:
 
 
 def _load_protected_main_helper() -> Any:
-    """Load the accepted-main source admission module from this exact tree."""
+    """Use the same source-admission owner as nested lifecycle verification."""
+    _load_lifecycle_publication_helpers(include_orchestration=True)
+    return _require_helper_identity(
+        _LIFECYCLE_PACKAGE + ".bootstrap_source_admission",
+        _LIFECYCLE_MODULES[_LIFECYCLE_PACKAGE + ".bootstrap_source_admission"],
+    )
 
-    package_name = "secpal_ready_recovery_policy"
-    package = types.ModuleType(package_name)
-    package.__path__ = [str(FAST_PATH_HELPER.parent)]
-    sys.modules[package_name] = package
-    sys.modules[f"{package_name}.fast_path"] = _load_fast_path_helper()
 
-    def load(name: str, path: Path) -> Any:
-        module_name = f"{package_name}.{name}"
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"Cannot load maintained policy helper: {path}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        return module
-
-    loaded_names: list[str] = []
-    try:
-        load("late_disposition", LATE_DISPOSITION_HELPER)
-        loaded_names.append("late_disposition")
-        load("lifecycle_authority", LIFECYCLE_AUTHORITY_HELPER)
-        loaded_names.append("lifecycle_authority")
-        load("lifecycle_publication", LIFECYCLE_PUBLICATION_HELPER)
-        loaded_names.append("lifecycle_publication")
-        helper = load(
-            "bootstrap_source_admission", BOOTSTRAP_SOURCE_ADMISSION_HELPER
+def _require_owned_actions_bridge() -> Any:
+    """Return only the executing bridge retained by its original construction."""
+    module = _ACTIONS_BRIDGE_MODULE
+    if (
+        not _ACTIONS_BRIDGE_INITIALIZED
+        or sys.modules.get(_ACTIONS_BRIDGE_NAME) is not module
+        or module.__dict__ is not _require_owned_actions_bridge.__globals__
+        or module.__name__ != _ACTIONS_BRIDGE_ROLE
+        or module.__package__ != _ACTIONS_BRIDGE_PACKAGE
+        or module.__file__ != str(_LOADER_ROOT / "scripts/secpal-pr-review-actions.py")
+        or module.__spec__ is not _ACTIONS_BRIDGE_SPEC
+        or (
+            _ACTIONS_BRIDGE_SPEC is not None
+            and (
+                _ACTIONS_BRIDGE_SPEC.origin != module.__file__
+                or _ACTIONS_BRIDGE_SPEC.name != _ACTIONS_BRIDGE_ROLE
+            )
         )
-        loaded_names.append("bootstrap_source_admission")
-        return helper
+        or hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
+        != _ACTIONS_BRIDGE_SOURCE_DIGEST
+    ):
+        raise RuntimeError("Owned Actions bridge identity or executing source changed")
+    return module
+
+
+def _initialize_owned_helpers() -> None:
+    """Construct the only canonical helper namespace, rejecting all preloads."""
+    global fast_path, pre_enrollment, exact_source_safety
+    if _lifecycle_namespace_entries():
+        if sys.modules.get(_ACTIONS_BRIDGE_NAME) is _ACTIONS_BRIDGE_MODULE:
+            sys.modules.pop(_ACTIONS_BRIDGE_NAME, None)
+        raise RuntimeError("Unowned preloaded verifier namespace")
+    package = types.ModuleType(_LIFECYCLE_PACKAGE)
+    package.__path__ = [str(FAST_PATH_HELPER.parent)]
+    sys.modules[_LIFECYCLE_PACKAGE] = package
+    _BRIDGE_NAMESPACES[_LIFECYCLE_PACKAGE] = package
+    sys.meta_path.insert(0, _LIFECYCLE_FINDER)
+    try:
+        fast_path = _load_fast_path_helper()
+        pre_enrollment = _load_pre_enrollment_integration_helper()
+        exact_source_safety = _load_exact_source_safety_helper()
     except BaseException:
-        for name in reversed(loaded_names):
-            sys.modules.pop(f"{package_name}.{name}", None)
-        sys.modules.pop(f"{package_name}.fast_path", None)
-        sys.modules.pop(package_name, None)
+        _rollback_lifecycle_modules({})
+        _BRIDGE_NAMESPACES.pop(_LIFECYCLE_PACKAGE, None)
+        sys.meta_path[:] = [finder for finder in sys.meta_path if finder is not _LIFECYCLE_FINDER]
+        if sys.modules.get(_ACTIONS_BRIDGE_NAME) is _ACTIONS_BRIDGE_MODULE:
+            sys.modules.pop(_ACTIONS_BRIDGE_NAME, None)
         raise
+
+
+_ACTIONS_BRIDGE_MODULE = sys.modules.get(__name__)
+if (
+    type(_ACTIONS_BRIDGE_MODULE) is not types.ModuleType
+    or _ACTIONS_BRIDGE_MODULE.__dict__ is not _load_fast_path_helper.__globals__
+):
+    raise RuntimeError("Actions bridge is not bound to its executing module")
+sys.modules[_ACTIONS_BRIDGE_NAME] = _ACTIONS_BRIDGE_MODULE
+_ACTIONS_BRIDGE_ROLE = _ACTIONS_BRIDGE_MODULE.__name__
+_ACTIONS_BRIDGE_PACKAGE = _ACTIONS_BRIDGE_MODULE.__package__
+_ACTIONS_BRIDGE_SPEC = _ACTIONS_BRIDGE_MODULE.__spec__
+_ACTIONS_BRIDGE_SOURCE_DIGEST = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+_initialize_owned_helpers()
+evidence = fast_path.evidence
+follow_up = fast_path.follow_up
+PROHIBITED_OPERATION_KINDS = tuple(fast_path.PROHIBITED_REGISTRY_OPERATIONS)
+
+
+READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH = (
+    "tests/ready-source-recovery-current-safety.py"
+)
+READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS = (
+    "candidate_issuer_separation",
+    "lifecycle_history",
+    "ordinary_prior_ready",
+    "prior_authority_scope",
+    "prior_authority_signer",
+    "stable_feedback_integrity",
+)
+READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS = tuple(
+    fast_path.READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS
+)
 
 
 def _playwright_browsers_path(account_home: Path) -> Path:
@@ -10799,6 +10946,8 @@ def main(argv: list[str] | None = None) -> int:
         print(canonical_json_bytes(report).decode("utf-8"), file=sys.stderr, end="")
         return 2
 
+
+_ACTIONS_BRIDGE_INITIALIZED = True
 
 if __name__ == "__main__":
     raise SystemExit(main())

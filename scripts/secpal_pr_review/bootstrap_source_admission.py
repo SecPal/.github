@@ -431,15 +431,19 @@ def is_verified_bootstrap_source(value: Any) -> bool:
     )
 
 
+_ACTIONS_OWNER_LOADER: Any = None
+
+
 def _load_actions_helper() -> Any:
+    global _ACTIONS_OWNER_LOADER
+    if _ACTIONS_OWNER_LOADER is not None:
+        return _ACTIONS_OWNER_LOADER()
     module_name = "secpal_bootstrap_source_accepted_main_actions"
     loaded = sys.modules.get(module_name)
     if loaded is not None:
-        if Path(getattr(loaded, "__file__", "")).resolve() != _ADMISSION_HELPER:
-            raise BootstrapSourceAdmissionError(
-                "accepted-main validation helper path was substituted"
-            )
-        return loaded
+        raise BootstrapSourceAdmissionError(
+            "unowned accepted-main validation helper was preloaded"
+        )
     spec = importlib.util.spec_from_file_location(module_name, _ADMISSION_HELPER)
     if spec is None or spec.loader is None:
         raise BootstrapSourceAdmissionError(
@@ -454,7 +458,10 @@ def _load_actions_helper() -> Any:
         raise BootstrapSourceAdmissionError(
             "accepted-main validation helper could not be loaded"
         ) from exc
-    return module
+    # This transport constructed the bridge. Other owned transport instances
+    # receive the same loader callback when their maintained source executes.
+    _ACTIONS_OWNER_LOADER = module._require_owned_actions_bridge
+    return _ACTIONS_OWNER_LOADER()
 
 
 def _select_policy_from_trust(

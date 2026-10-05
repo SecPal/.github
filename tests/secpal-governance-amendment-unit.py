@@ -347,12 +347,9 @@ class GovernanceAmendmentTests(TestCase):
         """Authenticated signed v4 root; only external observations are replaced."""
         from scripts.secpal_pr_review import lifecycle_publication as publication
 
-        root = Path(__file__).resolve().parents[1]
-        spec = importlib.util.spec_from_file_location(
-            "v4_ready_actions", root / "scripts/secpal-pr-review-actions.py",
-        )
-        actions = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(actions)
+        from tests.secpal_actions_fixture import load_actions
+
+        actions = load_actions()
         first, second = self.patches()
         with first, second, tempfile.TemporaryDirectory() as directory:
             self._ready_integration_commits = {}

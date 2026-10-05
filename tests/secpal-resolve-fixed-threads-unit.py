@@ -3926,6 +3926,19 @@ class ResolveFixedThreadsTests(TestCase):
             )
 
     def test_lifecycle_helper_import_ignores_repository_root_shadow(self) -> None:
+        if "secpal_bootstrap_source_accepted_main_actions" in sys.modules:
+            # This adversarial first-load fixture needs a process without an owner.
+            code = f"""
+import sys, unittest
+sys.path.insert(0, {str(ROOT)!r})
+suite = unittest.defaultTestLoader.loadTestsFromName({self.id()!r})
+result = unittest.TextTestRunner().run(suite)
+sys.exit(not result.wasSuccessful())
+"""
+            result = subprocess.run([sys.executable, "-I", "-c", code],
+                capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             canonical_package = root / "scripts/secpal_pr_review"

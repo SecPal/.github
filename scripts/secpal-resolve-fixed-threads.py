@@ -153,6 +153,23 @@ class ResolutionError(RuntimeError):
     """The requested bounded resolution cannot be proven safe."""
 
 
+# The native CLI establishes ownership before loading any verifier helper.
+# Imported component fixtures remain consumers of their existing test harness.
+if __name__ == "__main__":
+    if sys.modules.get("secpal_bootstrap_source_accepted_main_actions") is not None:
+        raise RuntimeError("Fixed-thread CLI requires an isolated first Actions load")
+    _actions_spec = importlib.util.spec_from_file_location(
+        "secpal_bootstrap_source_accepted_main_actions",
+        REPOSITORY_ROOT / "scripts/secpal-pr-review-actions.py",
+    )
+    if _actions_spec is None or _actions_spec.loader is None:
+        raise RuntimeError("Cannot construct the maintained Actions bridge")
+    _actions_owner = importlib.util.module_from_spec(_actions_spec)
+    sys.modules[_actions_spec.name] = _actions_owner
+    _actions_spec.loader.exec_module(_actions_owner)
+    _actions_owner._load_lifecycle_publication_helpers(include_orchestration=True)
+
+
 def _load_evidence_helper() -> Any:
     loaded = sys.modules.get("secpal_pr_review_evidence_shared")
     if loaded is not None:

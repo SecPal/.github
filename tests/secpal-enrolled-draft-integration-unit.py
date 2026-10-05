@@ -261,12 +261,26 @@ class FrontendEnrolledDraftPolicyTests(TestCase):
     def test_exact_policy_and_maintained_projections_agree(self):
         self.assertEqual(self.entry["enrolled_draft_integration_policy"], enrolled.POLICY)
         self.assertIn("lifecycle_authority_policy", self.entry)
-        # The historical reviewer fixture uses the legacy module name.
-        with mock.patch.dict(sys.modules, {"secpal_pr_review": ready.review_package}):
-            resolver = load_fixture("enrolled_policy_resolver", "scripts/secpal-resolve-fixed-threads.py")
+        # A separate CLI first-load test must not execute inside the owned harness.
+        code = f"""
+import importlib.util, json, sys
+from pathlib import Path
+root = Path({str(ROOT)!r})
+sys.path.insert(0, str(root))
+sys.path.insert(0, str(root / 'scripts'))
+spec = importlib.util.spec_from_file_location('isolated_policy_resolver', root / 'scripts/secpal-resolve-fixed-threads.py')
+resolver = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = resolver
+spec.loader.exec_module(resolver)
+print(json.dumps(resolver._validation_registry_binding({self.entry!r})))
+"""
+        result = subprocess.run([sys.executable, "-I", "-c", code],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        resolver_binding = json.loads(result.stdout)
         binding = enrolled.fast_path.validation_registry_projection(self.entry)
         self.assertEqual(binding, draft.actions._fast_registry_binding(self.entry))
-        self.assertEqual(binding, resolver._validation_registry_binding(self.entry))
+        self.assertEqual(binding, resolver_binding)
         self.assertEqual(enrolled._entry(draft.actions, self.repository), (self.entry, binding))
         self.assertIn("BRANCH_WRITE", self.entry["unsupported_operations"])
         with self.assertRaises(draft.actions.RegistryError):

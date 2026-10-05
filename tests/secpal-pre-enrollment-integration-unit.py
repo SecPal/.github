@@ -18,12 +18,9 @@ from scripts.secpal_pr_review import pre_enrollment_integration as integration
 
 ROOT = Path(__file__).resolve().parents[1]
 ACTIONS = ROOT / "scripts" / "secpal-pr-review-actions.py"
-SPEC = importlib.util.spec_from_file_location("pre_enrollment_actions", ACTIONS)
-assert SPEC is not None and SPEC.loader is not None
-actions = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = actions
-SPEC.loader.exec_module(actions)
+from tests.secpal_actions_fixture import load_actions
 
+actions = load_actions()
 
 class DeploymentIntegrationPolicyTests(TestCase):
     repository = "SecPal/deployment"

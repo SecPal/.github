@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib
+import importlib.util
 from pathlib import Path
 import sys
 
@@ -13,11 +15,19 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT))
 sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
 
-from secpal_pr_review import fast_path
-from secpal_pr_review import lifecycle_authority as authority
-from secpal_pr_review import lifecycle_execution
-from secpal_pr_review import lifecycle_publication as publication
-from secpal_pr_review import provider_reacquisition
+_BRIDGE_NAME = "secpal_bootstrap_source_accepted_main_actions"
+if _BRIDGE_NAME in sys.modules:
+    raise RuntimeError("Provider CLI requires an isolated first Actions load")
+_spec = importlib.util.spec_from_file_location(
+    _BRIDGE_NAME, REPOSITORY_ROOT / "scripts/secpal-pr-review-actions.py"
+)
+_actions = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = _actions
+_spec.loader.exec_module(_actions)
+authority, publication = _actions._load_lifecycle_publication_helpers()
+fast_path = _actions.fast_path
+lifecycle_execution = importlib.import_module(publication.__package__ + ".lifecycle_execution")
+provider_reacquisition = importlib.import_module(publication.__package__ + ".provider_reacquisition")
 
 
 def main() -> int:

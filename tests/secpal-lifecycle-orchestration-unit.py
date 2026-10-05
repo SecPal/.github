@@ -32,6 +32,8 @@ from scripts.secpal_pr_review import fast_path
 from scripts.secpal_pr_review import lifecycle_orchestration as orchestration
 from scripts.secpal_pr_review import lifecycle_publication as publication
 from scripts.secpal_pr_review import late_disposition
+from tests.secpal_actions_fixture import load_actions
+
 
 REPOSITORY = "SecPal/.github"
 ISSUE = 692
@@ -15001,19 +15003,33 @@ class ProviderReacquisitionExecutionTests(TestCase):
         self.assertEqual(report["status"], "PERSISTED")
         self.assertEqual(execute.call_count, 1)
 
+    def run_isolated_provider_cli(self, body):
+        code = f"""
+import importlib.util, sys, json, tempfile
+from pathlib import Path
+from unittest import mock
+root = Path({str(REPO_ROOT)!r})
+spec = importlib.util.spec_from_file_location('provider_cli_fixture', root / 'scripts/secpal-provider-reacquisition.py')
+cli = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cli)
+""" + body
+        result = subprocess.run([sys.executable, "-I", "-c", code],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_cli_rejects_non_object_authorization_with_structured_failure(self):
-        spec = importlib.util.spec_from_file_location("secpal_reacquisition_cli_nonobject", REPO_ROOT / "scripts/secpal-provider-reacquisition.py")
-        cli = importlib.util.module_from_spec(spec);spec.loader.exec_module(cli)
-        with tempfile.TemporaryDirectory(prefix="secpal-reacquisition-input-") as directory:
-            source, output = Path(directory) / "auth.json", Path(directory) / "result.json"
-            for value in ([], None, "text", 7):
-                source.write_text(json.dumps(value))
-                with mock.patch.object(sys, "argv", ["reacquisition", "observe", "--repo", REPOSITORY,
-                        "--delivery-issue", "1082", "--authorization", str(source), "--output", str(output)]), \
-                        mock.patch.object(cli.provider_reacquisition, "authenticate_assessment") as observe:
-                    self.assertEqual(cli.main(), 1)
-                observe.assert_not_called()
-                self.assertEqual(json.loads(output.read_text())["status"], "BLOCKED")
+        self.run_isolated_provider_cli("""
+with tempfile.TemporaryDirectory() as directory:
+    source, output = Path(directory) / 'auth.json', Path(directory) / 'result.json'
+    for value in ([], None, 'text', 7):
+        source.write_text(json.dumps(value))
+        with mock.patch.object(sys, 'argv', ['reacquisition', 'observe', '--repo', 'SecPal/.github',
+                '--delivery-issue', '1082', '--authorization', str(source), '--output', str(output)]), \
+                mock.patch.object(cli.provider_reacquisition, 'authenticate_assessment') as observe:
+            assert cli.main() == 1
+        observe.assert_not_called()
+        assert json.loads(output.read_text())['status'] == 'BLOCKED'
+""")
 
     def test_stranded_claim_never_posts_a_second_request(self):
         r, doc, observed = self.complete_observation()
@@ -15069,23 +15085,22 @@ class ProviderReacquisitionExecutionTests(TestCase):
         claims.assert_not_called()
 
     def test_cli_records_signing_failure_without_an_external_operation(self):
-        spec = importlib.util.spec_from_file_location("secpal_reacquisition_cli_test", REPO_ROOT / "scripts/secpal-provider-reacquisition.py")
-        cli = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cli)
-        with tempfile.TemporaryDirectory(prefix="secpal-reacquisition-cli-") as directory:
-            output = Path(directory) / "result.json"
-            with mock.patch.object(sys, "argv", ["reacquisition", "authorize", "--repo", REPOSITORY,
-                    "--delivery-issue", "1082", "--output", str(output)]), \
-                    mock.patch.object(cli.provider_reacquisition, "issue_authorization",
-                        side_effect=cli.lifecycle_execution.LifecycleExecutionError("accepted signer unavailable")):
-                self.assertEqual(cli.main(), 1)
-            self.assertEqual(json.loads(output.read_text())["status"], "BLOCKED")
+        self.run_isolated_provider_cli("""
+with tempfile.TemporaryDirectory() as directory:
+    output = Path(directory) / 'result.json'
+    with mock.patch.object(sys, 'argv', ['reacquisition', 'authorize', '--repo', 'SecPal/.github',
+            '--delivery-issue', '1082', '--output', str(output)]), \
+            mock.patch.object(cli.provider_reacquisition, 'issue_authorization',
+                side_effect=cli.lifecycle_execution.LifecycleExecutionError('accepted signer unavailable')):
+        assert cli.main() == 1
+    assert json.loads(output.read_text())['status'] == 'BLOCKED'
+""")
 
     def test_existing_isolated_action_launcher_can_load_reacquisition_claims(self):
         action = REPO_ROOT / "scripts/secpal-pr-review-actions.py"
-        code = ("import importlib.util, importlib; "
+        code = ("import importlib.util, importlib, sys; "
             f"spec = importlib.util.spec_from_file_location('isolated_actions', {str(action)!r}); "
-            "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module); "
             "authority_module, publication_module = module._load_lifecycle_publication_helpers(); "
             "importlib.import_module(publication_module.__package__ + '.provider_reacquisition'); "
             "importlib.import_module(publication_module.__package__ + '.enrolled_draft_integration')")
@@ -15128,6 +15143,32 @@ class ProviderReacquisitionExecutionTests(TestCase):
             r._write_request(observed, "CODE", "@codex review please")
 
 
+class ActionsFixtureCompositionTests(TestCase):
+    def test_composition_fixtures_reuse_the_constructed_actions_bridge(self):
+        code = f"""
+import importlib.util, sys
+from pathlib import Path
+root = Path({str(REPO_ROOT)!r})
+sys.path.insert(0, str(root))
+from tests.secpal_actions_fixture import load_actions
+owner = load_actions()
+def fixture(name, filename):
+    spec = importlib.util.spec_from_file_location(name, root / 'tests' / filename)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+adopted = fixture('composition_adopted', 'secpal-adopted-ready-prior-authority-unit.py')
+actions = fixture('composition_actions', 'secpal-pr-review-actions-unit.py')
+assert adopted.actions is owner and actions.actions is owner
+assert load_actions() is owner
+assert adopted.lifecycle_publication is owner._load_lifecycle_publication_helpers()[1]
+"""
+        result = subprocess.run([sys.executable, "-I", "-c", code],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 class CorrectedReadyIntegrationRemediationTests(TestCase):
     """Corrected historical absence composed with a real signed integration."""
 
@@ -15138,9 +15179,6 @@ class CorrectedReadyIntegrationRemediationTests(TestCase):
     def setUp(self):
         stack = ExitStack()
         self.addCleanup(stack.close)
-        # Standalone fixture loaders use production module aliases. Restore
-        # those aliases after each case so later CLI tests retain their package.
-        stack.enter_context(mock.patch.dict(sys.modules))
 
         def load(name, filename):
             spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "tests" / filename)
@@ -15447,9 +15485,6 @@ class FreshProviderRemediationCompositionTests(TestCase):
         return {"format": "ssh", "signer_identity": self.pf.SIGNER, "value": result.stdout.decode()}
 
     def setUp(self):
-        modules = mock.patch.dict(sys.modules)
-        modules.start()
-        self.addCleanup(modules.stop)
         ReadyIntegrationRemediationTests.setUpClass.__func__(type(self))
         from scripts.secpal_pr_review import provider_reacquisition as r
         self.r = r

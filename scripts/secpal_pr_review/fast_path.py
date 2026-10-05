@@ -83,40 +83,19 @@ READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS = (
 
 
 def _load_follow_up_helper() -> Any:
-    loaded = sys.modules.get("secpal_pr_review.follow_up")
-    if loaded is not None:
-        loaded_path = getattr(loaded, "__file__", None)
-        if (
-            not isinstance(loaded_path, str)
-            or Path(loaded_path).absolute() != FOLLOW_UP_HELPER.absolute()
-        ):
-            raise RuntimeError("Canonical follow-up module has an unexpected path")
-    spec = importlib.util.spec_from_file_location("secpal_pr_review.follow_up", FOLLOW_UP_HELPER)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load follow-up helper: {FOLLOW_UP_HELPER}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(spec.name, None)
-        raise
-    return module
+    from . import follow_up as owned_follow_up
+
+    return owned_follow_up
 
 
 follow_up = _load_follow_up_helper()
 
 
 def _load_evidence_helper() -> Any:
-    module_name = "secpal_pr_review.integration_evidence_helper"
+    module_name = __package__ + ".integration_evidence_helper"
     loaded = sys.modules.get(module_name)
     if loaded is not None:
-        loaded_path = getattr(loaded, "__file__", None)
-        if (
-            not isinstance(loaded_path, str)
-            or Path(loaded_path).absolute() != EVIDENCE_HELPER.absolute()
-        ):
-            raise RuntimeError("Canonical evidence helper has an unexpected path")
+        raise RuntimeError("Unowned preloaded evidence helper")
     spec = importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load evidence helper: {EVIDENCE_HELPER}")
@@ -3821,7 +3800,6 @@ def _run_integration_commit_git(
     repository_root: Path, arguments: list[str], *, raw_output: bool = False,
     input_data: bytes | None = None,
 ) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
-    evidence = _load_evidence_helper()
     try:
         git_executable = evidence.resolve_trusted_executable("git")
         environment = evidence.command_environment("git")
@@ -3904,7 +3882,6 @@ def _authenticate_integration_commit(
     verified_commit = _run_integration_commit_git(
         root, ["verify-commit", "--raw", head]
     )
-    evidence = _load_evidence_helper()
     local_signature = evidence.interpret_local_signature(
         verified_commit.returncode,
         f"{verified_commit.stdout}\n{verified_commit.stderr}",

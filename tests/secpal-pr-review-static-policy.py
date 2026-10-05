@@ -25,6 +25,7 @@ class ProcessCall:
 class DynamicImportCall:
     functions: tuple[str, ...]
     expression: str
+    classes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -575,6 +576,7 @@ ALLOWED_IMPORTS = {
         "from . import lifecycle_authority, lifecycle_execution",
         "from . import provider_acquisition",
         "from . import provider_reacquisition",
+        "from . import follow_up as owned_follow_up",
     },
     "exact_source_safety.py": {
         "from __future__ import annotations",
@@ -724,7 +726,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "tempfile": {"mkstemp"},
     },
     "secpal-pr-review-actions.py": {
-        "importlib": {"util"},
+        "importlib": {"util", "import_module"},
         "pwd": {"getpwuid"},
         "site": {"getusersitepackages"},
         "sys": {
@@ -737,7 +739,7 @@ DIRECT_MODULE_ATTRIBUTES = {
             "version_info",
         },
         "tempfile": {"TemporaryDirectory"},
-        "types": {"ModuleType"},
+        "types": {"ModuleType", "FunctionType"},
     },
     "fast_path.py": {
         "importlib": {"util"},
@@ -806,6 +808,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "verify_snapshot_evidence",
         },
         "fast_path": {
+            "evidence",
             "__file__",
             "__spec__",
             "BatchRequest",
@@ -1000,96 +1003,20 @@ LOADED_MODULE_ATTRIBUTES = {
 }
 DYNAMIC_IMPORT_CALLS = {
     "secpal-pr-review-actions.py": {
-        DynamicImportCall(
-            ("_load_enrolled_draft_integration_helper",),
-            "importlib.util.spec_from_file_location(module_name, FAST_PATH_HELPER.with_name('enrolled_draft_integration.py'))",
-        ),
-        DynamicImportCall(
-            ("_load_enrolled_draft_integration_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_enrolled_draft_integration_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "importlib.util.spec_from_file_location("
-            "f'{package_name}.exact_source_safety', EXACT_SOURCE_SAFETY_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "importlib.util.spec_from_file_location("
-            "'secpal_pr_review_evidence_shared', EVIDENCE_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "importlib.util.spec_from_file_location("
-            "'secpal_pr_review.fast_path', FAST_PATH_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_pre_enrollment_integration_helper",),
-            "importlib.util.spec_from_file_location("
-            "module_name, PRE_ENROLLMENT_INTEGRATION_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_pre_enrollment_integration_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_pre_enrollment_integration_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers", "load"),
-            "importlib.util.spec_from_file_location(module_name, path)",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers", "load"),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers", "load"),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper", "load"),
-            "importlib.util.spec_from_file_location(module_name, path)",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper", "load"),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper", "load"),
-            "spec.loader.exec_module(module)",
-        ),
+        DynamicImportCall(('_load_fast_path_helper',), "importlib.import_module(_LIFECYCLE_PACKAGE + '.fast_path')"),
+        DynamicImportCall(('_load_pre_enrollment_integration_helper',), "importlib.import_module(_LIFECYCLE_PACKAGE + '.pre_enrollment_integration')"),
+        DynamicImportCall(('_load_exact_source_safety_helper',), "importlib.import_module(_LIFECYCLE_PACKAGE + '.exact_source_safety')"),
+        DynamicImportCall(('_load_enrolled_draft_integration_helper',), "importlib.import_module(_LIFECYCLE_PACKAGE + '.enrolled_draft_integration')"),
+        DynamicImportCall(('_load_lifecycle_publication_helpers',), "importlib.import_module(_LIFECYCLE_PACKAGE + '.lifecycle_authority')"),
+        DynamicImportCall(('_load_lifecycle_publication_helpers',), "importlib.import_module(_LIFECYCLE_PACKAGE + '.lifecycle_publication')"),
+        DynamicImportCall(('_load_lifecycle_publication_helpers',), "importlib.import_module(_LIFECYCLE_PACKAGE + '.lifecycle_orchestration')"),
+        DynamicImportCall(('exec_module',), 'self.source_loader.exec_module(module)', ('_LifecycleModuleLoader',)),
+        DynamicImportCall(('find_spec',), 'importlib.util.spec_from_file_location(fullname, source)', ('_LifecycleModuleFinder',)),
     },
     "secpal-resolve-fixed-threads.py": {
+        DynamicImportCall((), "importlib.util.spec_from_file_location('secpal_bootstrap_source_accepted_main_actions', REPOSITORY_ROOT / 'scripts/secpal-pr-review-actions.py')"),
+        DynamicImportCall((), "importlib.util.module_from_spec(_actions_spec)"),
+        DynamicImportCall((), "_actions_spec.loader.exec_module(_actions_owner)"),
         DynamicImportCall(
             ("_load_evidence_helper",),
             "importlib.util.spec_from_file_location("
@@ -1144,31 +1071,9 @@ DYNAMIC_IMPORT_CALLS = {
         ),
     },
     "fast_path.py": {
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "importlib.util.spec_from_file_location("
-            "'secpal_pr_review.follow_up', FOLLOW_UP_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "spec.loader.exec_module(module)",
-        ),
+        DynamicImportCall(('_load_evidence_helper',), 'importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)'),
+        DynamicImportCall(('_load_evidence_helper',), 'importlib.util.module_from_spec(spec)'),
+        DynamicImportCall(('_load_evidence_helper',), 'spec.loader.exec_module(module)'),
     },
     "secpal-create-late-disposition.py": {
         DynamicImportCall(
@@ -1209,148 +1114,59 @@ DYNAMIC_IMPORT_CALLS = {
         ),
     },
 }
+SAFE_META_PATH_ACCESS = {
+    "secpal-pr-review-actions.py": {
+        DynamicImportCall((), 'tuple(sys.meta_path)'),
+        DynamicImportCall(('_initialize_owned_helpers',), 'sys.meta_path.insert(0, _LIFECYCLE_FINDER)'),
+        DynamicImportCall(('_initialize_owned_helpers',), 'sys.meta_path[:] = [finder for finder in sys.meta_path if finder is not _LIFECYCLE_FINDER]'),
+        DynamicImportCall(('_initialize_owned_helpers',), ' for finder in sys.meta_path if finder is not _LIFECYCLE_FINDER'),
+        DynamicImportCall(('_require_lifecycle_graph',), 'len(sys.meta_path)'),
+        DynamicImportCall(('_require_lifecycle_graph',), 'zip(sys.meta_path, (_LIFECYCLE_FINDER, *_LIFECYCLE_IMPORTERS))'),
+    },
+}
 SAFE_GETATTR_CALLS = {
     "secpal-pr-review-actions.py": {
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "getattr(loaded, '__file__', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'manual_gate_evidence', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'eligibility_evidence', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'integration_evidence', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'pre_enrollment_integration_evidence', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'exceptional_recovery_evidence', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'exceptional_recovery_delivery_issue', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'exceptional_recovery_authorization_id', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'exceptional_continuation_evidence', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'exceptional_continuation_delivery_issue', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'exceptional_continuation_authorization_id', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'delivery_issue', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'integration_authorization_id', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'expected_integration_signer', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'prior_authority', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'prior_authority_tag_ref', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'prior_reviewed_state', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'prior_receipt', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'prior_attestation', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'prior_integration_chain', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'expected_prior_authority_signer', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'prior_authority', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'prior_reviewed_state', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'prior_receipt', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'prior_attestation', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'prior_integration_chain', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'prior_authority_tag_ref', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'expected_prior_authority_signer', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_integration_selection",),
-            "getattr(arguments, 'delivery_issue', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_integration_selection",),
-            "getattr(arguments, 'integration_authorization_id', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_integration_selection",),
-            "getattr(arguments, 'expected_integration_signer', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_exceptional_recovery_selection",),
-            "getattr(arguments, 'exceptional_recovery_delivery_issue', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_exceptional_recovery_selection",),
-            "getattr(arguments, 'exceptional_recovery_authorization_id', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_exceptional_continuation_selection",),
-            "getattr(arguments, 'exceptional_continuation_delivery_issue', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_exceptional_continuation_selection",),
-            "getattr(arguments, 'exceptional_continuation_authorization_id', None)",
-        ),
+        DynamicImportCall((), "getattr(_existing_bridge, '_ACTIONS_BRIDGE_INITIALIZED', False)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'delivery_issue', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'eligibility_evidence', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'exceptional_continuation_authorization_id', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'exceptional_continuation_delivery_issue', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'exceptional_continuation_evidence', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'exceptional_recovery_authorization_id', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'exceptional_recovery_delivery_issue', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'exceptional_recovery_evidence', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'expected_integration_signer', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'expected_prior_authority_signer', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'integration_authorization_id', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'integration_evidence', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'manual_gate_evidence', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'pre_enrollment_integration_evidence', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'prior_attestation', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'prior_authority', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'prior_authority_tag_ref', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'prior_integration_chain', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'prior_receipt', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'prior_reviewed_state', None)"),
+        DynamicImportCall(('_helper_identity',), 'getattr(module, name)'),
+        DynamicImportCall(('_load_bridge_scripts_namespace',), "getattr(package, '__file__', None)"),
+        DynamicImportCall(('_require_helper_identity',), 'getattr(module, key, None)'),
+        DynamicImportCall(('_require_lifecycle_graph',), "getattr(package, '__file__', None)"),
+        DynamicImportCall(('_require_lifecycle_graph',), "getattr(package, name.rsplit('.', 1)[1], None)"),
+        DynamicImportCall(('_rollback_lifecycle_modules',), 'getattr(package, child, None)'),
+        DynamicImportCall(('_verify_exceptional_continuation_selection',), "getattr(arguments, 'exceptional_continuation_authorization_id', None)"),
+        DynamicImportCall(('_verify_exceptional_continuation_selection',), "getattr(arguments, 'exceptional_continuation_delivery_issue', None)"),
+        DynamicImportCall(('_verify_exceptional_recovery_selection',), "getattr(arguments, 'exceptional_recovery_authorization_id', None)"),
+        DynamicImportCall(('_verify_exceptional_recovery_selection',), "getattr(arguments, 'exceptional_recovery_delivery_issue', None)"),
+        DynamicImportCall(('_verify_integration_selection',), "getattr(arguments, 'delivery_issue', None)"),
+        DynamicImportCall(('_verify_integration_selection',), "getattr(arguments, 'expected_integration_signer', None)"),
+        DynamicImportCall(('_verify_integration_selection',), "getattr(arguments, 'integration_authorization_id', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'expected_prior_authority_signer', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'prior_attestation', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'prior_authority', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'prior_authority_tag_ref', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'prior_integration_chain', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'prior_receipt', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'prior_reviewed_state', None)"),
     },
     "secpal-resolve-fixed-threads.py": {
         DynamicImportCall(
@@ -1379,92 +1195,28 @@ SAFE_GETATTR_CALLS = {
         ),
     },
     "fast_path.py": {
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "getattr(loaded, '__file__', None)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "getattr(loaded, '__file__', None)",
-        ),
+        DynamicImportCall(('_load_evidence_helper',), "getattr(loaded, '__file__', None)"),
     },
 }
 SAFE_SYS_MODULES_CALLS = {
     "secpal-pr-review-actions.py": {
-        DynamicImportCall(
-            ("_provider_binding_uses_historical_summary",),
-            "sys.modules.get(f'{package}.{owner}')",
-        ),
-        DynamicImportCall(
-            ("_command_enrolled_draft_integration",),
-            "sys.modules.get(__name__)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules.get(spec.name)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules.pop(module_name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules.get(package_name)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules.pop(package_name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules.get(spec.name)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "sys.modules.get('secpal_pr_review.fast_path')",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "sys.modules.get(spec.name)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_pre_enrollment_integration_helper",),
-            "sys.modules.get(module_name)",
-        ),
-        DynamicImportCall(
-            ("_load_pre_enrollment_integration_helper",),
-            "sys.modules.pop(module_name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
-            "sys.modules.pop(module_name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper",),
-            "sys.modules.pop(f'{package_name}.{name}', None)",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper",),
-            "sys.modules.pop(f'{package_name}.fast_path', None)",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper",),
-            "sys.modules.pop(package_name, None)",
-        ),
+        DynamicImportCall((), 'sys.modules.get(_ACTIONS_BRIDGE_NAME)'),
+        DynamicImportCall((), 'sys.modules.get(__name__)'),
+        DynamicImportCall((), 'sys.modules.get(_shared_name)'),
+        DynamicImportCall(('_command_enrolled_draft_integration',), 'sys.modules.get(__name__)'),
+        DynamicImportCall(('_initialize_owned_helpers',), 'sys.modules.get(_ACTIONS_BRIDGE_NAME)'),
+        DynamicImportCall(('_initialize_owned_helpers',), 'sys.modules.pop(_ACTIONS_BRIDGE_NAME, None)'),
+        DynamicImportCall(('_lifecycle_namespace_entries',), 'sys.modules.copy()'),
+        DynamicImportCall(('_load_bridge_scripts_namespace',), "sys.modules.get('scripts')"),
+        DynamicImportCall(('_provider_binding_uses_historical_summary',), "sys.modules.get(f'{package}.{owner}')"),
+        DynamicImportCall(('_require_helper_identity',), 'sys.modules.get(name)'),
+        DynamicImportCall(('_require_lifecycle_graph',), 'sys.modules.get(_ACTIONS_BRIDGE_NAME)'),
+        DynamicImportCall(('_require_owned_actions_bridge',), 'sys.modules.get(_ACTIONS_BRIDGE_NAME)'),
+        DynamicImportCall(('_rollback_lifecycle_modules',), 'sys.modules.pop(name, None)'),
+        DynamicImportCall(('exec_module',), 'sys.modules.get(child_name)'),
     },
     "secpal-resolve-fixed-threads.py": {
+        DynamicImportCall((), "sys.modules.get('secpal_bootstrap_source_accepted_main_actions')"),
         DynamicImportCall(
             ("_load_exact_prerequisite_helpers",),
             "sys.modules.get('secpal_pr_review.unchanged_head_prerequisite')",
@@ -1511,22 +1263,8 @@ SAFE_SYS_MODULES_CALLS = {
         ),
     },
     "fast_path.py": {
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules.get(module_name)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "sys.modules.get('secpal_pr_review.follow_up')",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
+        DynamicImportCall(('_load_evidence_helper',), 'sys.modules.get(module_name)'),
+        DynamicImportCall(('_load_evidence_helper',), 'sys.modules.pop(spec.name, None)'),
     },
     "secpal-create-late-disposition.py": {
         DynamicImportCall(
@@ -1543,72 +1281,12 @@ SAFE_SYS_MODULES_CALLS = {
 }
 SAFE_SYS_MODULES_STORES = {
     "secpal-pr-review-actions.py": {
-        DynamicImportCall(
-            ("_load_enrolled_draft_integration_helper",),
-            "sys.modules['scripts']",
-        ),
-        DynamicImportCall(
-            ("_load_enrolled_draft_integration_helper",),
-            "sys.modules[package_name]",
-        ),
-        DynamicImportCall(
-            ("_load_enrolled_draft_integration_helper",),
-            "sys.modules[module_name]",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules[package_name]",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules[spec.name]",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules[spec.name]",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "sys.modules[spec.name]",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
-            "sys.modules['scripts']",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
-            "sys.modules[package_name]",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
-            "sys.modules[f'{package_name}.fast_path']",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
-            "sys.modules[f'{package_name}.pre_enrollment_integration']",
-        ),
-        DynamicImportCall(
-            ("_load_pre_enrollment_integration_helper",),
-            "sys.modules[module_name]",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers", "load"),
-            "sys.modules[module_name]",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper",),
-            "sys.modules[package_name]",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper",),
-            "sys.modules[f'{package_name}.fast_path']",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper", "load"),
-            "sys.modules[module_name]",
-        ),
+        DynamicImportCall((), 'sys.modules[_ACTIONS_BRIDGE_NAME]'),
+        DynamicImportCall(('_initialize_owned_helpers',), 'sys.modules[_LIFECYCLE_PACKAGE]'),
+        DynamicImportCall(('_load_bridge_scripts_namespace',), "sys.modules['scripts']"),
     },
     "secpal-resolve-fixed-threads.py": {
+        DynamicImportCall((), "sys.modules[_actions_spec.name]"),
         DynamicImportCall(
             ("_load_evidence_helper",),
             "sys.modules[spec.name]",
@@ -1627,14 +1305,7 @@ SAFE_SYS_MODULES_STORES = {
         ),
     },
     "fast_path.py": {
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules[spec.name]",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "sys.modules[spec.name]",
-        ),
+        DynamicImportCall(('_load_evidence_helper',), 'sys.modules[spec.name]'),
     },
     "secpal-create-late-disposition.py": {
         DynamicImportCall(
@@ -2254,7 +1925,17 @@ class PolicyVisitor(ast.NodeVisitor):
             if node.attr not in SAFE_OS_ATTRIBUTES:
                 self.finding(node, f"prohibited os attribute: {node.attr}")
         elif isinstance(node.value, ast.Name) and node.value.id in direct_modules:
-            if node.attr not in direct_modules[node.value.id]:
+            parent = self.parents.get(node)
+            meta_parent = self.parents.get(parent) if isinstance(parent, ast.Attribute) else parent
+            if isinstance(meta_parent, ast.Subscript):
+                meta_parent = self.parents.get(meta_parent)
+            allowed_meta = (
+                node.value.id == "sys" and node.attr == "meta_path"
+                and meta_parent is not None
+                and DynamicImportCall(tuple(self.functions), ast.unparse(meta_parent))
+                in SAFE_META_PATH_ACCESS.get(self.source_name, set())
+            )
+            if node.attr not in direct_modules[node.value.id] and not allowed_meta:
                 self.finding(
                     node,
                     f"prohibited {node.value.id} attribute: {node.attr}",
@@ -2262,10 +1943,10 @@ class PolicyVisitor(ast.NodeVisitor):
             parent = self.parents.get(node)
             if (
                 node.value.id == "importlib"
-                and node.attr == "util"
+                and node.attr in {"util", "import_module"}
                 and (
-                    not isinstance(parent, ast.Attribute)
-                    or parent.value is not node
+                    (node.attr == "util" and (not isinstance(parent, ast.Attribute) or parent.value is not node))
+                    or (node.attr == "import_module" and (not isinstance(parent, ast.Call) or parent.func is not node))
                 )
             ):
                 self.finding(node, "importlib.util may not be aliased")
@@ -2330,7 +2011,17 @@ class PolicyVisitor(ast.NodeVisitor):
                 node,
                 f"prohibited process-capable attribute: {node.attr}",
             )
-        if node.attr in PROHIBITED_REFLECTION_ATTRIBUTES:
+        identity_parent = self.parents.get(node)
+        owned_bridge_identity = (
+            self.source_name == "secpal-pr-review-actions.py"
+            and not self.classes
+            and isinstance(identity_parent, ast.Compare)
+            and DynamicImportCall(tuple(self.functions), ast.unparse(identity_parent)) in {
+                DynamicImportCall((), "_ACTIONS_BRIDGE_MODULE.__dict__ is not _load_fast_path_helper.__globals__"),
+                DynamicImportCall(("_require_owned_actions_bridge",), "module.__dict__ is not _require_owned_actions_bridge.__globals__"),
+            }
+        )
+        if node.attr in PROHIBITED_REFLECTION_ATTRIBUTES and not owned_bridge_identity:
             self.finding(
                 node,
                 f"prohibited reflection attribute: {node.attr}",
@@ -2338,7 +2029,7 @@ class PolicyVisitor(ast.NodeVisitor):
         if node.attr == "exec_module":
             parent = self.parents.get(node)
             dynamic_call = (
-                DynamicImportCall(tuple(self.functions), ast.unparse(parent))
+                DynamicImportCall(tuple(self.functions), ast.unparse(parent), tuple(self.classes))
                 if isinstance(parent, ast.Call) and parent.func is node
                 else None
             )
@@ -2379,6 +2070,7 @@ class PolicyVisitor(ast.NodeVisitor):
             dynamic_call = DynamicImportCall(
                 tuple(self.functions),
                 ast.unparse(node),
+                tuple(self.classes),
             )
             if dynamic_call not in DYNAMIC_IMPORT_CALLS.get(self.source_name, set()):
                 self.finding(node, "dynamic import is outside the closed allowlist")
@@ -2855,19 +2547,34 @@ def self_test() -> None:
         raise SystemExit("closed provider-owner module read was rejected")
 
     scripts_namespace = (
-        "import sys\nimport types\ndef _load_lifecycle_publication_helpers():\n"
-        "    scripts_package = types.ModuleType('scripts')\n"
-        "    scripts_package.__path__ = [str(REPOSITORY_ROOT / 'scripts')]\n"
-        "    sys.modules['scripts'] = scripts_package\n"
+        "import sys\nimport types\ndef _load_bridge_scripts_namespace():\n"
+        "    package = types.ModuleType('scripts')\n"
+        "    package.__path__ = [str(REPOSITORY_ROOT / 'scripts')]\n"
+        "    sys.modules['scripts'] = package\n"
     )
     if inspect_source(scripts_namespace, "secpal-pr-review-actions.py", ()):
         raise SystemExit("closed lifecycle scripts namespace was rejected")
     for substituted in (
         scripts_namespace.replace("['scripts']", "['subprocess']"),
-        scripts_namespace.replace("_load_lifecycle_publication_helpers", "arbitrary_loader"),
+        scripts_namespace.replace("_load_bridge_scripts_namespace", "arbitrary_loader"),
     ):
         if not inspect_source(substituted, "secpal-pr-review-actions.py", ()):
             raise SystemExit("substituted lifecycle namespace was accepted")
+
+    for source in (
+        "import sys\ndef arbitrary_loader():\n    sys.meta_path.insert(0, finder)\n",
+        "import sys\ndef _initialize_owned_helpers():\n    sys.meta_path[:] = []\n",
+        "import sys\ndef _initialize_owned_helpers():\n    sys.meta_path[:] = [foreign_finder]\n",
+        "state = _ACTIONS_BRIDGE_MODULE.__dict__\n",
+        "state = _load_fast_path_helper.__globals__\n",
+        "assert foreign_module.__dict__ is not _load_fast_path_helper.__globals__\n",
+        "import sys\ndef _initialize_owned_helpers():\n    sys.meta_path.insert(0, arbitrary_finder)\n",
+        "class ForeignLoader:\n    def exec_module(self, module):\n        self.source_loader.exec_module(module)\n",
+        "def exec_module(self, module):\n    self.source_loader.exec_module(module)\n",
+        "import importlib.util\nclass ForeignFinder:\n    def find_spec(self, fullname, path):\n        return importlib.util.spec_from_file_location(fullname, source)\n",
+    ):
+        if not inspect_source(source, "secpal-pr-review-actions.py", ()):
+            raise SystemExit("unowned import hook escaped the static policy")
 
     source_specific_unsafe = (
         (

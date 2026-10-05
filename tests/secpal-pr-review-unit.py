@@ -23,7 +23,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HELPER = REPO_ROOT / "scripts" / "secpal-pr-review.py"
 FIXTURES = REPO_ROOT / "tests/fixtures/secpal-pr-review"
-SPEC = importlib.util.spec_from_file_location("secpal_pr_review", HELPER)
+SPEC = importlib.util.spec_from_file_location("secpal_review_evidence_fixture", HELPER)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"Cannot load helper at {HELPER}")
 review = importlib.util.module_from_spec(SPEC)
