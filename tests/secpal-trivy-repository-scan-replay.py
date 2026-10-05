@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import tarfile
@@ -73,6 +74,13 @@ def main() -> int:
             encoding="utf-8",
         )
         template.unlink()
+        # Generate native-rule captures only at runtime, in disposable exact Git
+        # fixtures. Exercise both complete and bounded minified cause lines.
+        sendgrid = "SG." + secrets.token_urlsafe(16) + "." + secrets.token_urlsafe(32)
+        short_line = "sendgrid='" + sendgrid + "';"
+        (workspace / "short-secret.js").write_text(short_line + "\n")
+        (workspace / "long-secret.js").write_text("x" * 2000 + short_line + "y" * 2000 + "\n")
+        (workspace / "crlf-secret.js").write_bytes(("q" + "x" * 30 + sendgrid + "\r\n").encode())
         (workspace / "tests").mkdir()
         (workspace / "tests" / "example.md").write_text(secret_path.read_text())
         lock = json.loads((workspace / "package-lock.json").read_text())
@@ -201,10 +209,28 @@ def main() -> int:
             completed_at=completed_at,
         )
         generic_result = module.admit(generic_observation, json.loads(POLICY.read_text()))
+        module.verify_redaction(generic_native, generic_result, workspace,
+                                "SecPal/repository-scan-fixture", generic_commit)
         if generic_result["gate_state"] != "ACTIONABLE" or {f["class"] for f in generic_result["findings"]} != {"VULNERABILITY", "SECRET", "MISCONFIGURATION"}:
             raise RuntimeError("generic scanner replay regressed")
         result = module.admit(observation, json.loads(POLICY.read_text(encoding="utf-8")))
         module.verify_redaction(native_value, result, workspace, "SecPal/repository-scan-fixture", commit)
+        representations = {}
+        for path in ("short-secret.js", "long-secret.js", "crlf-secret.js"):
+            findings = [s for r in native_value["Results"] if r["Target"] == path
+                        for s in r.get("Secrets", []) if s["RuleID"] == "sendgrid-api-token"]
+            if len(findings) != 1:
+                raise RuntimeError("runtime SendGrid fixture did not exercise the native rule")
+            causes = [line for line in findings[0]["Code"]["Lines"] if line.get("IsCause") is True]
+            if len(causes) != 1 or causes[0]["Number"] != 1:
+                raise RuntimeError("runtime SendGrid fixture cause location mismatch")
+            source_size = len((workspace / path).read_bytes().split(b"\n")[0])
+            cause_size = len(causes[0]["Content"].encode())
+            if ((path == "short-secret.js" and source_size != cause_size)
+                    or (path != "short-secret.js" and not cause_size < source_size)
+                    or (path == "crlf-secret.js" and (source_size, cause_size) != (101, 99))):
+                raise RuntimeError("pinned cause-line representation was not exercised")
+            representations[path] = {"source_bytes": source_size, "cause_bytes": cause_size}
         for field in ("path", "resource", "title", "message", "package"):
             import copy
             unsafe = copy.deepcopy(result)
@@ -215,14 +241,23 @@ def main() -> int:
                 pass
             else:
                 raise RuntimeError("captured metadata bypassed the redaction guard")
+        unsafe = copy.deepcopy(result)
+        unsafe["findings"][0]["message"] = sendgrid
+        try:
+            module.verify_redaction(native_value, unsafe, workspace, "SecPal/repository-scan-fixture", commit)
+        except module.ContractError:
+            pass
+        else:
+            raise RuntimeError("long-line captured alias bypassed the redaction guard")
         encoded = json.dumps(result, sort_keys=True)
         classes = {finding["class"] for finding in result["findings"]}
         if classes != {"VULNERABILITY", "SECRET", "MISCONFIGURATION"}:
             raise RuntimeError(f"pinned Trivy did not exercise every scanner class: {sorted(classes)}")
-        if SYNTHETIC_SECRET in encoded or '"match"' in encoded.lower() or '"code"' in encoded.lower():
+        if (any(value in encoded or value in diagnostics for value in (SYNTHETIC_SECRET, sendgrid))
+                or '"match"' in encoded.lower() or '"code"' in encoded.lower()):
             raise RuntimeError("normalized evidence retained secret capture material")
         secret_paths = {f["path"] for f in result["findings"] if f["class"] == "SECRET"}
-        if not {"tests/example.md", "package-lock.json"} <= secret_paths:
+        if not {"tests/example.md", "package-lock.json", "short-secret.js", "long-secret.js", "crlf-secret.js"} <= secret_paths:
             raise RuntimeError("secret default exclusions remain enabled")
         if result["gate_state"] != "ACTIONABLE":
             raise RuntimeError("representative findings were not admitted as actionable")
@@ -266,7 +301,7 @@ def main() -> int:
         public = action.stdout + action.stderr + summary_path.read_bytes() + output_path.read_bytes()
         for retained in evidence_root.iterdir():
             public += retained.read_bytes()
-        if SYNTHETIC_SECRET.encode() in public:
+        if any(value.encode() in public for value in (SYNTHETIC_SECRET, sendgrid)):
             raise RuntimeError("maintained action exposed synthetic capture material")
         if list(runner.glob("secpal-trivy-tool-*")) or list(runner.glob("secpal-trivy-cache-*")):
             raise RuntimeError("maintained action retained private scanner material")
@@ -320,6 +355,10 @@ def main() -> int:
                     "policy_identity": action_result["policy"],
                     "composer_advisory_qualified": True,
                     "generic_replay_passed": True,
+                    "short_line_redaction": "PASS",
+                    "long_line_redaction": "PASS",
+                    "crlf_threshold_redaction": "PASS",
+                    "cause_representations": representations,
                     "maintained_action_passed": True,
                     "unknown_warning_fail_closed": True,
                     "parser_failure_fail_closed": True,

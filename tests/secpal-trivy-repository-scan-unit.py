@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import secrets
 import subprocess
 import tempfile
 import unittest
@@ -1003,6 +1004,186 @@ class RepositoryScanContractTests(unittest.TestCase):
             self.assertNotEqual(completed.returncode, 0)
             result = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(result["operation"]["failure_code"], "POLICY_FAILURE")
+
+
+class SecretExcerptTests(unittest.TestCase):
+    """Correlate private masks with exact temporary Git blobs, without captures in errors."""
+
+    def setUp(self) -> None:
+        self.module = load_module()
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.workspace = Path(self.temporary.name)
+        self.capture = secrets.token_urlsafe(32)
+        self.prefix, self.suffix = "left-context=" + "a" * 17, ";right=" + "b" * 13
+        self.excerpt = self.prefix + "*" * len(self.capture) + self.suffix
+        self.source = "x" * 2000 + self.prefix + self.capture + self.suffix + "y" * 2000
+        self.git("init", "--quiet")
+        self.git("config", "user.name", "SecPal Test")
+        self.git("config", "user.email", "test@secpal.app")
+        self.commit_source(self.source)
+
+    def git(self, *arguments: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(self.workspace), *arguments], text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+
+    def commit_source(self, source: str | bytes) -> None:
+        data = source.encode() if isinstance(source, str) else source
+        (self.workspace / "secret.txt").write_bytes(data + b"\n")
+        self.git("add", ".")
+        self.git("-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture")
+        self.commit = self.git("rev-parse", "HEAD")
+        self.module.verify_target(self.workspace, self.commit)
+        self.native = {"Results": [{"Target": "secret.txt", "Secrets": [{
+            "StartLine": 1, "EndLine": 1,
+            "Code": {"Lines": [{"Number": 1, "IsCause": True, "Content": self.excerpt}]},
+        }]}]}
+        self.candidate = {
+            "subject": {"repository": "SecPal/example", "commit": self.commit},
+            "gate_state": "ACTIONABLE", "findings": [{"path": "secret.txt"}],
+            "scanner": {"name": "trivy", "version": self.module.TRIVY_VERSION,
+                        "immutable_id": self.module.TRIVY_ARCHIVE_ID,
+                        "configuration_sha256": self.module.configuration_identity()},
+        }
+
+    def verify(self) -> None:
+        self.module.verify_redaction(
+            self.native, self.candidate, self.workspace, "SecPal/example", self.commit,
+        )
+
+    def reject(self, message: str = "secret censor") -> None:
+        with self.assertRaisesRegex(self.module.ContractError, message) as error:
+            self.verify()
+        self.assertFalse(self.capture in str(error.exception))
+
+    def test_unique_long_excerpt_and_immutable_source_pass(self) -> None:
+        self.verify()
+        (self.workspace / "secret.txt").write_text("uncommitted unrelated bytes\n")
+        self.verify()
+
+    def test_full_line_and_line_edge_excerpts_pass(self) -> None:
+        for before, after in (("", ""), ("", "y" * 2000), ("x" * 2000, "")):
+            self.commit_source(before + self.prefix + self.capture + self.suffix + after)
+            self.verify()
+
+    def test_repeated_visible_context_rejects_both_positions(self) -> None:
+        second = secrets.token_urlsafe(32)
+        self.commit_source(self.source + ";" + self.prefix + second + self.suffix)
+        self.reject("ambiguous")
+
+    def test_overlapping_compatible_windows_are_ambiguous(self) -> None:
+        self.excerpt = "a" + "*" * 4 + "a"
+        self.commit_source("a" * 200)
+        self.reject("ambiguous")
+
+    def test_multiple_censor_spans_are_extracted(self) -> None:
+        second = secrets.token_urlsafe(16)
+        self.excerpt = self.prefix + "*" * len(self.capture) + ";" + "*" * len(second) + self.suffix
+        self.commit_source("x" * 2000 + self.prefix + self.capture + ";" + second + self.suffix + "y" * 2000)
+        self.verify()
+        self.candidate["findings"][0]["message"] = "alias/" + second
+        self.reject("captured material")
+
+    def test_multiline_full_cause_coverage_remains_supported(self) -> None:
+        self.excerpt = self.prefix + "*" * len(self.capture)
+        self.commit_source(self.prefix + self.capture + "\n" + self.capture + self.suffix)
+        secret = self.native["Results"][0]["Secrets"][0]
+        secret["EndLine"] = 2
+        secret["Code"]["Lines"].append({
+            "Number": 2, "IsCause": True, "Content": "*" * len(self.capture) + self.suffix,
+        })
+        self.verify()
+        secret["Code"]["Lines"].reverse()
+        self.reject("coverage")
+
+    def test_changed_non_mask_byte_and_no_window_reject(self) -> None:
+        for mask in ("z" + self.excerpt[1:], "absent=" + "*" * len(self.capture)):
+            self.native["Results"][0]["Secrets"][0]["Code"]["Lines"][0]["Content"] = mask
+            self.reject()
+
+    def test_missing_malformed_and_mismatched_native_evidence_rejects(self) -> None:
+        original = copy.deepcopy(self.native)
+        for code in (None, {}, {"Lines": None}, {"Lines": []}, {"Lines": [None]},
+                     {"Lines": [{"Number": 1, "IsCause": False, "Content": self.excerpt}]},
+                     {"Lines": [{"Number": 2, "IsCause": True, "Content": self.excerpt}]},
+                     {"Lines": [{"Number": True, "IsCause": True, "Content": self.excerpt}]}):
+            self.native = copy.deepcopy(original)
+            self.native["Results"][0]["Secrets"][0]["Code"] = code
+            self.reject()
+        for content in (None, 42, [], "", "\ud800", self.prefix + self.capture + self.suffix):
+            self.native = copy.deepcopy(original)
+            self.native["Results"][0]["Secrets"][0]["Code"]["Lines"][0]["Content"] = content
+            self.reject()
+        self.native = copy.deepcopy(original)
+        self.native["Results"][0]["Secrets"][0]["EndLine"] = 2
+        self.reject("coverage")
+        self.native = copy.deepcopy(original)
+        secret = self.native["Results"][0]["Secrets"][0]
+        secret["StartLine"] = secret["EndLine"] = 2
+        secret["Code"]["Lines"][0]["Number"] = 2
+        self.reject()
+
+    def test_short_source_cannot_use_excerpt_representation(self) -> None:
+        self.commit_source("x" + self.prefix + self.capture + self.suffix)
+        self.reject()
+
+    def test_crlf_raw_line_threshold_admits_unique_excerpt(self) -> None:
+        # Trivy tests the 101-byte raw line before removing the trailing CR.
+        before = "x" * 31
+        after = "y" * (100 - len(before) - len(self.capture))
+        self.excerpt = "x" * 30 + "*" * len(self.capture) + "y" * 20
+        self.commit_source(before + self.capture + after + "\r")
+        self.verify()
+
+    def test_lossy_utf8_boundary_excerpt_remains_unsupported(self) -> None:
+        # A byte cut inside the Euro sign emits U+FFFD and a native WARN.
+        # Its visible bytes no longer equal the immutable source window.
+        self.excerpt = "\ufffd" + "z" * 29 + "*" * len(self.capture) + "y" * 20
+        self.commit_source("a" * 1000 + "€" + "z" * 29 + self.capture + "y" * 1000)
+        self.reject()
+        cache = self.workspace / "cache"
+        fallback = '[misconfig] Falling back to embedded checks\terr=' + json.dumps(
+            'failed to check cache: cache does not exist at ' + json.dumps(str(cache / "policy/content"))
+        )
+        diagnostic = (
+            "2026-10-05T18:00:00Z\tERROR\t" + fallback + "\n"
+            "2026-10-05T18:00:00Z\tWARN\t[secret] Invalid UTF-8 sequences detected in file content, replacing with empty string\n"
+        )
+        with self.assertRaisesRegex(self.module.ContractError, "unknown scan health"):
+            self.module.verify_diagnostics(diagnostic, cache)
+
+    def test_excerpt_requires_exact_pinned_scanner(self) -> None:
+        scanner = copy.deepcopy(self.candidate["scanner"])
+        for field, value in (("version", "0.73.0"), ("immutable_id", "sha256:" + "a" * 64)):
+            self.candidate["scanner"] = {**scanner, field: value}
+            self.reject("scanner")
+        del self.candidate["scanner"]
+        self.reject("scanner")
+
+    def test_literal_stars_and_binary_captures_fail_closed(self) -> None:
+        for capture in ("*" * len(self.capture), "*" + self.capture[1:]):
+            self.commit_source(self.source.replace(self.capture, capture))
+            self.reject()
+        binary = self.source.encode().replace(self.capture.encode(), b"\xff" * len(self.capture))
+        self.commit_source(binary)
+        self.reject("unsupported")
+
+    def test_literal_star_outside_real_censor_span_is_preserved(self) -> None:
+        self.excerpt = "*;" + self.excerpt
+        self.commit_source(self.source.replace(self.prefix, "*;" + self.prefix))
+        self.verify()
+
+    def test_each_capture_alias_is_rejected_in_nested_public_metadata(self) -> None:
+        original = copy.deepcopy(self.candidate)
+        for field in ("path", "rule_id", "message", "resource", "package", "title"):
+            self.candidate = copy.deepcopy(original)
+            self.candidate["findings"][0][field] = "alias/" + self.capture
+            self.reject("captured material")
+        self.candidate = copy.deepcopy(original)
+        self.candidate["summary"] = {"nested": ["alias/" + self.capture]}
+        self.reject("captured material")
 
 
 class FrontendBracesDispositionTests(unittest.TestCase):

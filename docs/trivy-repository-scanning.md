@@ -129,8 +129,24 @@ allow rules; only the reviewed central exception contract can suppress findings.
 
 Normalized candidates stay private until redaction verification correlates
 Trivy's cause-line censor masks with immutable Git blobs. Captured values are
-used only transiently to reject aliases in all public metadata. Missing,
-truncated, binary, or ambiguous censor evidence fails closed. Trivy diagnostics
+used only transiently to reject aliases in all public metadata. Full cause lines
+must match every immutable source byte outside censor spans. For the exact
+Trivy 0.74.0 archive, raw source lines longer than 100 bytes may instead use the
+bounded cause excerpt emitted by pinned
+[`findLocation`](https://github.com/aquasecurity/trivy/blob/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994/pkg/fanal/secret/scanner.go#L862).
+An excerpt requires exactly one mask-compatible window in the authenticated
+source line, including overlapping positions. Zero or multiple positions fail
+closed. Each censor span maps to immutable bytes; literal stars alone provide no
+capture, mixed literal-star spans are rejected, and textual captures require
+strict UTF-8 decoding. At least one real censor span is required per finding.
+The length cutoff is applied before removing carriage returns, so CRLF lines
+with exactly 100 content bytes can use an authenticated shorter excerpt.
+Lossy UTF-8 boundary sanitization remains unsupported: a replacement character
+does not prove equality with the immutable visible bytes, and the native
+invalid-UTF-8 warning still fails scanner-health admission. No diagnostic
+exception is added for this representation.
+Missing, mismatched, unsupported, binary, or ambiguous censor evidence fails
+closed. Trivy diagnostics
 stay private, fail closed on unqualified warnings/errors or malformed/missing log framing
 even when the process exits zero, and are discarded. Every Python invocation is
 isolated from checkout imports.
@@ -139,6 +155,17 @@ once only, with independent confirmation that no external checks cache exists.
 Normalization itself consumes captured canonical path strings and performs no
 filesystem observation. Only verified normalized evidence enters the bounded
 artifact directory.
+
+The maintained native replay generates short and minified long-line secrets at
+runtime in temporary Git repositories, verifies each exact commit, and checks
+both cause representations and the raw CRLF cutoff. It also exercises the action's stdout, stderr,
+summary and artifact boundary for capture leakage and private-file cleanup.
+Unit cases reject duplicate excerpt positions, altered visible bytes, missing
+censor evidence, unsupported captures, literal-star ambiguity, and aliases in
+public metadata. This qualification changes the configuration identity without
+changing the scanner archive, action inputs, schema, or central policy. It adds
+no exception for a downstream secret finding; a qualified finding remains
+actionable until its separate policy disposition is reviewed.
 
 ## Composer severity fallback qualification
 
