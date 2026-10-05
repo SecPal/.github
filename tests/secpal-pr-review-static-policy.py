@@ -2916,8 +2916,8 @@ def self_test() -> None:
 
     scripts_namespace = (
         "import sys\nimport types\ndef _load_bridge_scripts_namespace():\n"
-        "    scripts_package = types.ModuleType('scripts')\n"
-        "    scripts_package.__path__ = [str(REPOSITORY_ROOT / 'scripts')]\n"
+        "    package = types.ModuleType('scripts')\n"
+        "    package.__path__ = [str(REPOSITORY_ROOT / 'scripts')]\n"
         "    sys.modules['scripts'] = package\n"
     )
     if inspect_source(scripts_namespace, "secpal-pr-review-actions.py", ()):

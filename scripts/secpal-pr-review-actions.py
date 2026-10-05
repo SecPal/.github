@@ -95,10 +95,10 @@ evidence = _load_evidence_helper()
 
 # Ephemeral ownership only: source acceptance and protected-main freshness are
 # still authenticated independently for each production operation.
-_SHARED_HELPERS: dict[str, tuple[Any, Path, dict[str, Any]]] = {}
+_SHARED_HELPERS: dict[str, tuple[Any, Path, str, dict[str, Any]]] = {}
 _BRIDGE_NAMESPACES: dict[str, Any] = {}
 _SCRIPTS_SPEC: Any = None
-_LIFECYCLE_MODULES: dict[str, tuple[Any, Path, dict[str, Any]]] = {}
+_LIFECYCLE_MODULES: dict[str, tuple[Any, Path, str, dict[str, Any]]] = {}
 _LIFECYCLE_PACKAGE = "secpal_ready_integration_lifecycle"
 _LOADER_ROOT = REPOSITORY_ROOT
 
@@ -111,6 +111,7 @@ def _require_helper_origin(module: Any, path: Path) -> None:
             or path.parent != _LOADER_ROOT / "scripts/secpal_pr_review"
             or module.__file__ != str(path)
             or module.__spec__.origin != str(path)
+            or module.__spec__.name != module.__name__
             or path.resolve(strict=True) != path
             or not path.is_file()
         ):
@@ -119,25 +120,29 @@ def _require_helper_origin(module: Any, path: Path) -> None:
         raise RuntimeError("Maintained helper has an unexpected path or origin") from exc
 
 
-def _helper_identity(module: Any, path: Path) -> tuple[Any, Path, dict[str, Any]]:
+def _helper_identity(module: Any, path: Path) -> tuple[Any, Path, str, dict[str, Any]]:
     _require_helper_origin(module, path)
     bindings = {
         name: getattr(module, name)
         for name in dir(module)
-        if isinstance(getattr(module, name), type) or type(getattr(module, name)) is object
+        if name in {"__name__", "__package__", "__spec__"}
+        or isinstance(getattr(module, name), type)
+        or type(getattr(module, name)) is object
     }
-    return module, path, bindings
+    return module, path, hashlib.sha256(path.read_bytes()).hexdigest(), bindings
 
 
 def _require_helper_identity(
-    name: str, owned: tuple[Any, Path, dict[str, Any]]
+    name: str, owned: tuple[Any, Path, str, dict[str, Any]]
 ) -> Any:
-    module, path, bindings = owned
+    module, path, source_digest, bindings = owned
     if sys.modules.get(name) is not module:
         raise RuntimeError(
             "Maintained helper identity changed; unexpected path or replacement"
         )
     _require_helper_origin(module, path)
+    if hashlib.sha256(path.read_bytes()).hexdigest() != source_digest:
+        raise RuntimeError("Executing helper source changed; a fresh process is required")
     if any(getattr(module, key, None) is not value for key, value in bindings.items()):
         raise RuntimeError("Maintained verifier class or token identity changed")
     return module
@@ -292,6 +297,8 @@ def _load_bridge_scripts_namespace() -> Any:
     if owned is not None:
         if (
             package is not owned
+            or package.__name__ != "scripts"
+            or package.__package__ != ("scripts" if _SCRIPTS_SPEC is not None else None)
             or list(dict.fromkeys(package.__path__)) != [path]
             or package.__spec__ is not _SCRIPTS_SPEC
             or getattr(package, "__file__", None) is not None
@@ -299,6 +306,7 @@ def _load_bridge_scripts_namespace() -> Any:
                 _SCRIPTS_SPEC is not None
                 and (
                     _SCRIPTS_SPEC.origin is not None
+                    or _SCRIPTS_SPEC.name != "scripts"
                     or list(dict.fromkeys(_SCRIPTS_SPEC.submodule_search_locations)) != [path]
                 )
             )
@@ -379,6 +387,8 @@ def _require_lifecycle_graph() -> None:
         entries.get(_LIFECYCLE_PACKAGE) is not package
         or package.__path__ != [str(LIFECYCLE_AUTHORITY_HELPER.parent)]
         or package.__spec__ is not None
+        or package.__name__ != _LIFECYCLE_PACKAGE
+        or package.__package__ is not None
         or getattr(package, "__file__", None) is not None
         or set(entries) != {_LIFECYCLE_PACKAGE, *_LIFECYCLE_MODULES}
         or sum(finder is _LIFECYCLE_FINDER for finder in sys.meta_path) != 1

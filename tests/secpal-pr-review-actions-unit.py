@@ -16106,12 +16106,12 @@ class PolicyScriptTests(TestCase):
 class AcceptedLifecycleLoaderIdentityTests(TestCase):
     """Exercise the real bridge in fresh processes without identity adapters."""
 
-    def run_bridge(self, body: str) -> None:
+    def run_bridge(self, body: str, *, tooling_root: Path = REPO_ROOT) -> None:
         script = "\n".join((
             "import importlib, importlib.util, sys, types",
             "from pathlib import Path",
             "from unittest import mock",
-            f"root = Path({str(REPO_ROOT)!r})",
+            f"root = Path({str(tooling_root)!r})",
             "sys.path.insert(0, str(root))",
             "spec = importlib.util.spec_from_file_location('secpal_bootstrap_source_accepted_main_actions', root / 'scripts/secpal-pr-review-actions.py')",
             "a = importlib.util.module_from_spec(spec)",
@@ -16176,6 +16176,8 @@ try:
     with mock.patch.object(first_authority, '_load_lifecycle_trust_policy', return_value=policy), mock.patch.object(first_publication, '_verify_live_protection', return_value=pf.RULESET_ID):
         first, claims = first_publication.verify_provider_dispatch_claims(pf.REPOSITORY, pf.ISSUE)
         assert len(claims) == 2, (len(claims), [claim.key.review_type for claim in claims])
+        assert all(type(claim) is first_publication.VerifiedProviderDispatchClaim for claim in claims)
+        claim_type = first_publication.VerifiedProviderDispatchClaim
         verified = r.verify_authorization(document, first)
         feedback = r.fast_path.verify_reviewed_state_evidence(document['loss_proof']['historical_feedback'])
         assessment = {'status': 'PROVIDER_REACQUISITION_COMPLETE', 'operation': r.OPERATION,
@@ -16194,6 +16196,7 @@ try:
             second, second_claims = second_publication.verify_provider_dispatch_claims(pf.REPOSITORY, pf.ISSUE)
             assert second.publication_oid == first.publication_oid
             assert second_claims == claims
+            assert second_publication.VerifiedProviderDispatchClaim is claim_type
             assert r.require_verified_fresh_acquisitions(fresh, second, feedback) is fresh
             assert r._FreshAcquisitionSeal is seal_type and r.VerifiedFreshProviderAcquisitions is fresh_type
             assert r._FRESH_ACQUISITION_TOKEN is token
@@ -16238,14 +16241,20 @@ for short in ('lifecycle_authority', 'lifecycle_publication', 'provider_reacquis
         del sys.modules[name]
         rejected()
         assert name not in sys.modules
-    for attribute in ('__file__',):
+    for attribute in ('__file__', '__package__', '__name__'):
         with mock.patch.object(original, attribute, '/tmp/candidate/helper.py'):
             rejected()
     with mock.patch.object(original.__spec__, 'origin', '/tmp/site-packages/helper.py'):
         rejected()
+    with mock.patch.object(original.__spec__, 'name', 'foreign.helper'):
+        rejected()
 with mock.patch.object(sys.modules[prefix], '__path__', ['/tmp/candidate']):
     rejected()
+with mock.patch.object(sys.modules[prefix], '__name__', 'foreign_package'):
+    rejected()
 with mock.patch.dict(sys.modules, {prefix + '.duplicate.provider_reacquisition': r}):
+    rejected()
+with mock.patch.dict(sys.modules, {prefix + '_foreign': r}):
     rejected()
 with mock.patch.object(sys.modules[prefix], 'lifecycle_publication', types.ModuleType('foreign')):
     rejected()
@@ -16335,18 +16344,51 @@ for unused in range(2):
     a._load_lifecycle_publication_helpers()
 """)
 
+    def test_relative_imports_ignore_arbitrary_site_package_search_paths(self) -> None:
+        self.run_bridge("""
+import tempfile
+with tempfile.TemporaryDirectory() as directory:
+    foreign = Path(directory) / prefix
+    foreign.mkdir()
+    (foreign / '__init__.py').write_text('raise AssertionError("foreign package executed")')
+    (foreign / 'provider_reacquisition.py').write_text('raise AssertionError("site package executed")')
+    sys.path.insert(0, directory)
+    first = a._load_lifecycle_publication_helpers()
+    r = importlib.import_module(prefix + '.provider_reacquisition')
+    assert r.__file__ == str(root / 'scripts/secpal_pr_review/provider_reacquisition.py')
+    assert a._load_lifecycle_publication_helpers()[1] is first[1]
+    assert r.publication is first[1]
+""")
+
+    def test_executing_modules_cannot_follow_changed_source_bytes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="loader-source-identity-") as directory:
+            tooling_root = Path(directory)
+            shutil.copytree(REPO_ROOT / "scripts", tooling_root / "scripts")
+            self.run_bridge("""
+first = a._load_lifecycle_publication_helpers()
+path = root / 'scripts/secpal_pr_review/lifecycle_publication.py'
+path.write_bytes(path.read_bytes() + b'\\n# New protected-main source bytes.\\n')
+try:
+    a._load_lifecycle_publication_helpers()
+except RuntimeError:
+    pass
+else:
+    raise AssertionError('cached executing module accepted changed source bytes')
+assert sys.modules[prefix + '.lifecycle_publication'] is first[1]
+""", tooling_root=tooling_root)
+
     def test_both_orchestration_load_orderings_preserve_all_modules(self) -> None:
         for orchestration_first in (False, True):
             with self.subTest(orchestration_first=orchestration_first):
                 self.run_bridge(f"""
 first = a._load_lifecycle_publication_helpers(include_orchestration={orchestration_first!r})
-r = importlib.import_module(prefix + '.provider_reacquisition')
 for include in (False, True, False, True):
     before = {{name: value for name, value in sys.modules.items() if name == prefix or name.startswith(prefix + '.')}}
     loaded = a._load_lifecycle_publication_helpers(include_orchestration=include)
     assert loaded[0] is first[0] and loaded[1] is first[1]
     assert all(sys.modules[name] is value for name, value in before.items())
-    assert r.publication is loaded[1]
+    if prefix + '.provider_reacquisition' in sys.modules:
+        assert sys.modules[prefix + '.provider_reacquisition'].publication is loaded[1]
 collision = a._load_lifecycle_publication_helpers(include_orchestration=True, return_collision=True)
 assert collision is sys.modules[prefix + '.version_collision']
 """)
