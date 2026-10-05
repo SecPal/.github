@@ -1303,7 +1303,9 @@ original CURRENT; competing claims or any successor publication reject.
 The complete bounded GitHub branch timeline must contain the predecessor and
 no candidate publication, force push, deletion or restoration. A rewritten,
 incomplete or ambiguous history cannot prove absence. The exact primary PR must
-remain open, same-repository and Draft; the work graph must permit continuation.
+remain open, same-repository and Draft; an independent Git ref lookup must prove
+the exact branch still exists at the same SHA. A cached PR head cannot substitute
+for that ref. The work graph must permit continuation.
 An already-live candidate reports `RECONCILE_ONLY` and receives no replacement.
 The branch history query uses GitHub's documented
 [pull request timeline types](https://docs.github.com/en/graphql/reference/pulls).
@@ -1345,7 +1347,8 @@ Expiry or drift after claiming consumes the opportunity without dispatch.
 
 One uncertain replacement write permits only exact authoritative readback.
 If the candidate is live, the existing branch-read-only reconciliation verifies
-GitHub signature/readback and publishes ordinary `HEAD_ADVANCED`. Otherwise the
+GitHub signature/readback and publishes ordinary `HEAD_ADVANCED`. Exact Git ref
+readback also brackets that reconciliation. Otherwise the
 operation stops terminally. An already-live candidate always uses that same
 reconciliation path; a different live head rejects. No second replacement,
 force/ref selector, rebase, amend, preparation or generic branch write exists.

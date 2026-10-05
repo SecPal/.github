@@ -529,7 +529,7 @@ class SourceRealGitTests(TestCase):
         before = self.git("count-objects", "-v")
         claims = ({"authorization": preparation, "publication_digest": "1" * 64},
                   {"authorization": original, "publication_digest": "2" * 64})
-        with self.policy_context(), mock.patch.object(owner, "_trusted_source", return_value="9" * 40), mock.patch.object(owner, "_entry", return_value=({}, {"validation": []})), mock.patch.object(owner, "_live"), mock.patch.object(owner, "_graph", return_value="d" * 64), mock.patch.object(owner, "_require_unpublished_source_history"), mock.patch.object(owner.publication, "verify_current_lifecycle_authority", return_value=current), mock.patch.object(owner.publication, "verify_enrolled_draft_source_claims", return_value=claims):
+        with self.policy_context(), mock.patch.object(owner, "_trusted_source", return_value="9" * 40), mock.patch.object(owner, "_entry", return_value=({}, {"validation": []})), mock.patch.object(owner, "_live"), mock.patch.object(owner, "_graph", return_value="d" * 64), mock.patch.object(owner, "_require_unpublished_source_history"), mock.patch.object(owner.publication, "verify_current_lifecycle_authority", return_value=current), mock.patch.object(owner.publication, "verify_enrolled_draft_source_claims", return_value=claims), mock.patch.object(owner.publication, "_run_gh", return_value=SimpleNamespace(returncode=0, stdout=json.dumps({"ref": "refs/heads/delivery", "object": {"type": "commit", "sha": self.parent1}}).encode())):
             _, authenticated, binding = owner._qualify_source_reacquisition(actions, arguments, unused=True)
         self.assertEqual(authenticated, original)
         self.assertEqual(binding["candidate_head_sha"], original["final_attestation"]["candidate_head_sha"])
@@ -676,6 +676,9 @@ def install_reacquisition_fixture(case):
     for module, name, kwargs in (
         (owner.publication, "verify_enrolled_draft_source_claims", {"side_effect": read}),
         (owner, "_require_unpublished_source_history", {}),
+        (owner.publication, "_run_gh", {"side_effect": lambda *_: SimpleNamespace(returncode=0,
+            stdout=json.dumps({"ref": "refs/heads/" + case.evidence["head_ref"],
+                "object": {"type": "commit", "sha": case.branch}}).encode())}),
     ):
         patch = mock.patch.object(module, name, **kwargs)
         patch.start()
@@ -725,6 +728,13 @@ class SourceReacquisitionExecutionTests(TestCase):
         # Subsequent live-candidate invocation uses exact reconciliation only.
         self.assertEqual(self.recover(), 0)
         owner._push_exact.assert_called_once()
+
+    def test_stale_pr_pointer_cannot_substitute_for_exact_branch_ref(self):
+        raw = {"ref": "refs/heads/delivery", "object": {"type": "commit", "sha": "f" * 40}}
+        with mock.patch.object(owner.publication, "_run_gh", return_value=SimpleNamespace(returncode=0, stdout=json.dumps(raw).encode())):
+            with self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "branch ref"):
+                self.recover()
+        owner._push_exact.assert_not_called()
 
     def test_live_candidate_uses_historical_read_only_reconciliation(self):
         self.branch = self.head
@@ -935,6 +945,15 @@ class SourceReacquisitionHistoryTests(TestCase):
         with mock.patch.object(owner.publication, "_run_gh", return_value=SimpleNamespace(returncode=0, stdout=json.dumps(raw).encode())) as observed:
             owner._require_unpublished_source_history(original)
         self.assertIn("HEAD_REF_RESTORED_EVENT", observed.call_args.args[0][5])
+
+    def test_exact_ref_rejects_missing_changed_noncommit_or_wrong_ref(self):
+        raw = {"ref": "refs/heads/delivery", "object": {"type": "commit", "sha": "a" * 40}}
+        owner.admit_exact_source_branch_ref(raw, ref="refs/heads/delivery", head="a" * 40)
+        for changed in (None, [], {}, {**raw, "ref": "refs/heads/main"},
+                        {**raw, "object": {"type": "tree", "sha": "a" * 40}},
+                        {**raw, "object": {"type": "commit", "sha": "f" * 40}}):
+            with self.subTest(changed=changed), self.assertRaises(owner.fast_path.SecurityBlocker):
+                owner.admit_exact_source_branch_ref(changed, ref="refs/heads/delivery", head="a" * 40)
 
     def test_incomplete_ambiguous_or_persisted_history_never_proves_absence(self):
         _, original = authorizations()

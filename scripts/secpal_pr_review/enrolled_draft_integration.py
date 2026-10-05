@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import time
 from typing import Any
+from urllib.parse import quote
 
 from . import fast_path, lifecycle_authority as authority
 from . import lifecycle_execution as execution, lifecycle_publication as publication
@@ -754,6 +755,26 @@ def _require_unpublished_source_history(original):
     admit_unpublished_source_history(normalize_source_branch_history(draft.loads_closed_json(result.stdout)), original)
 
 
+def admit_exact_source_branch_ref(raw, *, ref, head):
+    """Pure admission of the independent Git ref, not a cached PR pointer."""
+    if (not isinstance(raw, dict) or raw.get("ref") != ref
+            or not isinstance(raw.get("object"), dict)
+            or raw["object"].get("type") != "commit"
+            or raw["object"].get("sha") != head):
+        raise fast_path.SecurityBlocker("exact source branch ref is missing or changed")
+
+
+def _require_exact_source_branch_ref(original, head):
+    evidence = original["evidence"]
+    draft._oid(head, "exact source branch head")
+    result = publication._run_gh(["api", "--hostname", "github.com",
+        f'repos/{evidence["repository"]}/git/ref/heads/{quote(evidence["head_ref"], safe="")}'])
+    if result.returncode != 0:
+        raise fast_path.SecurityBlocker("exact source branch ref observation is unavailable")
+    admit_exact_source_branch_ref(draft.loads_closed_json(result.stdout),
+        ref="refs/heads/" + evidence["head_ref"], head=head)
+
+
 def _qualify_source_reacquisition(actions, arguments, *, unused, owned=None):
     accepted_main = _trusted_source(actions, arguments.repo)
     _, binding = _entry(actions, arguments.repo, SOURCE_KIND)
@@ -768,6 +789,7 @@ def _qualify_source_reacquisition(actions, arguments, *, unused, owned=None):
     # Read-back of a live candidate has no mutation authority and keeps the
     # existing historical reconciliation policy, including after policy drift.
     live = actions.LiveGitHub().observe_ready_integration_authority(arguments.repo, arguments.pr)
+    _require_exact_source_branch_ref(original, live.get("head_sha"))
     main = actions._authenticate_protected_bridge_main(arguments.repo)
     if live.get("head_sha") == head:
         _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, main, evidence["head_ref"])
@@ -824,7 +846,12 @@ def authorize_source_reacquisition(actions, arguments):
 def _reconcile_source_reacquisition(actions, arguments):
     reconciled = copy.copy(arguments)
     reconciled.reconcile = True
-    return integrate(actions, reconciled, kind=SOURCE_KIND)
+    original = normalize_authorization(actions._read_pre_enrollment_json(arguments.authorization, "original source authorization"))
+    head = original["final_attestation"]["candidate_head_sha"]
+    _require_exact_source_branch_ref(original, head)
+    result = integrate(actions, reconciled, kind=SOURCE_KIND)
+    _require_exact_source_branch_ref(original, head)
+    return result
 
 
 def reacquire_source_push(actions, arguments):
