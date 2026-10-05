@@ -25,7 +25,18 @@
       "CRITICAL": "ACTIONABLE"
     }
   },
-  "exceptions": [],
+  "exceptions": [
+    {
+      "id": "frontend-braces-cve-2026-93687-not-affected-20261005",
+      "repository": "SecPal/frontend",
+      "class": "VULNERABILITY",
+      "rule_id": "CVE-2026-93687",
+      "path": "package-lock.json",
+      "disposition": "NOT_AFFECTED",
+      "expires_at": "2026-10-19T00:00:00Z",
+      "rationale": "Reviewed frontend e5322a16ed71c08f0aa07f882e059e3536ff1975: braces 3.0.3 is dev-only through Lingui/micromatch and static-copy/chokidar. Lingui uses static repository patterns with filenames as data through picomatch; static-copy watches literal repository targets, never request paths or filenames as brace patterns. No untrusted brace-pattern input reaches braces; vulnerable executable code is absent from the Nginx runtime (retained SBOM metadata is not code). Before renewal, recheck published fixes, dependency topology, reachability and runtime contents; prefer dependency remediation."
+    }
+  ],
   "vex": {
     "documents": [],
     "accepted_statuses": ["not_affected", "fixed"],
