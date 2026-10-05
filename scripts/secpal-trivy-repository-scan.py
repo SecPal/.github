@@ -275,8 +275,8 @@ def verify_redaction(native: dict[str, Any], candidate: dict[str, Any], workspac
                      repository: str, commit: str) -> None:
     """Reject secret aliases before a private candidate becomes public evidence.
 
-    Correlate Trivy's full cause-line censor masks with immutable Git blobs.
-    Captures remain transient; ambiguous binary or truncated masks fail closed.
+    Correlate full cause lines or pinned bounded excerpts with immutable Git blobs.
+    Captures remain transient; ambiguous positions and binary masks fail closed.
     """
     if candidate["subject"] != _validate_subject(repository, commit):
         raise ContractError("redaction subject differs from the authenticated target")
@@ -305,16 +305,51 @@ def verify_redaction(native: dict[str, Any], candidate: dict[str, Any], workspac
                 if number > len(lines) or not isinstance(line.get("Content"), str):
                     raise ContractError("secret censor source is unavailable")
                 original = lines[number - 1].replace(b"\r", b"")
-                mask = line["Content"].encode("utf-8")
-                if len(original) != len(mask) or any(a != b and b != 42 for a, b in zip(original, mask)):
-                    raise ContractError("secret censor source is ambiguous")
+                try:
+                    mask = line["Content"].encode("utf-8", errors="strict")
+                except UnicodeError:
+                    raise ContractError("secret censor content is unsupported") from None
+                if not mask:
+                    raise ContractError("secret censor content is unavailable")
+                if len(mask) == len(original):
+                    if any(a != b and b != 42 for a, b in zip(original, mask)):
+                        raise ContractError("secret censor source is ambiguous")
+                else:
+                    # Trivy 0.74.0 findLocation (e1fd17a0): cause lines over
+                    # 100 bytes use match context. Admit only this pinned scanner
+                    # and exactly one compatible position, including overlapping
+                    # windows. Fixed-width byte wildcards preserve censor spans;
+                    # visible bytes are escaped literals, never regex syntax.
+                    scanner = candidate.get("scanner", {})
+                    if (not isinstance(scanner, dict)
+                            or scanner.get("version") != TRIVY_VERSION
+                            or scanner.get("immutable_id") != TRIVY_ARCHIVE_ID):
+                        raise ContractError("secret censor excerpt scanner is unqualified")
+                    if len(original) <= 100 or len(mask) >= len(original):
+                        raise ContractError("secret censor excerpt representation is unsupported")
+                    pattern = b"".join(
+                        b".{" + str(len(part)).encode("ascii") + b"}" if part.startswith(b"*")
+                        else re.escape(part)
+                        for part in re.split(rb"(\*+)", mask) if part
+                    )
+                    windows = re.finditer(rb"(?=" + pattern + rb")", original, re.DOTALL)
+                    window = next(windows, None)
+                    if window is None:
+                        raise ContractError("secret censor excerpt source is unavailable")
+                    if next(windows, None) is not None:
+                        raise ContractError("secret censor excerpt source is ambiguous")
+                    original = original[window.start():window.start() + len(mask)]
                 for match in re.finditer(rb"\*+", mask):
                     value = original[match.start():match.end()]
                     if value == match.group():
                         continue
                     if b"*" in value:
                         raise ContractError("secret censor span is ambiguous")
-                    captures.add(value.decode("utf-8", errors="strict"))
+                    try:
+                        capture = value.decode("utf-8", errors="strict")
+                    except UnicodeError:
+                        raise ContractError("secret censor capture is unsupported") from None
+                    captures.add(capture)
                     found = True
             if not found:
                 raise ContractError("secret censor span is unavailable")
