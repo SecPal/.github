@@ -6689,6 +6689,7 @@ class FastPathTests(TestCase):
         spec = SimpleNamespace(name=module_name, loader=loader)
         with (
             mock.patch.dict(actions.sys.modules, {module_name: None}),
+            mock.patch.dict(actions._SHARED_HELPERS, {}, clear=True),
             mock.patch.object(actions.importlib.util, "spec_from_file_location", return_value=spec),
             mock.patch.object(actions.importlib.util, "module_from_spec", return_value=partial_module),
         ):
@@ -16100,6 +16101,255 @@ class PolicyScriptTests(TestCase):
         quality = (REPO_ROOT / ".github/workflows/quality.yml").read_text(encoding="utf-8")
         self.assertNotIn("apt-get install", quality)
         self.assertNotIn("command -v rg", quality)
+
+
+class AcceptedLifecycleLoaderIdentityTests(TestCase):
+    """Exercise the real bridge in fresh processes without identity adapters."""
+
+    def run_bridge(self, body: str) -> None:
+        script = "\n".join((
+            "import importlib, importlib.util, sys, types",
+            "from pathlib import Path",
+            "from unittest import mock",
+            f"root = Path({str(REPO_ROOT)!r})",
+            "sys.path.insert(0, str(root))",
+            "spec = importlib.util.spec_from_file_location('secpal_bootstrap_source_accepted_main_actions', root / 'scripts/secpal-pr-review-actions.py')",
+            "a = importlib.util.module_from_spec(spec)",
+            "sys.modules[spec.name] = a",
+            "spec.loader.exec_module(a)",
+            "prefix = 'secpal_ready_integration_lifecycle'",
+            body,
+        ))
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", script], cwd=REPO_ROOT,
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_repeated_core_load_preserves_verifier_universe(self) -> None:
+        self.run_bridge("""
+first = a._load_lifecycle_publication_helpers()
+r = importlib.import_module(prefix + '.provider_reacquisition')
+second = a._load_lifecycle_publication_helpers()
+assert r.publication is second[1], 'retained reacquisition references superseded publication'
+assert first[0] is second[0]
+assert first[1] is second[1]
+assert first[1].VerifiedLifecyclePublication is second[1].VerifiedLifecyclePublication
+assert a._load_fast_path_helper() is a.fast_path
+assert a._load_pre_enrollment_integration_helper() is a.pre_enrollment
+assert importlib.import_module(prefix + '.provider_reacquisition') is r
+assert first[1].fast_path is a.fast_path
+assert first[0].pre_enrollment_integration is a.pre_enrollment
+""")
+
+    def test_signed_reacquisition_journal_survives_nested_production_load(self) -> None:
+        self.run_bridge("""
+import subprocess
+from dataclasses import replace
+fixture_spec = importlib.util.spec_from_file_location('signed_loader_fixture', root / 'tests/secpal-lifecycle-publication-unit.py')
+pf = importlib.util.module_from_spec(fixture_spec)
+fixture_spec.loader.exec_module(pf)
+f = pf.LifecyclePublicationTests()
+f.setUp()
+try:
+    signing_key = Path(f.directory.name) / 'fixture-key'
+    subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(signing_key)], check=True)
+    public = signing_key.with_suffix('.pub').read_text().strip()
+    def signer_for(identity=pf.SIGNER):
+        def sign(payload, domain):
+            signed = subprocess.run(['ssh-keygen', '-Y', 'sign', '-f', str(signing_key), '-n', domain], input=payload, capture_output=True, check=True)
+            return {'format': 'ssh', 'signer_identity': identity, 'value': signed.stdout.decode()}
+        return sign
+    pf.signer_for = signer_for
+    def verify(payload, signature, identity, domain):
+        pf.authority._verify_ssh_signature(payload, signature['value'], pf.authority.TrustedSigner(identity, (public,), ()), domain)
+        return pf.authority.VerifiedSignature(identity, 'ssh')
+    pf.verify_signature = verify
+    f.verifier_patch.stop()
+    policy = replace(f.policy, signers={identity: pf.authority.TrustedSigner(identity, (public,), ()) for identity in f.policy.signers})
+    pf.authority._load_lifecycle_trust_policy.return_value = policy
+    current, document, keys = f.reacquisition_claim_fixture()
+    for key in keys:
+        pf.publication._publish_provider_dispatch_claim(key, eligibility_evidence_digest=document['loss_proof_digest'], signer_identity=pf.SIGNER, signer=signer_for(), reacquisition_authorization=document)
+    first_authority, first_publication = a._load_lifecycle_publication_helpers()
+    r = importlib.import_module(prefix + '.provider_reacquisition')
+    with mock.patch.object(first_authority, '_load_lifecycle_trust_policy', return_value=policy), mock.patch.object(first_publication, '_verify_live_protection', return_value=pf.RULESET_ID):
+        first, claims = first_publication.verify_provider_dispatch_claims(pf.REPOSITORY, pf.ISSUE)
+        assert len(claims) == 2, (len(claims), [claim.key.review_type for claim in claims])
+        verified = r.verify_authorization(document, first)
+        feedback = r.fast_path.verify_reviewed_state_evidence(document['loss_proof']['historical_feedback'])
+        assessment = {'status': 'PROVIDER_REACQUISITION_COMPLETE', 'operation': r.OPERATION,
+            'acquisition_kind': 'SAME_HEAD_BOUNDED_REACQUISITION', 'authorization': document,
+            'stable_feedback': feedback.to_dict(), 'current_publication_oid': first.publication_oid,
+            'current_publication_digest': first.publication_digest}
+        assessment['assessment_digest'] = r.fast_path.digest_json(assessment)
+        fresh = r._seal_fresh_assessment(assessment)
+        assert r.require_verified_fresh_acquisitions(fresh, first, feedback) is fresh
+        seal_type, fresh_type, token = r._FreshAcquisitionSeal, r.VerifiedFreshProviderAcquisitions, r._FRESH_ACQUISITION_TOKEN
+        assert r.fast_path.canonical_json_bytes(r._require_authorization(verified)) == r.fast_path.canonical_json_bytes(document)
+        nested_actions = r.transport._load_actions_helper()
+        assert nested_actions is a
+        second_authority, second_publication = nested_actions._load_lifecycle_publication_helpers()
+        with mock.patch.object(second_authority, '_load_lifecycle_trust_policy', return_value=policy), mock.patch.object(second_publication, '_verify_live_protection', return_value=pf.RULESET_ID):
+            second, second_claims = second_publication.verify_provider_dispatch_claims(pf.REPOSITORY, pf.ISSUE)
+            assert second.publication_oid == first.publication_oid
+            assert second_claims == claims
+            assert r.require_verified_fresh_acquisitions(fresh, second, feedback) is fresh
+            assert r._FreshAcquisitionSeal is seal_type and r.VerifiedFreshProviderAcquisitions is fresh_type
+            assert r._FRESH_ACQUISITION_TOKEN is token
+            for forged in (types.SimpleNamespace(canonical_assessment=fresh.canonical_assessment, _seal=fresh._seal),
+                           replace(fresh, _seal=types.SimpleNamespace(token=token, digest=fresh._seal.digest)),
+                           replace(fresh, _seal=replace(fresh._seal, token=object()))):
+                try:
+                    r.require_verified_fresh_acquisitions(forged, second, feedback)
+                except a.fast_path.SecurityBlocker:
+                    pass
+                else:
+                    raise AssertionError('foreign type or seal accepted')
+            assert r.verify_authorization(document, second).document == verified.document
+            assert r.fast_path.canonical_json_bytes(r._require_authorization(verified)) == r.fast_path.canonical_json_bytes(document)
+            assert first_authority is second_authority and first_publication is second_publication
+            assert r.publication is second_publication
+finally:
+    f.tearDown()
+""")
+
+    def test_established_graph_rejects_tampering_without_healing(self) -> None:
+        self.run_bridge("""
+first = a._load_lifecycle_publication_helpers()
+r = importlib.import_module(prefix + '.provider_reacquisition')
+owned = {name: value for name, value in sys.modules.items() if name == prefix or name.startswith(prefix + '.')}
+def rejected():
+    try:
+        a._load_lifecycle_publication_helpers()
+    except RuntimeError:
+        return
+    raise AssertionError('tampered graph was accepted')
+for short in ('lifecycle_authority', 'lifecycle_publication', 'provider_reacquisition', 'fast_path', 'pre_enrollment_integration'):
+    name = prefix + '.' + short
+    original = sys.modules[name]
+    foreign = types.ModuleType(original.__name__)
+    foreign.__file__ = original.__file__
+    foreign.__spec__ = original.__spec__
+    with mock.patch.dict(sys.modules, {name: foreign}):
+        rejected()
+        assert sys.modules[name] is foreign
+    with mock.patch.dict(sys.modules):
+        del sys.modules[name]
+        rejected()
+        assert name not in sys.modules
+    for attribute in ('__file__',):
+        with mock.patch.object(original, attribute, '/tmp/candidate/helper.py'):
+            rejected()
+    with mock.patch.object(original.__spec__, 'origin', '/tmp/site-packages/helper.py'):
+        rejected()
+with mock.patch.object(sys.modules[prefix], '__path__', ['/tmp/candidate']):
+    rejected()
+with mock.patch.dict(sys.modules, {prefix + '.duplicate.provider_reacquisition': r}):
+    rejected()
+with mock.patch.object(sys.modules[prefix], 'lifecycle_publication', types.ModuleType('foreign')):
+    rejected()
+for module, name in ((r, 'VerifiedFreshProviderAcquisitions'), (r, '_FreshAcquisitionSeal'),
+                     (r, '_FRESH_ACQUISITION_TOKEN'),
+                     (first[0], '_VERIFIED_EXACT_ADOPTION_EVIDENCE'),
+                     (first[1], '_READY_CORRECTION_CONVERSION_SEAL')):
+    with mock.patch.object(module, name, object()):
+        rejected()
+try:
+    importlib.reload(first[1])
+except RuntimeError:
+    pass
+else:
+    raise AssertionError('live verified classes were reloaded')
+assert all(sys.modules[name] is value for name, value in owned.items())
+try:
+    a._load_lifecycle_publication_helpers(cache=owned)
+except TypeError:
+    pass
+else:
+    raise AssertionError('caller supplied loader ownership')
+""")
+
+    def test_prepopulated_namespaces_are_rejected_and_preserved(self) -> None:
+        for name in ("secpal_ready_integration_lifecycle", "scripts"):
+            with self.subTest(name=name):
+                self.run_bridge(f"""
+fake = types.ModuleType({name!r})
+fake.__path__ = [str(root / {'scripts/secpal_pr_review' if name != 'scripts' else 'scripts'!r})]
+sys.modules[{name!r}] = fake
+try:
+    a._load_lifecycle_publication_helpers()
+except RuntimeError:
+    pass
+else:
+    raise AssertionError('pre-populated namespace accepted')
+assert sys.modules[{name!r}] is fake
+""")
+
+    def test_initial_and_optional_failures_clean_only_new_modules(self) -> None:
+        for optional in (False, True):
+            with self.subTest(optional=optional):
+                self.run_bridge(f"""
+optional = {optional!r}
+if optional:
+    first = a._load_lifecycle_publication_helpers()
+before = {{name: value for name, value in sys.modules.items() if name == prefix or name.startswith(prefix + '.')}}
+original = a.importlib.util.spec_from_file_location
+failed_name = 'lifecycle_orchestration' if optional else 'lifecycle_publication'
+def failing_spec(name, *args, **kwargs):
+    spec = original(name, *args, **kwargs)
+    if name == prefix + '.' + failed_name:
+        execute = spec.loader.exec_module
+        def fail(module):
+            execute(module)
+            importlib.import_module(prefix + '.provider_reacquisition')
+            raise SyntaxError('partial graph failure')
+        spec.loader.exec_module = fail
+    return spec
+with mock.patch.object(a.importlib.util, 'spec_from_file_location', side_effect=failing_spec):
+    try:
+        a._load_lifecycle_publication_helpers(include_orchestration=optional)
+    except SyntaxError:
+        pass
+    else:
+        raise AssertionError('failure not exercised')
+after = {{name: value for name, value in sys.modules.items() if name == prefix or name.startswith(prefix + '.')}}
+assert before.keys() == after.keys()
+assert all(after[name] is value for name, value in before.items())
+loaded = a._load_lifecycle_publication_helpers(include_orchestration=optional)
+if optional:
+    assert loaded[0] is first[0] and loaded[1] is first[1]
+    assert loaded[1].authority is loaded[0]
+""")
+
+    def test_cached_modules_do_not_cache_accepted_main_authority(self) -> None:
+        self.run_bridge("""
+a._load_lifecycle_publication_helpers()
+for unused in range(2):
+    try:
+        a._require_accepted_main_tooling_blobs(root, 'f' * 40)
+    except a.fast_path.SecurityBlocker as exc:
+        assert 'stale accepted-main' in str(exc)
+    else:
+        raise AssertionError('module reuse accepted stale local main')
+    a._load_lifecycle_publication_helpers()
+""")
+
+    def test_both_orchestration_load_orderings_preserve_all_modules(self) -> None:
+        for orchestration_first in (False, True):
+            with self.subTest(orchestration_first=orchestration_first):
+                self.run_bridge(f"""
+first = a._load_lifecycle_publication_helpers(include_orchestration={orchestration_first!r})
+r = importlib.import_module(prefix + '.provider_reacquisition')
+for include in (False, True, False, True):
+    before = {{name: value for name, value in sys.modules.items() if name == prefix or name.startswith(prefix + '.')}}
+    loaded = a._load_lifecycle_publication_helpers(include_orchestration=include)
+    assert loaded[0] is first[0] and loaded[1] is first[1]
+    assert all(sys.modules[name] is value for name, value in before.items())
+    assert r.publication is loaded[1]
+collision = a._load_lifecycle_publication_helpers(include_orchestration=True, return_collision=True)
+assert collision is sys.modules[prefix + '.version_collision']
+""")
 
 
 if __name__ == "__main__":

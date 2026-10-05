@@ -25,6 +25,7 @@ class ProcessCall:
 class DynamicImportCall:
     functions: tuple[str, ...]
     expression: str
+    classes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1066,10 +1067,6 @@ DYNAMIC_IMPORT_CALLS = {
         ),
         DynamicImportCall(
             ("_load_lifecycle_publication_helpers", "load"),
-            "importlib.util.spec_from_file_location(module_name, path)",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers", "load"),
             "importlib.util.module_from_spec(spec)",
         ),
         DynamicImportCall(
@@ -1087,6 +1084,16 @@ DYNAMIC_IMPORT_CALLS = {
         DynamicImportCall(
             ("_load_protected_main_helper", "load"),
             "spec.loader.exec_module(module)",
+        ),
+        DynamicImportCall(
+            ('exec_module',),
+            'self.source_loader.exec_module(module)',
+            ('_LifecycleModuleLoader',),
+        ),
+        DynamicImportCall(
+            ('find_spec',),
+            'importlib.util.spec_from_file_location(fullname, source)',
+            ('_LifecycleModuleFinder',),
         ),
     },
     "secpal-resolve-fixed-threads.py": {
@@ -1207,6 +1214,14 @@ DYNAMIC_IMPORT_CALLS = {
             ("_load_resolver",),
             "sys.modules[spec.name]",
         ),
+    },
+}
+SAFE_META_PATH_ACCESS = {
+    "secpal-pr-review-actions.py": {
+        DynamicImportCall(('_load_lifecycle_publication_helpers',), ' for finder in sys.meta_path if finder is not _LIFECYCLE_FINDER'),
+        DynamicImportCall(('_load_lifecycle_publication_helpers',), 'sys.meta_path.insert(0, _LIFECYCLE_FINDER)'),
+        DynamicImportCall(('_load_lifecycle_publication_helpers',), 'sys.meta_path[:]'),
+        DynamicImportCall(('_require_lifecycle_graph',), ' for finder in sys.meta_path'),
     },
 }
 SAFE_GETATTR_CALLS = {
@@ -1351,6 +1366,30 @@ SAFE_GETATTR_CALLS = {
             ("_verify_exceptional_continuation_selection",),
             "getattr(arguments, 'exceptional_continuation_authorization_id', None)",
         ),
+        DynamicImportCall(
+            ('_helper_identity',),
+            'getattr(module, name)',
+        ),
+        DynamicImportCall(
+            ('_load_bridge_scripts_namespace',),
+            "getattr(package, '__file__', None)",
+        ),
+        DynamicImportCall(
+            ('_load_lifecycle_publication_helpers',),
+            'getattr(package, child, None)',
+        ),
+        DynamicImportCall(
+            ('_require_helper_identity',),
+            'getattr(module, key, None)',
+        ),
+        DynamicImportCall(
+            ('_require_lifecycle_graph',),
+            "getattr(package, '__file__', None)",
+        ),
+        DynamicImportCall(
+            ('_require_lifecycle_graph',),
+            "getattr(package, name.rsplit('.', 1)[1], None)",
+        ),
     },
     "secpal-resolve-fixed-threads.py": {
         DynamicImportCall(
@@ -1448,10 +1487,6 @@ SAFE_SYS_MODULES_CALLS = {
             "sys.modules.pop(module_name, None)",
         ),
         DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
-            "sys.modules.pop(module_name, None)",
-        ),
-        DynamicImportCall(
             ("_load_protected_main_helper",),
             "sys.modules.pop(f'{package_name}.{name}', None)",
         ),
@@ -1462,6 +1497,30 @@ SAFE_SYS_MODULES_CALLS = {
         DynamicImportCall(
             ("_load_protected_main_helper",),
             "sys.modules.pop(package_name, None)",
+        ),
+        DynamicImportCall(
+            ('_lifecycle_namespace_entries',),
+            'sys.modules.copy()',
+        ),
+        DynamicImportCall(
+            ('_load_bridge_scripts_namespace',),
+            "sys.modules.get('scripts')",
+        ),
+        DynamicImportCall(
+            ('_load_lifecycle_publication_helpers',),
+            "sys.modules.get('scripts')",
+        ),
+        DynamicImportCall(
+            ('_load_lifecycle_publication_helpers',),
+            "sys.modules.pop('scripts', None)",
+        ),
+        DynamicImportCall(
+            ('_load_lifecycle_publication_helpers',),
+            'sys.modules.pop(name, None)',
+        ),
+        DynamicImportCall(
+            ('_require_helper_identity',),
+            'sys.modules.get(name)',
         ),
     },
     "secpal-resolve-fixed-threads.py": {
@@ -1545,10 +1604,6 @@ SAFE_SYS_MODULES_STORES = {
     "secpal-pr-review-actions.py": {
         DynamicImportCall(
             ("_load_enrolled_draft_integration_helper",),
-            "sys.modules['scripts']",
-        ),
-        DynamicImportCall(
-            ("_load_enrolled_draft_integration_helper",),
             "sys.modules[package_name]",
         ),
         DynamicImportCall(
@@ -1573,19 +1628,7 @@ SAFE_SYS_MODULES_STORES = {
         ),
         DynamicImportCall(
             ("_load_lifecycle_publication_helpers",),
-            "sys.modules['scripts']",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
             "sys.modules[package_name]",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
-            "sys.modules[f'{package_name}.fast_path']",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
-            "sys.modules[f'{package_name}.pre_enrollment_integration']",
         ),
         DynamicImportCall(
             ("_load_pre_enrollment_integration_helper",),
@@ -1606,6 +1649,14 @@ SAFE_SYS_MODULES_STORES = {
         DynamicImportCall(
             ("_load_protected_main_helper", "load"),
             "sys.modules[module_name]",
+        ),
+        DynamicImportCall(
+            ('_load_bridge_scripts_namespace',),
+            "sys.modules['scripts']",
+        ),
+        DynamicImportCall(
+            ('_load_lifecycle_publication_helpers',),
+            'sys.modules[module_name]',
         ),
     },
     "secpal-resolve-fixed-threads.py": {
@@ -2254,7 +2305,15 @@ class PolicyVisitor(ast.NodeVisitor):
             if node.attr not in SAFE_OS_ATTRIBUTES:
                 self.finding(node, f"prohibited os attribute: {node.attr}")
         elif isinstance(node.value, ast.Name) and node.value.id in direct_modules:
-            if node.attr not in direct_modules[node.value.id]:
+            parent = self.parents.get(node)
+            meta_parent = self.parents.get(parent) if isinstance(parent, ast.Attribute) else parent
+            allowed_meta = (
+                node.value.id == "sys" and node.attr == "meta_path"
+                and meta_parent is not None
+                and DynamicImportCall(tuple(self.functions), ast.unparse(meta_parent))
+                in SAFE_META_PATH_ACCESS.get(self.source_name, set())
+            )
+            if node.attr not in direct_modules[node.value.id] and not allowed_meta:
                 self.finding(
                     node,
                     f"prohibited {node.value.id} attribute: {node.attr}",
@@ -2338,7 +2397,7 @@ class PolicyVisitor(ast.NodeVisitor):
         if node.attr == "exec_module":
             parent = self.parents.get(node)
             dynamic_call = (
-                DynamicImportCall(tuple(self.functions), ast.unparse(parent))
+                DynamicImportCall(tuple(self.functions), ast.unparse(parent), tuple(self.classes))
                 if isinstance(parent, ast.Call) and parent.func is node
                 else None
             )
@@ -2379,6 +2438,7 @@ class PolicyVisitor(ast.NodeVisitor):
             dynamic_call = DynamicImportCall(
                 tuple(self.functions),
                 ast.unparse(node),
+                tuple(self.classes),
             )
             if dynamic_call not in DYNAMIC_IMPORT_CALLS.get(self.source_name, set()):
                 self.finding(node, "dynamic import is outside the closed allowlist")
@@ -2855,19 +2915,29 @@ def self_test() -> None:
         raise SystemExit("closed provider-owner module read was rejected")
 
     scripts_namespace = (
-        "import sys\nimport types\ndef _load_lifecycle_publication_helpers():\n"
+        "import sys\nimport types\ndef _load_bridge_scripts_namespace():\n"
         "    scripts_package = types.ModuleType('scripts')\n"
         "    scripts_package.__path__ = [str(REPOSITORY_ROOT / 'scripts')]\n"
-        "    sys.modules['scripts'] = scripts_package\n"
+        "    sys.modules['scripts'] = package\n"
     )
     if inspect_source(scripts_namespace, "secpal-pr-review-actions.py", ()):
         raise SystemExit("closed lifecycle scripts namespace was rejected")
     for substituted in (
         scripts_namespace.replace("['scripts']", "['subprocess']"),
-        scripts_namespace.replace("_load_lifecycle_publication_helpers", "arbitrary_loader"),
+        scripts_namespace.replace("_load_bridge_scripts_namespace", "arbitrary_loader"),
     ):
         if not inspect_source(substituted, "secpal-pr-review-actions.py", ()):
             raise SystemExit("substituted lifecycle namespace was accepted")
+
+    for source in (
+        "import sys\ndef arbitrary_loader():\n    sys.meta_path.insert(0, finder)\n",
+        "import sys\ndef _load_lifecycle_publication_helpers():\n    sys.meta_path.insert(0, arbitrary_finder)\n",
+        "class ForeignLoader:\n    def exec_module(self, module):\n        self.source_loader.exec_module(module)\n",
+        "def exec_module(self, module):\n    self.source_loader.exec_module(module)\n",
+        "import importlib.util\nclass ForeignFinder:\n    def find_spec(self, fullname, path):\n        return importlib.util.spec_from_file_location(fullname, source)\n",
+    ):
+        if not inspect_source(source, "secpal-pr-review-actions.py", ()):
+            raise SystemExit("unowned import hook escaped the static policy")
 
     source_specific_unsafe = (
         (

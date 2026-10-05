@@ -1948,7 +1948,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             else:
                 sys.modules[name] = previous
 
-    def test_preloaded_same_path_module_is_reloaded_from_source(self) -> None:
+    def test_substituted_same_path_module_is_rejected_without_reload(self) -> None:
         name = "secpal_pr_review.pre_enrollment_integration"
         previous = sys.modules.get(name)
         candidate = SimpleNamespace(
@@ -1956,12 +1956,9 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         )
         sys.modules[name] = candidate
         try:
-            loaded = actions._load_pre_enrollment_integration_helper()
-            self.assertIsNot(loaded, candidate)
-            self.assertEqual(
-                Path(loaded.__spec__.origin).absolute(),
-                actions.PRE_ENROLLMENT_INTEGRATION_HELPER.absolute(),
-            )
+            with self.assertRaisesRegex(RuntimeError, "identity changed"):
+                actions._load_pre_enrollment_integration_helper()
+            self.assertIs(sys.modules[name], candidate)
         finally:
             if previous is None:
                 sys.modules.pop(name, None)
@@ -1988,6 +1985,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             try:
                 with (
                     self.subTest(loader=loader_name),
+                    mock.patch.dict(actions._SHARED_HELPERS, {}, clear=True),
                     mock.patch.object(
                         actions.importlib.util,
                         "spec_from_file_location",
