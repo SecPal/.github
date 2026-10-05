@@ -147,6 +147,11 @@
       ],
       "required_local_validation": [
         {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-trivy-action-archive.py"],
+          "working_directory": ".",
+          "purpose": "Qualify central Trivy action archive and runtime closure"
+        },
+        {
           "argv": ["python3", "-m", "unittest", "tests/secpal-pr-review-unit.py"],
           "working_directory": ".",
           "purpose": "Run accepted Package-2.1 unit tests"

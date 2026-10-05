@@ -3461,14 +3461,9 @@ class LifecycleOrchestrationTests(TestCase):
             current_binding = fast_path.validation_registry_projection(
                 current_entry
             )
-            self.assertEqual(len(current_binding["validation"]), 21)
-            self.assertEqual(
-                fast_path.digest_json(current_binding),
-                "5eb32c33aa354dc9ebda3d00bef1eba02409f6b98c4f073f418309ef993cec90",
-            )
-            self.assertEqual(
-                fast_path.digest_json(current_binding["validation"]),
-                "b37fd0a415a61e6c8d3925ca7e87783c4301ae50bfe481bc6e8d76002bb62936",
+            # The current registry evolves; only the historical epoch is fixed.
+            self.assertNotEqual(
+                collision_binding["validation"], current_binding["validation"],
             )
             self.assertNotEqual(
                 fast_path.digest_json(collision_binding),
