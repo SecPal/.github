@@ -80,6 +80,7 @@ def main() -> int:
         short_line = "sendgrid='" + sendgrid + "';"
         (workspace / "short-secret.js").write_text(short_line + "\n")
         (workspace / "long-secret.js").write_text("x" * 2000 + short_line + "y" * 2000 + "\n")
+        (workspace / "crlf-secret.js").write_bytes(("q" + "x" * 30 + sendgrid + "\r\n").encode())
         (workspace / "tests").mkdir()
         (workspace / "tests" / "example.md").write_text(secret_path.read_text())
         lock = json.loads((workspace / "package-lock.json").read_text())
@@ -215,7 +216,7 @@ def main() -> int:
         result = module.admit(observation, json.loads(POLICY.read_text(encoding="utf-8")))
         module.verify_redaction(native_value, result, workspace, "SecPal/repository-scan-fixture", commit)
         representations = {}
-        for path in ("short-secret.js", "long-secret.js"):
+        for path in ("short-secret.js", "long-secret.js", "crlf-secret.js"):
             findings = [s for r in native_value["Results"] if r["Target"] == path
                         for s in r.get("Secrets", []) if s["RuleID"] == "sendgrid-api-token"]
             if len(findings) != 1:
@@ -226,7 +227,8 @@ def main() -> int:
             source_size = len((workspace / path).read_bytes().split(b"\n")[0])
             cause_size = len(causes[0]["Content"].encode())
             if ((path == "short-secret.js" and source_size != cause_size)
-                    or (path == "long-secret.js" and not cause_size < source_size)):
+                    or (path != "short-secret.js" and not cause_size < source_size)
+                    or (path == "crlf-secret.js" and (source_size, cause_size) != (101, 99))):
                 raise RuntimeError("pinned cause-line representation was not exercised")
             representations[path] = {"source_bytes": source_size, "cause_bytes": cause_size}
         for field in ("path", "resource", "title", "message", "package"):
@@ -255,7 +257,7 @@ def main() -> int:
                 or '"match"' in encoded.lower() or '"code"' in encoded.lower()):
             raise RuntimeError("normalized evidence retained secret capture material")
         secret_paths = {f["path"] for f in result["findings"] if f["class"] == "SECRET"}
-        if not {"tests/example.md", "package-lock.json", "short-secret.js", "long-secret.js"} <= secret_paths:
+        if not {"tests/example.md", "package-lock.json", "short-secret.js", "long-secret.js", "crlf-secret.js"} <= secret_paths:
             raise RuntimeError("secret default exclusions remain enabled")
         if result["gate_state"] != "ACTIONABLE":
             raise RuntimeError("representative findings were not admitted as actionable")
@@ -355,6 +357,7 @@ def main() -> int:
                     "generic_replay_passed": True,
                     "short_line_redaction": "PASS",
                     "long_line_redaction": "PASS",
+                    "crlf_threshold_redaction": "PASS",
                     "cause_representations": representations,
                     "maintained_action_passed": True,
                     "unknown_warning_fail_closed": True,

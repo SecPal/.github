@@ -1129,6 +1129,31 @@ class SecretExcerptTests(unittest.TestCase):
         self.commit_source("x" + self.prefix + self.capture + self.suffix)
         self.reject()
 
+    def test_crlf_raw_line_threshold_admits_unique_excerpt(self) -> None:
+        # Trivy tests the 101-byte raw line before removing the trailing CR.
+        before = "x" * 31
+        after = "y" * (100 - len(before) - len(self.capture))
+        self.excerpt = "x" * 30 + "*" * len(self.capture) + "y" * 20
+        self.commit_source(before + self.capture + after + "\r")
+        self.verify()
+
+    def test_lossy_utf8_boundary_excerpt_remains_unsupported(self) -> None:
+        # A byte cut inside the Euro sign emits U+FFFD and a native WARN.
+        # Its visible bytes no longer equal the immutable source window.
+        self.excerpt = "\ufffd" + "z" * 29 + "*" * len(self.capture) + "y" * 20
+        self.commit_source("a" * 1000 + "€" + "z" * 29 + self.capture + "y" * 1000)
+        self.reject()
+        cache = self.workspace / "cache"
+        fallback = '[misconfig] Falling back to embedded checks\terr=' + json.dumps(
+            'failed to check cache: cache does not exist at ' + json.dumps(str(cache / "policy/content"))
+        )
+        diagnostic = (
+            "2026-10-05T18:00:00Z\tERROR\t" + fallback + "\n"
+            "2026-10-05T18:00:00Z\tWARN\t[secret] Invalid UTF-8 sequences detected in file content, replacing with empty string\n"
+        )
+        with self.assertRaisesRegex(self.module.ContractError, "unknown scan health"):
+            self.module.verify_diagnostics(diagnostic, cache)
+
     def test_excerpt_requires_exact_pinned_scanner(self) -> None:
         scanner = copy.deepcopy(self.candidate["scanner"])
         for field, value in (("version", "0.73.0"), ("immutable_id", "sha256:" + "a" * 64)):

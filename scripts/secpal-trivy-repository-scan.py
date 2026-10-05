@@ -304,7 +304,8 @@ def verify_redaction(native: dict[str, Any], candidate: dict[str, Any], workspac
                 number = line["Number"]
                 if number > len(lines) or not isinstance(line.get("Content"), str):
                     raise ContractError("secret censor source is unavailable")
-                original = lines[number - 1].replace(b"\r", b"")
+                raw_line = lines[number - 1]
+                original = raw_line.replace(b"\r", b"")
                 try:
                     mask = line["Content"].encode("utf-8", errors="strict")
                 except UnicodeError:
@@ -325,7 +326,7 @@ def verify_redaction(native: dict[str, Any], candidate: dict[str, Any], workspac
                             or scanner.get("version") != TRIVY_VERSION
                             or scanner.get("immutable_id") != TRIVY_ARCHIVE_ID):
                         raise ContractError("secret censor excerpt scanner is unqualified")
-                    if len(original) <= 100 or len(mask) >= len(original):
+                    if len(raw_line) <= 100 or len(mask) >= len(original):
                         raise ContractError("secret censor excerpt representation is unsupported")
                     pattern = b"".join(
                         b".{" + str(len(part)).encode("ascii") + b"}" if part.startswith(b"*")
