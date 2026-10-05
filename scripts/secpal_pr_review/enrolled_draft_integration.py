@@ -392,7 +392,7 @@ def prepare(actions, arguments, *, kind=KIND) -> int:
     require_predecessor(publication.verify_current_lifecycle_authority(arguments.repo, arguments.delivery_issue), evidence)
     if (kind == KIND and actions._authenticate_protected_bridge_main(arguments.repo) != main) or _graph(actions, arguments.repo, arguments.delivery_issue) != graph:
         raise fast_path.SecurityBlocker("main or work graph changed during validation")
-    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, actions._authenticate_protected_bridge_main(arguments.repo), head_ref)
+    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, main if kind == KIND else actions._authenticate_protected_bridge_main(arguments.repo), head_ref)
     require_fresh_source_authorization(evidence)
     receipt = fast_path.create_enrolled_draft_validation_receipt(evidence)
     preparation_fields = {
@@ -545,11 +545,11 @@ def integrate(actions, arguments, *, kind=KIND) -> int:
     signers = execution._production_signing_authorities(arguments.repo, authorization["signer_identity"])
     if arguments.reconcile:
         publication.verify_enrolled_draft_integration_claim(authorization)
-        _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
+        _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, evidence["current_main"]["sha"] if kind == KIND else actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
         execution._verify_live_github_commit_signature(arguments.repo, head)
         if current.lifecycle.head_sha == head:
             _require_exact_published(authorization, current)
-            _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
+            _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, evidence["current_main"]["sha"] if kind == KIND else actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
             return 0
         require_predecessor(current, evidence)
     else:
@@ -572,13 +572,13 @@ def integrate(actions, arguments, *, kind=KIND) -> int:
             raise fast_path.SecurityBlocker("work graph changed after push claim; no retry")
         require_fresh_source_authorization(evidence)
         _push_exact(actions, root, evidence, head)
-        _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
+        _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, evidence["current_main"]["sha"] if kind == KIND else actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
         execution._verify_live_github_commit_signature(arguments.repo, head)
     # Both paths have authenticated predecessor CURRENT, the exact claimed
     # authorization and the already live signed candidate. No commit is created.
     successor = _successor(current, authorization, signers, root)
-    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
+    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, evidence["current_main"]["sha"] if kind == KIND else actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
     publication.advance_current_terminal(successor, signer_identity=signers.publication_identity, signer=signers.publication_signer)
     _require_exact_published(authorization, publication.verify_current_lifecycle_authority(arguments.repo, arguments.delivery_issue))
-    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
+    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, evidence["current_main"]["sha"] if kind == KIND else actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
     return 0

@@ -327,6 +327,116 @@ class SourceExecutionTests(TestCase):
             self.advance()
 
 
+class IntegrationPreparationMainTests(TestCase):
+    claim = fixtures.EnrolledDraftPreparationTests.claim
+
+    def setUp(self):
+        fixtures.EnrolledDraftPreparationTests.setUp(self)
+
+    def test_main_race_after_validation_stops_before_candidate_reservation(self):
+        calls = []
+        def live(_actions, _repo, _issue, _pr, _head, main_sha, _ref=None):
+            calls.append(main_sha)
+            if len(calls) > 1 and main_sha != "9" * 40:
+                raise owner.fast_path.SecurityBlocker("protected-main drift")
+            return "delivery"
+        owner._live.side_effect = live
+        self.actions._authenticate_protected_bridge_main.side_effect = ["b" * 40, "b" * 40, "9" * 40]
+        with self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "protected-main drift"):
+            owner.prepare(self.actions, self.arguments)
+        self.assertEqual(self.events, ["validate"])
+        self.assertFalse(self.claims)
+        self.actions._create_signed_pre_enrollment_commit.assert_not_called()
+
+
+class MainSeparationTests(TestCase):
+    validation = fixtures.EnrolledDraftExecutionTests.validation
+    claim = fixtures.EnrolledDraftExecutionTests.claim
+    read_claim = fixtures.EnrolledDraftExecutionTests.read_claim
+    push = fixtures.EnrolledDraftExecutionTests.push
+
+    def setUp(self):
+        fixtures.EnrolledDraftExecutionTests.setUp(self)
+        self.observed_main = self.evidence["current_main"]["sha"]
+
+    def live(self, actions, repository, issue, pr, head, main_sha, ref=None):
+        fixtures.EnrolledDraftExecutionTests.live(self, actions, repository, issue, pr, head, main_sha, ref)
+        if main_sha != self.observed_main:
+            raise owner.fast_path.SecurityBlocker("protected-main drift")
+
+    def advance_main(self):
+        self.observed_main = "9" * 40
+        self.actions._authenticate_protected_bridge_main.return_value = self.observed_main
+
+    def test_integration_rejects_main_advancement_after_push(self):
+        def push_and_advance(*args):
+            self.push(*args)
+            self.advance_main()
+        owner._push_exact.side_effect = push_and_advance
+        with self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "protected-main drift"):
+            owner.integrate(self.actions, self.arguments)
+        self.assertEqual(self.calls, ["claim", "push"])
+        self.assertFalse(self.harness.publication_writes)
+
+    def test_missing_integration_publication_cannot_reconcile_stale_main(self):
+        self.harness.publication_mode = "AMBIGUOUS_PREDECESSOR"
+        with self.assertRaises(owner.publication.LifecyclePublicationAmbiguousWrite):
+            owner.integrate(self.actions, self.arguments)
+        self.arguments.reconcile = True
+        self.harness.publication_mode = "SUCCESS"
+        self.advance_main()
+        writes = len(self.harness.publication_writes)
+        with self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "protected-main drift"):
+            owner.integrate(self.actions, self.arguments)
+        self.assertEqual(len(self.harness.publication_writes), writes)
+        self.assertEqual(self.calls, ["claim", "push"])
+
+    def test_completed_integration_reconciliation_rejects_stale_main(self):
+        owner.integrate(self.actions, self.arguments)
+        self.arguments.reconcile = True
+        self.advance_main()
+        with self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "protected-main drift"):
+            owner.integrate(self.actions, self.arguments)
+        self.assertEqual(self.calls, ["claim", "push"])
+        self.assertEqual(len(self.harness.publication_writes), 1)
+
+    def test_integration_rechecks_authorized_main_before_publication(self):
+        original = owner._successor
+        def advance_during_successor(*args):
+            result = original(*args)
+            self.advance_main()
+            return result
+        with mock.patch.object(owner, "_successor", side_effect=advance_during_successor):
+            with self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "protected-main drift"):
+                owner.integrate(self.actions, self.arguments)
+        self.assertFalse(self.harness.publication_writes)
+
+    def test_integration_rechecks_authorized_main_after_publication(self):
+        original = self.harness.publisher
+        def advance_during_publication(*args, **kwargs):
+            result = original(*args, **kwargs)
+            self.advance_main()
+            return result
+        owner.publication.advance_current_terminal.side_effect = advance_during_publication
+        with self.assertRaisesRegex(owner.fast_path.SecurityBlocker, "protected-main drift"):
+            owner.integrate(self.actions, self.arguments)
+        self.assertEqual(len(self.harness.publication_writes), 1)
+
+    def test_source_advancement_allows_independent_main_advancement_after_push(self):
+        self.evidence = evidence()
+        self.evidence["user_authorization"] = {"issued_at": int(time.time()), "expires_at": int(time.time()) + 600}
+        self.preparation, self.authorization = authorizations(self.evidence)
+        Path(self.arguments.authorization).write_text(json.dumps(self.authorization))
+        owner.fast_path.verify_enrolled_draft_validation_evidence.return_value = self.validation()
+        def push_and_advance(*args):
+            self.push(*args)
+            self.advance_main()
+        owner._push_exact.side_effect = push_and_advance
+        self.assertEqual(owner.integrate(self.actions, self.arguments, kind=owner.SOURCE_KIND), 0)
+        self.assertEqual(self.calls, ["claim", "push"])
+        self.assertEqual(self.evidence["ordered_parent_shas"], ["a" * 40])
+
+
 class SourceRealGitTests(TestCase):
     git = fixtures.EnrolledDraftRealGitTests.git
     policy_context = fixtures.EnrolledDraftRealGitTests.policy_context
