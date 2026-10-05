@@ -14,7 +14,13 @@ from types import SimpleNamespace
 from unittest import TestCase, main, mock
 
 
-RESOLVER_PATH = Path(__file__).resolve().parents[1] / "scripts/secpal-resolve-fixed-threads.py"
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from tests.secpal_actions_fixture import load_actions
+
+# Composition uses the constructed bridge; no second helper world is executed.
+actions = load_actions()
+RESOLVER_PATH = ROOT / "scripts/secpal-resolve-fixed-threads.py"
 SPEC = importlib.util.spec_from_file_location("exact_prerequisite_resolver_test", RESOLVER_PATH)
 assert SPEC is not None and SPEC.loader is not None
 RESOLVER = importlib.util.module_from_spec(SPEC)

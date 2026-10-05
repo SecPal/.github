@@ -23,9 +23,16 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "scripts"))
-from tests.secpal_actions_fixture import load_actions
-
-actions = load_actions()
+# This closed current-safety harness runs in an isolated interpreter and imports
+# no other test modules. Establish its single production bridge before helpers.
+SPEC = importlib.util.spec_from_file_location(
+    "secpal_bootstrap_source_accepted_main_actions", ROOT / "scripts/secpal-pr-review-actions.py")
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("current-safety Actions source is unavailable")
+actions = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = actions
+SPEC.loader.exec_module(actions)
+actions._load_lifecycle_publication_helpers()
 from secpal_pr_review import fast_path, lifecycle_authority as authority, lifecycle_publication
 
 REPOSITORY = "example/project"
