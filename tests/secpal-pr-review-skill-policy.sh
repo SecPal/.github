@@ -1318,6 +1318,7 @@ assert [
     ["./tests/secpal-pr-review-skill-policy.sh"],
     ["./tests/secpal-pr-review-skill-integration.sh"],
     ["python3", "-m", "unittest", "tests/secpal-enrolled-draft-integration-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-enrolled-draft-source-unit.py"],
 ], "SecPal/.github must register lifecycle and Exceptional Recovery authority regressions unconditionally"
 
 frontend_entries = [
