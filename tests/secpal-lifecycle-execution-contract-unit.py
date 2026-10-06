@@ -20,6 +20,7 @@ import hashlib
 import inspect
 import json
 from pathlib import Path
+import subprocess
 import sys
 from typing import Any
 from unittest import TestCase, main, mock
@@ -705,6 +706,242 @@ class LifecycleExecutionTests(TestCase):
                 publication.LifecyclePublicationError, "protection verification failed"
             ):
                 execution.publish_review_consumption(REPOSITORY, ISSUE)
+
+    def equal_second_review_fixture(self):
+        """Reviewed native REST shapes with synthetic delivery/event identities."""
+        harness = self.ready_harness()
+        live = execution.LivePullRequest(REPOSITORY, PR, "OPEN", HEAD, False, "author")
+        actor = {"login": "author", "node_id": "AUTHOR", "id": 7}
+        request = {
+            "node_id": "COPILOT_REQUEST", "created_at": "2026-10-01T00:00:00Z",
+            "actor": {"login": "author", "node_id": "AUTHOR", "database_id": 7},
+            "requested_reviewer": fast_path.COPILOT_REVIEW_PROVIDER,
+        }
+        review = {
+            "node_id": "COPILOT_REVIEW", "body_digest": "b" * 64,
+            "actor": fast_path.COPILOT_REVIEW_PROVIDER, "state": "COMMENTED",
+            "commit_oid": HEAD, "submitted_at": "2026-10-01T00:10:00Z",
+            "reactions": [],
+        }
+        feedback = fast_path.StableFeedbackState(
+            repository=REPOSITORY, pull_request_number=PR, head_sha=HEAD,
+            base_ref="main", base_sha="b" * 40, pr_state="OPEN",
+            feedback={"pull_request_reactions": [], "reviews": [review],
+                      "conversation_comments": [], "threads": [],
+                      "provider_review_requests": [request]},
+        )
+        context = {
+            "number": PR, "state": "open", "draft": False,
+            "head": {"sha": HEAD, "repo": {"full_name": REPOSITORY}},
+        }
+        native = [
+            {"event": "committed", "node_id": "COMMIT_EVENT", "sha": HEAD},
+            {"event": "ready_for_review", "id": 1, "node_id": "READY_EVENT",
+             "actor": actor, "created_at": request["created_at"], "commit_id": None},
+            {"event": "review_requested", "id": 2, "node_id": request["node_id"],
+             "actor": actor, "created_at": request["created_at"], "commit_id": None,
+             "requested_reviewer": {
+                 "login": "Copilot", "node_id": fast_path.COPILOT_REVIEW_PROVIDER["node_id"],
+                 "id": fast_path.COPILOT_REVIEW_PROVIDER["database_id"], "type": "Bot",
+             }},
+            {"event": "reviewed", "id": 3, "node_id": review["node_id"],
+             "commit_id": HEAD, "submitted_at": review["submitted_at"]},
+        ]
+        return harness, live, feedback, context, native
+
+    def test_equal_second_native_ready_then_request_publishes_one_review(self) -> None:
+        harness, live, feedback, context, native = self.equal_second_review_fixture()
+
+        def observe(arguments):
+            value = native if "/timeline?" in arguments[-1] else context
+            if "--slurp" in arguments:
+                value = [value]
+            return subprocess.CompletedProcess([], 0, json.dumps(value).encode(), b"")
+
+        with (
+            mock.patch.object(publication, "_run_gh", side_effect=observe),
+            mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=harness.current_reader),
+            mock.patch.object(publication, "advance_current_terminal", side_effect=harness.publisher),
+            mock.patch.object(publication, "_verify_historical_lifecycle_transition", side_effect=harness.historical_reader),
+            mock.patch.object(execution, "_read_live_github", return_value=live),
+            mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=feedback),
+            mock.patch.object(execution, "_production_signing_authorities", return_value=fixture_signing_authorities()),
+        ):
+            result = execution.publish_review_consumption(REPOSITORY, ISSUE)
+            self.assertEqual(result.lifecycle.state["unrestricted_review_count"], 1)
+            self.assertEqual(result.lifecycle.state["ready_transition_count"], 1)
+            self.assertEqual(result.lifecycle.state["remediation_cycle_count"], 0)
+            self.assertEqual(len(harness.publication_writes), 1)
+            self.assertEqual(harness.github_writes, [])
+            event = json.loads(harness.publication_writes[0])["transition_authorizations"][-1]
+            self.assertEqual(event["transition_kind"], "UNRESTRICTED_REVIEW_CONSUMED")
+            with self.assertRaises(execution.LifecycleExecutionError):
+                execution.publish_review_consumption(REPOSITORY, ISSUE)
+
+    def test_malformed_ready_chronology_rejects_before_publication(self) -> None:
+        for timestamp in ("invalid-ready-timestamp", "2026-02-30T00:00:00Z"):
+            with self.subTest(timestamp=timestamp):
+                harness, live, feedback, context, native = self.equal_second_review_fixture()
+                native[1]["created_at"] = timestamp
+
+                def observe(arguments):
+                    value = native if "/timeline?" in arguments[-1] else context
+                    return subprocess.CompletedProcess([], 0, json.dumps(value).encode(), b"")
+
+                with (
+                    mock.patch.object(publication, "_run_gh", side_effect=observe),
+                    mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=harness.current_reader),
+                    mock.patch.object(publication, "advance_current_terminal", side_effect=harness.publisher),
+                    mock.patch.object(execution, "_read_live_github", return_value=live),
+                    mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=feedback),
+                ):
+                    with self.assertRaises(execution.LifecycleExecutionError):
+                        execution.publish_review_consumption(REPOSITORY, ISSUE)
+                self.assertEqual(harness.publication_writes, [])
+                self.assertEqual(harness.github_writes, [])
+
+    def test_equal_second_native_security_matrix_rejects_before_publication(self) -> None:
+        cases = (
+            "request_before_ready", "request_then_ready", "missing_ready", "missing_request",
+            "duplicate_ready", "duplicate_request", "ambiguous_request", "substituted_request", "wrong_repository",
+            "wrong_pr", "wrong_head", "wrong_ready_head", "advanced_ready_head", "missing_head", "head_after_ready", "wrong_actor",
+            "wrong_actor_node", "wrong_reviewer", "wrong_reviewer_node", "feedback_disagreement",
+            "extra_draft", "draft_after_ready", "force_push", "removed_request",
+            "partial_page", "incomplete_pagination", "truncated_json", "context_drift", "ready_state_drift",
+            "current_drift", "observation_drift", "modified_timestamp",
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                harness, live, feedback, context, native = self.equal_second_review_fixture()
+                context_after = copy.deepcopy(context)
+                latest_native = None
+                if case == "request_before_ready":
+                    data = copy.deepcopy(feedback.feedback)
+                    data["provider_review_requests"][0]["created_at"] = "2026-09-30T23:59:59Z"
+                    feedback = replace(feedback, feedback=data)
+                elif case == "request_then_ready":
+                    native[1], native[2] = native[2], native[1]
+                elif case == "missing_ready":
+                    native.pop(1)
+                elif case == "missing_request":
+                    native.pop(2)
+                elif case == "duplicate_ready":
+                    native.append({**native[1], "id": 9, "node_id": "EXTRA_READY"})
+                elif case == "duplicate_request":
+                    native.append(copy.deepcopy(native[2]))
+                elif case == "ambiguous_request":
+                    native.append({**native[2], "id": 8, "node_id": "OTHER_REQUEST"})
+                elif case == "substituted_request":
+                    native[2]["node_id"] = "OTHER_REQUEST"
+                elif case == "wrong_repository":
+                    context["head"]["repo"]["full_name"] = "SecPal/other"
+                elif case == "wrong_pr":
+                    context["number"] = PR + 1
+                elif case == "wrong_head":
+                    context["head"]["sha"] = "c" * 40
+                elif case == "wrong_ready_head":
+                    native[0]["sha"] = "c" * 40
+                elif case == "advanced_ready_head":
+                    harness.chain.append("HEAD_ADVANCED", head="c" * 40)
+                    harness.current = replace(
+                        harness.current, lifecycle=harness.chain.verified(),
+                        serialized_lifecycle_evidence=harness.chain.raw(),
+                    )
+                    live = replace(live, head_sha="c" * 40)
+                    data = copy.deepcopy(feedback.feedback)
+                    data["reviews"][0]["commit_oid"] = "c" * 40
+                    feedback = replace(feedback, head_sha="c" * 40, feedback=data)
+                    context["head"]["sha"] = "c" * 40
+                    native[0]["sha"] = "c" * 40
+                elif case == "missing_head":
+                    native.pop(0)
+                elif case == "head_after_ready":
+                    native.append({"event": "committed", "node_id": "LATE_COMMIT", "sha": HEAD})
+                elif case == "wrong_actor":
+                    native[2]["actor"] = {"login": "other", "node_id": "OTHER", "id": 8}
+                elif case == "wrong_actor_node":
+                    native[2]["actor"] = {"login": "author", "node_id": "OTHER", "id": 8}
+                elif case == "wrong_reviewer":
+                    native[2]["requested_reviewer"]["login"] = "other"
+                elif case == "wrong_reviewer_node":
+                    native[2]["requested_reviewer"]["node_id"] = "OTHER_PROVIDER"
+                elif case == "feedback_disagreement":
+                    data = copy.deepcopy(feedback.feedback)
+                    data["provider_review_requests"][0]["node_id"] = "OTHER_REQUEST"
+                    feedback = replace(feedback, feedback=data)
+                elif case in {"extra_draft", "draft_after_ready", "force_push", "removed_request"}:
+                    event = {**native[1], "id": 9, "node_id": "EXTRA_EVENT"}
+                    event["actor"] = copy.deepcopy(event["actor"])
+                    event["event"] = {
+                        "extra_draft": "convert_to_draft", "draft_after_ready": "convert_to_draft",
+                        "force_push": "head_ref_force_pushed", "removed_request": "review_request_removed",
+                    }[case]
+                    if case == "extra_draft":
+                        event["created_at"] = "2026-09-30T23:59:59Z"
+                        native.insert(1, event)
+                    else:
+                        event.update(before_commit_id=HEAD, after_commit_id=HEAD)
+                        native.append(event)
+                elif case == "partial_page":
+                    native.extend({"event": "commented"} for _ in range(100 - len(native)))
+                elif case == "context_drift":
+                    context_after["head"]["sha"] = "c" * 40
+                elif case == "ready_state_drift":
+                    context["draft"] = True
+                elif case == "current_drift":
+                    harness.current_drift_at[2] = replace(harness.current, publication_oid="f" * 40)
+                elif case == "observation_drift":
+                    latest_native = copy.deepcopy(native)
+                    latest_native[2]["id"] = 8
+                elif case == "modified_timestamp":
+                    native[2]["created_at"] = "2026-10-01T00:00:01Z"
+
+                calls = {"context": 0, "timeline": 0}
+
+                def observe(arguments):
+                    if "/timeline?" in arguments[-1]:
+                        calls["timeline"] += 1
+                        if case == "truncated_json":
+                            return subprocess.CompletedProcess([], 0, b"[", b"")
+                        value = latest_native if latest_native is not None and calls["timeline"] >= 3 else native
+                    else:
+                        calls["context"] += 1
+                        value = context_after if case == "context_drift" and calls["context"] % 2 == 0 else context
+                    if "--slurp" in arguments:
+                        value = [value, value] if case == "incomplete_pagination" else [value]
+                    return subprocess.CompletedProcess([], 0, json.dumps(value).encode(), b"")
+
+                with (
+                    mock.patch.object(publication, "_run_gh", side_effect=observe),
+                    mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=harness.current_reader),
+                    mock.patch.object(publication, "advance_current_terminal", side_effect=harness.publisher),
+                    mock.patch.object(execution, "_read_live_github", return_value=live),
+                    mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=feedback),
+                    mock.patch.object(execution, "_production_signing_authorities", return_value=fixture_signing_authorities()),
+                ):
+                    with self.assertRaises((execution.LifecycleExecutionError, publication.LifecyclePublicationError)):
+                        execution.publish_review_consumption(REPOSITORY, ISSUE)
+                self.assertEqual(harness.publication_writes, [])
+                self.assertEqual(harness.github_writes, [])
+
+    def test_equal_second_scope_rejects_caller_order_and_altered_observation(self) -> None:
+        harness, live, feedback, context, native = self.equal_second_review_fixture()
+        timeline = publication._normalize_pull_request_lifecycle_timeline(native)
+        facts = publication._normalize_review_request_chronology(context, context, native)
+        with mock.patch.object(
+            publication, "_run_gh", side_effect=lambda args: subprocess.CompletedProcess(
+                [], 0, json.dumps([native] if "--slurp" in args else context).encode(), b""
+            ),
+        ):
+            observed = publication._observe_review_request_chronology(REPOSITORY, PR)
+        altered = replace(observed, facts=copy.deepcopy(observed.facts))
+        altered.facts["events"][2]["created_at"] = "2026-10-01T00:00:01Z"
+        for proof in (None, {"ready_precedes_request": True},
+                      publication.ObservedReviewRequestChronology(facts), altered):
+            with self.subTest(proof=type(proof).__name__), self.assertRaises(execution.LifecycleExecutionError):
+                execution._review_consumption_scope(
+                    harness.current, live, feedback, timeline, native_chronology=proof
+                )
 
     def test_review_publication_reconciles_ambiguous_remote_success(self) -> None:
         harness = self.ready_harness()
