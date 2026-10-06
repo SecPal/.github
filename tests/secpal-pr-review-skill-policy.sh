@@ -42,14 +42,14 @@ fail() {
 
 # Complete Validation success belongs to canonical receipt publication.
 for validation_doc in "$SKILL" "$CONTRACT" "$WORKFLOW_DOC" "$SCRIPT_README"; do
-  rg -q 'REGISTERED COMMANDS PASS' "$validation_doc" \
+  grep -q 'REGISTERED COMMANDS PASS' "$validation_doc" \
     || fail 'technical registered-command classification is missing'
-  rg -q 'COMPLETE REGISTERED VALIDATION PASS' "$validation_doc" \
+  grep -q 'COMPLETE REGISTERED VALIDATION PASS' "$validation_doc" \
     || fail 'receipt-owning completion classification is missing'
-  rg -q 'SUCCESS_WITH_RECEIPT' "$validation_doc" \
+  grep -q 'SUCCESS_WITH_RECEIPT' "$validation_doc" \
     || fail 'unchanged-tree rule is not bound to receipt-bearing success'
 done
-rg -q 'durable publication and authentication' "$WORKFLOW_DOC" \
+grep -q 'durable publication and authentication' "$WORKFLOW_DOC" \
   || fail 'canonical durable-publication boundary is missing'
 
 assert_polyscope_template_baseline() {

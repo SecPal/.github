@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import types
+import weakref
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote
@@ -511,41 +512,74 @@ class RegistryError(ValueError):
     """The production registry is invalid or does not support a repository."""
 
 
-class RegisteredValidationResult:
-    """Secret-safe outcome of one complete registered-validation run."""
+_REGISTERED_EXECUTION_RESULTS: Any = weakref.WeakKeyDictionary()
 
-    def __init__(
-        self,
-        failure_index: int | None = None,
-        failure_purpose: str | None = None,
-        failure_category: str | None = None,
-        *,
-        command_set: list[dict[str, Any]] | None = None,
-    ) -> None:
-        self.command_set = copy.deepcopy(command_set)
-        self.failure_index = failure_index
-        self.failure_purpose = (
-            evidence.redact_diagnostic(failure_purpose)
-            if failure_purpose is not None
-            else None
-        )
-        self.failure_category = failure_category
+
+class RegisteredValidationResult:
+    """Verifier-owned process-local execution truth; never completion evidence."""
+
+    __slots__ = ("__weakref__",)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        raise TypeError("registered execution results are runner-owned")
+
+    def _facts(self) -> dict[str, Any]:
+        if type(self) is not RegisteredValidationResult or self not in _REGISTERED_EXECUTION_RESULTS:
+            raise fast_path.SecurityBlocker("unowned registered command result")
+        return _REGISTERED_EXECUTION_RESULTS[self]
+
+    @property
+    def command_set(self) -> list[dict[str, Any]] | None:
+        return copy.deepcopy(self._facts()["command_set"])
+
+    @property
+    def execution_root(self) -> Path | None:
+        return self._facts()["execution_root"]
 
     def __bool__(self) -> bool:
-        return self.failure_category is None
+        return self._facts()["failure_category"] is None
+
+    def execution_report(self) -> dict[str, str]:
+        return {
+            "REGISTERED_COMMAND_EXECUTION": "PASS" if self else "FAILED",
+            "COMPLETE_REGISTERED_VALIDATION": "INCOMPLETE" if self else "FAILED",
+            "CANONICAL_RECEIPT": "ABSENT",
+            "COMMIT_BINDING_AUTHORITY": "ABSENT",
+        }
 
     def failure_report(self) -> dict[str, Any] | None:
-        if (
-            self.failure_index is None
-            or self.failure_purpose is None
-            or self.failure_category is None
-        ):
+        facts = self._facts()
+        if any(facts[key] is None for key in (
+            "failure_index", "failure_purpose", "failure_category"
+        )):
             return None
         return {
-            "index": self.failure_index,
-            "purpose": self.failure_purpose,
-            "category": self.failure_category,
+            "index": facts["failure_index"],
+            "purpose": facts["failure_purpose"],
+            "category": facts["failure_category"],
         }
+
+
+def _registered_execution_result(
+    failure_index: int | None = None,
+    failure_purpose: str | None = None,
+    failure_category: str | None = None,
+    *,
+    command_set: list[dict[str, Any]] | None = None,
+    execution_root: Path | None = None,
+) -> RegisteredValidationResult:
+    result = object.__new__(RegisteredValidationResult)
+    _REGISTERED_EXECUTION_RESULTS[result] = {
+        "command_set": copy.deepcopy(command_set),
+        "execution_root": execution_root,
+        "failure_index": failure_index,
+        "failure_purpose": (
+            evidence.redact_diagnostic(failure_purpose)
+            if failure_purpose is not None else None
+        ),
+        "failure_category": failure_category,
+    }
+    return result
 
 
 class RegisteredValidationFailure(fast_path.SecurityBlocker):
@@ -1429,7 +1463,7 @@ def _complete_validation_source_state(
 def _preparation_failure(category: str) -> RegisteredValidationResult:
     """Return one secret-safe dependency-preparation failure identity."""
 
-    return RegisteredValidationResult(
+    return _registered_execution_result(
         0,
         "Prepare locked Node dependencies",
         category,
@@ -1485,7 +1519,7 @@ def _prepare_complete_validation_dependencies(
 ) -> RegisteredValidationResult:
     preparation = repository.get("complete_validation_preparation")
     if preparation is None:
-        return RegisteredValidationResult()
+        return _registered_execution_result()
     if (
         not isinstance(preparation, dict)
         or preparation.get("kind") != "NPM_CI_LOCKED"
@@ -1520,7 +1554,7 @@ def _prepare_complete_validation_dependencies(
                 return _preparation_failure(
                     "dependency installation mutated tracked source"
                 )
-            return RegisteredValidationResult()
+            return _registered_execution_result()
         executable = _validation_executable(
             {
                 "argv": ["npm", "ci", "--ignore-scripts"],
@@ -1571,7 +1605,7 @@ def _prepare_complete_validation_dependencies(
         return _preparation_failure("dependency preparation authority invalid")
     if source_after != source_before:
         return _preparation_failure("dependency installation mutated tracked source")
-    return RegisteredValidationResult()
+    return _registered_execution_result()
 
 
 def _governance_only_candidate(
@@ -1615,11 +1649,11 @@ def _run_registered_validations(
     governance_base: str | None = None,
     governance_tree: str | None = None,
 ) -> RegisteredValidationResult:
-    """Run the complete registered scope policy without caller-selected skipping."""
+    """Execute all registered commands; only the owning transaction can complete."""
 
     repository_root = repository_root.resolve()
     if not repository_root.is_dir():
-        return RegisteredValidationResult(
+        return _registered_execution_result(
             failure_category="validation root unavailable"
         )
     governance_only = _governance_only_candidate(
@@ -1634,7 +1668,7 @@ def _run_registered_validations(
             prefix="secpal-pr-review-validation-"
         )
     except OSError:
-        return RegisteredValidationResult(
+        return _registered_execution_result(
             failure_category="validation environment unavailable"
         )
     with validation_home:
@@ -1676,7 +1710,7 @@ def _run_registered_validations(
                     npm_config.write_text("", encoding="utf-8")
                     npm_config.chmod(0o600)
             except OSError:
-                return RegisteredValidationResult(
+                return _registered_execution_result(
                     failure_category="validation environment unavailable"
                 )
             environment.update(
@@ -1708,7 +1742,7 @@ def _run_registered_validations(
                     repository_root / command["working_directory"]
                 ).resolve()
             except (OSError, RuntimeError):
-                return RegisteredValidationResult(
+                return _registered_execution_result(
                     index,
                     command["purpose"],
                     "unavailable working directory",
@@ -1717,13 +1751,13 @@ def _run_registered_validations(
                 working_directory != repository_root
                 and repository_root not in working_directory.parents
             ):
-                return RegisteredValidationResult(
+                return _registered_execution_result(
                     index,
                     command["purpose"],
                     "unsafe working directory",
                 )
             if not working_directory.is_dir():
-                return RegisteredValidationResult(
+                return _registered_execution_result(
                     index,
                     command["purpose"],
                     "unavailable working directory",
@@ -1735,7 +1769,7 @@ def _run_registered_validations(
                     REPOSITORY_ROOT if governance_only else repository_root,
                 )
             except RegistryError:
-                return RegisteredValidationResult(
+                return _registered_execution_result(
                     index,
                     command["purpose"],
                     "unavailable executable",
@@ -1754,13 +1788,13 @@ def _run_registered_validations(
                     timeout=LOCAL_VALIDATION_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired:
-                return RegisteredValidationResult(
+                return _registered_execution_result(
                     index,
                     command["purpose"],
                     "timeout",
                 )
             except OSError:
-                return RegisteredValidationResult(
+                return _registered_execution_result(
                     index,
                     command["purpose"],
                     "execution error",
@@ -1769,12 +1803,14 @@ def _run_registered_validations(
                 if integrity_verifier is not None:
                     integrity_verifier()
             if completed.returncode != 0:
-                return RegisteredValidationResult(
+                return _registered_execution_result(
                     index,
                     command["purpose"],
                     "non-zero exit",
                 )
-    return RegisteredValidationResult(command_set=list(commands))
+    return _registered_execution_result(
+        command_set=list(commands), execution_root=repository_root,
+    )
 
 
 FAST_PATH_PREFLIGHT_QUERY = r"""
@@ -4975,7 +5011,6 @@ def build_resolution_evidence(
     final_snapshot: dict[str, Any],
     configuration: dict[str, Any],
     command_runner: Any | None = None,
-    validation_runner: Any | None = None,
     verified_mutation_identities: set[str] | None = None,
 ) -> dict[str, bool]:
     empty = {
@@ -5039,32 +5074,9 @@ def build_resolution_evidence(
         ),
         "registered_validation_verified": False,
     }
-    if all(result[key] for key in result if key != "registered_validation_verified"):
-        try:
-            if registered is None:
-                raise RegistryError("repository has no validated registry entry")
-            runner = validation_runner or _run_registered_validations
-            validation_result = runner(
-                registered, Path(local["repository_root"])
-            )
-            result["registered_validation_verified"] = (
-                bool(validation_result)
-                if isinstance(validation_result, RegisteredValidationResult)
-                else validation_result is True
-            )
-        except (OSError, RegistryError):
-            result["registered_validation_verified"] = False
-    if result["registered_validation_verified"]:
-        try:
-            final_local = evidence.verify_local_against_snapshot(
-                final_snapshot,
-                configuration,
-                local_runner,
-                plan["expected_head_sha"],
-            )
-            result["local_verified"] = not final_local["blockers"]
-        except (evidence.BlockedError, evidence.ContractError):
-            result["local_verified"] = False
+    # Legacy forensic snapshots and raw PASS logs cannot authenticate a receipt
+    # bound to a signed commit. Use attest-validation and the receipt-bound
+    # resolve-batch/simple-resolver path for resolution authority.
     return result
 
 
@@ -9144,6 +9156,10 @@ def _resolution_eligibility_digest(
 
 
 def _command_attest_validation(arguments: argparse.Namespace) -> int:
+    if not arguments.output:
+        raise fast_path.RecoverableLocalError(
+            "attest-validation requires a durable --output path"
+        )
     if not OID_PATTERN.fullmatch(arguments.expected_head):
         raise fast_path.RecoverableLocalError("--expected-head must be a complete commit OID")
     repository_root = Path(arguments.repo_root).resolve(strict=True)
@@ -9911,6 +9927,14 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 "validated_tree_sha": tree,
             },
         )
+    execution_root = repository_root
+    expected_commands = list(
+        _governance_validation_commands()
+        if not any((pre_enrollment_evidence, integration_evidence,
+                    exceptional_recovery, exceptional_continuation))
+        and _governance_only_candidate(entry, repository_root, reviewed.base_sha, tree)
+        else binding["validation"] if binding is not None else ()
+    )
     if collision_validation:
         try:
             collision_helper = _load_collision_validation_helper()
@@ -9940,6 +9964,8 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 manual_gate_evidence = _load_fast_manual_gate_evidence(
                     getattr(arguments, "manual_gate_evidence", None), binding
                 )
+                execution_root = execution.execution_root.resolve()
+                expected_commands = list(_complete_validation_commands(entry))
                 validation_result = _run_registered_validations(
                     entry,
                     execution.execution_root,
@@ -9965,19 +9991,37 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         raise fast_path.SecurityBlocker(
             "complete validation authority is unavailable"
         )
+    if type(validation_result) is not RegisteredValidationResult:
+        raise fast_path.SecurityBlocker(
+            "complete registered validation failed: unowned registered command result"
+        )
     if not validation_result:
-        if (
-            isinstance(validation_result, RegisteredValidationResult)
-            and validation_result.failure_report() is not None
-        ):
+        if validation_result.failure_report() is not None:
             raise RegisteredValidationFailure(validation_result)
         raise fast_path.SecurityBlocker("complete registered validation failed")
+    if (
+        validation_result.execution_root != execution_root
+        or validation_result.command_set != expected_commands
+    ):
+        raise fast_path.SecurityBlocker("unowned or mismatched registered command execution")
     head_after, status_after = _attestation_local_state(repository_root, arguments.repo)
     tree_after = _staged_tree(repository_root, status_after)
     if head_after != head or tree_after != tree or status_after != status:
         raise fast_path.SecurityBlocker(
             "local head, staged tree, or worktree changed during complete validation"
         )
+    if not collision_validation:
+        binding_after = _fast_registry_binding(select_repository(
+            load_registry(arguments.registry), arguments.repo,
+        ))
+        if binding_after != binding:
+            raise fast_path.SecurityBlocker("registry changed during complete validation")
+    if _load_fast_manual_gate_evidence(
+        getattr(arguments, "manual_gate_evidence", None), binding,
+    ) != manual_gate_evidence:
+        raise fast_path.SecurityBlocker("manual gate evidence changed during complete validation")
+    if _load_fast_state(arguments.reviewed_state).to_dict() != reviewed.to_dict():
+        raise fast_path.SecurityBlocker("reviewed evidence changed during complete validation")
     if eligibility_evidence and _resolution_eligibility_digest(
         eligibility_evidence,
         arguments.repo,
@@ -10119,12 +10163,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             binding=binding,
             reviewed=reviewed,
             manual_gate_evidence=manual_gate_evidence,
-            command_set=(
-                validation_result.command_set
-                if isinstance(validation_result, RegisteredValidationResult)
-                and validation_result.command_set is not None
-                else binding["validation"]
-            ),
+            command_set=expected_commands,
             eligibility_evidence_digest=eligibility_evidence_digest,
             integration_evidence_digest=(
                 fast_path.digest_json(integration_evidence)
@@ -10143,7 +10182,41 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             ),
         )
     )
-    _write_fast_report(arguments.output, receipt)
+    invalidated = {
+        "schema_version": "1.0", "status": "VALIDATION_RECEIPT_INVALIDATED",
+        "head_sha": head, "validated_tree_sha": tree,
+    }
+    try:
+        _write_fast_report(arguments.output, receipt)
+        published = _read_json(arguments.output, "published validation receipt")
+        if published != receipt:
+            raise fast_path.SecurityBlocker("published validation receipt failed authentication")
+        if pre_enrollment_evidence is None:
+            # Reuse the existing receipt authenticator used by bind-commit.
+            # Its pure assembly is discarded; final attestation still requires
+            # the later signed commit and is issued only by --bind-commit.
+            fast_path._create_validation_attestation(
+                repository=arguments.repo, head_sha=head, receipt_head_sha=head,
+                registry=binding, command_set=expected_commands,
+                successful_result=True, reviewed_state=reviewed,
+                validation_receipt=published,
+            )
+        publication_head, publication_status = _attestation_local_state(
+            repository_root, arguments.repo,
+        )
+        if (
+            (publication_head, publication_status) != (head, status)
+            or _staged_tree(repository_root, publication_status) != tree
+        ):
+            raise fast_path.SecurityBlocker("source changed during receipt publication")
+    except (OSError, ValueError, fast_path.SecurityBlocker, fast_path.RecoverableLocalError):
+        # A replace followed by directory-fsync/readback failure must not leave
+        # a consumable success document. Retain the original publication error.
+        try:
+            _write_fast_report(arguments.output, invalidated)
+        except OSError:
+            Path(arguments.output).unlink(missing_ok=True)
+        raise
     return 0
 
 

@@ -511,6 +511,7 @@ ALLOWED_IMPORT_ROOTS = {
     "tempfile",
     "types",
     "typing",
+    "weakref",
     "urllib",
 }
 ALLOWED_IMPORTS = {
@@ -549,6 +550,7 @@ ALLOWED_IMPORTS = {
         "import sys",
         "import tempfile",
         "import types",
+        "import weakref",
         "from pathlib import Path",
         "from typing import Any, Iterable",
         "from urllib.parse import quote",
@@ -738,6 +740,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         },
         "tempfile": {"TemporaryDirectory"},
         "types": {"ModuleType"},
+        "weakref": {"WeakKeyDictionary"},
     },
     "fast_path.py": {
         "importlib": {"util"},
@@ -823,6 +826,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "authenticate_integration_commit",
             "canonical_json_bytes",
             "create_validation_attestation",
+            "_create_validation_attestation",
             "create_validation_receipt",
             "governance_tree_delta_allowed",
             "governance_validation_commands",
