@@ -1223,8 +1223,8 @@ class FrontendBracesDispositionTests(unittest.TestCase):
         )
 
     def test_exact_selector_retains_complete_finding_and_exception_metadata(self) -> None:
-        self.assertEqual(len(self.policy["exceptions"]), 1)
-        exception = self.policy["exceptions"][0]
+        exception = next(entry for entry in self.policy["exceptions"]
+                         if entry["id"] == "frontend-braces-cve-2026-93687-not-affected-20261005")
         self.assertEqual(
             {key: value for key, value in exception.items() if key != "rationale"},
             {
@@ -1248,6 +1248,10 @@ class FrontendBracesDispositionTests(unittest.TestCase):
         self.assertEqual(before["summary"], {
             "total": 1, "actionable": 1, "review_required": 0, "excepted": 0,
         })
+        android_only = copy.deepcopy(self.policy)
+        android_only["exceptions"] = [entry for entry in android_only["exceptions"]
+                                      if entry["repository"] == "SecPal/android"]
+        self.assertEqual(self.module.admit(self.observation, android_only)["gate_state"], "ACTIONABLE")
         self.assertEqual(result["gate_state"], "CLEAN")
         self.assertEqual(result["summary"], {
             "total": 1, "actionable": 0, "review_required": 0, "excepted": 1,
@@ -1342,6 +1346,143 @@ class FrontendBracesDispositionTests(unittest.TestCase):
 
     def test_exception_cannot_override_stale_database(self) -> None:
         self.observation["completed_at"] = "2026-10-06T10:00:00Z"
+        self.observation["database"]["status"] = "STALE"
+        result = self.module.admit(self.observation, self.policy)
+        self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+        self.assertEqual(result["operation"]["failure_code"], "DATABASE_FAILURE")
+        self.assertEqual(result["summary"]["excepted"], 1)
+
+
+class AndroidCountryDispositionTests(unittest.TestCase):
+    """Keep the reviewed reference-data collision visible and narrowly excepted."""
+
+    def setUp(self) -> None:
+        self.module = load_module()
+        self.policy = json.loads(POLICY.read_text(encoding="utf-8"))
+        self.exception_id = "android-country-codes-sendgrid-false-positive-20261006"
+        self.path = "android/app/src/main/assets/public/assets/EmployeeAddressFields-D642volM.js"
+        native = native_result()
+        native["Results"] = [native["Results"][1]]
+        native["Results"][0]["Target"] = self.path
+        native["Results"][0]["Secrets"][0].update(
+            RuleID="sendgrid-api-token", Severity="MEDIUM", StartLine=1, EndLine=1,
+        )
+        self.observation = self.module.normalize_native(
+            native, repository="SecPal/android", commit="5d8a5bf357a6315706b25d6b8285a93d2edbad2d",
+            workspace=".",
+            scanner={
+                "name": "trivy", "version": "0.74.0",
+                "immutable_id": "sha256:2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a",
+                "configuration_sha256": self.module.configuration_identity(),
+            },
+            database={
+                "status": "FRESH", "identity": "sha256:" + "b" * 64,
+                "updated_at": "2026-10-06T10:00:00Z", "next_update": "2026-10-07T19:11:49.518354706Z",
+                "downloaded_at": "2026-10-06T22:40:00Z",
+            },
+            completed_at="2026-10-06T22:44:34.385939Z",
+        )
+
+    def exception_index(self, policy: dict) -> int:
+        return next(i for i, entry in enumerate(policy["exceptions"]) if entry["id"] == self.exception_id)
+
+    def test_exact_selector_retains_secret_safe_finding_and_exception_metadata(self) -> None:
+        self.assertEqual(len(self.policy["exceptions"]), 2)
+        exception = self.policy["exceptions"][self.exception_index(self.policy)]
+        self.assertEqual({key: value for key, value in exception.items() if key != "rationale"}, {
+            "id": self.exception_id, "repository": "SecPal/android", "class": "SECRET",
+            "rule_id": "sendgrid-api-token", "path": self.path, "disposition": "IGNORED",
+            "expires_at": "2026-10-13T00:00:00Z",
+        })
+        self.assertTrue(exception["rationale"].strip())
+        frontend_only = copy.deepcopy(self.policy)
+        del frontend_only["exceptions"][self.exception_index(frontend_only)]
+        before = self.module.admit(self.observation, frontend_only)
+        result = self.module.admit(self.observation, self.policy)
+        import jsonschema
+        jsonschema.validate(result, json.loads(SCHEMA.read_text(encoding="utf-8")))
+        self.assertEqual(before["gate_state"], "ACTIONABLE")
+        self.assertEqual(before["summary"], {"total": 1, "actionable": 1, "review_required": 0, "excepted": 0})
+        self.assertEqual(result["gate_state"], "CLEAN")
+        self.assertEqual(result["summary"], {"total": 1, "actionable": 0, "review_required": 0, "excepted": 1})
+        finding = result["findings"][0]
+        self.assertEqual({key: value for key, value in finding.items() if key != "exception"}, before["findings"][0])
+        self.assertEqual(finding["fingerprint"], "sha256:765aaec01a15d9ec212909f7188ba404ed53c1718e22e34108fa1fb07237d8e8")
+        self.assertEqual(set(finding), {"class", "rule_id", "severity", "path", "location", "fingerprint", "exception"})
+        self.assertEqual(finding["location"], {"start_line": 1, "end_line": 1})
+        self.assertEqual(finding["exception"], {key: exception[key] for key in ("id", "disposition", "expires_at")})
+        self.assertNotIn(SYNTHETIC_SECRET, json.dumps(result))
+
+    def test_nonmatching_selectors_remain_actionable(self) -> None:
+        for field, value in (
+            ("repository", "SecPal/frontend"), ("rule_id", "other-secret-rule"),
+            ("path", self.path.replace("D642volM", "changed")), ("class", "VULNERABILITY"),
+        ):
+            with self.subTest(field=field):
+                other = copy.deepcopy(self.observation)
+                target = other["subject"] if field == "repository" else other["findings"][0]
+                target[field] = value
+                if field == "class":
+                    target["severity"] = "HIGH"
+                result = self.module.admit(other, self.policy)
+                self.assertEqual(result["gate_state"], "ACTIONABLE")
+                self.assertEqual(result["summary"]["excepted"], 0)
+                self.assertNotIn("exception", result["findings"][0])
+
+    def test_unrelated_secret_still_blocks(self) -> None:
+        other = copy.deepcopy(self.observation["findings"][0])
+        other.update(path="config/unrelated.env", rule_id="other-secret-rule", fingerprint="sha256:" + "d" * 64)
+        self.observation["findings"].append(other)
+        result = self.module.admit(self.observation, self.policy)
+        self.assertEqual(result["gate_state"], "ACTIONABLE")
+        self.assertEqual(result["summary"], {"total": 2, "actionable": 1, "review_required": 0, "excepted": 1})
+        self.assertEqual(result["findings"][1], other)
+
+    def test_expired_exception_fails_closed_at_and_after_boundary(self) -> None:
+        for expiry in (self.observation["completed_at"], "2026-10-06T22:44:33Z"):
+            with self.subTest(expiry=expiry):
+                policy = copy.deepcopy(self.policy)
+                policy["exceptions"][self.exception_index(policy)]["expires_at"] = expiry
+                with self.assertRaisesRegex(self.module.ContractError, "expired"):
+                    self.module.admit(self.observation, policy)
+
+    def test_duplicate_selector_and_id_are_rejected(self) -> None:
+        for duplicate_id in (False, True):
+            with self.subTest(duplicate_id=duplicate_id):
+                policy = copy.deepcopy(self.policy)
+                duplicate = copy.deepcopy(policy["exceptions"][self.exception_index(policy)])
+                if not duplicate_id:
+                    duplicate["id"] += "-duplicate"
+                policy["exceptions"].append(duplicate)
+                with self.assertRaisesRegex(self.module.ContractError, "unique"):
+                    self.module.admit(self.observation, policy)
+
+    def test_wildcard_text_is_literal_and_cannot_broaden_matching(self) -> None:
+        for field, value in (("rule_id", "*"), ("path", "**/*.js")):
+            with self.subTest(field=field):
+                policy = copy.deepcopy(self.policy)
+                policy["exceptions"][self.exception_index(policy)][field] = value
+                result = self.module.admit(self.observation, policy)
+                self.assertEqual(result["gate_state"], "ACTIONABLE")
+                self.assertEqual(result["summary"]["excepted"], 0)
+
+    def test_malformed_entry_and_not_affected_are_rejected(self) -> None:
+        for field, value in (
+            ("repository", "SecPal/*"), ("class", "*"),
+            ("disposition", "NOT_AFFECTED"), ("expires_at", "not-a-date"),
+            ("rationale", ""), ("unexpected", True),
+        ):
+            with self.subTest(field=field):
+                policy = copy.deepcopy(self.policy)
+                policy["exceptions"][self.exception_index(policy)][field] = value
+                with self.assertRaises(self.module.ContractError):
+                    self.module.admit(self.observation, policy)
+        policy = copy.deepcopy(self.policy)
+        del policy["exceptions"][self.exception_index(policy)]["path"]
+        with self.assertRaisesRegex(self.module.ContractError, "malformed"):
+            self.module.admit(self.observation, policy)
+
+    def test_exception_cannot_override_stale_database(self) -> None:
         self.observation["database"]["status"] = "STALE"
         result = self.module.admit(self.observation, self.policy)
         self.assertEqual(result["gate_state"], "UNKNOWN_STALE")

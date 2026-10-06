@@ -35,6 +35,16 @@
       "disposition": "NOT_AFFECTED",
       "expires_at": "2026-10-19T00:00:00Z",
       "rationale": "Reviewed frontend e5322a16ed71c08f0aa07f882e059e3536ff1975: braces 3.0.3 is dev-only through Lingui/micromatch and static-copy/chokidar. Lingui uses static repository patterns with filenames as data through picomatch; static-copy watches literal repository targets, never request paths or filenames as brace patterns. No untrusted brace-pattern input reaches braces; vulnerable executable code is absent from the Nginx runtime (retained SBOM metadata is not code). Before renewal, recheck published fixes, dependency topology, reachability and runtime contents; prefer dependency remediation."
+    },
+    {
+      "id": "android-country-codes-sendgrid-false-positive-20261006",
+      "repository": "SecPal/android",
+      "class": "SECRET",
+      "rule_id": "sendgrid-api-token",
+      "path": "android/app/src/main/assets/public/assets/EmployeeAddressFields-D642volM.js",
+      "disposition": "IGNORED",
+      "expires_at": "2026-10-13T00:00:00Z",
+      "rationale": "Reviewed Android 5d8a5bf357a6315706b25d6b8285a93d2edbad2d asset blob f0bc32de9c027ed0bd3b7842642e5d137510e65c against pinned frontend 8c950220d8ae582a536135eed75c8ecb2a4858c8 country-module blob b3e8f72d92d280ffc1f0f3a569ea1c33cc23ccca: the match lies wholly within a static template of the same 198 literal country codes in the same order. The module has no imports or environment, network, storage or credential inputs; its remaining operations localize and sort display names. A hermetic reference-data-only replay reproduces the rule without signing, publication or runtime credentials. Revalidate source lineage and the content-hashed path before renewal; retire when the asset or pattern no longer matches."
     }
   ],
   "vex": {
