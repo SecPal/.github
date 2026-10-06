@@ -1057,6 +1057,16 @@ CURRENT before writing a successor. Historical signed chains that consumed
 review before Ready remain independently verifiable, but cannot be newly issued
 or published in that order.
 
+Ordinary review-request chronology is admitted by
+`lifecycle_execution._admit_review_request_chronology`. Strictly later requests
+retain timestamp-based admission. Equal-second requests require a complete
+maintained native timeline, the exact Ready and request identities, matching
+Stable Feedback actors and reviewer, and the current Ready head before both
+events in native sequence. Missing, ambiguous, substituted or drifting
+observations fail closed; timestamp equality and caller order assertions grant
+no authority. The publisher reobserves this chronology before its existing
+`UNRESTRICTED_REVIEW_CONSUMED` publication and compares its canonical digest.
+
 The ancillary `SECPAL_PROVIDER_DISPATCH_CLAIM` reserves one exact replacement
 provider fallback dispatch before its external comment write. It is signed by
 the existing publication role, uses the same protected branch and CAS, and

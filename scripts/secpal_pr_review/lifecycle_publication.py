@@ -187,6 +187,23 @@ class GitHubPullRequestTimelineEvent:
     commit_id: str | None = None
 
 
+_REVIEW_REQUEST_OBSERVATION_TOKEN = object()
+
+
+@dataclass(frozen=True)
+class _ReviewRequestObservationSeal:
+    digest: str
+    token: object
+
+
+@dataclass(frozen=True)
+class ObservedReviewRequestChronology:
+    """Ephemeral native observation, never caller-authored lifecycle evidence."""
+
+    facts: dict[str, Any]
+    _seal: _ReviewRequestObservationSeal | None = None
+
+
 _READY_CORRECTION_CONVERSION_SEAL = object()
 
 
@@ -560,11 +577,22 @@ def _observe_pull_request_lifecycle_timeline(
 ) -> tuple[GitHubPullRequestTimelineEvent, ...]:
     """Read the complete native Ready/Draft timeline without trusting caller data."""
 
+    return _normalize_pull_request_lifecycle_timeline(
+        _read_pull_request_native_timeline(repository, pull_request)
+    )
+
+
+def _read_pull_request_native_timeline(
+    repository: str, pull_request: int, *, complete_pages: bool = False,
+) -> list[dict[str, Any]]:
+    """Observe the maintained complete, bounded native REST sequence once."""
+
     result = _run_gh(
         [
             "api", "--hostname", "github.com",
             "-H", "Accept: application/vnd.github+json",
             "-H", "X-GitHub-Api-Version: 2026-03-10",
+            *(["--paginate", "--slurp"] if complete_pages else []),
             f"repos/{repository}/issues/{pull_request}/timeline?per_page=100",
         ]
     )
@@ -572,12 +600,29 @@ def _observe_pull_request_lifecycle_timeline(
         raise LifecyclePublicationError("GitHub lifecycle timeline is unavailable")
     try:
         items = json.loads(result.stdout, object_pairs_hook=_reject_duplicate_pairs)
+        if complete_pages:
+            # gh must finish native Link pagination successfully. The established
+            # closed bound admits exactly one page with fewer than 100 events.
+            if not isinstance(items, list) or len(items) != 1:
+                raise LifecyclePublicationError("native review timeline pagination is incomplete or exceeds its bound")
+            items = items[0]
         if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
             raise LifecyclePublicationError("GitHub lifecycle timeline is malformed")
         if len(items) >= 100:
             raise LifecyclePublicationError(
                 "GitHub lifecycle timeline exceeds the closed 99-event bound"
             )
+        return items
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LifecyclePublicationError("GitHub lifecycle timeline is malformed") from exc
+
+
+def _normalize_pull_request_lifecycle_timeline(
+    items: list[dict[str, Any]],
+) -> tuple[GitHubPullRequestTimelineEvent, ...]:
+    """Pure normalization of the established Ready/Draft representation."""
+
+    try:
         projected: list[GitHubPullRequestTimelineEvent] = []
         names = {
             "ready_for_review": "READY_FOR_REVIEW",
@@ -627,6 +672,92 @@ def _observe_pull_request_lifecycle_timeline(
     ) as exc:
         raise LifecyclePublicationError("GitHub lifecycle timeline is malformed") from exc
     return tuple(projected)
+
+
+def _normalize_review_request_chronology(
+    before: dict[str, Any], after: dict[str, Any], items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Pure normalization retaining native order and immutable request actors."""
+
+    def actor(value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            raise LifecyclePublicationError("native chronology actor is malformed")
+        return {
+            "login": authority._require_github_login(value.get("login"), "native actor"),
+            "node_id": authority._require_identity(value.get("node_id"), "native actor node"),
+            "database_id": authority._require_positive_int(value.get("id"), "native actor ID"),
+        }
+
+    events = []
+    try:
+        for item in items:
+            kind = item.get("event")
+            if kind not in {
+                "committed", "ready_for_review", "convert_to_draft", "review_requested",
+                "review_request_removed", "head_ref_force_pushed", "head_ref_deleted",
+                "head_ref_restored",
+            }:
+                continue
+            event = {
+                "kind": kind,
+                "node_id": authority._require_identity(item.get("node_id"), "native event node"),
+            }
+            if kind == "committed":
+                event["head_sha"] = authority._require_oid(item.get("sha"), "native commit")
+            else:
+                event.update({
+                    "database_id": authority._require_positive_int(item.get("id"), "native event ID"),
+                    "actor": actor(item.get("actor")),
+                    "created_at": fast_path._require_github_timestamp(item.get("created_at"), "native event timestamp"),
+                })
+            if kind == "review_requested":
+                reviewer = item.get("requested_reviewer")
+                event["requested_reviewer"] = actor(reviewer)
+                event["reviewer_type"] = reviewer.get("type")
+                # REST names this immutable provider Bot "Copilot", while the
+                # maintained GraphQL/Stable Feedback projection uses its app slug.
+                provider = fast_path.COPILOT_REVIEW_PROVIDER
+                if (
+                    reviewer.get("login") == "Copilot" and reviewer.get("type") == "Bot"
+                    and reviewer.get("node_id") == provider["node_id"]
+                    and reviewer.get("id") == provider["database_id"]
+                ):
+                    event["requested_reviewer"] = dict(provider)
+            events.append(event)
+        return {
+            "before": copy.deepcopy(before), "after": copy.deepcopy(after),
+            "events": events,
+            "lifecycle_events": [asdict(event) for event in _normalize_pull_request_lifecycle_timeline(items)],
+        }
+    except (TypeError, authority.LifecycleAuthorityError, SecurityBlocker) as exc:
+        raise LifecyclePublicationError("native review chronology is malformed") from exc
+
+
+def _observe_review_request_chronology(
+    repository: str, pull_request: int,
+) -> ObservedReviewRequestChronology:
+    """Reuse complete native observation between two independently read PR contexts."""
+
+    before = _observe_pre_enrollment_pull_request(repository, pull_request)
+    items = _read_pull_request_native_timeline(repository, pull_request, complete_pages=True)
+    after = _observe_pre_enrollment_pull_request(repository, pull_request)
+    facts = _normalize_review_request_chronology(before, after, items)
+    return ObservedReviewRequestChronology(
+        facts, _ReviewRequestObservationSeal(digest_json(facts), _REVIEW_REQUEST_OBSERVATION_TOKEN)
+    )
+
+
+def _require_observed_review_request_chronology(value: Any) -> dict[str, Any]:
+    """Reject caller assertions and altered observations without admitting order."""
+
+    if (
+        type(value) is not ObservedReviewRequestChronology
+        or type(value._seal) is not _ReviewRequestObservationSeal
+        or value._seal.token is not _REVIEW_REQUEST_OBSERVATION_TOKEN
+        or value._seal.digest != digest_json(value.facts)
+    ):
+        raise LifecyclePublicationError("complete native review chronology is unauthenticated")
+    return value.facts
 
 
 def _require_bound_github_ready_event(

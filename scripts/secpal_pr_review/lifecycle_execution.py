@@ -13,7 +13,7 @@ from __future__ import annotations
 import base64
 import copy
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -463,6 +463,115 @@ def _validate_live_pull_request(
     return observed
 
 
+def _review_request_timestamps(
+    ready: publication.GitHubPullRequestTimelineEvent, request: dict[str, Any],
+) -> tuple[datetime, datetime]:
+    ready_at = datetime.fromisoformat(ready.created_at.replace("Z", "+00:00"))
+    requested_at = datetime.fromisoformat(request["created_at"].replace("Z", "+00:00"))
+    if ready_at.tzinfo is None or requested_at.tzinfo is None:
+        raise LifecycleExecutionError("review chronology lacks timezone")
+    return ready_at, requested_at
+
+
+def _admit_review_request_chronology(
+    ready: publication.GitHubPullRequestTimelineEvent,
+    request: dict[str, Any],
+    native: publication.ObservedReviewRequestChronology | None,
+    *, repository: str, pull_request: int, head_sha: str, ready_head_sha: str | None, author: str,
+    timeline: tuple[publication.GitHubPullRequestTimelineEvent, ...],
+) -> str | None:
+    """Canonical after-Ready admission; equality requires maintained native proof."""
+
+    ready_at, requested_at = _review_request_timestamps(ready, request)
+    if requested_at < ready_at:
+        raise LifecycleExecutionError("review request is outside the Ready cycle")
+    if requested_at > ready_at:
+        return None
+    try:
+        facts = publication._require_observed_review_request_chronology(native)
+    except publication.LifecyclePublicationError as exc:
+        raise LifecycleExecutionError("equal-second review requires authenticated native order") from exc
+    context = {
+        "repository": repository, "pull_request": pull_request,
+        "state": "OPEN", "draft": False, "head_sha": head_sha,
+    }
+    if (
+        facts["before"] != context or facts["after"] != context
+        or ready_head_sha != head_sha
+        or facts["lifecycle_events"] != [asdict(event) for event in timeline]
+    ):
+        raise LifecycleExecutionError("native review chronology differs from Ready CURRENT")
+    events = facts["events"]
+    nodes = [event["node_id"] for event in events]
+    database_ids = [event["database_id"] for event in events if "database_id" in event]
+    if len(nodes) != len(set(nodes)) or len(database_ids) != len(set(database_ids)):
+        raise LifecycleExecutionError("native review chronology repeats an identity")
+    history = [
+        event["kind"] for event in events
+        if event["kind"] in {"ready_for_review", "convert_to_draft"}
+    ]
+    ready_count = history.count("ready_for_review")
+    expected_history = ["ready_for_review", "convert_to_draft"] * (ready_count - 1) + ["ready_for_review"]
+    if not ready_count or history != expected_history:
+        raise LifecycleExecutionError("native Ready/Draft history is ambiguous")
+    timestamps = [
+        datetime.fromisoformat(event["created_at"].replace("Z", "+00:00"))
+        for event in events if "created_at" in event
+    ]
+    if any(before > after for before, after in zip(timestamps, timestamps[1:])):
+        raise LifecycleExecutionError("native review timestamps contradict event order")
+    ready_positions = [i for i, event in enumerate(events) if event["kind"] == "ready_for_review"]
+    request_positions = [
+        i for i, event in enumerate(events)
+        if event["kind"] == "review_requested" and event["node_id"] == request["node_id"]
+    ]
+    provider_requests = [
+        event for event in events if event["kind"] == "review_requested"
+        and event["requested_reviewer"] == request["requested_reviewer"]
+    ]
+    if not ready_positions or len(request_positions) != 1 or len(provider_requests) != 1:
+        raise LifecycleExecutionError("native review chronology is missing or ambiguous")
+    ready_position, request_position = ready_positions[-1], request_positions[0]
+    native_ready, native_request = events[ready_position], events[request_position]
+    commits = [(i, event["head_sha"]) for i, event in enumerate(events) if event["kind"] == "committed"]
+    if (
+        native_ready["node_id"] != ready.node_id
+        or native_ready["database_id"] != ready.database_id
+        or native_ready["created_at"] != ready.created_at
+        or native_ready["actor"] != request["actor"]
+        or native_ready["actor"]["login"] != author
+        or ready.actor != author
+        or native_request["created_at"] != request["created_at"]
+        or native_request["actor"] != request["actor"]
+        or native_request["requested_reviewer"] != request["requested_reviewer"]
+        or native_request["reviewer_type"] != "Bot"
+        or request_position <= ready_position
+        or not commits or commits[-1][1] != head_sha or commits[-1][0] >= ready_position
+        or any(
+            event["kind"] in {"head_ref_force_pushed", "head_ref_deleted", "head_ref_restored", "review_request_removed"}
+            for event in events
+        )
+        or any(event["kind"] == "convert_to_draft" for event in events[ready_position:])
+    ):
+        raise LifecycleExecutionError("native request does not follow the exact Ready head and actor")
+    return authority.digest_json(facts)
+
+
+def _observe_equal_second_review_chronology(
+    repository: str, pull_request: int, feedback: fast_path.StableFeedbackState,
+    timeline: tuple[publication.GitHubPullRequestTimelineEvent, ...],
+) -> publication.ObservedReviewRequestChronology | None:
+    """Collect additional native facts only for the timestamp-equality shape."""
+
+    ready = [event for event in timeline if event.kind == "READY_FOR_REVIEW"]
+    requests = feedback.feedback.get("provider_review_requests", [])
+    if ready and len(requests) == 1:
+        ready_at, requested_at = _review_request_timestamps(ready[-1], requests[0])
+        if ready_at == requested_at:
+            return publication._observe_review_request_chronology(repository, pull_request)
+    return None
+
+
 def _review_consumption_scope(
     current: publication.VerifiedLifecyclePublication,
     live: LivePullRequest,
@@ -470,6 +579,7 @@ def _review_consumption_scope(
     timeline: tuple[publication.GitHubPullRequestTimelineEvent, ...],
     *,
     provider_summary_body: str | None = None,
+    native_chronology: publication.ObservedReviewRequestChronology | None = None,
 ) -> dict[str, Any]:
     """Bind the sole independent post-Ready review to authenticated CURRENT."""
 
@@ -530,12 +640,19 @@ def _review_consumption_scope(
         requests = feedback.feedback.get("provider_review_requests", [])
         if len(requests) > 1:
             raise LifecycleExecutionError("review cycle spans multiple provider requests")
+        chronology_digest = None
         if requests:
-            requested_at = datetime.fromisoformat(
-                requests[0]["created_at"].replace("Z", "+00:00")
+            chronology_digest = _admit_review_request_chronology(
+                ready_events[-1], requests[0], native_chronology,
+                repository=lifecycle.repository, pull_request=lifecycle.pull_request,
+                head_sha=lifecycle.head_sha,
+                ready_head_sha=next((
+                    event["resulting_head_sha"] for event in reversed(events)
+                    if event["transition_kind"] == "DRAFT_TO_READY"
+                ), None),
+                author=author, timeline=timeline,
             )
-            if requested_at.tzinfo is None or requested_at <= ready_at:
-                raise LifecycleExecutionError("review request is outside the Ready cycle")
+            _, requested_at = _review_request_timestamps(ready_events[-1], requests[0])
         reviews = []
         for review in feedback.feedback["reviews"]:
             submitted_at = review.get("submitted_at")
@@ -628,7 +745,7 @@ def _review_consumption_scope(
     ]
     if summary_cycle is not None:
         cycle.append(summary_cycle)
-    return {
+    scope = {
         "pull_request": lifecycle.pull_request,
         "head_sha": lifecycle.head_sha,
         "ready_event_node_id": ready_events[-1].node_id,
@@ -636,6 +753,9 @@ def _review_consumption_scope(
         "review_cycle_digest": authority.digest_json(cycle),
         "feedback_state_digest": feedback.state_digest,
     }
+    if chronology_digest is not None:
+        scope["native_review_request_chronology_digest"] = chronology_digest
+    return scope
 
 
 def _is_exact_predecessor(
@@ -2097,6 +2217,9 @@ def publish_review_consumption(
     scope = _review_consumption_scope(
         current, live, feedback, timeline,
         provider_summary_body=getattr(feedback, "provider_summary_body", None),
+        native_chronology=_observe_equal_second_review_chronology(
+            repository, lifecycle.pull_request, feedback, timeline
+        ),
     )
 
     policy = authority._load_lifecycle_trust_policy(repository)
@@ -2126,14 +2249,18 @@ def publish_review_consumption(
     latest_feedback = orchestration._capture_current_stable_feedback(
         repository, lifecycle.pull_request, capture_provider_summary=True
     )
+    latest_timeline = publication._observe_pull_request_lifecycle_timeline(
+        repository, lifecycle.pull_request
+    )
     latest_scope = _review_consumption_scope(
         before,
         _read_live_github(repository, lifecycle.pull_request),
         latest_feedback,
-        publication._observe_pull_request_lifecycle_timeline(
-            repository, lifecycle.pull_request
-        ),
+        latest_timeline,
         provider_summary_body=getattr(latest_feedback, "provider_summary_body", None),
+        native_chronology=_observe_equal_second_review_chronology(
+            repository, lifecycle.pull_request, latest_feedback, latest_timeline
+        ),
     )
     if not _same_publication(before, current) or latest_scope != scope:
         raise LifecycleExecutionError("review or CURRENT changed before publication")

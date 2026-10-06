@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-06 - Authenticate Equal-Second Ready Review Requests
+
+**Fixed:**
+
+- Admit equal-second Ready and provider review requests only when complete
+  authenticated native ordering proves the exact Ready event precedes the
+  request retained by Stable Feedback. Preserve strictly later admission and
+  the existing finite review-consumption transition and publication controls.
+
 ## 2026-10-04 - Harden Trivy Repository Scan Admission
 
 **Fixed:**
