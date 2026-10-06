@@ -9,6 +9,18 @@ This is the normative Package-2.2 state and decision contract. It processes one
 completed set of review feedback. It does not perform a review and does not
 decide whether to request reviewers, request another round, or merge.
 
+## Complete Registered Validation ownership
+
+Apply the [canonical validation ownership](../../../../docs/secpal-pr-review-workflow.md#complete-registered-validation-ownership) contract.
+`REGISTERED COMMANDS PASS` is technical execution only.
+`COMPLETE REGISTERED VALIDATION PASS` requires exact post-run authentication
+and the existing canonical receipt durably issued and authenticated by
+`attest-validation`. Require its receipt file before creating the receipt-bound
+signed commit. A raw runner result or PASS log cannot authorize binding.
+Only `SUCCESS_WITH_RECEIPT` forbids repeating successful Complete Validation
+on an unchanged tree. Preserve closed typed transactions and historical receipt
+and final-attestation semantics.
+
 ## User control and absolute limits
 
 ```yaml

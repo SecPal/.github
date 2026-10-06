@@ -1616,6 +1616,37 @@ is ready. Likewise, outdated does not mean invalid and resolved does not mean
 fixed. The helper has no keyword classifier; technical truth is established from
 repository evidence while deterministic code validates structure and policy transitions.
 
+## Complete Registered Validation ownership
+
+`REGISTERED COMMANDS PASS` denotes technical command execution only.
+`COMPLETE REGISTERED VALIDATION PASS` requires the complete ordered command set,
+exact post-run HEAD, staged tree, worktree, registry, manual gates and supplied
+evidence authentication, followed by existing canonical receipt creation,
+durable publication and authentication of the written receipt. The public
+owner is `attest-validation`; its durable `--output` is required. Receipt and
+final-attestation schemas and digest meanings remain unchanged.
+
+A raw `_run_registered_validations` result is process-local execution truth,
+never terminal Complete Validation or commit-binding authority. Stopping after
+command PASS leaves `REGISTERED_COMMAND_EXECUTION = PASS`,
+`COMPLETE_REGISTERED_VALIDATION = INCOMPLETE`, `CANONICAL_RECEIPT = ABSENT`, and
+`COMMIT_BINDING_AUTHORITY = ABSENT`. Caller-created results, raw PASS reports and
+historical logs cannot be promoted to receipts. Closed enrolled-Draft and
+pre-enrollment transactions retain their own canonical typed evidence.
+
+A canonical attempt ends as `SUCCESS_WITH_RECEIPT`, `FAILED_WITHOUT_RECEIPT`, or
+`INCOMPLETE_WITHOUT_RECEIPT`. These describe validation outcomes, not new
+lifecycle states. Only `SUCCESS_WITH_RECEIPT` invokes the rule never to repeat
+successful Complete Validation on an unchanged tree. Failure or interruption
+before receipt publication leaves no valid receipt; the pre-execution
+`VALIDATION_RECEIPT_INVALIDATED` placeholder remains. Publication or readback
+failure restores invalidation, or removes the output if invalidation cannot be
+written, and returns no success.
+
+Legacy forensic resolution reports cannot use raw command success as authority.
+Use canonical `attest-validation`, its unchanged `--bind-commit`, and the
+receipt-bound `resolve-batch` or simple resolver for resolution authority.
+
 ## Bounded GitHub actions
 
 The reaction/reply/resolution table is normative in the finite contract. In
