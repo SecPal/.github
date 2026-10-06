@@ -512,74 +512,82 @@ class RegistryError(ValueError):
     """The production registry is invalid or does not support a repository."""
 
 
-_REGISTERED_EXECUTION_RESULTS: Any = weakref.WeakKeyDictionary()
+def _own_registered_execution(execute: Any) -> tuple[type, Any]:
+    """Keep result issuance and backing observations inside the runner closure."""
+
+    results: Any = weakref.WeakKeyDictionary()
+
+    class RegisteredValidationResult:
+        """Verifier-owned process-local execution truth; never completion evidence."""
+
+        __slots__ = ("__weakref__",)
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise TypeError("registered execution results are runner-owned")
+
+        def _facts(self) -> dict[str, Any]:
+            if type(self) is not RegisteredValidationResult or self not in results:
+                raise fast_path.SecurityBlocker("unowned registered command result")
+            return copy.deepcopy(results[self])
+
+        @property
+        def command_set(self) -> list[dict[str, Any]] | None:
+            return self._facts()["command_set"]
+
+        @property
+        def execution_root(self) -> Path | None:
+            return self._facts()["execution_root"]
+
+        def __bool__(self) -> bool:
+            return self._facts()["failure_category"] is None
+
+        def execution_report(self) -> dict[str, str]:
+            return {
+                "REGISTERED_COMMAND_EXECUTION": "PASS" if self else "FAILED",
+                "COMPLETE_REGISTERED_VALIDATION": "INCOMPLETE" if self else "FAILED",
+                "CANONICAL_RECEIPT": "ABSENT",
+                "COMMIT_BINDING_AUTHORITY": "ABSENT",
+            }
+
+        def failure_report(self) -> dict[str, Any] | None:
+            facts = self._facts()
+            if any(facts[key] is None for key in (
+                "failure_index", "failure_purpose", "failure_category"
+            )):
+                return None
+            return {
+                "index": facts["failure_index"],
+                "purpose": facts["failure_purpose"],
+                "category": facts["failure_category"],
+            }
 
 
-class RegisteredValidationResult:
-    """Verifier-owned process-local execution truth; never completion evidence."""
-
-    __slots__ = ("__weakref__",)
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise TypeError("registered execution results are runner-owned")
-
-    def _facts(self) -> dict[str, Any]:
-        if type(self) is not RegisteredValidationResult or self not in _REGISTERED_EXECUTION_RESULTS:
-            raise fast_path.SecurityBlocker("unowned registered command result")
-        return _REGISTERED_EXECUTION_RESULTS[self]
-
-    @property
-    def command_set(self) -> list[dict[str, Any]] | None:
-        return copy.deepcopy(self._facts()["command_set"])
-
-    @property
-    def execution_root(self) -> Path | None:
-        return self._facts()["execution_root"]
-
-    def __bool__(self) -> bool:
-        return self._facts()["failure_category"] is None
-
-    def execution_report(self) -> dict[str, str]:
-        return {
-            "REGISTERED_COMMAND_EXECUTION": "PASS" if self else "FAILED",
-            "COMPLETE_REGISTERED_VALIDATION": "INCOMPLETE" if self else "FAILED",
-            "CANONICAL_RECEIPT": "ABSENT",
-            "COMMIT_BINDING_AUTHORITY": "ABSENT",
+    def issue_result(
+        failure_index: int | None = None,
+        failure_purpose: str | None = None,
+        failure_category: str | None = None,
+        *,
+        command_set: list[dict[str, Any]] | None = None,
+        execution_root: Path | None = None,
+    ) -> RegisteredValidationResult:
+        result = object.__new__(RegisteredValidationResult)
+        results[result] = {
+            "command_set": copy.deepcopy(command_set),
+            "execution_root": execution_root,
+            "failure_index": failure_index,
+            "failure_purpose": (
+                evidence.redact_diagnostic(failure_purpose)
+                if failure_purpose is not None else None
+            ),
+            "failure_category": failure_category,
         }
-
-    def failure_report(self) -> dict[str, Any] | None:
-        facts = self._facts()
-        if any(facts[key] is None for key in (
-            "failure_index", "failure_purpose", "failure_category"
-        )):
-            return None
-        return {
-            "index": facts["failure_index"],
-            "purpose": facts["failure_purpose"],
-            "category": facts["failure_category"],
-        }
+        return result
 
 
-def _registered_execution_result(
-    failure_index: int | None = None,
-    failure_purpose: str | None = None,
-    failure_category: str | None = None,
-    *,
-    command_set: list[dict[str, Any]] | None = None,
-    execution_root: Path | None = None,
-) -> RegisteredValidationResult:
-    result = object.__new__(RegisteredValidationResult)
-    _REGISTERED_EXECUTION_RESULTS[result] = {
-        "command_set": copy.deepcopy(command_set),
-        "execution_root": execution_root,
-        "failure_index": failure_index,
-        "failure_purpose": (
-            evidence.redact_diagnostic(failure_purpose)
-            if failure_purpose is not None else None
-        ),
-        "failure_category": failure_category,
-    }
-    return result
+    def run(*args: Any, **kwargs: Any) -> Any:
+        return execute(*args, **kwargs, _result=issue_result)
+
+    return RegisteredValidationResult, run
 
 
 class RegisteredValidationFailure(fast_path.SecurityBlocker):
@@ -1460,16 +1468,6 @@ def _complete_validation_source_state(
     return identities[0], identities[1], status
 
 
-def _preparation_failure(category: str) -> RegisteredValidationResult:
-    """Return one secret-safe dependency-preparation failure identity."""
-
-    return _registered_execution_result(
-        0,
-        "Prepare locked Node dependencies",
-        category,
-    )
-
-
 def _validate_locked_node_dependency_authority(
     repository_root: Path,
     preparation: dict[str, Any],
@@ -1514,17 +1512,21 @@ def _prepare_complete_validation_dependencies(
     repository_root: Path,
     environment: dict[str, str],
     *,
+    _result: Any,
     integrity_verifier: Any = None,
     dependency_preparation_satisfied: bool = False,
 ) -> RegisteredValidationResult:
+    def failure(category: str) -> RegisteredValidationResult:
+        return _result(0, "Prepare locked Node dependencies", category)
+
     preparation = repository.get("complete_validation_preparation")
     if preparation is None:
-        return _registered_execution_result()
+        return _result()
     if (
         not isinstance(preparation, dict)
         or preparation.get("kind") != "NPM_CI_LOCKED"
     ):
-        return _preparation_failure("dependency preparation authority invalid")
+        return failure("dependency preparation authority invalid")
     try:
         working_directory = (
             repository_root / preparation["working_directory"]
@@ -1536,14 +1538,14 @@ def _prepare_complete_validation_dependencies(
                 and repository_root not in working_directory.parents
             )
         ):
-            return _preparation_failure("dependency preparation directory unsafe")
+            return failure("dependency preparation directory unsafe")
         source_before = _complete_validation_source_state(
             repository_root, preparation
         )
         _validate_locked_node_dependency_authority(repository_root, preparation)
         if dependency_preparation_satisfied:
             if integrity_verifier is None:
-                return _preparation_failure(
+                return failure(
                     "dependency preparation authority invalid"
                 )
             integrity_verifier()
@@ -1551,10 +1553,10 @@ def _prepare_complete_validation_dependencies(
                 repository_root, preparation
             )
             if source_after != source_before:
-                return _preparation_failure(
+                return failure(
                     "dependency installation mutated tracked source"
                 )
-            return _registered_execution_result()
+            return _result()
         executable = _validation_executable(
             {
                 "argv": ["npm", "ci", "--ignore-scripts"],
@@ -1571,7 +1573,7 @@ def _prepare_complete_validation_dependencies(
         fast_path.RecoverableLocalError,
         fast_path.SecurityBlocker,
     ):
-        return _preparation_failure("dependency preparation authority invalid")
+        return failure("dependency preparation authority invalid")
     if integrity_verifier is not None:
         integrity_verifier()
     arguments = ["ci", "--ignore-scripts"]
@@ -1587,12 +1589,12 @@ def _prepare_complete_validation_dependencies(
             timeout=LOCAL_VALIDATION_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return _preparation_failure("dependency installation failed")
+        return failure("dependency installation failed")
     finally:
         if integrity_verifier is not None:
             integrity_verifier()
     if completed.returncode != 0:
-        return _preparation_failure("dependency installation failed")
+        return failure("dependency installation failed")
     try:
         source_after = _complete_validation_source_state(
             repository_root, preparation
@@ -1602,10 +1604,10 @@ def _prepare_complete_validation_dependencies(
         fast_path.RecoverableLocalError,
         fast_path.SecurityBlocker,
     ):
-        return _preparation_failure("dependency preparation authority invalid")
+        return failure("dependency preparation authority invalid")
     if source_after != source_before:
-        return _preparation_failure("dependency installation mutated tracked source")
-    return _registered_execution_result()
+        return failure("dependency installation mutated tracked source")
+    return _result()
 
 
 def _governance_only_candidate(
@@ -1644,6 +1646,7 @@ def _run_registered_validations(
     repository: dict[str, Any],
     repository_root: Path,
     *,
+    _result: Any,
     integrity_verifier: Any = None,
     dependency_preparation_satisfied: bool = False,
     governance_base: str | None = None,
@@ -1653,7 +1656,7 @@ def _run_registered_validations(
 
     repository_root = repository_root.resolve()
     if not repository_root.is_dir():
-        return _registered_execution_result(
+        return _result(
             failure_category="validation root unavailable"
         )
     governance_only = _governance_only_candidate(
@@ -1668,7 +1671,7 @@ def _run_registered_validations(
             prefix="secpal-pr-review-validation-"
         )
     except OSError:
-        return _registered_execution_result(
+        return _result(
             failure_category="validation environment unavailable"
         )
     with validation_home:
@@ -1710,7 +1713,7 @@ def _run_registered_validations(
                     npm_config.write_text("", encoding="utf-8")
                     npm_config.chmod(0o600)
             except OSError:
-                return _registered_execution_result(
+                return _result(
                     failure_category="validation environment unavailable"
                 )
             environment.update(
@@ -1730,6 +1733,7 @@ def _run_registered_validations(
             repository,
             repository_root,
             environment,
+            _result=_result,
             integrity_verifier=integrity_verifier,
             dependency_preparation_satisfied=dependency_preparation_satisfied,
         )
@@ -1742,7 +1746,7 @@ def _run_registered_validations(
                     repository_root / command["working_directory"]
                 ).resolve()
             except (OSError, RuntimeError):
-                return _registered_execution_result(
+                return _result(
                     index,
                     command["purpose"],
                     "unavailable working directory",
@@ -1751,13 +1755,13 @@ def _run_registered_validations(
                 working_directory != repository_root
                 and repository_root not in working_directory.parents
             ):
-                return _registered_execution_result(
+                return _result(
                     index,
                     command["purpose"],
                     "unsafe working directory",
                 )
             if not working_directory.is_dir():
-                return _registered_execution_result(
+                return _result(
                     index,
                     command["purpose"],
                     "unavailable working directory",
@@ -1769,7 +1773,7 @@ def _run_registered_validations(
                     REPOSITORY_ROOT if governance_only else repository_root,
                 )
             except RegistryError:
-                return _registered_execution_result(
+                return _result(
                     index,
                     command["purpose"],
                     "unavailable executable",
@@ -1788,13 +1792,13 @@ def _run_registered_validations(
                     timeout=LOCAL_VALIDATION_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired:
-                return _registered_execution_result(
+                return _result(
                     index,
                     command["purpose"],
                     "timeout",
                 )
             except OSError:
-                return _registered_execution_result(
+                return _result(
                     index,
                     command["purpose"],
                     "execution error",
@@ -1803,14 +1807,21 @@ def _run_registered_validations(
                 if integrity_verifier is not None:
                     integrity_verifier()
             if completed.returncode != 0:
-                return _registered_execution_result(
+                return _result(
                     index,
                     command["purpose"],
                     "non-zero exit",
                 )
-    return _registered_execution_result(
+    return _result(
         command_set=list(commands), execution_root=repository_root,
     )
+
+
+# Install the only callable result owner, then remove the bootstrap constructor.
+RegisteredValidationResult, _run_registered_validations = _own_registered_execution(
+    _run_registered_validations
+)
+del _own_registered_execution
 
 
 FAST_PATH_PREFLIGHT_QUERY = r"""
@@ -6032,11 +6043,26 @@ def _load_fast_manual_gate_evidence(
     )
 
 
-def _write_fast_report(path: str | None, report: dict[str, Any]) -> None:
+def _write_fast_report(
+    path: str | None, report: dict[str, Any], *, before_publish: Any = None,
+) -> None:
     if path:
-        fast_path.atomic_write_json(Path(path), report)
+        if before_publish is None:
+            fast_path.atomic_write_json(Path(path), report)
+        else:
+            fast_path.atomic_write_json(Path(path), report, before_publish=before_publish)
     else:
         sys.stdout.buffer.write(fast_path.canonical_json_bytes(report))
+
+
+def _durably_remove_fast_report(path: str) -> None:
+    target = Path(path)
+    descriptor = os.open(target.parent.resolve(strict=True), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        target.unlink(missing_ok=True)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _write_batch_report(path: str | None, report: dict[str, Any]) -> bool:
@@ -10004,150 +10030,152 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         or validation_result.command_set != expected_commands
     ):
         raise fast_path.SecurityBlocker("unowned or mismatched registered command execution")
-    head_after, status_after = _attestation_local_state(repository_root, arguments.repo)
-    tree_after = _staged_tree(repository_root, status_after)
-    if head_after != head or tree_after != tree or status_after != status:
-        raise fast_path.SecurityBlocker(
-            "local head, staged tree, or worktree changed during complete validation"
-        )
-    if not collision_validation:
-        binding_after = _fast_registry_binding(select_repository(
-            load_registry(arguments.registry), arguments.repo,
-        ))
-        if binding_after != binding:
-            raise fast_path.SecurityBlocker("registry changed during complete validation")
-    if _load_fast_manual_gate_evidence(
-        getattr(arguments, "manual_gate_evidence", None), binding,
-    ) != manual_gate_evidence:
-        raise fast_path.SecurityBlocker("manual gate evidence changed during complete validation")
-    if _load_fast_state(arguments.reviewed_state).to_dict() != reviewed.to_dict():
-        raise fast_path.SecurityBlocker("reviewed evidence changed during complete validation")
-    if eligibility_evidence and _resolution_eligibility_digest(
-        eligibility_evidence,
-        arguments.repo,
-        reviewed,
-    ) != eligibility_evidence_digest:
-        raise fast_path.SecurityBlocker(
-            "eligibility evidence changed during complete validation"
-        )
-    if integration_evidence_path:
-        integration_after = fast_path.normalize_ready_integration_evidence(
-            _read_json(integration_evidence_path, "Ready integration evidence"),
-            repository=arguments.repo,
-            reviewed_state=reviewed,
-            registry=binding,
-            validated_tree_sha=tree_after,
-        )
-        _verify_integration_selection(integration_after, arguments)
-        if integration_after != integration_evidence:
+    def reauthenticate_post_execution() -> None:
+        head_after, status_after = _attestation_local_state(repository_root, arguments.repo)
+        tree_after = _staged_tree(repository_root, status_after)
+        if head_after != head or tree_after != tree or status_after != status:
             raise fast_path.SecurityBlocker(
-                "Ready integration evidence changed during complete validation"
+                "local head, staged tree, or worktree changed during complete validation"
             )
-        live_observation = _observe_ready_integration_authority_once(
-            arguments.repo, integration_evidence["pull_request_number"]
-        )
-        _verify_ready_integration_live_observation(
-            live_observation, integration_evidence, binding
-        )
-    if pre_enrollment_evidence_path:
-        pre_after = pre_enrollment.normalize_evidence(
-            _read_pre_enrollment_json(
-                pre_enrollment_evidence_path,
-                "pre-enrollment integration evidence",
-            ),
-            registry=binding,
-        )
-        if pre_after != pre_enrollment_evidence:
+        if not collision_validation:
+            binding_after = _fast_registry_binding(select_repository(
+                load_registry(arguments.registry), arguments.repo,
+            ))
+            if binding_after != binding:
+                raise fast_path.SecurityBlocker("registry changed during complete validation")
+        if _load_fast_manual_gate_evidence(
+            getattr(arguments, "manual_gate_evidence", None), binding,
+        ) != manual_gate_evidence:
+            raise fast_path.SecurityBlocker("manual gate evidence changed during complete validation")
+        if _load_fast_state(arguments.reviewed_state).to_dict() != reviewed.to_dict():
+            raise fast_path.SecurityBlocker("reviewed evidence changed during complete validation")
+        if eligibility_evidence and _resolution_eligibility_digest(
+            eligibility_evidence,
+            arguments.repo,
+            reviewed,
+        ) != eligibility_evidence_digest:
             raise fast_path.SecurityBlocker(
-                "pre-enrollment integration evidence changed during validation"
+                "eligibility evidence changed during complete validation"
             )
-        _verify_pre_enrollment_external_authority(pre_after, repository_root)
-        live_observation = LiveGitHub().observe_ready_integration_authority(
-            arguments.repo, pre_after["pull_request"]
-        )
-        if (
-            live_observation["repository"] != pre_after["repository"]
-            or live_observation["base_repository"] != pre_after["repository"]
-            or live_observation["head_repository"] != pre_after["repository"]
-            or live_observation["pull_request_number"] != pre_after["pull_request"]
-            or live_observation["state"] != "OPEN"
-            or live_observation["draft"] is not True
-            or live_observation["head_sha"] != pre_after["draft_pr"]["head_sha"]
-            or live_observation["base_ref"] != pre_after["current_main"]["ref"]
-            or live_observation["base_ref"] != binding["default_branch"]
-            or live_observation["base_sha"] != pre_after["current_main"]["sha"]
-            or live_observation.get("closing_issues_complete") is not True
-            or live_observation.get("closing_issues")
-            != [{
-                "repository": pre_after["repository"],
-                "number": pre_after["delivery_issue"],
-                "state": "OPEN",
-            }]
-        ):
-            raise fast_path.SecurityBlocker(
-                "Draft PR or registered current main drifted during final validation"
+        if integration_evidence_path:
+            integration_after = fast_path.normalize_ready_integration_evidence(
+                _read_json(integration_evidence_path, "Ready integration evidence"),
+                repository=arguments.repo,
+                reviewed_state=reviewed,
+                registry=binding,
+                validated_tree_sha=tree_after,
             )
-    if exceptional_recovery_path:
-        recovery_after = _load_exceptional_recovery_evidence(
-            path=exceptional_recovery_path,
-            eligibility_path=eligibility_evidence,
-            repository=arguments.repo,
-            delivery_issue=arguments.exceptional_recovery_delivery_issue,
-            repository_root=repository_root,
-            reviewed=reviewed,
-            validated_tree=tree_after,
-            eligibility_digest=eligibility_evidence_digest,
-        )
-        _verify_exceptional_recovery_selection(recovery_after, arguments)
-        if recovery_after != exceptional_recovery:
-            raise fast_path.SecurityBlocker(
-                "exceptional recovery evidence changed during complete validation"
+            _verify_integration_selection(integration_after, arguments)
+            if integration_after != integration_evidence:
+                raise fast_path.SecurityBlocker(
+                    "Ready integration evidence changed during complete validation"
+                )
+            live_observation = _observe_ready_integration_authority_once(
+                arguments.repo, integration_evidence["pull_request_number"]
             )
-        recovery_observation = _observe_ready_integration_authority_once(
-            arguments.repo, exceptional_recovery["pull_request_number"]
-        )
-        if (
-            recovery_observation["repository"] != arguments.repo
-            or recovery_observation["pull_request_number"]
-            != exceptional_recovery["pull_request_number"]
-            or recovery_observation["state"] != "OPEN"
-            or recovery_observation["draft"] is not False
-            or recovery_observation["head_sha"]
-            != exceptional_recovery["prior_ready_head_sha"]
-        ):
-            raise fast_path.SecurityBlocker(
-                "exceptional recovery Ready-head authority drifted"
+            _verify_ready_integration_live_observation(
+                live_observation, integration_evidence, binding
             )
-    if exceptional_continuation_path:
-        continuation_after = _load_exceptional_continuation_evidence(
-            path=exceptional_continuation_path,
-            eligibility_path=eligibility_evidence,
-            repository=arguments.repo,
-            reviewed=reviewed,
-            validated_tree=tree_after,
-        )
-        _verify_exceptional_continuation_selection(
-            continuation_after, arguments
-        )
-        if continuation_after != exceptional_continuation:
-            raise fast_path.SecurityBlocker(
-                "exceptional continuation evidence changed during complete validation"
+        if pre_enrollment_evidence_path:
+            pre_after = pre_enrollment.normalize_evidence(
+                _read_pre_enrollment_json(
+                    pre_enrollment_evidence_path,
+                    "pre-enrollment integration evidence",
+                ),
+                registry=binding,
             )
-        continuation_observation = _observe_ready_integration_authority_once(
-            arguments.repo, exceptional_continuation["pull_request_number"]
-        )
-        if (
-            continuation_observation["repository"] != arguments.repo
-            or continuation_observation["pull_request_number"]
-            != exceptional_continuation["pull_request_number"]
-            or continuation_observation["state"] != "OPEN"
-            or continuation_observation["draft"] is not False
-            or continuation_observation["head_sha"]
-            != exceptional_continuation["prior_ready_head_sha"]
-        ):
-            raise fast_path.SecurityBlocker(
-                "exceptional continuation Ready-head authority drifted"
+            if pre_after != pre_enrollment_evidence:
+                raise fast_path.SecurityBlocker(
+                    "pre-enrollment integration evidence changed during validation"
+                )
+            _verify_pre_enrollment_external_authority(pre_after, repository_root)
+            live_observation = LiveGitHub().observe_ready_integration_authority(
+                arguments.repo, pre_after["pull_request"]
             )
+            if (
+                live_observation["repository"] != pre_after["repository"]
+                or live_observation["base_repository"] != pre_after["repository"]
+                or live_observation["head_repository"] != pre_after["repository"]
+                or live_observation["pull_request_number"] != pre_after["pull_request"]
+                or live_observation["state"] != "OPEN"
+                or live_observation["draft"] is not True
+                or live_observation["head_sha"] != pre_after["draft_pr"]["head_sha"]
+                or live_observation["base_ref"] != pre_after["current_main"]["ref"]
+                or live_observation["base_ref"] != binding["default_branch"]
+                or live_observation["base_sha"] != pre_after["current_main"]["sha"]
+                or live_observation.get("closing_issues_complete") is not True
+                or live_observation.get("closing_issues")
+                != [{
+                    "repository": pre_after["repository"],
+                    "number": pre_after["delivery_issue"],
+                    "state": "OPEN",
+                }]
+            ):
+                raise fast_path.SecurityBlocker(
+                    "Draft PR or registered current main drifted during final validation"
+                )
+        if exceptional_recovery_path:
+            recovery_after = _load_exceptional_recovery_evidence(
+                path=exceptional_recovery_path,
+                eligibility_path=eligibility_evidence,
+                repository=arguments.repo,
+                delivery_issue=arguments.exceptional_recovery_delivery_issue,
+                repository_root=repository_root,
+                reviewed=reviewed,
+                validated_tree=tree_after,
+                eligibility_digest=eligibility_evidence_digest,
+            )
+            _verify_exceptional_recovery_selection(recovery_after, arguments)
+            if recovery_after != exceptional_recovery:
+                raise fast_path.SecurityBlocker(
+                    "exceptional recovery evidence changed during complete validation"
+                )
+            recovery_observation = _observe_ready_integration_authority_once(
+                arguments.repo, exceptional_recovery["pull_request_number"]
+            )
+            if (
+                recovery_observation["repository"] != arguments.repo
+                or recovery_observation["pull_request_number"]
+                != exceptional_recovery["pull_request_number"]
+                or recovery_observation["state"] != "OPEN"
+                or recovery_observation["draft"] is not False
+                or recovery_observation["head_sha"]
+                != exceptional_recovery["prior_ready_head_sha"]
+            ):
+                raise fast_path.SecurityBlocker(
+                    "exceptional recovery Ready-head authority drifted"
+                )
+        if exceptional_continuation_path:
+            continuation_after = _load_exceptional_continuation_evidence(
+                path=exceptional_continuation_path,
+                eligibility_path=eligibility_evidence,
+                repository=arguments.repo,
+                reviewed=reviewed,
+                validated_tree=tree_after,
+            )
+            _verify_exceptional_continuation_selection(
+                continuation_after, arguments
+            )
+            if continuation_after != exceptional_continuation:
+                raise fast_path.SecurityBlocker(
+                    "exceptional continuation evidence changed during complete validation"
+                )
+            continuation_observation = _observe_ready_integration_authority_once(
+                arguments.repo, exceptional_continuation["pull_request_number"]
+            )
+            if (
+                continuation_observation["repository"] != arguments.repo
+                or continuation_observation["pull_request_number"]
+                != exceptional_continuation["pull_request_number"]
+                or continuation_observation["state"] != "OPEN"
+                or continuation_observation["draft"] is not False
+                or continuation_observation["head_sha"]
+                != exceptional_continuation["prior_ready_head_sha"]
+            ):
+                raise fast_path.SecurityBlocker(
+                    "exceptional continuation Ready-head authority drifted"
+                )
+    reauthenticate_post_execution()
     receipt = (
         pre_enrollment.create_validation_receipt(
             evidence=pre_enrollment_evidence,
@@ -10186,21 +10214,32 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         "schema_version": "1.0", "status": "VALIDATION_RECEIPT_INVALIDATED",
         "head_sha": head, "validated_tree_sha": tree,
     }
-    try:
-        _write_fast_report(arguments.output, receipt)
-        published = _read_json(arguments.output, "published validation receipt")
-        if published != receipt:
-            raise fast_path.SecurityBlocker("published validation receipt failed authentication")
+    def authenticate_receipt(path: str, label: str) -> None:
+        written = _read_json(path, label)
+        if written != receipt:
+            raise fast_path.SecurityBlocker("written validation receipt failed authentication")
         if pre_enrollment_evidence is None:
-            # Reuse the existing receipt authenticator used by bind-commit.
-            # Its pure assembly is discarded; final attestation still requires
-            # the later signed commit and is issued only by --bind-commit.
+            # Pure existing authentication; final attestation remains bind-commit.
             fast_path._create_validation_attestation(
                 repository=arguments.repo, head_sha=head, receipt_head_sha=head,
                 registry=binding, command_set=expected_commands,
                 successful_result=True, reviewed_state=reviewed,
-                validation_receipt=published,
+                validation_receipt=written,
             )
+
+    staged_authenticated = False
+    def authenticate_before_publish(path: Path) -> None:
+        nonlocal staged_authenticated
+        authenticate_receipt(str(path), "staged validation receipt")
+        reauthenticate_post_execution()
+        staged_authenticated = True
+
+    try:
+        _write_fast_report(arguments.output, receipt,
+                           before_publish=authenticate_before_publish)
+        if not staged_authenticated:
+            raise fast_path.SecurityBlocker("receipt staging authentication did not complete")
+        authenticate_receipt(arguments.output, "published validation receipt")
         publication_head, publication_status = _attestation_local_state(
             repository_root, arguments.repo,
         )
@@ -10209,13 +10248,12 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             or _staged_tree(repository_root, publication_status) != tree
         ):
             raise fast_path.SecurityBlocker("source changed during receipt publication")
-    except (OSError, ValueError, fast_path.SecurityBlocker, fast_path.RecoverableLocalError):
-        # A replace followed by directory-fsync/readback failure must not leave
-        # a consumable success document. Retain the original publication error.
+    except BaseException:
+        # Include interruptions after replacement. Cleanup must itself be durable.
         try:
             _write_fast_report(arguments.output, invalidated)
-        except OSError:
-            Path(arguments.output).unlink(missing_ok=True)
+        except BaseException:
+            _durably_remove_fast_report(arguments.output)
         raise
     return 0
 

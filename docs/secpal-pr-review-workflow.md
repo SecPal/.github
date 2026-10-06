@@ -1626,6 +1626,13 @@ durable publication and authentication of the written receipt. The public
 owner is `attest-validation`; its durable `--output` is required. Receipt and
 final-attestation schemas and digest meanings remain unchanged.
 
+The existing atomic writer authenticates the private staged receipt bytes and
+reauthenticates the exact source and supplied evidence before publishing the
+canonical output. Its file fsync, atomic replacement and directory fsync precede
+terminal success. Readback confirms the published receipt. Runner-result
+issuance and its backing observations remain enclosed inside the internal
+runner; callers receive copies of execution facts only.
+
 A raw `_run_registered_validations` result is process-local execution truth,
 never terminal Complete Validation or commit-binding authority. Stopping after
 command PASS leaves `REGISTERED_COMMAND_EXECUTION = PASS`,
@@ -1640,8 +1647,9 @@ lifecycle states. Only `SUCCESS_WITH_RECEIPT` invokes the rule never to repeat
 successful Complete Validation on an unchanged tree. Failure or interruption
 before receipt publication leaves no valid receipt; the pre-execution
 `VALIDATION_RECEIPT_INVALIDATED` placeholder remains. Publication or readback
-failure restores invalidation, or removes the output if invalidation cannot be
-written, and returns no success.
+failure, including process interruptions that can be handled, restores
+invalidation, or removes the output and fsyncs its directory if invalidation
+cannot be written, and returns no success.
 
 Legacy forensic resolution reports cannot use raw command success as authority.
 Use canonical `attest-validation`, its unchanged `--bind-commit`, and the

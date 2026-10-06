@@ -8734,7 +8734,12 @@ def execute_resolution_batch(
     return report
 
 
-def atomic_write_json(path: Path, value: Any) -> None:
+def atomic_write_json(
+    path: Path,
+    value: Any,
+    *,
+    before_publish: Callable[[Path], None] | None = None,
+) -> None:
     target = Path(path)
     parent = target.parent.resolve(strict=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=parent)
@@ -8744,6 +8749,8 @@ def atomic_write_json(path: Path, value: Any) -> None:
             stream.write(canonical_json_bytes(value))
             stream.flush()
             os.fsync(stream.fileno())
+        if before_publish is not None:
+            before_publish(Path(temporary_name))
         os.replace(temporary_name, target)
         directory_descriptor = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
         try:

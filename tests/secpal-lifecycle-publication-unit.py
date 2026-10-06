@@ -3029,7 +3029,7 @@ class LifecyclePublicationTests(TestCase):
                 signer_identity=SIGNER, signer=signer_for(),
                 _policy_loader=lambda _: ("f" * 40, entry),
                 _gateway_factory=lambda *_: gateway,
-                _validation_runner=lambda *_: actions._registered_execution_result(),
+                _validation_runner=lambda *_: True,
                 _issuer_source_verifier=lambda _: None,
                 _current_lifecycle_loader=lambda *_: enrolled,
                 _authorization_factory=(

@@ -1224,6 +1224,10 @@ SAFE_GETATTR_CALLS = {
             "getattr(arguments, 'manual_gate_evidence', None)",
         ),
         DynamicImportCall(
+            ("_command_attest_validation", "reauthenticate_post_execution"),
+            "getattr(arguments, 'manual_gate_evidence', None)",
+        ),
+        DynamicImportCall(
             ("_command_attest_validation",),
             "getattr(arguments, 'eligibility_evidence', None)",
         ),

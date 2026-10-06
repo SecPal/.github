@@ -51,6 +51,18 @@ fast_path = actions.fast_path
 p21 = load_module("secpal_pr_review_p21_tests", P21_TESTS)
 
 
+def execute_commands_for_fixture(commands: list[dict[str, Any]], root: Path,
+                                 *, fail_last: bool = False) -> Any:
+    """Observe real bounded command exits instead of minting owned results."""
+    entry = {"repository": "SecPal/.github", "focused_validation": [],
+             "required_local_validation": commands}
+    executables = ["/usr/bin/true"] * len(commands)
+    if fail_last:
+        executables[-1] = "/usr/bin/false"
+    with mock.patch.object(actions, "_validation_executable", side_effect=executables):
+        return actions._run_registered_validations(entry, root)
+
+
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -6067,8 +6079,8 @@ class ReceiptBoundaryTests(TestCase):
     def test_public_success_follows_durable_publication_and_readback(self) -> None:
         events = []
         original = fast_path.atomic_write_json
-        def write(path: Path, value: Any) -> None:
-            original(path, value)
+        def write(path: Path, value: Any, **kwargs: Any) -> None:
+            original(path, value, **kwargs)
             events.append(value.get("kind", value.get("status")))
         with mock.patch.object(fast_path, "atomic_write_json", side_effect=write):
             self.assertEqual(actions._command_attest_validation(self.arguments), 0)
@@ -6097,9 +6109,7 @@ class ReceiptBoundaryTests(TestCase):
                 with self.assertRaisesRegex(fast_path.SecurityBlocker, "unowned"):
                     actions._command_attest_validation(self.arguments)
                 self.assert_invalidated()
-        foreign = actions._registered_execution_result(
-            command_set=self.binding["validation"], execution_root=self.directory,
-        )
+        foreign = execute_commands_for_fixture(self.binding["validation"], self.directory)
         with mock.patch.object(actions, "_run_registered_validations", return_value=foreign):
             with self.assertRaises(fast_path.SecurityBlocker):
                 actions._command_attest_validation(self.arguments)
@@ -6112,9 +6122,7 @@ class ReceiptBoundaryTests(TestCase):
         for selected in (wrong, commands[:1], list(reversed(commands))):
             with self.subTest(selected=selected), mock.patch.object(
                 actions, "_run_registered_validations",
-                return_value=actions._registered_execution_result(
-                    command_set=selected, execution_root=self.root,
-                ),
+                return_value=execute_commands_for_fixture(selected, self.root),
             ):
                 with self.assertRaisesRegex(fast_path.SecurityBlocker, "mismatched"):
                     actions._command_attest_validation(self.arguments)
@@ -6162,12 +6170,12 @@ class ReceiptBoundaryTests(TestCase):
         original = fast_path.atomic_write_json
         for after_replace in (False, True):
             with self.subTest(after_replace=after_replace):
-                def fail(path: Path, value: Any) -> None:
+                def fail(path: Path, value: Any, **kwargs: Any) -> None:
                     if value.get("kind") == "VALIDATION_RECEIPT":
                         if after_replace:
-                            original(path, value)
+                            original(path, value, **kwargs)
                         raise OSError("publication failed")
-                    original(path, value)
+                    original(path, value, **kwargs)
                 with mock.patch.object(fast_path, "atomic_write_json", side_effect=fail):
                     with self.assertRaisesRegex(OSError, "publication failed"):
                         actions._command_attest_validation(self.arguments)
@@ -6191,13 +6199,13 @@ class ReceiptBoundaryTests(TestCase):
 
     def test_unrecoverable_write_failure_removes_success_document(self) -> None:
         original = fast_path.atomic_write_json
-        def fail(path: Path, value: Any) -> None:
+        def fail(path: Path, value: Any, **kwargs: Any) -> None:
             if value.get("kind") == "VALIDATION_RECEIPT":
-                original(path, value)
+                original(path, value, **kwargs)
                 raise OSError("directory sync failed")
             if self.output.exists():
                 raise OSError("invalidation unavailable")
-            original(path, value)
+            original(path, value, **kwargs)
         with mock.patch.object(fast_path, "atomic_write_json", side_effect=fail):
             with self.assertRaises(OSError):
                 actions._command_attest_validation(self.arguments)
@@ -6268,14 +6276,122 @@ class ReceiptBoundaryTests(TestCase):
 
     def test_source_drift_during_publication_cannot_report_success(self) -> None:
         original = fast_path.atomic_write_json
-        def drift(path: Path, value: Any) -> None:
-            original(path, value)
+        def drift(path: Path, value: Any, **kwargs: Any) -> None:
+            original(path, value, **kwargs)
             if value.get("kind") == "VALIDATION_RECEIPT":
                 (self.root / "source").write_text("changed during publication\n")
         with mock.patch.object(fast_path, "atomic_write_json", side_effect=drift):
             with self.assertRaisesRegex(fast_path.SecurityBlocker, "publication"):
                 actions._command_attest_validation(self.arguments)
         self.assert_invalidated()
+
+    def test_review_boundary_importer_cannot_issue_owned_success(self) -> None:
+        factory = getattr(actions, "_registered_execution_result", None)
+        claimed = (
+            factory(command_set=self.binding["validation"], execution_root=self.root)
+            if factory is not None else object.__new__(actions.RegisteredValidationResult)
+        )
+        with mock.patch.object(actions, "_run_registered_validations", return_value=claimed):
+            with self.assertRaises(fast_path.SecurityBlocker):
+                actions._command_attest_validation(self.arguments)
+        self.assert_invalidated()
+
+    def test_review_boundary_backing_facts_are_not_mutable(self) -> None:
+        result = actions._run_registered_validations(self.entry, self.root)
+        facts = result._facts()
+        facts["command_set"].clear()
+        facts["failure_category"] = "caller mutation"
+        self.assertTrue(result)
+        self.assertEqual(result.command_set, self.binding["validation"])
+        failed = execute_commands_for_fixture(self.binding["validation"], self.root,
+                                              fail_last=True)
+        failed._facts().update(failure_category=None,
+                               command_set=self.binding["validation"],
+                               execution_root=self.root)
+        self.assertFalse(failed)
+        with mock.patch.object(actions, "_run_registered_validations", return_value=failed):
+            with self.assertRaises(actions.RegisteredValidationFailure):
+                actions._command_attest_validation(self.arguments)
+        self.assert_invalidated()
+
+    def test_review_boundary_authentication_precedes_receipt_visibility(self) -> None:
+        original = fast_path._create_validation_attestation
+        calls = []
+        def authenticate(**kwargs: Any) -> Any:
+            if not calls:
+                self.assertEqual(json.loads(self.output.read_text()).get("status"),
+                                 "VALIDATION_RECEIPT_INVALIDATED")
+            calls.append("AUTHENTICATED")
+            return original(**kwargs)
+        with mock.patch.object(fast_path, "_create_validation_attestation", side_effect=authenticate):
+            self.assertEqual(actions._command_attest_validation(self.arguments), 0)
+        self.assertTrue(calls)
+        self.assertEqual(json.loads(self.output.read_text())["kind"], "VALIDATION_RECEIPT")
+
+    def test_review_boundary_termination_before_authentication_has_no_receipt(self) -> None:
+        script = r"""
+import os, runpy, signal, sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+ns = runpy.run_path(sys.argv[1], run_name="receipt_boundary_child")
+actions = ns["actions"]
+reviewed = ns["fast_feedback"](thread_count=0, head_sha=sys.argv[3])
+entry = ns["registry_entry"]("SecPal/.github")
+entry["manual_gates"] = []
+arguments = SimpleNamespace(expected_head=sys.argv[3], repo_root=sys.argv[2],
+    repo="SecPal/.github", reviewed_state="reviewed.json", registry="registry.json",
+    bind_commit=False, receipt=None, output=sys.argv[4], manual_gate_evidence=None)
+def terminate(**kwargs):
+    os.kill(os.getpid(), signal.SIGKILL)
+with mock.patch.object(actions, "_load_fast_state", return_value=reviewed), \
+     mock.patch.object(actions, "load_registry", return_value={}), \
+     mock.patch.object(actions, "select_repository", return_value=entry), \
+     mock.patch.object(actions, "_validation_executable", return_value="/usr/bin/true"), \
+     mock.patch.object(actions.fast_path, "_create_validation_attestation", side_effect=terminate):
+    actions._command_attest_validation(arguments)
+"""
+        result = subprocess.run([sys.executable, "-c", script, __file__, str(self.root),
+                                 self.head, str(self.output)], capture_output=True,
+                                env={**os.environ, "TMPDIR": str(self.directory)}, timeout=30)
+        self.assertEqual(result.returncode, -9, result.stderr.decode())
+        self.assert_invalidated()
+
+    def test_review_boundary_interruptions_invalidate_published_receipt(self) -> None:
+        original = fast_path.atomic_write_json
+        for interruption in (KeyboardInterrupt, SystemExit):
+            with self.subTest(interruption=interruption):
+                def interrupt(path: Path, value: Any, **kwargs: Any) -> None:
+                    original(path, value, **kwargs)
+                    if value.get("kind") == "VALIDATION_RECEIPT":
+                        raise interruption("interrupted after replacement")
+                with mock.patch.object(fast_path, "atomic_write_json", side_effect=interrupt):
+                    with self.assertRaises(interruption):
+                        actions._command_attest_validation(self.arguments)
+                self.assert_invalidated()
+
+    def test_review_boundary_fallback_removal_is_durable(self) -> None:
+        original = fast_path.atomic_write_json
+        fsync = fast_path.os.fsync
+        durable_removal = []
+        def fail(path: Path, value: Any, **kwargs: Any) -> None:
+            if value.get("kind") == "VALIDATION_RECEIPT":
+                original(path, value, **kwargs)
+                raise OSError("publication interrupted")
+            if self.output.exists():
+                raise OSError("invalidation unavailable")
+            original(path, value, **kwargs)
+        def sync(descriptor: int) -> None:
+            import stat
+            if not self.output.exists() and stat.S_ISDIR(fast_path.os.fstat(descriptor).st_mode):
+                durable_removal.append(True)
+            fsync(descriptor)
+        with mock.patch.object(fast_path, "atomic_write_json", side_effect=fail), \
+                mock.patch.object(fast_path.os, "fsync", side_effect=sync):
+            with self.assertRaises(OSError):
+                actions._command_attest_validation(self.arguments)
+        self.assertFalse(self.output.exists())
+        self.assertTrue(durable_removal)
 
     def bind_fixture(self) -> dict[str, Any]:
         self.assertEqual(actions._command_attest_validation(self.arguments), 0)
@@ -7525,7 +7641,9 @@ class FastPathTests(TestCase):
             **actions._fast_registry_binding(accepted_entry),
             "collision_validation_authority": {"candidate_tree": tree},
         }
-        execution_root = REPO_ROOT / ".context/collision-validation-unit"
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        execution_root = Path(temporary.name)
         execution = SimpleNamespace(
             collision=SimpleNamespace(to_dict=lambda: collision),
             repository_entry=accepted_entry,
@@ -7614,10 +7732,7 @@ class FastPathTests(TestCase):
             ),
             mock.patch.object(
                 actions, "_run_registered_validations",
-                return_value=actions._registered_execution_result(
-                    command_set=accepted_binding["validation"],
-                    execution_root=execution_root.resolve(),
-                ),
+                return_value=execute_commands_for_fixture(accepted_binding["validation"], execution_root),
             ) as run_validation,
             mock.patch.object(
                 actions,
@@ -7633,7 +7748,10 @@ class FastPathTests(TestCase):
             mock.patch.object(
                 actions,
                 "_write_fast_report",
-                side_effect=lambda _path, value: reports.append(value),
+                side_effect=lambda path, value, **kwargs: (
+                    reports.append(value),
+                    kwargs["before_publish"](Path(path)) if "before_publish" in kwargs else None,
+                ),
             ),
         ):
             self.assertEqual(actions._command_attest_validation(arguments), 0)
@@ -9173,11 +9291,11 @@ class FastPathTests(TestCase):
         gateway = mock.Mock()
         gateway.observe_stable_feedback.return_value = observation
         gateway.observe_ready_source_recovery_approval_policy.return_value = True
-        failure = actions._registered_execution_result(
-            failure_index=2,
-            failure_purpose="Run recovery security tests",
-            failure_category="NONZERO_EXIT",
-        )
+        failure = execute_commands_for_fixture([
+            {"argv": ["python3", "-m", "unittest", "tests/fixture.py"],
+             "working_directory": ".", "purpose": purpose}
+            for purpose in ("Run fixture setup", "Run recovery security tests")
+        ], REPO_ROOT, fail_last=True)
         with (
             mock.patch.object(
                 actions, "_ready_source_recovery_current_safety_profile",
@@ -9219,7 +9337,7 @@ class FastPathTests(TestCase):
             {
                 "index": 2,
                 "purpose": "Run recovery security tests",
-                "category": "NONZERO_EXIT",
+                "category": "non-zero exit",
             },
         )
 
@@ -9469,7 +9587,7 @@ class FastPathTests(TestCase):
         gateway.observe_ready_source_recovery_delivery.return_value = commit_evidence
         gateway_factory = mock.Mock(return_value=gateway)
         validation_runner = mock.Mock(
-            return_value=actions._registered_execution_result()
+            return_value=True
         )
         with (
             mock.patch.object(
@@ -9621,7 +9739,7 @@ class FastPathTests(TestCase):
                 _policy_loader=mock.Mock(return_value=("f" * 40, entry)),
                 _gateway_factory=mock.Mock(return_value=gateway),
                 _validation_runner=mock.Mock(
-                    return_value=actions._registered_execution_result()
+                    return_value=True
                 ),
                 ready_source_provider_binding=binding,
             )
@@ -9635,7 +9753,7 @@ class FastPathTests(TestCase):
         entry["manual_gates"] = []
         gateway = mock.Mock()
         gateway.observe_stable_feedback.return_value = observation
-        validation_runner = mock.Mock(return_value=actions._registered_execution_result())
+        validation_runner = mock.Mock(return_value=True)
 
         with (
             mock.patch.object(
@@ -9882,7 +10000,7 @@ class FastPathTests(TestCase):
         }
         gateway_factory = mock.Mock(return_value=gateway)
         validation_runner = mock.Mock(
-            return_value=actions._registered_execution_result()
+            return_value=True
         )
         authorization_factory = mock.Mock(
             return_value={"kind": "SECPAL_READY_SOURCE_RECOVERY_AUTHORIZATION"}

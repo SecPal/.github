@@ -210,6 +210,13 @@ class AndroidIntegrationPolicyTests(SecpalAppIntegrationPolicyTests):
 
 
 class PreEnrollmentIntegrationBoundaryTests(TestCase):
+
+    def observed_command_result(self, commands: list[dict[str, Any]]) -> Any:
+        entry = {"repository": "SecPal/.github", "focused_validation": [],
+                 "required_local_validation": commands}
+        with mock.patch.object(actions, "_validation_executable", return_value="/usr/bin/true"):
+            return actions._run_registered_validations(entry, ROOT)
+
     def test_typed_pre_enrollment_error_is_a_bounded_cli_security_failure(self) -> None:
         with mock.patch.object(
             actions, "_command_attest_validation",
@@ -346,12 +353,12 @@ class PreEnrollmentIntegrationBoundaryTests(TestCase):
             mock.patch.object(actions, "_load_fast_manual_gate_evidence", return_value=[]),
             mock.patch.object(actions, "_staged_tree", return_value=TREE),
             mock.patch.object(actions, "_verify_integration_tree_delta"),
-            mock.patch.object(actions, "_run_registered_validations", return_value=actions._registered_execution_result(
-                command_set=registry()["validation"], execution_root=ROOT.resolve(),
-            )),
+            mock.patch.object(actions, "_run_registered_validations", return_value=self.observed_command_result(registry()["validation"])),
             mock.patch.object(actions, "_verify_pre_enrollment_external_authority"),
             mock.patch.object(actions.LiveGitHub, "observe_ready_integration_authority", return_value=live),
-            mock.patch.object(actions, "_write_fast_report") as write_report,
+            mock.patch.object(actions, "_write_fast_report", side_effect=lambda path, value, **kwargs:
+                kwargs["before_publish"](Path(path)) if "before_publish" in kwargs else None
+            ) as write_report,
         ):
             self.assertEqual(actions._command_attest_validation(arguments), 0)
         self.assertEqual(
@@ -453,7 +460,8 @@ def registry() -> dict[str, object]:
             "require_local_verified": True,
             "accepted_formats": ["ssh"],
         },
-        "validation": [{"argv": ["./scripts/preflight.sh"]}],
+        "validation": [{"argv": ["./scripts/preflight.sh"],
+                        "working_directory": ".", "purpose": "Run integration tests"}],
         "pre_enrollment_integration_policy": {
             "schema_version": "1.0",
             "command": "integrate-pre-enrollment-draft",
