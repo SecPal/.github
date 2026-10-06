@@ -341,6 +341,18 @@ When CURRENT is already Review 1/1, preserve that consumed cycle and skip the
 publisher. Historical
 signed review-before-Ready chains remain verification inputs only.
 
+## Complete Registered Validation ownership
+
+Apply the [canonical validation ownership](../../../docs/secpal-pr-review-workflow.md#complete-registered-validation-ownership) contract.
+`REGISTERED COMMANDS PASS` is technical execution only.
+`COMPLETE REGISTERED VALIDATION PASS` requires exact post-run authentication
+and the existing canonical receipt durably issued and authenticated by
+`attest-validation`. Require its receipt file before creating the receipt-bound
+signed commit. A raw runner result or PASS log cannot authorize binding.
+Only `SUCCESS_WITH_RECEIPT` forbids repeating successful Complete Validation
+on an unchanged tree. Preserve closed typed transactions and historical receipt
+and final-attestation semantics.
+
 ## Run the finite invocation
 
 The following state machine applies only to the full feedback-remediation path.

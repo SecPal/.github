@@ -114,6 +114,18 @@ appends once and verifies exact read-back; repeated invocation is idempotent
 only for that same authenticated correction. No Ready transition, review,
 remediation, recovery counter or lifecycle head is changed.
 
+## Complete Registered Validation ownership
+
+Apply the [canonical validation ownership](../docs/secpal-pr-review-workflow.md#complete-registered-validation-ownership) contract.
+`REGISTERED COMMANDS PASS` is technical execution only.
+`COMPLETE REGISTERED VALIDATION PASS` requires exact post-run authentication
+and the existing canonical receipt durably issued and authenticated by
+`attest-validation`. Require its receipt file before creating the receipt-bound
+signed commit. A raw runner result or PASS log cannot authorize binding.
+Only `SUCCESS_WITH_RECEIPT` forbids repeating successful Complete Validation
+on an unchanged tree. Preserve closed typed transactions and historical receipt
+and final-attestation semantics.
+
 `attest-validation --pre-enrollment-integration-evidence` is the distinct
 version-1.0 `PRE_ENROLLMENT_DRAFT_INTEGRATION` path. It applies only to an open
 Draft delivery with no CURRENT publication, native genesis, or lifecycle-aware
