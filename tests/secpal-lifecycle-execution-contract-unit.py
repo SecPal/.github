@@ -778,6 +778,28 @@ class LifecycleExecutionTests(TestCase):
             with self.assertRaises(execution.LifecycleExecutionError):
                 execution.publish_review_consumption(REPOSITORY, ISSUE)
 
+    def test_malformed_ready_chronology_rejects_before_publication(self) -> None:
+        for timestamp in ("invalid-ready-timestamp", "2026-02-30T00:00:00Z"):
+            with self.subTest(timestamp=timestamp):
+                harness, live, feedback, context, native = self.equal_second_review_fixture()
+                native[1]["created_at"] = timestamp
+
+                def observe(arguments):
+                    value = native if "/timeline?" in arguments[-1] else context
+                    return subprocess.CompletedProcess([], 0, json.dumps(value).encode(), b"")
+
+                with (
+                    mock.patch.object(publication, "_run_gh", side_effect=observe),
+                    mock.patch.object(publication, "verify_current_lifecycle_authority", side_effect=harness.current_reader),
+                    mock.patch.object(publication, "advance_current_terminal", side_effect=harness.publisher),
+                    mock.patch.object(execution, "_read_live_github", return_value=live),
+                    mock.patch.object(orchestration, "_capture_current_stable_feedback", return_value=feedback),
+                ):
+                    with self.assertRaises(execution.LifecycleExecutionError):
+                        execution.publish_review_consumption(REPOSITORY, ISSUE)
+                self.assertEqual(harness.publication_writes, [])
+                self.assertEqual(harness.github_writes, [])
+
     def test_equal_second_native_security_matrix_rejects_before_publication(self) -> None:
         cases = (
             "request_before_ready", "request_then_ready", "missing_ready", "missing_request",

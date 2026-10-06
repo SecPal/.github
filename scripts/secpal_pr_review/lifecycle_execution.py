@@ -466,8 +466,11 @@ def _validate_live_pull_request(
 def _review_request_timestamps(
     ready: publication.GitHubPullRequestTimelineEvent, request: dict[str, Any],
 ) -> tuple[datetime, datetime]:
-    ready_at = datetime.fromisoformat(ready.created_at.replace("Z", "+00:00"))
-    requested_at = datetime.fromisoformat(request["created_at"].replace("Z", "+00:00"))
+    try:
+        ready_at = datetime.fromisoformat(ready.created_at.replace("Z", "+00:00"))
+        requested_at = datetime.fromisoformat(request["created_at"].replace("Z", "+00:00"))
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise LifecycleExecutionError("review chronology is malformed") from exc
     if ready_at.tzinfo is None or requested_at.tzinfo is None:
         raise LifecycleExecutionError("review chronology lacks timezone")
     return ready_at, requested_at
