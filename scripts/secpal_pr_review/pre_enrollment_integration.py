@@ -382,6 +382,74 @@ def verify_fresh_state(evidence: Mapping[str, Any], *, live_pr: Mapping[str, Any
         raise PreEnrollmentIntegrationError("lifecycle absence changed before write")
 
 
+def admit_live_observation(
+    live: Mapping[str, Any], *, repository: str, delivery_issue: int,
+    pull_request: int, registry: Mapping[str, Any], protected_main_sha: str,
+) -> None:
+    """Admit canonical facts normalized by the maintained GitHub adapter.
+
+    This is the canonical pre-enrollment OPEN/same-repository/Draft/default-main
+    invariant used by production and independent admission. This pure decision
+    neither reads external state nor assembles an evidence document.
+    """
+    _repository(repository)
+    _positive(delivery_issue, "delivery issue")
+    _positive(pull_request, "pull request")
+    head_ref = live.get("head_ref")
+    if (
+        registry.get("repository") != repository
+        or live.get("repository") != repository
+        or live.get("base_repository") != repository
+        or live.get("head_repository") != repository
+        or live.get("pull_request_number") != pull_request
+        or live.get("state") != "OPEN" or live.get("draft") is not True
+        or live.get("base_ref") != registry.get("default_branch")
+        or live.get("base_sha") != protected_main_sha
+        or not isinstance(head_ref, str) or not head_ref
+        or head_ref == registry.get("default_branch")
+        or live.get("closing_issues_complete") is not True
+        or live.get("closing_issues") != [{
+            "repository": repository, "number": delivery_issue, "state": "OPEN",
+        }]
+    ):
+        raise PreEnrollmentIntegrationError("exact open same-repository Draft PR/current-main identity is invalid")
+    _oid(protected_main_sha, "protected main")
+    _oid(live.get("head_sha"), "Draft head")
+
+
+def assemble_live_observation(live: Mapping[str, Any], *, repository: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Pure projection of admitted facts into the existing closed format."""
+    main = {"ref": live["base_ref"], "sha": live["base_sha"]}
+    draft = {"state": live["state"], "draft": live["draft"], "head_sha": live["head_sha"]}
+    return (
+        {**draft, "observation_digest": digest_json(dict(live))},
+        {**main, "observation_digest": digest_json({"repository": repository, **main})},
+    )
+
+
+def assemble_evidence(
+    *, authorization: Mapping[str, Any], registry: Mapping[str, Any],
+    observed: FrozenObservation, validated_tree_sha: str,
+    mechanical_tree_sha: str, conflict_paths: list[str], resolution_delta: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Pure assembly of derived facts; the existing verifier owns admission."""
+    return copy.deepcopy({
+        "schema_version": SCHEMA_VERSION, "kind": KIND, "domain": DOMAIN,
+        "repository": authorization["repository"], "delivery_issue": authorization["delivery_issue"],
+        "pull_request": authorization["pull_request"], "authorization": dict(authorization),
+        "authorization_digest": authorization["authorization_digest"],
+        "draft_pr": dict(observed.draft_pr), "current_main": dict(observed.current_main),
+        "ordered_parent_shas": [observed.draft_pr["head_sha"], observed.current_main["sha"]],
+        "validated_tree_sha": validated_tree_sha, "mechanical_merge_tree_sha": mechanical_tree_sha,
+        "mechanical_conflict_paths": conflict_paths, "manual_conflict_resolution_delta": resolution_delta,
+        "work_graph": dict(observed.work_graph), "lifecycle_absence": dict(observed.lifecycle_absence),
+        "validation_execution": {
+            "registry_digest": digest_json(registry), "command_set_digest": digest_json(registry["validation"]),
+        },
+        "expected_signer": authorization["expected_signer"],
+    })
+
+
 def verify_combined_tree(evidence: Mapping[str, Any], *, mechanical_tree_sha: str, conflict_paths: list[str], observed_delta: list[dict[str, str]], retained_conflict_markers: bool) -> None:
     if _oid(mechanical_tree_sha, "observed mechanical tree") != evidence["mechanical_merge_tree_sha"] or _paths(conflict_paths) != evidence["mechanical_conflict_paths"] or _delta(observed_delta) != evidence["manual_conflict_resolution_delta"]:
         raise PreEnrollmentIntegrationError("combined-tree or conflict evidence mismatch")

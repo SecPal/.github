@@ -6,8 +6,13 @@ from __future__ import annotations
 
 import importlib.util
 import copy
+from contextlib import ExitStack
+import json
+import os
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 from types import SimpleNamespace
 from unittest import TestCase, main, mock
 
@@ -210,6 +215,53 @@ class AndroidIntegrationPolicyTests(SecpalAppIntegrationPolicyTests):
 
 
 class PreEnrollmentIntegrationBoundaryTests(TestCase):
+    def test_deleted_fork_repository_normalizes_to_ineligible_facts(self) -> None:
+        runner = mock.Mock()
+        runner.run.return_value = {"data": {"repository": {
+            "nameWithOwner": "SecPal/.github", "defaultBranchRef": {"name": "main", "target": {"oid": PARENT_2}},
+            "pullRequest": {
+                "number": 900002, "state": "OPEN", "isDraft": True, "headRefName": "delivery", "headRefOid": PARENT_1,
+                "baseRefName": "main", "baseRepository": {"nameWithOwner": "SecPal/.github"}, "headRepository": None,
+                "closingIssuesReferences": {"nodes": [{"repository": {"nameWithOwner": "SecPal/.github"}, "number": 900001, "state": "OPEN"}], "pageInfo": {"hasNextPage": False}},
+            },
+        }}}
+        github = actions.LiveGitHub(runner)
+        graph = {"issue": {"claims": [{"pull_request": "SecPal/.github#900002"}],
+                           "leaf": True, "blocked": False, "ready": True}}
+        publication = SimpleNamespace(verify_pre_enrollment_absence=lambda *_: SimpleNamespace(evidence_digest="4" * 64))
+        with (
+            mock.patch.object(actions, "_observe_pre_enrollment_work_graph", return_value=graph),
+            mock.patch.object(actions, "_authenticate_protected_bridge_main", return_value=PARENT_2),
+            mock.patch.object(actions, "LiveGitHub", return_value=github),
+            self.assertRaisesRegex(actions.fast_path.SecurityBlocker, "Draft PR observation"),
+        ):
+            actions._observe_pre_enrollment_state(ROOT, "SecPal/.github", 900001, 900002, registry(), publication)
+        # Preserve the existing Ready family's rejection, rather than letting
+        # nullable-repository normalization accidentally admit its missing head.
+        runner.run.return_value["data"]["repository"]["pullRequest"]["isDraft"] = False
+        with mock.patch.object(actions, "LiveGitHub", return_value=github), self.assertRaises(
+            (actions.MutationBlocked, actions.MutationFailure, AttributeError, TypeError)
+        ):
+            actions._observe_ready_integration_authority_once("SecPal/.github", 900002)
+
+    def test_graph_observation_cannot_load_caller_python_or_node_code(self) -> None:
+        with mock.patch.dict(os.environ, {"PYTHONPATH": "/untrusted", "NODE_OPTIONS": "--require=/untrusted.js"}), mock.patch.object(actions.subprocess, "run") as run:
+            actions._run_pre_enrollment_work_graph(ROOT, ["graph.py", "validate-issue", "SecPal/.github#900001"])
+        self.assertIn("-I", run.call_args.args[0])
+        self.assertNotIn("NODE_OPTIONS", run.call_args.kwargs["env"])
+        self.assertNotIn("PYTHONPATH", run.call_args.kwargs["env"])
+
+    def test_production_preparation_accepts_only_target_selectors(self) -> None:
+        arguments = actions.build_parser().parse_args([
+            "prepare-pre-enrollment-draft-integration", "--repo", "SecPal/.github",
+            "--delivery-issue", "900001", "--pr", "900002", "--repo-root", str(ROOT),
+            "--authorization-id", "integration-001", "--output", "integration.json",
+        ])
+        self.assertEqual(arguments.authorization_id, "integration-001")
+        self.assertFalse(hasattr(arguments, "registry"))
+        self.assertFalse(hasattr(arguments, "expected_signer"))
+        self.assertFalse(hasattr(arguments, "evidence"))
+
     def test_typed_pre_enrollment_error_is_a_bounded_cli_security_failure(self) -> None:
         with mock.patch.object(
             actions, "_command_attest_validation",
@@ -847,6 +899,237 @@ class PreEnrollmentIntegrationContractTests(TestCase):
                 receipt_id="receipt-001", attestation_id="attestation-001",
             )
         self.assertEqual(calls, {"observe": 1, "create": 0, "push": 0})
+
+
+class ProductionPreparationTests(TestCase):
+    """Real Git derivation; provider fixtures prove behavior, not live authority."""
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory(prefix="secpal-producer-")
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name) / "candidate"
+        self.root.mkdir()
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.name", "Fixture")
+        self.git("config", "user.email", "fixture@example.invalid")
+        self.git("config", "commit.gpgsign", "false")
+        self.git("remote", "add", "origin", "https://github.com/SecPal/.github.git")
+        (self.root / "shared").write_text("base\n")
+        self.commit()
+        self.git("checkout", "-q", "-b", "delivery")
+        (self.root / "draft").write_text("draft\n")
+        self.commit()
+        self.head = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "main")
+        (self.root / "main").write_text("main\n")
+        self.commit()
+        self.main_head = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "delivery")
+        self.arguments = SimpleNamespace(
+            repo="SecPal/.github", delivery_issue=900001, pr=900002,
+            repo_root=str(self.root), authorization_id="integration-001",
+            output=str(Path(self.directory.name) / "integration.json"),
+        )
+        self.live = {
+            "repository": self.arguments.repo, "pull_request_number": self.arguments.pr,
+            "state": "OPEN", "draft": True, "head_ref": "delivery", "head_sha": self.head,
+            "base_repository": self.arguments.repo, "head_repository": self.arguments.repo,
+            "base_ref": "main", "base_sha": self.main_head,
+            "closing_issues_complete": True,
+            "closing_issues": [{"repository": self.arguments.repo,
+                                "number": self.arguments.delivery_issue, "state": "OPEN"}],
+        }
+        self.graph = {"complete": True, "findings": [], "issue": {
+            "key": f"{self.arguments.repo}#{self.arguments.delivery_issue}",
+            "leaf": True, "ready": True, "blocked": False, "malformed": False,
+            "reasons": [], "claims": [{"pull_request": f"{self.arguments.repo}#{self.arguments.pr}"}],
+        }}
+        self.helpers = actions._load_enrolled_draft_integration_helper()
+        self.policy = SimpleNamespace(transition_signer_identities=frozenset({AUTHORIZER}))
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        for target, name, kwargs in (
+            (actions, "_require_accepted_main_bridge_source", {"return_value": actions._run_attestation_git(ROOT, ["rev-parse", "HEAD"]).stdout.strip()}),
+            (actions, "_load_enrolled_draft_integration_helper", {"return_value": self.helpers}),
+            (actions, "_load_lifecycle_publication_helpers", {"return_value": (self.helpers.authority, self.helpers.publication)}),
+            (actions, "_authenticate_protected_bridge_main", {"return_value": self.main_head}),
+            (actions.LiveGitHub, "observe_ready_integration_authority", {"side_effect": lambda *_: copy.deepcopy(self.live)}),
+            (actions, "_run_pre_enrollment_work_graph", {"side_effect": lambda *_: SimpleNamespace(returncode=0, stdout=json.dumps(self.graph))}),
+            (self.helpers.publication, "verify_pre_enrollment_absence", {"return_value": SimpleNamespace(evidence_digest="4" * 64)}),
+            (self.helpers.authority, "_load_lifecycle_trust_policy", {"return_value": self.policy}),
+            (self.helpers.execution, "_policy_role_signer", {"return_value": (AUTHORIZER, fake_signer)}),
+            (self.helpers.authority, "_policy_signature_verifier", {"return_value": lambda *_: True}),
+            (self.helpers.authority, "_verify_signature", {"side_effect": self.verify_signature}),
+        ):
+            self.stack.enter_context(mock.patch.object(target, name, **kwargs))
+
+    def git(self, *argv: str) -> str:
+        return subprocess.run(["git", *argv], cwd=self.root, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def commit(self) -> None:
+        self.git("add", ".")
+        self.git("commit", "-qm", "fixture")
+
+    @staticmethod
+    def verify_signature(payload, signature, signer, domain, *_):
+        if signature != fake_signer(payload, domain) or signer != AUTHORIZER:
+            raise actions.fast_path.SecurityBlocker("authorization mismatch")
+        return True
+
+    def prepare(self) -> dict:
+        actions._command_prepare_pre_enrollment_draft_integration(self.arguments)
+        return integration.loads_closed_json(Path(self.arguments.output).read_bytes())
+
+    def test_produces_admitted_package_without_caller_authored_facts_or_mutation(self) -> None:
+        before = self.git("status", "--porcelain=v2")
+        with mock.patch.object(actions, "_push_pre_enrollment_commit") as push:
+            package = self.prepare()
+        binding = actions._fast_registry_binding(actions.select_repository(actions.load_registry(), self.arguments.repo))
+        self.assertEqual(integration.normalize_evidence(package, registry=binding), package)
+        actions._verify_pre_enrollment_external_authority(package, self.root)
+        tree, conflicts = actions._mechanical_integration_result(self.root, [self.head, self.main_head])
+        integration.verify_combined_tree(package, mechanical_tree_sha=tree,
+                                         conflict_paths=conflicts, observed_delta=[], retained_conflict_markers=False)
+        self.assertEqual(package["validated_tree_sha"], tree)
+        self.assertEqual(package["ordered_parent_shas"], [self.head, self.main_head])
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.head)
+        self.assertEqual(self.git("status", "--porcelain=v2"), before)
+        push.assert_not_called()
+
+    def test_observation_rejects_wrong_delivery_state_graph_or_absence(self) -> None:
+        base_live, base_graph = copy.deepcopy(self.live), copy.deepcopy(self.graph)
+        cases = [
+            ("live", key, value) for key, value in (
+                ("repository", "Other/repo"), ("head_repository", "Other/repo"),
+                ("base_repository", "Other/repo"), ("pull_request_number", 900003),
+                ("state", "CLOSED"), ("draft", False), ("head_sha", "a" * 40),
+                ("base_ref", "release"), ("base_sha", "b" * 40),
+                ("closing_issues_complete", False), ("closing_issues", []),
+                ("head_ref", "bad ref"),
+            )
+        ] + [("issue", key, value) for key, value in (
+            ("key", "SecPal/.github#900003"), ("ready", False), ("blocked", True),
+            ("malformed", True), ("leaf", False), ("reasons", ["unsatisfied_dependency"]),
+            ("claims", []), ("claims", [{"pull_request": "SecPal/.github#900003"}]),
+        )] + [("graph", "complete", False)]
+        for kind, key, value in cases:
+            with self.subTest(kind=kind, key=key, value=value):
+                self.live, self.graph = copy.deepcopy(base_live), copy.deepcopy(base_graph)
+                target = self.live if kind == "live" else self.graph["issue"] if kind == "issue" else self.graph
+                target[key] = value
+                with self.assertRaises((actions.fast_path.SecurityBlocker, integration.PreEnrollmentIntegrationError,
+                                        actions.pre_enrollment.PreEnrollmentIntegrationError)):
+                    self.prepare()
+                self.assertFalse(Path(self.arguments.output).exists())
+        self.live, self.graph = base_live, base_graph
+        for reason in ("CURRENT exists", "native genesis exists", "HEAD_ADVANCED exists"):
+            with self.subTest(reason=reason), mock.patch.object(
+                self.helpers.publication, "verify_pre_enrollment_absence",
+                side_effect=self.helpers.publication.LifecyclePublicationError(reason),
+            ), self.assertRaises(actions.fast_path.SecurityBlocker):
+                self.prepare()
+
+    def test_independent_admission_rejects_forged_package_fields(self) -> None:
+        package = self.prepare()
+        cases = [
+            ("draft_pr", "observation_digest", "5" * 64),
+            ("current_main", "observation_digest", "5" * 64),
+            ("work_graph", "evidence_digest", "5" * 64),
+            ("lifecycle_absence", "evidence_digest", "5" * 64),
+            ("validation_execution", "registry_digest", "5" * 64),
+            ("validation_execution", "command_set_digest", "5" * 64),
+            ("authorization", "authorization_id", "other-operation"),
+            (None, "expected_signer", "substituted@example.invalid"),
+        ]
+        for section, key, value in cases:
+            with self.subTest(section=section, key=key):
+                forged = copy.deepcopy(package)
+                (forged[section] if section else forged)[key] = value
+                with self.assertRaises((actions.fast_path.SecurityBlocker, actions.pre_enrollment.PreEnrollmentIntegrationError)):
+                    actions._verify_pre_enrollment_external_authority(forged, self.root)
+
+    def test_drift_between_observation_and_admission_leaves_no_package(self) -> None:
+        drifted = {**self.live, "head_sha": "a" * 40}
+        with mock.patch.object(actions.LiveGitHub, "observe_ready_integration_authority",
+                               side_effect=[self.live, drifted]), self.assertRaises(actions.pre_enrollment.PreEnrollmentIntegrationError):
+            self.prepare()
+        self.assertFalse(Path(self.arguments.output).exists())
+
+    def test_independent_lifecycle_drift_is_a_bounded_cli_failure(self) -> None:
+        class IndependentlyLoadedPublicationError(ValueError):
+            pass
+
+        publication = SimpleNamespace(
+            LifecyclePublicationError=IndependentlyLoadedPublicationError,
+            verify_pre_enrollment_absence=mock.Mock(side_effect=IndependentlyLoadedPublicationError("CURRENT appeared")),
+        )
+        with mock.patch.object(actions, "_load_lifecycle_publication_helpers", return_value=(self.helpers.authority, publication)), self.assertRaisesRegex(actions.fast_path.SecurityBlocker, "lifecycle absence"):
+            self.prepare()
+        self.assertFalse(Path(self.arguments.output).exists())
+
+    def test_real_conflict_resolution_is_derived_and_bounded(self) -> None:
+        self.git("checkout", "-q", "main")
+        (self.root / "shared").write_text("main conflict\n")
+        self.commit()
+        self.main_head = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "delivery")
+        (self.root / "shared").write_text("draft conflict\n")
+        self.commit()
+        self.head = self.git("rev-parse", "HEAD")
+        self.live.update(head_sha=self.head, base_sha=self.main_head)
+        with mock.patch.object(actions, "_authenticate_protected_bridge_main", return_value=self.main_head):
+            result = subprocess.run(["git", "merge", "--no-commit", self.main_head], cwd=self.root,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+            with self.assertRaises(actions.fast_path.SecurityBlocker):
+                self.prepare()
+            (self.root / "shared").write_text("resolved\n")
+            self.git("add", "shared")
+            package = self.prepare()
+            self.assertEqual(package["mechanical_conflict_paths"], ["shared"])
+            self.assertEqual([item["path"] for item in package["manual_conflict_resolution_delta"]], ["shared"])
+            Path(self.arguments.output).unlink()
+            (self.root / "unrelated").write_text("unrelated edit\n")
+            self.git("add", "unrelated")
+            with self.assertRaises(actions.pre_enrollment.PreEnrollmentIntegrationError):
+                self.prepare()
+            self.assertFalse(Path(self.arguments.output).exists())
+
+    def test_package_composes_with_existing_executor_receipt_and_head_proof(self) -> None:
+        package = self.prepare()
+        binding = actions._fast_registry_binding(actions.select_repository(actions.load_registry(), self.arguments.repo))
+        current = actions.pre_enrollment
+        tree, conflicts = actions._mechanical_integration_result(self.root, package["ordered_parent_shas"])
+        result = current.execute_once(
+            evidence=package, registry=binding, accepted_authorization_signers=frozenset({AUTHORIZER}),
+            authorization_verifier=lambda payload, signature, signer, domain: self.verify_signature(payload, signature, signer, domain),
+            derive_tree=lambda *_: (tree, conflicts, [], False), run_registered_validation=lambda *_: True,
+            observe_frozen_state=lambda: actions._observe_pre_enrollment_state(
+                self.root, self.arguments.repo, self.arguments.delivery_issue, self.arguments.pr, binding, self.helpers.publication),
+            create_signed_candidate=lambda tree, parents, trailers, signer: {
+                "head_sha": CANDIDATE, "tree_sha": tree, "parent_shas": parents,
+                "verified_signer": signer, "signature_format": "ssh"},
+            persist_candidate_evidence=lambda *_: None, push_fast_forward=lambda *_: True,
+            observe_final_pr_head=lambda: CANDIDATE, receipt_id="producer-receipt", attestation_id="producer-attestation",
+        )
+        self.assertTrue(current.is_verified_initial_head_proof(result.initial_head_proof))
+        self.assertEqual(result.validation_receipt["integration_evidence_digest"], fast_path.digest_json(package))
+        self.assertEqual(result.final_attestation["ordered_parent_shas"], [self.head, self.main_head])
+
+    def test_output_cannot_overwrite_inputs_evidence_or_git_refs(self) -> None:
+        for output in (self.root / "shared", self.root / ".git" / "refs" / "heads" / "new",
+                       ROOT / "scripts" / "secpal-pr-review-actions.py"):
+            with self.subTest(output=output), self.assertRaises(actions.fast_path.SecurityBlocker):
+                self.arguments.output = str(output)
+                self.prepare()
+        self.arguments.output = str(Path(self.directory.name) / "existing.json")
+        Path(self.arguments.output).write_text("retained evidence\n")
+        with self.assertRaises(actions.fast_path.SecurityBlocker):
+            self.prepare()
+        self.assertEqual(Path(self.arguments.output).read_text(), "retained evidence\n")
+
+
 
 
 if __name__ == "__main__":

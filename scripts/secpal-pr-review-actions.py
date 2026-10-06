@@ -5160,6 +5160,13 @@ def build_parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--attestation")
     batch_parser.add_argument("--output")
     batch_parser.add_argument("--apply", action="store_true")
+    preparation = subparsers.add_parser("prepare-pre-enrollment-draft-integration")
+    preparation.add_argument("--repo", required=True)
+    preparation.add_argument("--pr", required=True, type=_positive_integer)
+    preparation.add_argument("--delivery-issue", required=True, type=_positive_integer)
+    preparation.add_argument("--repo-root", required=True)
+    preparation.add_argument("--authorization-id", required=True)
+    preparation.add_argument("--output", required=True)
     pre_enrollment_parser = subparsers.add_parser(
         "integrate-pre-enrollment-draft"
     )
@@ -6082,8 +6089,13 @@ def _run_attestation_git(
 def _run_pre_enrollment_work_graph(
     repository_root: Path, arguments: list[str]
 ) -> subprocess.CompletedProcess[str]:
+    environment = evidence.command_environment("gh")
+    for key in tuple(environment):
+        if key.startswith("PYTHON") or key in {"NODE_OPTIONS", "NODE_PATH"}:
+            environment.pop(key)
+    isolated_arguments = ["-I", *arguments]
     return subprocess.run(
-        [sys.executable, *arguments],
+        [sys.executable, *isolated_arguments],
         cwd=repository_root,
         check=False,
         stdin=subprocess.DEVNULL,
@@ -6091,6 +6103,7 @@ def _run_pre_enrollment_work_graph(
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=environment,
         timeout=EXTERNAL_COMMAND_TIMEOUT_SECONDS,
     )
 
@@ -6386,37 +6399,17 @@ def _verify_ready_integration_live_observation(
         raise fast_path.SecurityBlocker("current target-base authority drifted")
 
 
-def _verify_pre_enrollment_external_authority(
-    evidence_value: dict[str, Any], repository_root: Path
-) -> None:
-    """Authenticate signed selection, canonical graph, and journal absence once."""
-
-    lifecycle_authority, lifecycle_publication = _load_lifecycle_publication_helpers()
-    policy = lifecycle_authority._load_lifecycle_trust_policy(
-        evidence_value["repository"]
-    )
-    pre_enrollment.verify_authorization(
-        evidence_value["authorization"],
-        accepted_signers=policy.transition_signer_identities,
-        verifier=lambda payload, signature, signer, domain: (
-            lifecycle_authority._verify_signature(
-                payload,
-                signature,
-                signer,
-                domain,
-                policy.transition_signer_identities,
-                lifecycle_authority._policy_signature_verifier(policy),
-            )
-            is not None
-        ),
-    )
+def _observe_pre_enrollment_work_graph(
+    repository_root: Path, repository: str, delivery_issue: int,
+) -> dict[str, Any]:
+    """Observe native graph state; its canonical reader owns READY semantics."""
     try:
         graph_result = _run_pre_enrollment_work_graph(
             repository_root,
             [
                 str(REPOSITORY_ROOT / "scripts/secpal-work-graph.py"),
                 "validate-issue",
-                f'{evidence_value["repository"]}#{evidence_value["delivery_issue"]}',
+                f"{repository}#{delivery_issue}",
             ],
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -6424,39 +6417,91 @@ def _verify_pre_enrollment_external_authority(
             "canonical pre-enrollment work-graph evidence is unavailable"
         ) from exc
     try:
-        graph = json.loads(graph_result.stdout)
+        graph = pre_enrollment.loads_closed_json(graph_result.stdout)
     except (json.JSONDecodeError, TypeError) as exc:
         raise fast_path.SecurityBlocker(
             "canonical pre-enrollment work-graph evidence is unavailable"
         ) from exc
-    if graph_result.returncode != 0:
+    if graph_result.returncode != 0 or not isinstance(graph, dict):
         raise fast_path.SecurityBlocker(
             "canonical work graph does not authorize pre-enrollment execution"
         )
     _verify_pre_enrollment_work_graph_result(
         graph,
-        repository=evidence_value["repository"],
-        delivery_issue=evidence_value["delivery_issue"],
-        expected_digest=evidence_value["work_graph"]["evidence_digest"],
+        repository=repository,
+        delivery_issue=delivery_issue,
+        expected_digest=fast_path.digest_json(graph),
     )
-    absence = lifecycle_publication.verify_pre_enrollment_absence(
-        evidence_value["repository"], evidence_value["delivery_issue"]
+    return graph
+
+
+def _observe_pre_enrollment_state(
+    repository_root: Path, repository: str, delivery_issue: int,
+    pull_request: int, binding: dict[str, Any], lifecycle_publication: Any,
+) -> pre_enrollment.FrozenObservation:
+    """Read maintained sources, then normalize and admit their bounded facts."""
+    graph = _observe_pre_enrollment_work_graph(repository_root, repository, delivery_issue)
+    claims = graph["issue"].get("claims")
+    if (not isinstance(claims, list) or len(claims) != 1 or not isinstance(claims[0], dict)
+            or claims[0].get("pull_request") != f"{repository}#{pull_request}"):
+        raise fast_path.SecurityBlocker("delivery does not have the exact sole primary PR")
+    try:
+        absence = lifecycle_publication.verify_pre_enrollment_absence(repository, delivery_issue)
+    except lifecycle_publication.LifecyclePublicationError as exc:
+        raise fast_path.SecurityBlocker("pre-enrollment lifecycle absence verification failed") from exc
+    main = _authenticate_protected_bridge_main(repository)
+    try:
+        live = LiveGitHub().observe_ready_integration_authority(repository, pull_request)
+    except (MutationFailure, MutationBlocked, AttributeError, TypeError) as exc:
+        raise fast_path.SecurityBlocker("pre-enrollment Draft PR observation is unavailable or malformed") from exc
+    pre_enrollment.admit_live_observation(
+        live, repository=repository, delivery_issue=delivery_issue,
+        pull_request=pull_request, registry=binding, protected_main_sha=main,
     )
-    if (
-        absence.evidence_digest
-        != evidence_value["lifecycle_absence"]["evidence_digest"]
-        or any(
-            evidence_value["lifecycle_absence"][key] is not False
-            for key in (
-                "current_publication",
-                "native_genesis",
-                "lifecycle_aware_head_advancement",
-            )
+    draft, current = pre_enrollment.assemble_live_observation(live, repository=repository)
+    checked = _run_attestation_git(
+        repository_root, ["check-ref-format", f'refs/heads/{live["head_ref"]}'], allow_failure=True,
+    )
+    if checked.returncode != 0:
+        raise fast_path.SecurityBlocker("Draft delivery branch ref is unsafe")
+    return pre_enrollment.FrozenObservation(
+        draft, current,
+        {"leaf": graph["issue"]["leaf"], "hard_dependencies_satisfied": not graph["issue"]["blocked"],
+         "ready": graph["issue"]["ready"], "evidence_digest": fast_path.digest_json(graph)},
+        {"current_publication": False, "native_genesis": False,
+         "lifecycle_aware_head_advancement": False, "evidence_digest": absence.evidence_digest},
+    )
+
+
+def _verify_pre_enrollment_external_authority(
+    evidence_value: dict[str, Any], repository_root: Path
+) -> None:
+    """Independently re-observe authority; a caller's digests grant no admission."""
+    lifecycle_authority, lifecycle_publication = _load_lifecycle_publication_helpers()
+    repository = evidence_value["repository"]
+    binding = _fast_registry_binding(select_repository(load_registry(), repository))
+    selected = pre_enrollment.normalize_evidence(evidence_value, registry=binding)
+    policy = lifecycle_authority._load_lifecycle_trust_policy(repository)
+    try:
+        pre_enrollment.verify_authorization(
+            selected["authorization"], accepted_signers=policy.transition_signer_identities,
+            verifier=lambda payload, signature, signer, domain: (
+                lifecycle_authority._verify_signature(
+                    payload, signature, signer, domain, policy.transition_signer_identities,
+                    lifecycle_authority._policy_signature_verifier(policy),
+                ) is not None
+            ),
         )
-    ):
-        raise fast_path.SecurityBlocker(
-            "delivery has lifecycle authority or stale lifecycle-absence evidence"
-        )
+    except lifecycle_authority.LifecycleAuthorityError as exc:
+        raise fast_path.SecurityBlocker("pre-enrollment authorization signature verification failed") from exc
+    observed = _observe_pre_enrollment_state(
+        repository_root, repository, selected["delivery_issue"], selected["pull_request"],
+        binding, lifecycle_publication,
+    )
+    pre_enrollment.verify_fresh_state(
+        selected, live_pr=observed.draft_pr, live_main=observed.current_main,
+        work_graph=observed.work_graph, lifecycle_absence=observed.lifecycle_absence,
+    )
 
 
 def _verify_pre_enrollment_work_graph_result(
@@ -10417,6 +10462,94 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
     return 0 if report["status"] == "BATCH_APPLIED" else 3
 
 
+def _command_prepare_pre_enrollment_draft_integration(arguments: argparse.Namespace) -> int:
+    """Derive one admitted package; never stage, commit, push or publish it."""
+    pre_enrollment._repository(arguments.repo)
+    pre_enrollment._positive(arguments.delivery_issue, "delivery issue")
+    pre_enrollment._positive(arguments.pr, "pull request")
+    pre_enrollment._identity(arguments.authorization_id, "authorization identity")
+    entry = select_repository(load_registry(), arguments.repo)
+    binding = _fast_registry_binding(entry)
+    # Validate policy through the same closed registry authority the executor
+    # consumes. No caller-selected registry, command set or signer is accepted.
+    if binding.get("pre_enrollment_integration_policy", {}).get("topology_kind") != pre_enrollment.KIND:
+        raise fast_path.SecurityBlocker("repository has no closed pre-enrollment integration policy")
+    helpers = _load_enrolled_draft_integration_helper()
+    try:
+        accepted_main = helpers._trusted_source(sys.modules.get(__name__), arguments.repo)
+        # READY observation is executable authority too, not candidate-local code.
+        graph_tree = _run_attestation_git(REPOSITORY_ROOT, [
+            "ls-tree", "-r", "--name-only", accepted_main, "--",
+            "scripts/secpal_work_graph",
+        ]).stdout.splitlines()
+        if not graph_tree:
+            raise fast_path.SecurityBlocker("accepted-main work-graph tooling is unavailable")
+        for path in ["scripts/secpal-work-graph.py", *graph_tree]:
+            _require_exact_accepted_main_blob(REPOSITORY_ROOT, accepted_main, path)
+        root = Path(arguments.repo_root).resolve(strict=True)
+        _require_distinct_candidate_repository_root(root)
+        output = Path(arguments.output).absolute()
+        resolved_output = output.resolve()
+        if (
+            output.exists() or output.is_symlink() or ".git" in output.parts or ".git" in resolved_output.parts
+            or root == resolved_output or root in resolved_output.parents
+            or (REPOSITORY_ROOT in resolved_output.parents
+                and REPOSITORY_ROOT / ".context" not in resolved_output.parents)
+        ):
+            raise fast_path.SecurityBlocker("evidence output must be a new file outside candidate inputs and Git metadata")
+        head, status = _attestation_local_state(root, arguments.repo)
+        observed = _observe_pre_enrollment_state(
+            root, arguments.repo, arguments.delivery_issue, arguments.pr, binding, helpers.publication,
+        )
+        if head != observed.draft_pr["head_sha"]:
+            raise fast_path.SecurityBlocker("local candidate head differs from authenticated Draft head")
+        parents = [head, observed.current_main["sha"]]
+        mechanical, conflicts = _mechanical_integration_result(root, parents)
+        # Clean integrations derive their tree directly. A conflict resolution is
+        # read from the frozen index; existing admission rejects extra paths.
+        tree = _staged_tree(root, status) if conflicts or status else mechanical
+        delta = _integration_tree_delta(root, mechanical, tree)
+        _reject_integration_conflict_markers(root, tree, conflicts)
+        policy = helpers.authority._load_lifecycle_trust_policy(arguments.repo)
+        signer_id, signer = helpers.execution._policy_role_signer(
+            policy, policy.transition_signer_identities, "pre-enrollment integration signer",
+            allow_routine_default=True,
+        )
+        authorization = pre_enrollment.create_authorization(
+            authorization_id=arguments.authorization_id, repository=arguments.repo,
+            delivery_issue=arguments.delivery_issue, pull_request=arguments.pr,
+            draft_head_sha=head, current_main_sha=parents[1], expected_signer=signer_id,
+            signer_identity=signer_id, signer=signer,
+        )
+        selected = pre_enrollment.normalize_evidence(pre_enrollment.assemble_evidence(
+            authorization=authorization, registry=binding, observed=observed,
+            validated_tree_sha=tree, mechanical_tree_sha=mechanical,
+            conflict_paths=conflicts, resolution_delta=delta,
+        ), registry=binding)
+        pre_enrollment.verify_combined_tree(
+            selected, mechanical_tree_sha=mechanical, conflict_paths=conflicts,
+            observed_delta=delta, retained_conflict_markers=False,
+        )
+        # Derivation never confers admission. Re-observe through the existing
+        # external verifier before publishing any evidence, with no retry.
+        if helpers._trusted_source(sys.modules.get(__name__), arguments.repo) != accepted_main:
+            raise fast_path.SecurityBlocker("accepted-main tooling changed during evidence production")
+        _verify_pre_enrollment_external_authority(selected, root)
+        if _attestation_local_state(root, arguments.repo) != (head, status):
+            raise fast_path.SecurityBlocker("candidate changed during evidence production")
+        if (conflicts or status) and _staged_tree(root, status) != tree:
+            raise fast_path.SecurityBlocker("candidate tree changed during evidence production")
+        with output.open("xb") as artifact:
+            artifact.write(pre_enrollment.canonical_json_bytes(selected))
+    except (helpers.authority.LifecycleAuthorityError,
+            helpers.publication.LifecyclePublicationError,
+            helpers.execution.LifecycleExecutionError, OSError) as exc:
+        raise fast_path.SecurityBlocker(
+            "pre-enrollment evidence production failed: " + evidence.redact_diagnostic(str(exc))
+        ) from exc
+    return 0
+
+
 def _command_integrate_pre_enrollment_draft(arguments: argparse.Namespace) -> int:
     """Create and non-force-push one exact authenticated Draft integration."""
 
@@ -10730,6 +10863,8 @@ def main(argv: list[str] | None = None) -> int:
             return _command_enrolled_draft_integration(arguments)
         if arguments.command == "integrate-pre-enrollment-draft":
             return _command_integrate_pre_enrollment_draft(arguments)
+        if arguments.command == "prepare-pre-enrollment-draft-integration":
+            return _command_prepare_pre_enrollment_draft_integration(arguments)
         if arguments.command == "advance-qualified-remediation-successor-loss":
             report = advance_qualified_remediation_successor_loss(
                 repository_root=Path(arguments.repo_root),

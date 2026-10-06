@@ -545,6 +545,14 @@ delivery as a READY leaf, and the protected lifecycle journal must prove both
 CURRENT and native-genesis absence. A signed authorization fixes the exact
 repository, issue, PR, both parents, expected signer, and operation identity.
 
+The [maintained producer](pre-enrollment-evidence-production.md) derives that
+complete package through `prepare-pre-enrollment-draft-integration`. The caller
+identifies the registered delivery, candidate root, and operation ID. Production
+observes current facts, constructs the existing signed authorization, and
+assembles the existing schema; independent verifier admission re-observes the
+authority and compares every observation binding. The producer has no branch
+or lifecycle mutation operation.
+
 The shared Git mechanics derive the mechanical merge tree, canonical conflict
 paths, raw resolution delta, ordered parents, and candidate signature. Clean
 merges require exact mechanical-tree equality. Conflict-bearing merges require
