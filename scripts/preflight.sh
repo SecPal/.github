@@ -102,8 +102,7 @@ if command -v npx >/dev/null 2>&1; then
       | xargs -0 ./node_modules/.bin/markdownlint --config .markdownlint.json -- || FORMAT_EXIT=1
   else
     echo "ℹ️  markdownlint not found in node_modules — run 'npm ci' first for reproducible linting." >&2
-    git ls-files -z -- '*.md' \
-      | xargs -0 npx --yes --package markdownlint-cli@0.49.0 markdownlint --config .markdownlint.json -- || FORMAT_EXIT=1
+    FORMAT_EXIT=1
   fi
 fi
 # Workflow linting is enforced by pre-commit hooks and CI.

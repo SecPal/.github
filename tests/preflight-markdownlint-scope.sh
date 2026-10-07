@@ -10,7 +10,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/preflight-markdownlint-scope.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 
-mkdir -p "$workspace/scripts" "$workspace/bin" "$workspace/.context"
+mkdir -p "$workspace/scripts" "$workspace/bin" "$workspace/.context" "$workspace/node_modules/.bin"
 cp "$REPO_ROOT/scripts/preflight.sh" "$workspace/scripts/preflight.sh"
 mkdir -p "$workspace/tests"
 
@@ -19,8 +19,11 @@ test_log="$workspace/test.log"
 
 cat >"$workspace/bin/npx" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "$LOG_FILE"
+printf '%s\n' "${0##*/} $*" >> "$LOG_FILE"
 markdownlint_call=0
+if [ "${0##*/}" = markdownlint ]; then
+  markdownlint_call=1
+fi
 tracked_bad=0
 for argument in "$@"; do
   case "$argument" in
@@ -43,6 +46,7 @@ fi
 exit 0
 EOF
 chmod +x "$workspace/bin/npx"
+cp "$workspace/bin/npx" "$workspace/node_modules/.bin/markdownlint"
 
 cat >"$workspace/bin/reuse" <<'EOF'
 #!/usr/bin/env bash
@@ -206,6 +210,27 @@ EOF
 )
 
 assert_unit_suites_ran
+
+# An absent locked CLI must fail instead of downloading a separate toolchain.
+mv "$workspace/node_modules/.bin/markdownlint" "$workspace/saved-markdownlint"
+if (
+  cd "$workspace"
+  LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/bin:$PATH" \
+    bash scripts/preflight.sh >"$workspace/missing-markdownlint.log" 2>&1
+); then
+  echo "Expected missing locked markdownlint to fail preflight" >&2
+  exit 1
+fi
+if ! grep -Fq "run 'npm ci' first" "$workspace/missing-markdownlint.log"; then
+  echo "Expected missing locked markdownlint to explain how to install it" >&2
+  cat "$workspace/missing-markdownlint.log" >&2
+  exit 1
+fi
+if grep -Fq -- '--package markdownlint' "$log_file"; then
+  echo "Expected preflight never to download a fallback markdownlint" >&2
+  exit 1
+fi
+mv "$workspace/saved-markdownlint" "$workspace/node_modules/.bin/markdownlint"
 : >"$test_log"
 
 # Git invokes a pre-push hook with the remote name and location as arguments.
