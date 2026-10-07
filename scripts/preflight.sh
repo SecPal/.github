@@ -97,13 +97,13 @@ FORMAT_EXIT=0
 if command -v npx >/dev/null 2>&1; then
   git ls-files -z -- '*.md' '*.yml' '*.yaml' '*.json' '*.ts' '*.tsx' '*.js' '*.jsx' \
     | xargs -0 npx --yes prettier@3.5.3 --check -- || FORMAT_EXIT=1
-  if [ -x ./node_modules/.bin/markdownlint ]; then
-    git ls-files -z -- '*.md' \
-      | xargs -0 ./node_modules/.bin/markdownlint --config .markdownlint.json -- || FORMAT_EXIT=1
-  else
-    echo "ℹ️  markdownlint not found in node_modules — run 'npm ci' first for reproducible linting." >&2
-    FORMAT_EXIT=1
-  fi
+fi
+if [ -x ./node_modules/.bin/markdownlint ]; then
+  git ls-files -z -- '*.md' \
+    | xargs -0 ./node_modules/.bin/markdownlint --config .markdownlint.json -- || FORMAT_EXIT=1
+else
+  echo "ℹ️  markdownlint not found in node_modules — run 'npm ci' first for reproducible linting." >&2
+  FORMAT_EXIT=1
 fi
 # Workflow linting is enforced by pre-commit hooks and CI.
 # Local preflight keeps this as guidance only because direct actionlint runs

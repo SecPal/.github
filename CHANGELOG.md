@@ -19,7 +19,8 @@ Log of notable changes to SecPal organization defaults (newest first).
   Markdown lint rules.
 - Use the locked local Markdown linter in pre-commit and fail preflight when
   it is unavailable instead of downloading a separate vulnerable toolchain.
-  Run `npm ci` before using the Markdown pre-commit hook.
+  The setup script installs locked dependencies before installing and running
+  hooks. Markdown linting also runs when `npx` is unavailable.
 - Cover TOML rule configuration, inherited KaTeX trust, math rendering and
   missing-tool failure with regression checks in CI.
 

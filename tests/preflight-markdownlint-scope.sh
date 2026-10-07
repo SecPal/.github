@@ -211,6 +211,47 @@ EOF
 
 assert_unit_suites_ran
 
+# Exercise a real PATH without Node tooling, retaining only fixture prerequisites.
+mkdir -p "$workspace/no-node-bin"
+for tool in bash git mktemp xargs python3 mkdir cp rm grep sed awk cat find; do
+  ln -s "$(command -v "$tool")" "$workspace/no-node-bin/$tool"
+done
+: >"$log_file"
+: >"$test_log"
+(
+  cd "$workspace"
+  LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/no-node-bin" \
+    bash scripts/preflight.sh >"$workspace/no-npx.log" 2>&1
+)
+if ! grep -Fq 'markdownlint --config .markdownlint.json --' "$log_file"; then
+  echo "Expected locked Markdown linting to run without npx" >&2
+  exit 1
+fi
+printf '#Invalid tracked heading\n' >"$workspace/docs/tracked-bad.md"
+git -C "$workspace" add docs/tracked-bad.md
+if (
+  cd "$workspace"
+  LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/no-node-bin" \
+    bash scripts/preflight.sh >"$workspace/no-npx-violation.log" 2>&1
+); then
+  echo "Expected tracked Markdown violations to fail without npx" >&2
+  exit 1
+fi
+grep -Fq 'Tracked Markdown violation reached markdownlint' "$workspace/no-npx-violation.log"
+git -C "$workspace" reset --quiet HEAD -- docs/tracked-bad.md
+rm "$workspace/docs/tracked-bad.md"
+mv "$workspace/node_modules/.bin/markdownlint" "$workspace/saved-markdownlint"
+if (
+  cd "$workspace"
+  LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/no-node-bin" \
+    bash scripts/preflight.sh >"$workspace/no-node-tools.log" 2>&1
+); then
+  echo "Expected missing locked markdownlint to fail even without npx" >&2
+  exit 1
+fi
+grep -Fq "run 'npm ci' first" "$workspace/no-node-tools.log"
+mv "$workspace/saved-markdownlint" "$workspace/node_modules/.bin/markdownlint"
+
 # An absent locked CLI must fail instead of downloading a separate toolchain.
 mv "$workspace/node_modules/.bin/markdownlint" "$workspace/saved-markdownlint"
 if (
