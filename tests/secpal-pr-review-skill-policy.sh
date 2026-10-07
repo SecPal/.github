@@ -1015,10 +1015,16 @@ grep -Fq 'tests/secpal-lifecycle-orchestration-unit.py' "$REGISTRY" \
 grep -Fq 'tests/secpal-lifecycle-execution-contract-unit.py' "$REGISTRY" \
   || fail 'lifecycle execution unit tests are not registered'
 
+# Review-tool behavior is protected by credentialless CLI regressions, not by
+# byte-locking the retired unauthenticated resolution path into its baseline.
+protected_mode_matches 100755 "$REPO_ROOT/scripts/copilot-review-tool.sh" \
+  || fail "review tool file type or mode changed"
+protected_mode_matches 100644 "$REPO_ROOT/docs/copilot-review-automation.md" \
+  || fail "review tool documentation file type or mode changed"
+bash "$REPO_ROOT/tests/copilot-review-memory.sh"
+
 protected_paths=(
   "$REPO_ROOT"/.github/workflows/*-review-memory.yml
-  "$REPO_ROOT"/scripts/*-review-tool.sh
-  "$REPO_ROOT"/docs/*-review-automation.md
   "$REPO_ROOT"/AGENTS.md
 )
 for path in "${protected_paths[@]}"; do
