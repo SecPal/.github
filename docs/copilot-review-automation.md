@@ -14,7 +14,7 @@ The durable substitute is:
 
 - export review threads
 - generate lessons artifacts
-- resolve fixed threads via GraphQL
+- resolve fixed threads through the canonical authenticated resolver
 - promote repeated findings into instructions, hooks, lint rules, tests, or CI
 
 ## CLI
@@ -25,7 +25,13 @@ Use [scripts/copilot-review-tool.sh](../scripts/copilot-review-tool.sh).
 - `lessons`: turn one PR's findings into a durable lessons file
 - `scan`: walk open non-draft PRs across multiple repositories
 - `track`: aggregate exported findings by category and create or update durable tracking issues
-- `resolve`: resolve review threads without posting comments
+
+Review-thread resolution is not part of this tool. Use the maintained
+[authenticated fixed-thread resolution workflow](simple-pr-thread-resolution.md)
+and its canonical `scripts/secpal-resolve-fixed-threads.py` boundary. It requires
+the exact repository, PR, reviewed head and target together with authenticated
+reviewed-state, fix/disposition and validation evidence where required. An
+arbitrary thread ID or a GitHub write credential is not sufficient authority.
 
 ## Preferred Non-Manual Path
 
@@ -73,7 +79,6 @@ For single PR work:
 ```bash
 ./scripts/copilot-review-tool.sh threads --repo SecPal/api --pr 557 --state unresolved
 ./scripts/copilot-review-tool.sh lessons --repo SecPal/api --pr 557 --state all
-./scripts/copilot-review-tool.sh resolve --thread-id PRRT_example_1
 ```
 
 ## Promotion Rule
