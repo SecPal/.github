@@ -1156,7 +1156,9 @@ and issued current-head receipt trailer, accepted historical provider binding,
 finite counters, and authenticated current-safety feedback. Historical receipt
 and final-attestation package bytes remain unavailable; fresh safety and
 integration validation do not reconstruct them. The schema, annotated-tag
-namespace, and typed integration family are unchanged. A never-issued root
+namespace, and typed integration family are unchanged. Protected `HEAD_ADVANCED`
+read-back rederives this manifest from its authenticated historical predecessor,
+preserving the historical provider head and receipt identity. A never-issued root
 continues to require its existing recovered-root authority; issued receipts do
 not authorize that recovery path.
 

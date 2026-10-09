@@ -4514,7 +4514,10 @@ def verify_ready_integration_predecessor(
     independent_root = manifest.get("source_authority_mode") in {
         "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
         "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
-    }
+    } or (
+        manifest.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V3"
+        and manifest["source_authority"]["ready_transition"] is None
+    )
     if (
         fast_path.digest_json(manifest) != integration["prior_authority_digest"]
         or manifest["repository"] != predecessor.repository
@@ -4551,6 +4554,7 @@ def verify_ready_integration_predecessor(
                     pull_request=predecessor.pull_request, binding=provenance["registry"],
                     reviewed_state_digest=reviewed.state_digest,
                     reviewed_feedback_digest=reviewed.feedback_digest,
+                    reviewed_head_sha=reviewed.head_sha,
                     source_publication_oid=transition.predecessor.publication_oid,
                 ),
             )
