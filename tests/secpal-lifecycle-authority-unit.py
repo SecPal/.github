@@ -4326,7 +4326,6 @@ printf 'Usage: fixture\\n'
                             historical_validation_receipt_digest=
                             "b34ab1e452e4c82e5cef84ad3e4728b206f392517e5c12de2e03f179bfab32f3")
             old_h0 = document["source_history"][0]["head_sha"]
-            old_h1 = document["source_history"][1]["head_sha"]
             for item in document["observed_pre_enrollment_history"]:
                 item["head_sha"] = h0 if item["head_sha"] == old_h0 else h1
             document["source_history"][0]["head_sha"] = h0
@@ -4431,6 +4430,13 @@ printf 'Usage: fixture\\n'
                         reviewed_head_sha=document["source_history"][0]["head_sha"],
                         reviewed_state_digest="6" * 64,
                         reviewed_feedback_digest=document["current_safety"]["feedback_digest"])
+                    with self.assertRaisesRegex(actions.fast_path.SecurityBlocker, "reviewed head differs from authenticated provider history"):
+                        actions._derive_exact_state_adoption_ready_prior_authority(
+                            repository_root=REPO_ROOT.parent, repository=document["repository"],
+                            delivery_issue=document["delivery_issue"], pull_request=document["pull_request"],
+                            binding={"default_branch":"main", "signature_policy":{"accepted_formats":["ssh"]}},
+                            reviewed_head_sha=document["head_sha"], reviewed_state_digest="6" * 64,
+                            reviewed_feedback_digest=document["current_safety"]["feedback_digest"])
                     provider = publication.derive_ready_source_recovery_provider_binding(current)
                     self.assertEqual(provider.provider_head_sha, document["source_history"][0]["head_sha"])
                     provider.verify_historical_provider_summary(body=summary, repository=document["repository"],

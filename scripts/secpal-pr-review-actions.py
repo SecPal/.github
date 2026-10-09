@@ -7917,12 +7917,10 @@ def _derive_exact_state_adoption_ready_prior_authority(
                 raise lifecycle_publication.LifecyclePublicationError("direct Ready historical provider binding is missing")
         except lifecycle_publication.LifecyclePublicationError as exc:
             raise fast_path.SecurityBlocker("direct Ready historical provider authority is invalid") from exc
-        if reviewed_head_sha is not None and reviewed_head_sha not in {
-            current.lifecycle.head_sha,
-            historical_provider.provider_head(
-                repository=repository, pull_request=pull_request,
-                current_head_sha=current.lifecycle.head_sha),
-        }:
+        if reviewed_head_sha is not None and reviewed_head_sha != historical_provider.provider_head(
+            repository=repository, pull_request=pull_request,
+            current_head_sha=current.lifecycle.head_sha,
+        ):
             raise fast_path.SecurityBlocker("direct Ready reviewed head differs from authenticated provider history")
         if reviewed_feedback_digest is not None and (
             current_safety.get("feedback_digest") != reviewed_feedback_digest
