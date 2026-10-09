@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-07 - Fix Markdown Toolchain Vulnerabilities
+
+**Fixed:**
+
+- Override the transitive TOML parser with the patched direct `smol-toml`
+  dependency and update KaTeX to `0.18.2`, addressing
+  `GHSA-r4xh-jqrq-34v2` and `GHSA-238p-pmpm-9mq7` without downgrading
+  Markdown lint rules.
+- Use the locked local Markdown linter in pre-commit and fail preflight when
+  it is unavailable instead of downloading a separate vulnerable toolchain.
+  The setup script installs locked dependencies before installing and running
+  hooks. Markdown linting also runs when `npx` is unavailable.
+- Cover TOML rule configuration, inherited KaTeX trust, math rendering and
+  missing-tool failure with regression checks in CI.
+
 ## 2026-10-06 - Authenticate Equal-Second Ready Review Requests
 
 **Fixed:**

@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/.."
 
 echo "🔧 Setting up pre-commit hooks for SecPal..."
 
@@ -23,6 +26,15 @@ if ! command -v pre-commit &>/dev/null; then
 	echo ""
 	exit 1
 fi
+
+if ! command -v npm &>/dev/null; then
+	echo "❌ npm is not installed. Install the repository's required Node.js version first." >&2
+	exit 1
+fi
+
+# Install the committed dependency graph before installing or running hooks.
+echo "📦 Installing locked Node dependencies..."
+npm ci
 
 # Install pre-commit hooks
 echo "📦 Installing pre-commit hooks..."

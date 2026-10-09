@@ -131,6 +131,9 @@ We use pre-commit hooks to ensure code quality before commits are made. This cat
 
 **Installation:**
 
+Install Node.js 26 (Current) first. The setup script runs `npm ci` to install
+the locked Markdown toolchain before installing and running the hooks.
+
 ```bash
 # Install pre-commit (if not already installed)
 pip install pre-commit
