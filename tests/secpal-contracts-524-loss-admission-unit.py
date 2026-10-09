@@ -5,8 +5,14 @@
 from __future__ import annotations
 
 import copy
+import contextlib
+import importlib.util
+import io
 import json
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -120,6 +126,49 @@ class Contracts524AdmissionTests(unittest.TestCase):
             profile = loss._current_safety_profile_for_record("a" * 40, record)
             loss._run_current_safety("a" * 40, ROOT, profile, record=record)
         self.assertEqual(run.call_args.kwargs["expected_profile"], profile)
+
+    def test_real_harness_accepts_h1_and_rejects_h0_before_fifo_read(self):
+        spec = importlib.util.spec_from_file_location("contracts_safety", ROOT / HARNESS)
+        assert spec is not None and spec.loader is not None
+        harness = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness)
+        # Only dependency installation is isolated; every guard subprocess and
+        # filesystem probe executes against the authenticated historical source.
+        run = harness._run
+
+        def installed(command, **kwargs):
+            if command[0] == "npm":
+                return subprocess.CompletedProcess(command, 0)
+            return run(command, **kwargs)
+
+        for source, expected in (("h1", 0), ("h0", 1)):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "scripts").mkdir()
+                shutil.copyfile(
+                    ROOT / f"tests/fixtures/contracts-524-node-toolchain-{source}.txt",
+                    root / harness.GUARD)
+                dependencies = root / "node_modules"
+                dependencies.mkdir()
+                (dependencies / "js-yaml").symlink_to(
+                    ROOT / "node_modules/js-yaml", target_is_directory=True)
+                (root / ".nvmrc").write_text("26\n")
+                package = {"engines": {"node": "^26.0.0"}}
+                (root / "package.json").write_text(json.dumps(package))
+                (root / "package-lock.json").write_text(json.dumps({"packages": {"": package}}))
+                workflows = root / ".github/workflows"
+                workflows.mkdir(parents=True)
+                workflow = "jobs:\n  lint:\n    steps:\n      - uses: actions/setup-node@" + "1" * 40 + "\n        with:\n          node-version: '26'\n"
+                for name in ("local-openapi-lint.yml", "local-prettier.yml"):
+                    (workflows / name).write_text(workflow)
+                output = io.StringIO()
+                with patch.object(harness.Path, "cwd", return_value=root), patch.object(
+                    harness, "_run", side_effect=installed
+                ), contextlib.redirect_stdout(output):
+                    self.assertEqual(harness.main([]), expected)
+                self.assertEqual(json.loads(output.getvalue()),
+                                 harness.INVARIANTS if expected == 0 else ["registered_validation"])
+                self.assertFalse(dependencies.exists())
 
 
 if __name__ == "__main__":
