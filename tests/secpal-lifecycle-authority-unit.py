@@ -4311,6 +4311,142 @@ printf 'Usage: fixture\\n'
                 with self.assertRaises(authority.LifecycleAuthorityError):
                     self.loss._verify_document(self.sign(changed))
 
+    def issued_ready_root(self, *, contracts_shape: bool = False):
+        """Normalize signed H0 review/H1 receipt history through actual v3 proof verification."""
+        document = self.current_receipt_document()
+        if contracts_shape:
+            h0 = "5fefdc0d8ed92779bdb74a8efa39baba8fdf331e"
+            h1 = "f8e229ef68630e4e8363fb1af4137a53a55a304a"
+            tree = "1098de89884096b2c19c9ad6f88a1eeeb1babe16"
+            document.update(repository="SecPal/contracts", delivery_issue=524,
+                            pull_request=525, head_sha=h1, tree_sha=tree,
+                            parent_sha=h0, historical_receipt_head_sha=h1,
+                            historical_validation_receipt_digest=
+                            "b34ab1e452e4c82e5cef84ad3e4728b206f392517e5c12de2e03f179bfab32f3")
+            old_h0 = document["source_history"][0]["head_sha"]
+            old_h1 = document["source_history"][1]["head_sha"]
+            for item in document["observed_pre_enrollment_history"]:
+                item["head_sha"] = h0 if item["head_sha"] == old_h0 else h1
+            document["source_history"][0]["head_sha"] = h0
+            document["source_history"][1].update(head_sha=h1, tree_sha=tree, parent_shas=[h0])
+            document["current_safety"]["validated_tree_sha"] = tree
+            document["intended_state"]["ready_history"][0]["observation_digest"] = authority.digest_json(
+                document["observed_pre_enrollment_history"][1])
+            # Reviewed read-only provider representation from contracts#525, 2026-10-09.
+            document["source_history"][0].update(tree_sha="ec724fe0956869ecb57b516818037b0512744fde",
+                parent_shas=["335a49de7a92710e7afce69de3f96a50810c56e4"], committed_at="2026-09-29T21:16:09Z")
+            document["source_history"][1]["committed_at"] = "2026-09-30T19:38:07Z"
+            for item, instant in zip(document["observed_pre_enrollment_history"],
+                    ("2026-09-29T21:16:09Z", "2026-09-29T21:22:56Z", "2026-09-30T19:38:07Z")):
+                item["observed_at"] = instant
+            document["adoption_timestamp"] = "2026-10-09T20:00:00Z"
+            document["intended_state"]["ready_history"][0]["observation_digest"] = authority.digest_json(
+                document["observed_pre_enrollment_history"][1])
+            self.trust = replace(self.trust, repository="SecPal/contracts")
+        summary = "\n".join((fast_path.CODEX_REVIEW_SUMMARY_MARKER,
+            f'| **Code Review** | ✅ **Completed** | `{document["source_history"][0]["head_sha"][:7]}` |'))
+        if contracts_shape:
+            summary = "\n".join((fast_path.CODEX_REVIEW_SUMMARY_MARKER,
+                '<!-- codex-security-review:v1 {"blockingSeverityThreshold":"P0","headSha":"5fefdc0d8ed92779bdb74a8efa39baba8fdf331e","mergeGateEnabled":false,"pullRequestNumber":525,"repository":"SecPal/contracts","status":"completed"} -->',
+                '| Review | Status | Commit | Review trigger |',
+                '| --- | --- | --- | --- |',
+                '| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-09-30T17:24:51.503157Z">2026-09-30T17:24:51.503157Z</relative-time> | `5fefdc0` | Manual request |',
+                '| 🔒 **Security Review** | ✅ **Completed** <relative-time datetime="2026-09-29T21:25:15.095393Z">2026-09-29T21:25:15.095393Z</relative-time> | `5fefdc0` | Draft marked ready |'))
+        document["historical_provider_summary_digest"] = fast_path.digest_text(summary)
+        record = {
+            "admission_schema_version": "1.3",
+            **{field: copy.deepcopy(document[field]) for field in self.loss.CURRENT_RECEIPT_RECORD_FIELDS
+               if field in document},
+            "feedback_digest": document["current_safety"]["feedback_digest"],
+            "technical_decisions": [],
+            "current_safety_harness_path": self.loss.CURRENT_RECEIPT_SAFETY_PATH,
+        }
+        document["loss_proof_policy_digest"] = authority.digest_json(record)
+        document["source_history_digest"] = authority.digest_json(document["source_history"])
+        document["historical_receipt_provenance_digest"] = authority.digest_json({
+            "repository": document["repository"], "delivery_issue": document["delivery_issue"],
+            "pull_request": document["pull_request"], "current_head_sha": document["head_sha"],
+            "current_tree_sha": document["tree_sha"], "historical_receipt_head_sha": document["head_sha"],
+            "historical_validation_receipt_digest": document["historical_validation_receipt_digest"],
+            "source_history_digest": document["source_history_digest"],
+        })
+        document = self.sign(document)
+        context = {field: document[field] for field in ("repository", "delivery_issue", "pull_request",
+            "head_sha", "tree_sha", "pull_request_state", "commit_signature_evidence_digest", "adoption_timestamp")}
+        context.update(validation_receipt_digest=document["historical_validation_receipt_digest"],
+            source_validation_evidence_digest=authority.digest_json(document["current_safety"]),
+            adoption_source_evidence_digest=document["admission_digest"])
+        budget = authority.create_pre_enrollment_review_budget_consumption_admission(
+            **context, admission_id="issued-root-review-budget",
+            observed_pre_enrollment_history=document["observed_pre_enrollment_history"],
+            intended_state=document["intended_state"], signer_identity=self.migration,
+            signer=signer_for(self.migration))
+        evidence = authority._assemble_exact_state_adoption_evidence(
+            **context, observed_pre_enrollment_history=document["observed_pre_enrollment_history"],
+            intended_state=document["intended_state"],
+            supporting_evidence_digests=[document["admission_digest"], budget["admission_digest"]],
+            review_budget_consumption_admission=budget, validation_evidence_loss_admission=document)
+        authorization = authority.create_exact_state_adoption_authorization(
+            adoption_evidence=evidence, authorization_id="issued-root-adoption", bounded_uses=1,
+            signer_identity=self.migration, signer=signer_for(self.migration))
+        proof = authority.create_exact_state_adoption_proof(
+            adoption_evidence=evidence, authorization=authorization,
+            signer_identity=self.migration, signer=signer_for(self.migration))
+        bundle = authority.loads_closed_json(authority.serialize_exact_state_adoption_evidence(
+            exact_state_adoption_proof=proof))
+        verified = authority.verify_exact_state_adoption_proof(proof)
+        current = publication.VerifiedLifecyclePublication(
+            publication_oid="b" * 40, publication_digest="c" * 64,
+            publication_branch="refs/heads/secpal-lifecycle-publications", journal_predecessor_oid="d" * 40,
+            predecessor_publication_oid=None, lifecycle=verified,
+            serialized_lifecycle_evidence=authority.canonical_json_bytes(bundle))
+        return current, bundle, document, record, summary
+
+    def test_authenticated_direct_v3_current_receipt_root_and_contracts_525_shape(self) -> None:
+        spec = importlib.util.spec_from_file_location("issued_root_actions", REPO_ROOT / "scripts/secpal-pr-review-actions.py")
+        actions = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(actions)
+        for contracts_shape in (False, True):
+            with self.subTest(contracts_shape=contracts_shape):
+                current, bundle, document, record, summary = self.issued_ready_root(contracts_shape=contracts_shape)
+                historical = authority.exact_state_adoption_ready_root_historical_evidence(current.lifecycle, bundle, None)
+                self.assertEqual(historical["state"], "UNAVAILABLE")
+                self.assertEqual(historical["validation_receipt_digest"], document["historical_validation_receipt_digest"])
+                self.assertFalse(historical["bytes_reconstructed"])
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    authority.recovered_adoption_root_historical_evidence(current.lifecycle, bundle, None)
+                with patch.object(self.loss, "_accepted_policy", return_value=("c" * 40, record, object(), self.trust)), patch.object(
+                    actions, "_load_lifecycle_publication_helpers", return_value=(authority, publication)), patch.object(
+                    actions, "_require_accepted_main_bridge_source", return_value="c" * 40), patch.object(
+                    publication, "verify_current_lifecycle_authority", return_value=current), patch.object(
+                    actions, "_commit_validation_receipt_digest", return_value=document["historical_validation_receipt_digest"]), patch.object(
+                    actions, "_verified_prior_delivery_commit", return_value={"parent_sha":document["parent_sha"],
+                    "tree_sha":document["tree_sha"], "signer":{"kind":"SSH_PRINCIPAL", "identity":SIGNER}}):
+                    manifest = actions._derive_exact_state_adoption_ready_prior_authority(
+                        repository_root=REPO_ROOT.parent, repository=document["repository"],
+                        delivery_issue=document["delivery_issue"], pull_request=document["pull_request"],
+                        binding={"default_branch":"main", "signature_policy":{"accepted_formats":["ssh"]}},
+                        reviewed_head_sha=document["source_history"][0]["head_sha"],
+                        reviewed_state_digest="6" * 64,
+                        reviewed_feedback_digest=document["current_safety"]["feedback_digest"])
+                    provider = publication.derive_ready_source_recovery_provider_binding(current)
+                    self.assertEqual(provider.provider_head_sha, document["source_history"][0]["head_sha"])
+                    provider.verify_historical_provider_summary(body=summary, repository=document["repository"],
+                        pull_request=document["pull_request"], current_head_sha=document["head_sha"])
+                    with self.assertRaises(fast_path.SecurityBlocker):
+                        provider.verify_historical_provider_summary(body=summary + "changed", repository=document["repository"],
+                            pull_request=document["pull_request"], current_head_sha=document["head_sha"])
+                self.assertIsNone(manifest["source_authority"]["ready_transition"])
+                self.assertEqual(manifest["lifecycle"]["remediation_cycles"], 1)
+                self.assertEqual(manifest["lifecycle"]["exceptional_recoveries"], 0)
+                self.assertEqual(manifest["lifecycle"]["exceptional_continuations"], 0)
+                for field, value in (("authorization", {}), ("validation_receipt_digest", "9" * 64),
+                                     ("signer_identity", OTHER_SIGNER), ("observed_history_digest", "9" * 64)):
+                    changed = copy.deepcopy(bundle)
+                    changed["exact_state_adoption_proof"][field] = value
+                    with self.subTest(field=field), self.assertRaises(authority.LifecycleAuthorityError):
+                        authority.exact_state_adoption_ready_root_historical_evidence(current.lifecycle, changed, None)
+
     def test_current_receipt_history_derives_only_the_exact_tip_trailer(self) -> None:
         document = self.current_receipt_document()
         record = {

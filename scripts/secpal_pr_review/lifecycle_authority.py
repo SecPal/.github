@@ -4721,12 +4721,12 @@ def exact_state_adoption_historical_evidence(value: Any) -> dict[str, Any]:
     return normalize_exact_state_adoption_historical_evidence(result)
 
 
-def recovered_adoption_root_historical_evidence(
+def exact_state_adoption_ready_root_historical_evidence(
     current_lifecycle: VerifiedLifecycleAuthority,
     lifecycle_evidence: Mapping[str, Any] | None,
     predecessor_publication_oid: str | None,
 ) -> dict[str, Any]:
-    """Authenticate a supported zero-historical exact-adoption root."""
+    """Authenticate direct Ready-root history without issuing new lifecycle authority."""
 
     if (
         not isinstance(lifecycle_evidence, Mapping)
@@ -4806,7 +4806,7 @@ def recovered_adoption_root_historical_evidence(
         proof.get("schema_version") != "3.0"
         or proof.get("proof_version") != "3.0"
         or not isinstance(loss, Mapping)
-        or loss.get("schema_version") != "1.2"
+        or loss.get("schema_version") not in {"1.2", "1.3"}
         or loss.get("historical_package_status") != "UNAVAILABLE"
         or loss.get("repository") != current_lifecycle.repository
         or loss.get("delivery_issue") != current_lifecycle.delivery_issue
@@ -4815,6 +4815,28 @@ def recovered_adoption_root_historical_evidence(
         or loss.get("tree_sha") != current_lifecycle.tree_sha
     ):
         raise LifecycleAuthorityError("zero-receipt adoption-root binding changed")
+    if loss["schema_version"] == "1.3":
+        if (
+            loss.get("historical_receipt_head_sha") != current_lifecycle.head_sha
+            or loss.get("historical_validation_receipt_digest")
+            != current_lifecycle.validation_receipt_digest
+            or current_lifecycle.validation_receipt_digest
+            != proof.get("validation_receipt_digest")
+            or current_lifecycle.source_validation_evidence_digest
+            != proof.get("source_validation_evidence_digest")
+            or current_lifecycle.adoption_source_evidence_digest
+            != proof.get("adoption_source_evidence_digest")
+            or loss.get("historical_final_attestation_digest") is not None
+            or loss.get("historical_bytes_reconstructed") is not False
+        ):
+            raise LifecycleAuthorityError("issued-receipt adoption-root binding changed")
+        return normalize_exact_state_adoption_historical_evidence({
+            "state": "UNAVAILABLE",
+            "validation_receipt_digest": loss["historical_validation_receipt_digest"],
+            "source_validation_evidence_digest": proof["source_validation_evidence_digest"],
+            "final_attestation_digest": None,
+            "bytes_reconstructed": False,
+        })
     historical = normalize_exact_state_adoption_historical_evidence({
         "state": "ABSENT_NEVER_ISSUED",
         "validation_receipt_digest": loss.get("historical_validation_receipt_digest"),
@@ -4822,6 +4844,21 @@ def recovered_adoption_root_historical_evidence(
         "final_attestation_digest": loss.get("historical_final_attestation_digest"),
         "bytes_reconstructed": loss.get("historical_bytes_reconstructed"),
     })
+    return historical
+
+
+def recovered_adoption_root_historical_evidence(
+    current_lifecycle: VerifiedLifecycleAuthority,
+    lifecycle_evidence: Mapping[str, Any] | None,
+    predecessor_publication_oid: str | None,
+) -> dict[str, Any]:
+    """Recovery remains restricted to authenticated never-issued history."""
+
+    historical = exact_state_adoption_ready_root_historical_evidence(
+        current_lifecycle, lifecycle_evidence, predecessor_publication_oid,
+    )
+    if historical["state"] != "ABSENT_NEVER_ISSUED":
+        raise LifecycleAuthorityError("zero-receipt adoption-root binding changed")
     return historical
 
 
