@@ -111,3 +111,27 @@ Downstream integration authenticates H1 as parent 1 and fresh protected
 contracts/main as parent 2, retaining the maintained conflict, validation and
 signing gates in the original contracts delivery workspace. This admission
 creates no contracts integration candidate, provider request or thread mutation.
+
+## Same-delivery delta preflight
+
+The original #1038 branch, index and ten pending source files were authenticated
+against their retained preservation digests before reconciliation. The accepted #1164 delta changed only the shared consumer, its tests and
+workflow documentation;
+no pending #1038 path overlapped it. A same-branch fast-forward preserved the
+implementation, source qualification and temporary evidence.
+
+Fresh observation reauthenticated the unchanged H0/H1 source chronology and
+stable feedback digest `2b5edfc8b11e6bd49453fab8d45ad1ab1e669da30c5dc2d38500f279de601bae`.
+The journal tip, active protection and four-artifact inventory above also remained
+unchanged. Those exact identities preserve the historical signature, provider,
+correction and unavailable-package evidence; elapsed time and the new prompt
+invalidate none of them.
+
+The earlier shared-consumer rejection is superseded by accepted #1164. Authority
+compatibility is revalidated against that accepted implementation. The original
+312-test result remains qualification evidence for its unchanged inputs, rather
+than proof of the changed consumer. The maintained registered validation invokes
+authority suites in separate processes; the combined diagnostic invocation's
+temporary importer-cache failure grants no validation authority. Complete
+Validation and receipt binding apply to this delivery's final tree. Contracts
+source remains read-only throughout.
