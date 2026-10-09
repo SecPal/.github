@@ -1327,6 +1327,7 @@ assert [
     ["python3", "-m", "unittest", "tests/secpal-pre-enrollment-integration-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-app-352-loss-admission-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-contracts-524-loss-admission-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-orchestration-unit.py"],

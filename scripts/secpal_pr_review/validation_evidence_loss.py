@@ -73,6 +73,9 @@ SECPAL_APP_352_REGISTERED_VALIDATION_PATHS = (
     "tests/workflow-section.test.mjs",
 )
 CURRENT_RECEIPT_SAFETY_PATH = "tests/pre-enrollment-github-948-current-safety.py"
+CONTRACTS_524_CURRENT_SAFETY_PATH = (
+    "tests/pre-enrollment-contracts-524-current-safety.py"
+)
 CURRENT_RECEIPT_NODE_TEST_PATH = "tests/node-baseline-governance.test.mjs"
 CURRENT_SAFETY_INVARIANTS = (
     "candidate_local_issuer_rejected", "complete_feedback", "context_binding",
@@ -1005,6 +1008,12 @@ def _accepted_policy(repository: str, issue: int) -> tuple[str, dict[str, Any], 
         CURRENT_RECEIPT_SCHEMA_VERSION: CURRENT_RECEIPT_SAFETY_PATH,
     }.get(record_version)
     if (
+        record_version == CURRENT_RECEIPT_SCHEMA_VERSION
+        and (repository, issue, record["pull_request"])
+        == ("SecPal/contracts", 524, 525)
+    ):
+        maintained_harness = CONTRACTS_524_CURRENT_SAFETY_PATH
+    if (
         record_version == NO_RECEIPT_SCHEMA_VERSION
         and (repository, issue, record["pull_request"])
         == ("SecPal/deployment", 119, 250)
@@ -1822,11 +1831,31 @@ def _zero_receipt_current_safety_profile(
     return profile
 
 
-def _current_receipt_safety_profile(main: str) -> dict[str, Any]:
+def _current_receipt_safety_profile(
+    main: str, record: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    harness_path = CURRENT_RECEIPT_SAFETY_PATH
+    if (
+        record is not None
+        and record.get("current_safety_harness_path")
+        == CONTRACTS_524_CURRENT_SAFETY_PATH
+    ):
+        if (
+            record.get("repository"), record.get("delivery_issue"),
+            record.get("pull_request"),
+        ) != ("SecPal/contracts", 524, 525):
+            raise authority.LifecycleAuthorityError(
+                "contracts current-safety scope changed"
+            )
+        harness_path = CONTRACTS_524_CURRENT_SAFETY_PATH
+    elif record is not None and record.get("repository") == "SecPal/contracts":
+        raise authority.LifecycleAuthorityError(
+            "contracts current-safety harness is not maintained"
+        )
     return exact_source_safety.build_profile(
         ROOT, main,
         policy=CURRENT_RECEIPT_SAFETY_POLICY,
-        harness_paths=(CURRENT_RECEIPT_SAFETY_PATH,),
+        harness_paths=(harness_path,),
         purpose="Validate exact current-receipt adoption current safety",
         required_invariants=REGISTERED_CURRENT_SAFETY_INVARIANTS,
     )
@@ -1854,9 +1883,11 @@ def _current_safety_profile_for_record(
             return _zero_receipt_current_safety_profile(main, record)
     if (
         _record_version(record) == CURRENT_RECEIPT_SCHEMA_VERSION
-        and record.get("current_safety_harness_path") == CURRENT_RECEIPT_SAFETY_PATH
+        and record.get("current_safety_harness_path") in {
+            CURRENT_RECEIPT_SAFETY_PATH, CONTRACTS_524_CURRENT_SAFETY_PATH,
+        }
     ):
-        return _current_receipt_safety_profile(main)
+        return _current_receipt_safety_profile(main, record)
     raise authority.LifecycleAuthorityError(
         "loss current-safety profile is not maintained"
     )
@@ -1963,7 +1994,10 @@ def _current_policy_validation_root(
     ) as prepared:
         preserved_test: Path | None = None
         expected_test_bytes: bytes | None = None
-        if profile.get("policy") == CURRENT_RECEIPT_SAFETY_POLICY:
+        if (
+            profile.get("policy") == CURRENT_RECEIPT_SAFETY_POLICY
+            and any(item["path"] == CURRENT_RECEIPT_SAFETY_PATH for item in profile["harness"])
+        ):
             source_test = source_root / CURRENT_RECEIPT_NODE_TEST_PATH
             preserved_test = prepared / CURRENT_RECEIPT_NODE_TEST_PATH
             if not source_test.is_file() or preserved_test.exists():
@@ -2021,6 +2055,8 @@ def _run_current_safety(
     expected = (
         _zero_receipt_current_safety_profile(main, record)
         if profile.get("policy") == NO_RECEIPT_CURRENT_SAFETY_POLICY
+        else _current_receipt_safety_profile(main, record)
+        if profile.get("policy") == CURRENT_RECEIPT_SAFETY_POLICY
         else builder(main)
     )
     exact_source_safety.run_profile(
@@ -2087,6 +2123,7 @@ def _acquire(repository: str, issue: int, *, execute_validation: bool) -> dict[s
                 run_arguments = (
                     {"record": record}
                     if "registered_candidate_validation" in profile
+                    or profile.get("policy") == CURRENT_RECEIPT_SAFETY_POLICY
                     else {}
                 )
                 _run_current_safety(
