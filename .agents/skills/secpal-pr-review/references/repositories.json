@@ -90,6 +90,16 @@
           "purpose": "Run exact secpal.app admission current-safety regressions"
         },
         {
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "tests/secpal-contracts-524-loss-admission-unit.py"
+          ],
+          "working_directory": ".",
+          "purpose": "Run exact contracts Ready admission regressions"
+        },
+        {
           "argv": ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
           "working_directory": ".",
           "purpose": "Run exact bootstrap source-admission unit tests"
