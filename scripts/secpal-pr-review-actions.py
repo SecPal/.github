@@ -6529,6 +6529,21 @@ def _verify_ready_integration_lifecycle_authority(
 ) -> None:
     lifecycle = authority["lifecycle"]
     eligibility = integration_evidence["eligibility"]
+    if (
+        authority.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V3"
+        and authority["source_authority"]["ready_transition"] is None
+    ):
+        if (
+            reviewed_state is None
+            or reviewed_state.repository != authority["repository"]
+            or reviewed_state.pull_request_number != authority["pull_request_number"]
+            or reviewed_state.pr_state != "OPEN"
+            or reviewed_state.head_sha != integration_evidence.get(
+                "reviewed_head_sha", authority["prior_delivery_head_sha"])
+            or reviewed_state.state_digest != integration_evidence["reviewed_state_digest"]
+            or reviewed_state.feedback_digest != integration_evidence["reviewed_feedback_digest"]
+        ):
+            raise fast_path.SecurityBlocker("direct Ready integration reviewed snapshot changed")
     if authority.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT":
         if (
             reviewed_state is None
@@ -7659,6 +7674,7 @@ def _derive_exact_state_adoption_ready_prior_authority(
     reviewed_state_digest: str | None = None,
     reviewed_feedback_digest: str | None = None,
     source_publication_oid: str | None = None,
+    reviewed_head_sha: str | None = None,
 ) -> dict[str, Any]:
     """Derive a maintained adopted source projection from protected CURRENT."""
 
@@ -7767,11 +7783,12 @@ def _derive_exact_state_adoption_ready_prior_authority(
         )
         _require_accepted_main_bridge_source(repository, expected_main=accepted_main)
         return manifest
-    if (
+    direct_root = (
         current.predecessor_publication_oid is None
         and bundle.get("transition_authorizations") == []
         and bundle.get("authority_chain") == []
-    ):
+    )
+    if direct_root and proof.get("validation_evidence_loss_admission", {}).get("schema_version") == "1.2":
         manifest = _derive_recovered_adoption_root_ready_prior_authority(
             repository_root=repository_root,
             repository=repository,
@@ -7792,6 +7809,13 @@ def _derive_exact_state_adoption_ready_prior_authority(
             repository, expected_main=accepted_main
         )
         return manifest
+    if direct_root:
+        try:
+            lifecycle_authority.exact_state_adoption_ready_root_historical_evidence(
+                current.lifecycle, bundle, current.predecessor_publication_oid,
+            )
+        except lifecycle_authority.LifecycleAuthorityError as exc:
+            raise fast_path.SecurityBlocker("direct Ready adoption root authority is invalid") from exc
     state = current.lifecycle.state
     ready_history = state.get("ready_history") if isinstance(state, dict) else None
     events = bundle.get("transition_authorizations")
@@ -7812,8 +7836,8 @@ def _derive_exact_state_adoption_ready_prior_authority(
         or verified_proof.tree_sha != current.lifecycle.tree_sha
         or not isinstance(events, list)
         or not isinstance(authorities, list)
-        or len(events) != 1
-        or len(authorities) != 1
+        or len(events) != (0 if direct_root else 1)
+        or len(authorities) != (0 if direct_root else 1)
         or state.get("draft") is not False
         or state.get("ready") is not True
         or isinstance(state.get("unrestricted_review_count"), bool)
@@ -7877,7 +7901,7 @@ def _derive_exact_state_adoption_ready_prior_authority(
         raise fast_path.SecurityBlocker(
             "adopted Ready reviewed-state selectors are incomplete"
         )
-    if reviewed_state_digest is not None and (
+    if reviewed_state_digest is not None and not direct_root and (
         not isinstance(current_safety, dict)
         or current_safety.get("reviewed_state_digest") != reviewed_state_digest
         or current_safety.get("reviewed_feedback_digest")
@@ -7886,6 +7910,24 @@ def _derive_exact_state_adoption_ready_prior_authority(
         raise fast_path.SecurityBlocker(
             "integration reviewed predecessor differs from authenticated adopted Ready safety"
         )
+    if direct_root:
+        try:
+            historical_provider = lifecycle_publication._derive_exact_adoption_historical_provider_binding(current, bundle)
+            if historical_provider is None:
+                raise lifecycle_publication.LifecyclePublicationError("direct Ready historical provider binding is missing")
+        except lifecycle_publication.LifecyclePublicationError as exc:
+            raise fast_path.SecurityBlocker("direct Ready historical provider authority is invalid") from exc
+        if reviewed_head_sha is not None and reviewed_head_sha != historical_provider.provider_head(
+            repository=repository, pull_request=pull_request,
+            current_head_sha=current.lifecycle.head_sha,
+        ):
+            raise fast_path.SecurityBlocker("direct Ready reviewed head differs from authenticated provider history")
+        if reviewed_feedback_digest is not None and (
+            current_safety.get("feedback_digest") != reviewed_feedback_digest
+        ):
+            raise fast_path.SecurityBlocker("direct Ready reviewed feedback differs from authenticated safety")
+        if _commit_validation_receipt_digest(repository_root, current.lifecycle.head_sha) != receipt_digest:
+            raise fast_path.SecurityBlocker("direct Ready issued receipt trailer changed")
     source_commit = _verified_prior_delivery_commit(
         repository_root,
         current.lifecycle.head_sha,
@@ -7895,40 +7937,43 @@ def _derive_exact_state_adoption_ready_prior_authority(
     if (
         source_commit["parent_sha"] != loss.get("parent_sha")
         or source_commit["tree_sha"] != current.lifecycle.tree_sha
+        or source_commit["signer"]["identity"] != loss.get("source_signer_identity")
     ):
         raise fast_path.SecurityBlocker(
             "Exact-State-Adoption v3 source commit changed"
         )
-    enrollment_oid = current.predecessor_publication_oid
-    if not isinstance(enrollment_oid, str):
-        raise fast_path.SecurityBlocker(
-            "Exact-State-Adoption v3 enrollment publication is unavailable"
-        )
-    try:
-        transition = lifecycle_publication._verify_historical_lifecycle_transition(
-            repository, delivery_issue, enrollment_oid
-        )
-    except lifecycle_publication.LifecyclePublicationError as exc:
-        raise fast_path.SecurityBlocker(
-            "Exact-State-Adoption v3 Ready transition is invalid"
-        ) from exc
-    event = events[0]
-    if (
-        transition.predecessor.publication_oid != enrollment_oid
-        or transition.successor.publication_oid != current.publication_oid
-        or transition.transition_kind != "DRAFT_TO_READY"
-        or transition.event_id != event.get("event_id")
-        or transition.event_digest != event.get("event_digest")
-        or transition.predecessor_authority_digest != proof.get("proof_digest")
-        or transition.predecessor_head_sha != current.lifecycle.head_sha
-        or transition.resulting_head_sha != current.lifecycle.head_sha
-        or current.predecessor_publication_oid != enrollment_oid
-        or ready_history[0].get("event_authorization_digest")
-        != transition.event_digest
-    ):
-        raise fast_path.SecurityBlocker(
-            "Exact-State-Adoption v3 Ready continuity is invalid"
-        )
+    transition = None
+    if not direct_root:
+        enrollment_oid = current.predecessor_publication_oid
+        if not isinstance(enrollment_oid, str):
+            raise fast_path.SecurityBlocker(
+                "Exact-State-Adoption v3 enrollment publication is unavailable"
+            )
+        try:
+            transition = lifecycle_publication._verify_historical_lifecycle_transition(
+                repository, delivery_issue, enrollment_oid
+            )
+        except lifecycle_publication.LifecyclePublicationError as exc:
+            raise fast_path.SecurityBlocker(
+                "Exact-State-Adoption v3 Ready transition is invalid"
+            ) from exc
+        event = events[0]
+        if (
+            transition.predecessor.publication_oid != enrollment_oid
+            or transition.successor.publication_oid != current.publication_oid
+            or transition.transition_kind != "DRAFT_TO_READY"
+            or transition.event_id != event.get("event_id")
+            or transition.event_digest != event.get("event_digest")
+            or transition.predecessor_authority_digest != proof.get("proof_digest")
+            or transition.predecessor_head_sha != current.lifecycle.head_sha
+            or transition.resulting_head_sha != current.lifecycle.head_sha
+            or current.predecessor_publication_oid != enrollment_oid
+            or ready_history[0].get("event_authorization_digest")
+            != transition.event_digest
+        ):
+            raise fast_path.SecurityBlocker(
+                "Exact-State-Adoption v3 Ready continuity is invalid"
+            )
     manifest = {
         "schema_version": "1.2",
         "kind": "READY_INTEGRATION_PRIOR_AUTHORITY",
@@ -7988,10 +8033,10 @@ def _derive_exact_state_adoption_ready_prior_authority(
             "adoption_authorization_id": authorization["authorization_id"],
             "adoption_authorization_digest": proof["authorization_digest"],
             "enrollment_publication": {
-                "object_oid": transition.predecessor.publication_oid,
-                "publication_digest": transition.predecessor.publication_digest,
+                "object_oid": current.publication_oid if direct_root else transition.predecessor.publication_oid,
+                "publication_digest": current.publication_digest if direct_root else transition.predecessor.publication_digest,
             },
-            "ready_transition": {
+            "ready_transition": None if direct_root else {
                 "event_id": transition.event_id,
                 "event_digest": transition.event_digest,
                 "predecessor_authority_digest": (
@@ -8677,6 +8722,11 @@ def _verify_ready_integration_prior_authority(
                 raise fast_path.SecurityBlocker(
                     "authenticated qualified-loss review selectors are unavailable"
                 ) from exc
+        reviewed_head_selector = {}
+        if authority.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V3" and authority["source_authority"]["ready_transition"] is None:
+            if reviewed_state is None:
+                raise fast_path.SecurityBlocker("direct Ready integration requires its reviewed snapshot")
+            reviewed_head_selector["reviewed_head_sha"] = reviewed_state.head_sha
         derived = _derive_exact_state_adoption_ready_prior_authority(
             repository_root=repository_root,
             repository=arguments.repo,
@@ -8685,6 +8735,7 @@ def _verify_ready_integration_prior_authority(
             binding=binding,
             reviewed_state_digest=reviewed_state_digest,
             reviewed_feedback_digest=reviewed_feedback_digest,
+            **reviewed_head_selector,
         )
         _require_exact_adopted_ready_manifest(authority, derived)
         if required_paths[4] != _canonical_ready_prior_authority_tag_ref(authority):

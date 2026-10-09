@@ -296,6 +296,25 @@ def transition(current: SimpleNamespace | None = None) -> SimpleNamespace:
     )
 
 
+def issued_receipt_root() -> SimpleNamespace:
+    """A direct Ready enrollment with an issued H1 receipt, never recovery."""
+    current, _ = recovered_root()
+    bundle = json.loads(current.serialized_lifecycle_evidence)
+    proof_value = bundle["exact_state_adoption_proof"]
+    loss = proof_value["validation_evidence_loss_admission"]
+    loss["current_safety"] = {**CURRENT_SAFETY, "feedback_digest": REVIEWED_FEEDBACK}
+    proof_value["source_validation_evidence_digest"] = fast_path.digest_json(loss["current_safety"])
+    current.lifecycle.source_validation_evidence_digest = proof_value["source_validation_evidence_digest"]
+    loss.update(schema_version="1.3", historical_receipt_head_sha=HEAD,
+                historical_validation_receipt_digest="2" * 64)
+    proof_value["validation_receipt_digest"] = "2" * 64
+    current.lifecycle.validation_receipt_digest = "2" * 64
+    current.lifecycle.state["remediation_cycle_count"] = 1
+    proof_value["intended_state"] = copy.deepcopy(current.lifecycle.state)
+    current.serialized_lifecycle_evidence = json.dumps(bundle).encode() + b"\n"
+    return current
+
+
 def legacy_proof() -> dict[str, object]:
     intended_state = state()
     intended_state["ready_history"] = [{
@@ -551,6 +570,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         recovery: SimpleNamespace | None = None,
         reviewed_state_digest: str | None = None,
         reviewed_feedback_digest: str | None = None,
+        reviewed_head_sha: str | None = None,
     ) -> dict[str, object]:
         current = current or published()
         with (
@@ -567,6 +587,8 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             mock.patch.object(lifecycle_publication, "verify_current_lifecycle_authority", return_value=current),
             mock.patch.object(lifecycle_publication, "verify_current_ready_source_recovery", return_value=recovery),
             mock.patch.object(lifecycle_publication, "_verify_historical_lifecycle_transition", return_value=transition(current)),
+            mock.patch.object(lifecycle_publication, "_derive_exact_adoption_historical_provider_binding"),
+            mock.patch.object(actions, "_commit_validation_receipt_digest", return_value="2" * 64),
             mock.patch.object(lifecycle_authority, "verify_exact_state_adoption_proof", return_value=current.lifecycle),
             mock.patch.object(
                 actions,
@@ -597,6 +619,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                 binding={"default_branch": "main", "signature_policy": {"accepted_formats": ["ssh"]}},
                 reviewed_state_digest=reviewed_state_digest,
                 reviewed_feedback_digest=reviewed_feedback_digest,
+                reviewed_head_sha=reviewed_head_sha,
             )
 
     def test_public_recovery_reader_rejects_false_historical_current_safety_claims(self) -> None:
@@ -620,6 +643,67 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             self.assertRaisesRegex(lifecycle_publication.LifecyclePublicationError, "historical evidence contradicts"),
         ):
             lifecycle_publication.verify_current_ready_source_recovery(REPOSITORY, ISSUE)
+
+    def test_direct_v3_current_receipt_root_uses_existing_ready_authority(self) -> None:
+        current = issued_receipt_root()
+        manifest = self.derive(current)
+        self.assertEqual(manifest["source_authority_mode"], "EXACT_STATE_ADOPTION_V3")
+        self.assertEqual(manifest["prior_validation_receipt_digest"], "2" * 64)
+        self.assertIsNone(manifest["prior_final_attestation_digest"])
+        self.assertIsNone(manifest["source_authority"]["ready_transition"])
+        self.assertEqual(manifest["source_authority"]["enrollment_publication"], manifest["publication"])
+        self.assertEqual(manifest["lifecycle"]["ready_history"], current.lifecycle.state["ready_history"])
+        self.assertEqual(manifest["lifecycle"]["remediation_cycles"], 1)
+        self.assertNotIn("recovery_publication", manifest)
+        self.assertEqual(manifest["historical_companions"]["validation_receipt_bytes"], "UNAVAILABLE")
+
+    def test_direct_issued_root_rejects_provenance_and_lifecycle_substitution(self) -> None:
+        mutations = (
+            ("repository", lambda c, p, l: setattr(c.lifecycle, "repository", "Other/project")),
+            ("issue", lambda c, p, l: setattr(c.lifecycle, "delivery_issue", ISSUE + 1)),
+            ("PR", lambda c, p, l: setattr(c.lifecycle, "pull_request", PR + 1)),
+            ("head", lambda c, p, l: setattr(c.lifecycle, "head_sha", "f" * 40)),
+            ("tree", lambda c, p, l: setattr(c.lifecycle, "tree_sha", "f" * 40)),
+            ("authority", lambda c, p, l: setattr(c.lifecycle, "authority_digest", "f" * 64)),
+            ("receipt", lambda c, p, l: l.update(historical_validation_receipt_digest="f" * 64)),
+            ("absence", lambda c, p, l: l.update(historical_validation_receipt_digest=None)),
+            ("ancestor receipt", lambda c, p, l: l.update(schema_version="1.1")),
+            ("package fabrication", lambda c, p, l: l.update(historical_bytes_reconstructed=True)),
+            ("final attestation", lambda c, p, l: l.update(historical_final_attestation_digest="f" * 64)),
+            ("invented Ready", lambda c, p, l: c.lifecycle.state.update(ready_transition_count=2)),
+            ("review count", lambda c, p, l: c.lifecycle.state.update(unrestricted_review_count=0)),
+            ("remediation count", lambda c, p, l: c.lifecycle.state.update(remediation_cycle_count=3)),
+            ("recovery", lambda c, p, l: c.lifecycle.state.update(exceptional_recovery_count=1)),
+            ("continuation", lambda c, p, l: c.lifecycle.state.update(exceptional_continuation_count=1)),
+            ("cycle 3", lambda c, p, l: c.lifecycle.state.update(cycle_3_absent=False)),
+            ("source signer", lambda c, p, l: l.update(source_signer_identity="other@secpal.app")),
+        )
+        for label, mutate in mutations:
+            current = issued_receipt_root()
+            bundle = json.loads(current.serialized_lifecycle_evidence)
+            proof_value = bundle["exact_state_adoption_proof"]
+            mutate(current, proof_value, proof_value["validation_evidence_loss_admission"])
+            current.serialized_lifecycle_evidence = json.dumps(bundle).encode() + b"\n"
+            with self.subTest(label=label), self.assertRaises(fast_path.SecurityBlocker):
+                self.derive(current)
+        current = issued_receipt_root()
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.derive(current, reviewed_state_digest=REVIEWED_STATE, reviewed_feedback_digest="f" * 64)
+        with self.assertRaises(fast_path.SecurityBlocker):
+            self.derive(current, reviewed_head_sha="f" * 40)
+        manifest = self.derive(current)
+        for label, mutate in (
+            ("publication", lambda m: m["publication"].update(object_oid="f" * 40)),
+            ("CURRENT", lambda m: m["lifecycle"].update(current_authority_digest="f" * 64)),
+            ("invented transition", lambda m: m["source_authority"].update(ready_transition={})),
+            ("caller mode", lambda m: m.update(source_authority_mode="DIRECT_READY")),
+            ("absence companions", lambda m: m["historical_companions"].update(validation_receipt_bytes="ABSENT_NEVER_ISSUED")),
+            ("supplied packages", lambda m: m["historical_companions"].update(validation_receipt_bytes="PRESENT")),
+        ):
+            changed = copy.deepcopy(manifest)
+            mutate(changed)
+            with self.subTest(label=label), self.assertRaises(fast_path.SecurityBlocker):
+                fast_path.normalize_ready_integration_prior_authority(changed)
 
     def test_recovered_v3_enrollment_root_derives_existing_ready_authority(self) -> None:
         current, recovery = recovered_root()
@@ -2172,7 +2256,11 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             )
 
     def test_v3_authority_normalizes_into_the_existing_integration_verifier(self) -> None:
-        manifest = self.derive()
+        for current in (published(), issued_receipt_root()):
+            self.verify_v3_integration_consumer(current)
+
+    def verify_v3_integration_consumer(self, current) -> None:
+        manifest = self.derive(current)
         integration = {
             "pull_request_number": PR,
             "prior_delivery_head_sha": HEAD,
@@ -2184,8 +2272,8 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                 "lifecycle_identity": manifest["lifecycle"]["identity"],
                 "unrestricted_reviews_before": 1,
                 "unrestricted_reviews_after": 1,
-                "remediation_cycles_before": 2,
-                "remediation_cycles_after": 2,
+                "remediation_cycles_before": manifest["lifecycle"]["remediation_cycles"],
+                "remediation_cycles_after": manifest["lifecycle"]["remediation_cycles"],
                 "exceptional_recoveries_before": 0,
                 "exceptional_recoveries_after": 0,
                 "exceptional_continuations_before": 0,
@@ -2226,10 +2314,22 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                     binding={"signature_policy": {"accepted_formats": ["ssh"]}},
                     integration_evidence=integration,
                     live_observation=None,
+                    reviewed_state=SimpleNamespace(repository=REPOSITORY, pull_request_number=PR,
+                        pr_state="OPEN", head_sha=HEAD, state_digest=REVIEWED_STATE,
+                        feedback_digest=REVIEWED_FEEDBACK),
                 ),
                 manifest,
             )
         tag.assert_called_once()
+        if current.predecessor_publication_oid is None:
+            for field, value in (("repository", "Other/project"), ("pull_request_number", PR + 1),
+                                 ("head_sha", "f" * 40), ("state_digest", "f" * 64),
+                                 ("feedback_digest", "f" * 64), ("pr_state", "CLOSED")):
+                reviewed = SimpleNamespace(repository=REPOSITORY, pull_request_number=PR,
+                    pr_state="OPEN", head_sha=HEAD, state_digest=REVIEWED_STATE, feedback_digest=REVIEWED_FEEDBACK)
+                setattr(reviewed, field, value)
+                with self.subTest(field=field), self.assertRaises(fast_path.SecurityBlocker):
+                    actions._verify_ready_integration_lifecycle_authority(manifest, integration, reviewed_state=reviewed)
 
     def test_recovered_root_consumer_binds_target_and_immutable_marker(self) -> None:
         current, recovery = recovered_root()

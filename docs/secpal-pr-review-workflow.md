@@ -1147,6 +1147,21 @@ implement two-parent integration. Those remain owned by #750, #692, and #745
 respectively. Repositories with no enrolled publication remain valid, while a
 consumer explicitly requesting published authority fails closed.
 
+A direct version-3 Ready enrollment with schema-1.3 `CURRENT_RECEIPT` loss
+provenance composes the same `EXACT_STATE_ADOPTION_V3` prior-authority manifest.
+Its `ready_transition` is null: enrollment and CURRENT are the same protected
+publication, and Ready history retains the signed historical observation.
+Admission verifies the adoption proof and authorization, exact source signature
+and issued current-head receipt trailer, accepted historical provider binding,
+finite counters, and authenticated current-safety feedback. Historical receipt
+and final-attestation package bytes remain unavailable; fresh safety and
+integration validation do not reconstruct them. The schema, annotated-tag
+namespace, and typed integration family are unchanged. Protected `HEAD_ADVANCED`
+read-back rederives this manifest from its authenticated historical predecessor,
+preserving the historical provider head and receipt identity. A never-issued root
+continues to require its existing recovered-root authority; issued receipts do
+not authorize that recovery path.
+
 ## Finite lifecycle orchestration
 
 `scripts/secpal_pr_review/lifecycle_orchestration.py` authenticates #752 CURRENT

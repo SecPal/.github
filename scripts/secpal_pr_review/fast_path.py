@@ -1765,6 +1765,13 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         authority_mode == "ADOPTED"
         and source_mode == "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT"
     )
+    source = value.get("source_authority")
+    direct_root = (
+        authority_mode == "ADOPTED"
+        and source_mode == "EXACT_STATE_ADOPTION_V3"
+        and isinstance(source, dict)
+        and source.get("ready_transition") is None
+    )
     if authority_mode in {"ADOPTED", "ADOPTED_RECOVERED"}:
         lifecycle_keys |= {
             "ready_transition_count",
@@ -1811,12 +1818,13 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         ready_history = lifecycle.get("ready_history")
         ready_history_keys = (
             {"sequence", "transition_kind", "event_authorization_digest"}
-            if source_mode in {
+            if not direct_root and source_mode in {
                 "EXACT_STATE_ADOPTION_V3",
                 "EXISTING_AUTHORITY_COMPOSITION",
             }
             else {"sequence", "transition_kind", "observation_digest"}
             if source_mode in {
+                "EXACT_STATE_ADOPTION_V3",
                 "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
                 "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
                 "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
@@ -1841,7 +1849,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             or not _require_digest(
                 ready_history[0].get(
                     "event_authorization_digest"
-                    if source_mode in {
+                    if not direct_root and source_mode in {
                         "EXACT_STATE_ADOPTION_V3",
                         "EXISTING_AUTHORITY_COMPOSITION",
                     }
@@ -2021,7 +2029,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     }:
         raise SecurityBlocker("adopted Ready enrollment publication is malformed")
     transition = source.get("ready_transition")
-    if not recovered_root and (not isinstance(transition, dict) or set(transition) != {
+    if not (recovered_root or direct_root) and (not isinstance(transition, dict) or set(transition) != {
         "event_id", "event_digest", "predecessor_authority_digest",
         "predecessor_head_sha", "resulting_head_sha",
     }):
@@ -2074,6 +2082,18 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             or normalized["prior_final_attestation_digest"] is not None
         ):
             raise SecurityBlocker("recovered adoption root historical identity is invalid")
+        normalized.update(
+            source_authority_mode=source_mode,
+            source_authority=copy.deepcopy(source),
+            historical_companions=copy.deepcopy(companions),
+        )
+        return normalized
+    if direct_root:
+        if (
+            enrollment != normalized["publication"]
+            or source["adoption_proof_digest"] != lifecycle["current_authority_digest"]
+        ):
+            raise SecurityBlocker("direct adopted Ready root publication changed")
         normalized.update(
             source_authority_mode=source_mode,
             source_authority=copy.deepcopy(source),
