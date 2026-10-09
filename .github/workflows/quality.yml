@@ -1,5 +1,5 @@
 ---
-# SPDX-FileCopyrightText: 2025-2026 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Note: This workflow uses inline jobs instead of calling reusable workflows
@@ -231,6 +231,9 @@ jobs:
 
       - name: Install Node dependencies
         run: npm ci
+
+      - name: Verify Markdown toolchain security and compatibility
+        run: npm run test:markdown-toolchain
 
       - name: Run markdownlint
         run: >

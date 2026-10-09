@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-09 - Patch Markdown Lint Toolchain Dependencies
+
+**Fixed:**
+
+- Override the Markdown linter's TOML parser with the existing pinned
+  `smol-toml@1.9.0` and its math extension's renderer with `katex@0.18.2` to
+  address GHSA-r4xh-jqrq-34v2 and GHSA-238p-pmpm-9mq7 without downgrading
+  `markdownlint-cli`. Keep the overrides scoped to these consumers until
+  upstream dependency ranges admit patched versions.
+- Add regression coverage for inherited rendering trust, inline and block
+  math, and TOML lint configuration, run locally through `npm test` and in the
+  Markdown quality job.
+
 ## 2026-10-06 - Authenticate Equal-Second Ready Review Requests
 
 **Fixed:**
