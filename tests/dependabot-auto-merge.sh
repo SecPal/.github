@@ -849,8 +849,8 @@ grep -q '@<trusted-commit-sha>' "$ROLLOUT_GUIDE" || {
   exit 1
 }
 
-grep -q '^# SPDX-FileCopyrightText: 2025-2026 SecPal$' "$REPO_ROOT/.github/workflows/quality.yml" || {
-  echo "Quality workflow SPDX year must stay current when the file is edited." >&2
+grep -q '^# SPDX-FileCopyrightText: 2025-2026 SecPal Contributors$' "$REPO_ROOT/.github/workflows/quality.yml" || {
+  echo "Quality workflow SPDX header must preserve the first-publication year, include the current year, and name SecPal Contributors." >&2
   exit 1
 }
 
