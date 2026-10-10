@@ -1902,8 +1902,9 @@ query CurrentReviewFeedback(
   $reviewsCursor:String, $commentsCursor:String, $threadsCursor:String
 ) {
   repository(owner:$owner, name:$name) {
+    nameWithOwner
     pullRequest(number:$number) {
-      id headRefOid baseRefName baseRefOid state isDraft reviewDecision
+      id number headRefOid baseRefName baseRefOid state isDraft reviewDecision
       reactions(first:100) {
         nodes { id databaseId content user { id databaseId login } }
         pageInfo { hasNextPage }
@@ -1927,7 +1928,7 @@ query CurrentReviewFeedback(
       }
       comments(first:100, after:$commentsCursor) {
         nodes {
-          id databaseId body updatedAt
+          id databaseId body createdAt updatedAt
           author {
             login
             ... on User { id databaseId }
@@ -2181,6 +2182,15 @@ def _validate_action_command(arguments: list[str]) -> None:
     if len(arguments) == 7 and arguments[5:7] == ["--method", "GET"]:
         if not rules_endpoint and not protection_endpoint:
             raise MutationBlocked("REST read endpoint is not exactly allowlisted")
+        return
+    if (
+        len(arguments) == 9
+        and re.fullmatch(rf"repos/{repository}/issues/[1-9][0-9]*/comments", endpoint)
+        and arguments[5:8] == ["--method", "POST", "-f"]
+        and arguments[8] in {
+            "body=@codex review", "body=@codex security review"
+        }
+    ):
         return
     if len(arguments) != 11 or arguments[5:7] != ["--method", "POST"]:
         raise MutationBlocked("REST mutation must use the exact POST command shape")
@@ -2619,6 +2629,26 @@ class LiveGitHub:
             )
         return second
 
+    def read_provider_fallback_transport(self, plan: dict[str, Any]) -> dict[str, Any]:
+        """Twice capture complete provider transport without requiring terminality."""
+
+        try:
+            limits = select_repository(load_registry(), plan["repository"])
+        except RegistryError as exc:
+            raise MutationBlocked("provider transport has no validated repository limits") from exc
+        budget = {"calls": 0}
+        first = self._read_current_feedback_once(
+            plan, limits, budget, require_provider_terminal=False,
+            include_provider_transport=True,
+        )
+        second = self._read_current_feedback_once(
+            plan, limits, budget, require_provider_terminal=False,
+            include_provider_transport=True,
+        )
+        if first != second:
+            raise MutationBlocked("provider transport changed between bounded reads")
+        return second
+
     def _read_current_feedback_once(
         self,
         plan: dict[str, Any],
@@ -2627,6 +2657,7 @@ class LiveGitHub:
         *,
         ready_source_provider_binding: Any = None,
         require_provider_terminal: bool = True,
+        include_provider_transport: bool = False,
     ) -> dict[str, Any]:
         owner, name = plan["repository"].split("/", 1)
         base_variables = {
@@ -2669,9 +2700,14 @@ class LiveGitHub:
                     _graphql_arguments(CURRENT_REVIEW_FEEDBACK_QUERY, variables)
                 )
                 budget["calls"] += 1
-                pull_request = payload["data"]["repository"]["pullRequest"]
+                remote_repository = payload["data"]["repository"]
+                if include_provider_transport and remote_repository.get("nameWithOwner") != plan["repository"]:
+                    raise MutationBlocked("provider transport repository identity changed")
+                pull_request = remote_repository["pullRequest"]
                 if not isinstance(pull_request, dict):
                     raise MutationBlocked("current pull-request feedback is unavailable")
+                if include_provider_transport and pull_request.get("number") != plan["pull_request_number"]:
+                    raise MutationBlocked("provider transport PR identity changed")
                 if initial_pull_request is None:
                     initial_pull_request = pull_request
                 elif (
@@ -2746,7 +2782,9 @@ class LiveGitHub:
             "nodes": comments,
             "pageInfo": {"hasNextPage": False},
         }
-        if not require_provider_terminal:
+        if not require_provider_terminal and include_provider_transport:
+            pass  # Raw fallback evidence is classified by the fallback authority.
+        elif not require_provider_terminal:
             _require_review_providers_terminal(provider_state, repository=plan["repository"],
                 pull_request_number=plan["pull_request_number"], require_terminal=False,
                 ready_source_provider_binding=ready_source_provider_binding)
@@ -2834,6 +2872,22 @@ class LiveGitHub:
                     for item in reviews
                 ),
                 key=lambda item: str(item["node_id"]),
+            ),
+            **(
+                {
+                    "provider_transport": {
+                        "repository": plan["repository"],
+                        "pull_request": plan["pull_request_number"],
+                        "head_sha": pull_request.get("headRefOid"),
+                        "pr_state": pull_request.get("state"),
+                        "is_draft": pull_request.get("isDraft"),
+                        "comments": comments,
+                        "reviews": reviews,
+                        "threads": threads,
+                    }
+                }
+                if include_provider_transport
+                else {}
             ),
             "feedback": {
                 "pull_request_reactions": _live_reactions(

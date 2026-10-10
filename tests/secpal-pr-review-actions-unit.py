@@ -2027,6 +2027,12 @@ class MutationTests(TestCase):
             "-F", "in_reply_to=21",
         ]
         actions._validate_action_command(reply)
+        replacement = [
+            "gh", "api", "--hostname", "github.com",
+            "repos/SecPal/.github/issues/1/comments",
+            "--method", "POST", "-f", "body=@codex security review",
+        ]
+        actions._validate_action_command(replacement)
         for unsafe in (
             ["gh", "api", "--hostname", "github.com", "repos/SecPal/.github/issues"],
             [*reaction, "--input", "payload.json"],
@@ -2035,6 +2041,8 @@ class MutationTests(TestCase):
             [*checks_query, "-f", "extra=value"],
             [*rules, "--paginate"],
             [*reply[:7], "-F", *reply[8:]],
+            [*replacement[:-1], "body=@codex review again"],
+            [*replacement, "--paginate"],
         ):
             with self.subTest(arguments=unsafe), self.assertRaises(actions.MutationBlocked):
                 actions._validate_action_command(unsafe)
@@ -2361,8 +2369,10 @@ class MutationTests(TestCase):
         payload = {
             "data": {
                 "repository": {
+                    "nameWithOwner": "SecPal/.github",
                     "pullRequest": {
                         "id": "PR_1",
+                        "number": 1,
                         "headRefOid": p21.HEAD,
                         "state": "OPEN",
                         "reviewDecision": "CHANGES_REQUESTED",
@@ -2442,6 +2452,16 @@ class MutationTests(TestCase):
             current["feedback"]["provider_review_requests"][0]["node_id"],
             "RRE_COPILOT",
         )
+        nonterminal = copy.deepcopy(payload)
+        nonterminal["data"]["repository"]["pullRequest"]["isDraft"] = False
+        nonterminal_github = actions.LiveGitHub(
+            SimpleNamespace(run=lambda _arguments: copy.deepcopy(nonterminal))
+        )
+        with self.assertRaises(actions.MutationBlocked):
+            nonterminal_github.read_current_feedback(plan())
+        transport = nonterminal_github.read_provider_fallback_transport(plan())
+        self.assertEqual(transport["provider_transport"]["head_sha"], p21.HEAD)
+        self.assertFalse(transport["provider_transport"]["is_draft"])
 
         alias_payload = copy.deepcopy(payload)
         alias_payload["data"]["repository"]["pullRequest"]["timelineItems"][

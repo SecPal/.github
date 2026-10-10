@@ -87,7 +87,9 @@ if arguments[3] == "graphql":
                 {
                     "data": {
                         "repository": {
+                            "nameWithOwner": "SecPal/.github",
                             "pullRequest": {
+                                "number": 1,
                                 "headRefOid": "a" * 40,
                                 "state": "OPEN",
                                 "isDraft": True,

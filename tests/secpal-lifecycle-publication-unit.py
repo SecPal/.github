@@ -4941,7 +4941,10 @@ class LifecyclePublicationTests(TestCase):
 
     def test_public_provider_dispatch_rejects_caller_selected_eligibility(self) -> None:
         _, enrolled, _ = self.provider_claim_fixture()
-        with self.assertRaisesRegex(
+        import scripts.secpal_pr_review as package
+        # This reserved consumer is installed by #1053. An absent/incomplete
+        # maintained consumer still grants no caller-selected transport.
+        with patch.object(package, "provider_fallback", SimpleNamespace(), create=True), self.assertRaisesRegex(
             publication.LifecyclePublicationError, "maintained provider fallback verifier is unavailable"
         ):
             publication.execute_provider_dispatch_with_claim(
@@ -4958,9 +4961,9 @@ class LifecyclePublicationTests(TestCase):
             authenticate_claim_eligibility=lambda repository, issue, review_type: (
                 eligibility
             ),
-            write_claimed_replacement=lambda repository, issue, review_type, body: (
-                writes.append(body), 1001
-            )[1],
+            write_claimed_replacement=lambda repository, issue, review_type, dispatch_key, body: (
+                self.assertEqual(dispatch_key, key), writes.append(body), 1001
+            )[2],
             reconcile_claimed_replacement=lambda dispatch_key, response_id: (
                 publication.ProviderDispatchReconciliation(1, 1001)
             ),

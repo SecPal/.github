@@ -85,6 +85,9 @@ jobs:
       - name: Run guarded-action unit tests
         run: python3 -m unittest tests/secpal-pr-review-actions-unit.py
 
+      - name: Run bounded provider fallback replacement tests
+        run: python3 -m unittest tests/secpal-provider-fallback-unit.py
+
       - name: Run adopted Ready prior-authority bridge unit tests
         run: python3 -m unittest tests/secpal-adopted-ready-prior-authority-unit.py
 

@@ -1916,8 +1916,10 @@ def _provider_feedback_response(
     return {
         "data": {
             "repository": {
+                "nameWithOwner": state.repository,
                 "pullRequest": {
                     "id": "PR_PROVIDER_REPLAY",
+                    "number": state.pull_request_number,
                     "headRefOid": state.head_sha,
                     "baseRefName": state.base_ref,
                     "baseRefOid": state.base_sha,

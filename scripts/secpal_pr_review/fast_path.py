@@ -91,6 +91,7 @@ VERIFIER_MODULE_NAMES = (
     "lifecycle_publication",
     "pre_enrollment_integration",
     "provider_acquisition",
+    "provider_fallback",
     "provider_reacquisition",
     "provider_reacquisition_cli",
     "review_consumption_cli",
@@ -559,6 +560,9 @@ def codex_review_type(body: Any) -> str | None:
             return "SECURITY"
         if body.lstrip().startswith("### 💡 Codex Review"):
             return "CODE"
+        for review_type, no_finding_text in CODEX_NO_FINDING_TEXT.items():
+            if body.lstrip().startswith(no_finding_text):
+                return review_type
     return None
 
 
