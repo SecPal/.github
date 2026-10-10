@@ -72,6 +72,32 @@ DIRECT_VALIDATION_EXECUTABLES = frozenset(
 )
 COMPOSER_VALIDATION_SCRIPTS = frozenset({"analyse", "ci:check", "test"})
 EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
+# The maintained Actions owner consumes this inventory after Ready integration.
+VERIFIER_MODULE_NAMES = (
+    "bootstrap_source_admission",
+    "enrolled_draft_integration",
+    "exact_source_safety",
+    "exceptional_recovery",
+    "fast_path",
+    "follow_up",
+    "governance_amendment",
+    "late_disposition",
+    "legacy_enrolled_package_loss",
+    "lifecycle_authority",
+    "lifecycle_execution",
+    "lifecycle_orchestration",
+    "lifecycle_publication",
+    "pre_enrollment_integration",
+    "provider_acquisition",
+    "provider_fallback",
+    "provider_reacquisition",
+    "qualified_remediation_successor_loss",
+    "unchanged_head_prerequisite",
+    "unchanged_head_prerequisite_evidence",
+    "validation_evidence_loss",
+    "version_collision",
+)
+
 READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS = (
     "scripts/secpal-pr-review-actions.py",
     "scripts/secpal-pr-review.py",

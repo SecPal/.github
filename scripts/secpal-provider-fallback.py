@@ -6,16 +6,26 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-from scripts.secpal_pr_review import provider_fallback
 
 
-LiveProviderObservation = provider_fallback.LiveProviderObservation
+def _load_consumer():
+    spec = importlib.util.spec_from_file_location(
+        "secpal_pr_review_actions", ROOT / "scripts/secpal-pr-review-actions.py"
+    )
+    if spec.name in sys.modules:
+        raise RuntimeError("Cannot replace a preloaded Actions owner")
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    sys.path.insert(0, str(ROOT))
+    from scripts.secpal_pr_review import provider_fallback
+    return provider_fallback
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,7 +36,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr", required=True, type=int)
     parser.add_argument("--review-type", required=True, choices=("CODE", "SECURITY"))
     args = parser.parse_args(argv)
-    runtime = LiveProviderObservation(args.repo, args.delivery_issue, args.pr)
+    provider_fallback = _load_consumer()
+    runtime = provider_fallback.LiveProviderObservation(args.repo, args.delivery_issue, args.pr)
     try:
         if args.command == "inspect":
             key = provider_fallback.inspect(runtime, args.review_type).dispatch_key

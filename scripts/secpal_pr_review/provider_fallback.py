@@ -521,16 +521,35 @@ class LiveProviderObservation:
         return response["id"]
 
 
+_RUNTIME_CLASS = LiveProviderObservation
+_RUNTIME_METHODS = tuple(
+    (name, getattr(_RUNTIME_CLASS, name)) for name in ("__init__", "observe", "write")
+)
+_RUNTIME_INIT, _RUNTIME_OBSERVE, _RUNTIME_WRITE = (
+    method for _, method in _RUNTIME_METHODS
+)
+
+
+def _new_runtime(repository: str, delivery_issue: int, pull_request: int) -> LiveProviderObservation:
+    if LiveProviderObservation is not _RUNTIME_CLASS or any(
+        getattr(_RUNTIME_CLASS, name) is not method for name, method in _RUNTIME_METHODS
+    ):
+        _blocked("provider runtime callable identity changed")
+    runtime = object.__new__(_RUNTIME_CLASS)
+    _RUNTIME_INIT(runtime, repository, delivery_issue, pull_request)
+    return runtime
+
+
 def _runtime(repository: str, delivery_issue: int) -> LiveProviderObservation:
     current = publication.verify_current_lifecycle_authority(repository, delivery_issue)
-    return LiveProviderObservation(repository, delivery_issue, current.lifecycle.pull_request)
+    return _new_runtime(repository, delivery_issue, current.lifecycle.pull_request)
 
 
 def authenticate_claim_eligibility(
     repository: str, delivery_issue: int, review_type: str,
 ) -> publication.ProviderDispatchEligibility | publication.ProviderDispatchNoLongerRequired:
     try:
-        eligible = classify(_runtime(repository, delivery_issue).observe(), review_type, datetime.now(timezone.utc))
+        eligible = classify(_RUNTIME_OBSERVE(_runtime(repository, delivery_issue)), review_type, datetime.now(timezone.utc))
     except ProviderAcknowledged:
         return publication.ProviderDispatchNoLongerRequired()
     return publication.ProviderDispatchEligibility(eligible.dispatch_key, fast_path.digest_json(asdict(eligible)))
@@ -544,15 +563,15 @@ def write_claimed_replacement(
             or (key.repository, key.delivery_issue, key.review_type) != (repository, delivery_issue, review_type)
             or body != TRIGGERS.get(review_type)):
         _blocked("replacement trigger substituted another review type")
-    return LiveProviderObservation(repository, delivery_issue, key.pull_request).write(body)
+    return _RUNTIME_WRITE(_new_runtime(repository, delivery_issue, key.pull_request), body)
 
 
 def reconcile_claimed_replacement(
     key: publication.ProviderDispatchKey, response_id: int | None,
 ) -> publication.ProviderDispatchReconciliation:
-    runtime = LiveProviderObservation(key.repository, key.delivery_issue, key.pull_request)
+    runtime = _new_runtime(key.repository, key.delivery_issue, key.pull_request)
     try:
-        observed = runtime.observe()
+        observed = _RUNTIME_OBSERVE(runtime)
     except ReplacementBlocked:
         raise
     except Exception as exc:
@@ -574,6 +593,9 @@ def inspect(runtime: LiveProviderObservation, review_type: str) -> ReplacementEl
 
 
 def dispatch(repository: str, delivery_issue: int, pull_request: int, review_type: str) -> publication.ProviderDispatchResult:
+    # Claim authority must never execute an unaccepted candidate verifier.
+    actions = bootstrap_source_admission._load_actions_helper()
+    actions._require_accepted_main_bridge_source(repository)
     policy = lifecycle_authority._load_lifecycle_trust_policy(repository)
     identity, signer = lifecycle_execution._policy_role_signer(
         policy, policy.publication_signer_identities, "publication signer role",

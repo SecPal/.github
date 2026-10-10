@@ -7,6 +7,13 @@ from __future__ import annotations
 import copy
 from datetime import datetime, timezone
 import unittest
+from pathlib import Path
+
+# Ready integration supplies the shared Actions fixture. The historical source
+# still exercises the same consumer/CAS cases before that prerequisite arrives.
+if Path(__file__).with_name("secpal_actions_fixture.py").is_file():
+    from tests.secpal_actions_fixture import load_actions
+    load_actions()
 
 from scripts.secpal_pr_review import provider_fallback
 
@@ -341,6 +348,46 @@ class ReviewedFindingRegressions(unittest.TestCase):
         with self.assertRaises(provider_fallback.ReplacementBlocked):
             provider_fallback._persisted_replacement(before.dispatch_key, edited, None)
 
+    def test_writer_rejects_substituted_runtime_class(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        key = provider_fallback.classify(case(), "SECURITY", NOW).dispatch_key
+        writes = []
+        forged = lambda *_: SimpleNamespace(write=lambda body: writes.append(body))
+        with mock.patch.object(provider_fallback, "LiveProviderObservation", forged):
+            with self.assertRaises(provider_fallback.ReplacementBlocked):
+                provider_fallback.write_claimed_replacement(
+                    key.repository, key.delivery_issue, key.review_type,
+                    key, provider_fallback.TRIGGERS[key.review_type])
+        self.assertEqual(writes, [])
+
+    def test_writer_rejects_substituted_runtime_method(self):
+        from unittest import mock
+        key = provider_fallback.classify(case(), "SECURITY", NOW).dispatch_key
+        writes = []
+        with mock.patch.object(provider_fallback.LiveProviderObservation, "write",
+                               lambda _, body: writes.extend((body, body))):
+            with self.assertRaises(provider_fallback.ReplacementBlocked):
+                provider_fallback.write_claimed_replacement(
+                    key.repository, key.delivery_issue, key.review_type,
+                    key, provider_fallback.TRIGGERS[key.review_type])
+        self.assertEqual(writes, [])
+
+    def test_dispatch_rejects_candidate_local_source_before_claim(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        source_check = mock.Mock(side_effect=provider_fallback.fast_path.SecurityBlocker("unaccepted source"))
+        actions = SimpleNamespace(_require_accepted_main_bridge_source=source_check)
+        with mock.patch.object(provider_fallback.bootstrap_source_admission, "_load_actions_helper", return_value=actions), \
+             mock.patch.object(provider_fallback.lifecycle_authority, "_load_lifecycle_trust_policy") as trust, \
+             mock.patch.object(provider_fallback.lifecycle_execution, "_policy_role_signer", return_value=("signer", object())), \
+             mock.patch.object(provider_fallback.publication, "execute_provider_dispatch_with_claim") as claim:
+            with self.assertRaises(provider_fallback.fast_path.SecurityBlocker):
+                provider_fallback.dispatch("SecPal/.github", 1031, 1035, "SECURITY")
+            trust.assert_not_called()
+            claim.assert_not_called()
+        source_check.assert_called_once_with("SecPal/.github")
+
     def test_documented_cli_is_executable(self):
         import subprocess
         from pathlib import Path
@@ -517,9 +564,43 @@ class ClaimedConsumerTests(unittest.TestCase):
         self.state = copy.deepcopy(self.initial)
         self.writes = []
         self.writer_error = None
-        self.runtime_patch = mock.patch.object(provider_fallback, "LiveProviderObservation", side_effect=lambda repo, issue, pr: SimpleNamespace(observe=self.observe, write=self.write))
-        self.runtime_patch.start()
-        self.addCleanup(self.runtime_patch.stop)
+        # Capture the source projection before the isolated journal fixture
+        # replaces trust transport. Consumer methods and Git/CAS stay real.
+        actions = self.fixture_module.actions_owner if hasattr(self.fixture_module, "actions_owner") else provider_fallback.bootstrap_source_admission._load_actions_helper()
+        github = SimpleNamespace(
+            read_provider_fallback_transport=lambda _: {"provider_transport": self.observe()},
+            inspect_actor=lambda: self.state["actor"],
+            runner=SimpleNamespace(run=lambda argv: {
+                "body": argv[-1].removeprefix("body="),
+                "id": self.write(argv[-1].removeprefix("body=")),
+            }),
+        )
+        self.transport_patches = [
+            mock.patch.object(provider_fallback.bootstrap_source_admission, "_load_actions_helper", return_value=actions),
+            mock.patch.object(actions, "LiveGitHub", return_value=github),
+            mock.patch.object(provider_fallback.provider_acquisition, "_observe", side_effect=self.chronology),
+        ]
+        for mocked in self.transport_patches:
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
+    def chronology(self, repository, pull_request):
+        timeline = self.state["timeline"]
+        events = []
+        for event in timeline:
+            if event["event"] == "committed":
+                events.append({"kind": "COMMIT", "head": event["sha"], "created_at": READY})
+            elif event["event"] == "ready_for_review":
+                events.append({"kind": "ReadyForReviewEvent", "created_at": event["created_at"]})
+            elif event["event"] == "commented":
+                comment = next(c for c in self.state["comments"] if c["databaseId"] == event["id"])
+                events.append({"kind": "IssueComment", "database_id": event["id"],
+                    "created_at": event["created_at"], "versions": ((event["created_at"], comment["body"]),)})
+        actor = self.state["actor"]
+        return {"repository": repository, "pull_request": pull_request,
+                "head": self.state["head_sha"], "state": "OPEN", "draft": False,
+                "author": (actor["login"], actor["node_id"], actor["database_id"]),
+                "head_publication": self.state["head_publication"], "events": events}
 
     def observe(self):
         return copy.deepcopy(self.state)
