@@ -540,6 +540,25 @@ exceptional-continuation counters; Cycle 3 remains absent. Native genesis is
 then admitted and enrolled through the admission-first publication boundary.
 The integration itself is not a lifecycle transition.
 
+## Ordinary source advancement before Ready
+
+An enrolled native initial unreviewed Draft delivery may use the closed
+`ENROLLED_DRAFT_SOURCE_ADVANCEMENT` operation from freshly authenticated
+accepted-main tooling. The exact registered repository, issue, primary PR and
+CURRENT binding must pass the maintained initial-Draft and work-graph guards.
+Fresh explicit user authorization binds one staged tree, sole CURRENT parent,
+maintained signer, one-use identity and expiry. Canonical Complete Validation,
+receipt, final attestation, protected reservations and isolated exact branch
+transport precede the existing `HEAD_ADVANCED` publication and CURRENT readback.
+No lifecycle state, counter or review budget changes.
+
+Source advancement and mechanically derived two-parent current-main integration
+remain separate operations. Repeated development requires fresh authority and
+validation on each successor. Uncertain mutation permits exact reconciliation
+only, with no new candidate or retry. See the [maintained source operation
+interface](../scripts/README.md#ordinary-enrolled-draft-source-advancement).
+This operation is outside the completed-feedback skill's remediation scope.
+
 ## Pre-enrollment Draft current-main integration
 
 An open Draft delivery that has not entered lifecycle authority may use the
@@ -1062,6 +1081,16 @@ CURRENT before writing a successor. Historical signed chains that consumed
 review before Ready remain independently verifiable, but cannot be newly issued
 or published in that order.
 
+Ordinary review-request chronology is admitted by
+`lifecycle_execution._admit_review_request_chronology`. Strictly later requests
+retain timestamp-based admission. Equal-second requests require a complete
+maintained native timeline, the exact Ready and request identities, matching
+Stable Feedback actors and reviewer, and the current Ready head before both
+events in native sequence. Missing, ambiguous, substituted or drifting
+observations fail closed; timestamp equality and caller order assertions grant
+no authority. The publisher reobserves this chronology before its existing
+`UNRESTRICTED_REVIEW_CONSUMED` publication and compares its canonical digest.
+
 The ancillary `SECPAL_PROVIDER_DISPATCH_CLAIM` reserves one exact replacement
 provider fallback dispatch before its external comment write. It is signed by
 the existing publication role, uses the same protected branch and CAS, and
@@ -1141,6 +1170,21 @@ Publication does not derive lifecycle state, orchestrate lifecycle events, or
 implement two-parent integration. Those remain owned by #750, #692, and #745
 respectively. Repositories with no enrolled publication remain valid, while a
 consumer explicitly requesting published authority fails closed.
+
+A direct version-3 Ready enrollment with schema-1.3 `CURRENT_RECEIPT` loss
+provenance composes the same `EXACT_STATE_ADOPTION_V3` prior-authority manifest.
+Its `ready_transition` is null: enrollment and CURRENT are the same protected
+publication, and Ready history retains the signed historical observation.
+Admission verifies the adoption proof and authorization, exact source signature
+and issued current-head receipt trailer, accepted historical provider binding,
+finite counters, and authenticated current-safety feedback. Historical receipt
+and final-attestation package bytes remain unavailable; fresh safety and
+integration validation do not reconstruct them. The schema, annotated-tag
+namespace, and typed integration family are unchanged. Protected `HEAD_ADVANCED`
+read-back rederives this manifest from its authenticated historical predecessor,
+preserving the historical provider head and receipt identity. A never-issued root
+continues to require its existing recovered-root authority; issued receipts do
+not authorize that recovery path.
 
 ## Finite lifecycle orchestration
 
@@ -1611,6 +1655,45 @@ is ready. Likewise, outdated does not mean invalid and resolved does not mean
 fixed. The helper has no keyword classifier; technical truth is established from
 repository evidence while deterministic code validates structure and policy transitions.
 
+## Complete Registered Validation ownership
+
+`REGISTERED COMMANDS PASS` denotes technical command execution only.
+`COMPLETE REGISTERED VALIDATION PASS` requires the complete ordered command set,
+exact post-run HEAD, staged tree, worktree, registry, manual gates and supplied
+evidence authentication, followed by existing canonical receipt creation,
+durable publication and authentication of the written receipt. The public
+owner is `attest-validation`; its durable `--output` is required. Receipt and
+final-attestation schemas and digest meanings remain unchanged.
+
+The existing atomic writer authenticates the private staged receipt bytes and
+reauthenticates the exact source and supplied evidence before publishing the
+canonical output. Its file fsync, atomic replacement and directory fsync precede
+terminal success. Readback confirms the published receipt. Runner-result
+issuance and its backing observations remain enclosed inside the internal
+runner; callers receive copies of execution facts only.
+
+A raw `_run_registered_validations` result is process-local execution truth,
+never terminal Complete Validation or commit-binding authority. Stopping after
+command PASS leaves `REGISTERED_COMMAND_EXECUTION = PASS`,
+`COMPLETE_REGISTERED_VALIDATION = INCOMPLETE`, `CANONICAL_RECEIPT = ABSENT`, and
+`COMMIT_BINDING_AUTHORITY = ABSENT`. Caller-created results, raw PASS reports and
+historical logs cannot be promoted to receipts. Closed enrolled-Draft and
+pre-enrollment transactions retain their own canonical typed evidence.
+
+A canonical attempt ends as `SUCCESS_WITH_RECEIPT`, `FAILED_WITHOUT_RECEIPT`, or
+`INCOMPLETE_WITHOUT_RECEIPT`. These describe validation outcomes, not new
+lifecycle states. Only `SUCCESS_WITH_RECEIPT` invokes the rule never to repeat
+successful Complete Validation on an unchanged tree. Failure or interruption
+before receipt publication leaves no valid receipt; the pre-execution
+`VALIDATION_RECEIPT_INVALIDATED` placeholder remains. Publication or readback
+failure, including process interruptions that can be handled, restores
+invalidation, or removes the output and fsyncs its directory if invalidation
+cannot be written, and returns no success.
+
+Legacy forensic resolution reports cannot use raw command success as authority.
+Use canonical `attest-validation`, its unchanged `--bind-commit`, and the
+receipt-bound `resolve-batch` or simple resolver for resolution authority.
+
 ## Bounded GitHub actions
 
 The reaction/reply/resolution table is normative in the finite contract. In
@@ -1772,6 +1855,30 @@ is terminal. Existing current-source classification and material-blocker gates
 remain required. This composition changes neither bounded provider acquisition
 nor review, remediation, Ready, Recovery or Continuation budgets. The broader
 provider-lineage contract remains owned by #1031.
+
+The #1129 corrective composition extends the #1078 bootstrap to mixed published
+successors in either order, including alternating integrations and ordinary
+remediations within the existing finite limits. One backward walk starts at
+exact CURRENT and authenticates each `HEAD_ADVANCED` through the canonical typed
+integration verifier and each `REMEDIATION_COMPLETED` through its exact protected
+predecessor and canonical native/adopted State delta. The ordered integration
+pairs must agree with the encountered publications and be consumed exactly once.
+The walk stops at an independently authenticated provider root, never an
+arbitrary ancestor. Signed legacy enrollment histories retain their existing
+root derivation. Binding reauthentication reconstructs mixed event order from
+the protected publications while retaining complete per-type event digests and
+integration packages; it adds no durable schema. Historical terminality belongs
+only to the provider root, and fresh feedback belongs only to exact CURRENT.
+An integration's `reviewed_state` is its source-validation context, which may
+be a distinct authenticated successor of that provider root. For ordinary prior
+source authority, the consumer compares the canonical ordinary source-binding
+digest and exact sole parent with the protected predecessor. For a typed prior
+integration, it reuses that predecessor's original verified package and exact
+reviewed-state/feedback identity. Historical same-head v1.1 and independently
+verified adopted/recovered prior authorities retain their existing semantics.
+No integration snapshot selects a provider head or claims historical review at
+the current source head.
+The #1078 historical contract and issued artifacts remain unchanged.
 
 Ordinary remediation and recovery continue to require one parent. A separately
 user-authorized mechanical integration into an already-Ready delivery PR uses

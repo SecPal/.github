@@ -15,6 +15,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from tests.secpal_actions_fixture import load_actions
+actions_owner = load_actions()
+
 from scripts.secpal_pr_review import validation_evidence_loss as loss
 
 

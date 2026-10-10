@@ -15,9 +15,7 @@ import binascii
 import copy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from functools import cache
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -37,6 +35,7 @@ from .fast_path import (
     verify_commit_signatures,
     verify_ready_source_recovery_safety_facts,
 )
+from . import fast_path
 from . import pre_enrollment_integration
 
 
@@ -682,7 +681,6 @@ _TRUST_REGISTRY = (
     Path(__file__).resolve().parents[2]
     / ".agents/skills/secpal-pr-review/references/repositories.json"
 )
-_EVIDENCE_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
 
 
 def loads_closed_json(raw: bytes | str) -> Any:
@@ -1827,34 +1825,9 @@ def _load_delivery_signature_policy(repository: str) -> dict[str, Any]:
     return copy.deepcopy(matches[0]["signature_policy"])
 
 
-@cache
 def _load_trusted_command_helper() -> Any:
-    """Load the maintained external-command trust boundary by exact path."""
-
-    module_name = "secpal_lifecycle_trusted_commands"
-    loaded = sys.modules.get(module_name)
-    if loaded is not None:
-        loaded_path = getattr(loaded, "__file__", None)
-        if (
-            not isinstance(loaded_path, str)
-            or Path(loaded_path).absolute() != _EVIDENCE_HELPER.absolute()
-        ):
-            raise LifecycleAuthorityError(
-                "maintained command trust helper has an unexpected path"
-            )
-    spec = importlib.util.spec_from_file_location(module_name, _EVIDENCE_HELPER)
-    if spec is None or spec.loader is None:
-        raise LifecycleAuthorityError("maintained command trust helper is unavailable")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException as exc:
-        sys.modules.pop(module_name, None)
-        raise LifecycleAuthorityError(
-            "maintained command trust helper could not be loaded"
-        ) from exc
-    return module
+    """Reuse module identity; each signature operation still observes live trust."""
+    return fast_path.evidence
 
 
 def _trusted_signature_command(name: str) -> tuple[str, dict[str, str]]:
@@ -4721,12 +4694,12 @@ def exact_state_adoption_historical_evidence(value: Any) -> dict[str, Any]:
     return normalize_exact_state_adoption_historical_evidence(result)
 
 
-def recovered_adoption_root_historical_evidence(
+def exact_state_adoption_ready_root_historical_evidence(
     current_lifecycle: VerifiedLifecycleAuthority,
     lifecycle_evidence: Mapping[str, Any] | None,
     predecessor_publication_oid: str | None,
 ) -> dict[str, Any]:
-    """Authenticate a supported zero-historical exact-adoption root."""
+    """Authenticate direct Ready-root history without issuing new lifecycle authority."""
 
     if (
         not isinstance(lifecycle_evidence, Mapping)
@@ -4806,7 +4779,7 @@ def recovered_adoption_root_historical_evidence(
         proof.get("schema_version") != "3.0"
         or proof.get("proof_version") != "3.0"
         or not isinstance(loss, Mapping)
-        or loss.get("schema_version") != "1.2"
+        or loss.get("schema_version") not in {"1.2", "1.3"}
         or loss.get("historical_package_status") != "UNAVAILABLE"
         or loss.get("repository") != current_lifecycle.repository
         or loss.get("delivery_issue") != current_lifecycle.delivery_issue
@@ -4815,6 +4788,28 @@ def recovered_adoption_root_historical_evidence(
         or loss.get("tree_sha") != current_lifecycle.tree_sha
     ):
         raise LifecycleAuthorityError("zero-receipt adoption-root binding changed")
+    if loss["schema_version"] == "1.3":
+        if (
+            loss.get("historical_receipt_head_sha") != current_lifecycle.head_sha
+            or loss.get("historical_validation_receipt_digest")
+            != current_lifecycle.validation_receipt_digest
+            or current_lifecycle.validation_receipt_digest
+            != proof.get("validation_receipt_digest")
+            or current_lifecycle.source_validation_evidence_digest
+            != proof.get("source_validation_evidence_digest")
+            or current_lifecycle.adoption_source_evidence_digest
+            != proof.get("adoption_source_evidence_digest")
+            or loss.get("historical_final_attestation_digest") is not None
+            or loss.get("historical_bytes_reconstructed") is not False
+        ):
+            raise LifecycleAuthorityError("issued-receipt adoption-root binding changed")
+        return normalize_exact_state_adoption_historical_evidence({
+            "state": "UNAVAILABLE",
+            "validation_receipt_digest": loss["historical_validation_receipt_digest"],
+            "source_validation_evidence_digest": proof["source_validation_evidence_digest"],
+            "final_attestation_digest": None,
+            "bytes_reconstructed": False,
+        })
     historical = normalize_exact_state_adoption_historical_evidence({
         "state": "ABSENT_NEVER_ISSUED",
         "validation_receipt_digest": loss.get("historical_validation_receipt_digest"),
@@ -4822,6 +4817,21 @@ def recovered_adoption_root_historical_evidence(
         "final_attestation_digest": loss.get("historical_final_attestation_digest"),
         "bytes_reconstructed": loss.get("historical_bytes_reconstructed"),
     })
+    return historical
+
+
+def recovered_adoption_root_historical_evidence(
+    current_lifecycle: VerifiedLifecycleAuthority,
+    lifecycle_evidence: Mapping[str, Any] | None,
+    predecessor_publication_oid: str | None,
+) -> dict[str, Any]:
+    """Recovery remains restricted to authenticated never-issued history."""
+
+    historical = exact_state_adoption_ready_root_historical_evidence(
+        current_lifecycle, lifecycle_evidence, predecessor_publication_oid,
+    )
+    if historical["state"] != "ABSENT_NEVER_ISSUED":
+        raise LifecycleAuthorityError("zero-receipt adoption-root binding changed")
     return historical
 
 

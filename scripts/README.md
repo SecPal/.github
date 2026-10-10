@@ -114,6 +114,18 @@ appends once and verifies exact read-back; repeated invocation is idempotent
 only for that same authenticated correction. No Ready transition, review,
 remediation, recovery counter or lifecycle head is changed.
 
+## Complete Registered Validation ownership
+
+Apply the [canonical validation ownership](../docs/secpal-pr-review-workflow.md#complete-registered-validation-ownership) contract.
+`REGISTERED COMMANDS PASS` is technical execution only.
+`COMPLETE REGISTERED VALIDATION PASS` requires exact post-run authentication
+and the existing canonical receipt durably issued and authenticated by
+`attest-validation`. Require its receipt file before creating the receipt-bound
+signed commit. A raw runner result or PASS log cannot authorize binding.
+Only `SUCCESS_WITH_RECEIPT` forbids repeating successful Complete Validation
+on an unchanged tree. Preserve closed typed transactions and historical receipt
+and final-attestation semantics.
+
 `attest-validation --pre-enrollment-integration-evidence` is the distinct
 version-1.0 `PRE_ENROLLMENT_DRAFT_INTEGRATION` path. It applies only to an open
 Draft delivery with no CURRENT publication, native genesis, or lifecycle-aware
@@ -1213,6 +1225,65 @@ The read-only target-shaped acceptance harness
 derives the frozen #81 CURRENT/main merge and proves byte equality with the
 accepted trusted qualification import closure, including #287's correction.
 It performs no downstream or provider mutation.
+
+#### Ordinary enrolled Draft source advancement
+
+The same maintained owner composes `ENROLLED_DRAFT_SOURCE_ADVANCEMENT` from
+its initial-native-Draft guard, staged-tree Complete Validation, signed receipt
+and final attestation, protected one-use reservations, isolated branch transport
+and existing `HEAD_ADVANCED` publication. This is ordinary implementation before
+Ready and consumes no lifecycle budget. It is distinct from current-main
+integration: source advancement requires exactly one CURRENT parent and never
+merges or rebases protected main. The integration mode retains its exact
+mechanically derived two-parent contract.
+
+The closed `enrolled_draft_source_advancement_policy` currently admits only
+`SecPal/.github` and `SecPal/deployment`, the proven callers. Other repositories
+must acquire an explicitly justified registry capability; there is no wildcard
+or generic `BRANCH_WRITE` grant.
+
+After explicit current user authorization of the exact repository, issue, PR,
+CURRENT predecessor, staged tree, signer, one-use operation ID and expiry, run
+accepted-main tooling against a distinct candidate repository:
+
+```bash
+python3 -I scripts/secpal-pr-review-actions.py prepare-enrolled-draft-source \
+  --repo OWNER/REPOSITORY --delivery-issue ISSUE --pr PR \
+  --repo-root /absolute/candidate/root --authorization-id unique-source-id \
+  --expected-predecessor CURRENT_SHA --authorized-tree EXACT_STAGED_TREE \
+  --expected-signer MAINTAINED_SSH_IDENTITY --expires-at UNIX_SECONDS \
+  --manual-gate-evidence /absolute/manual-gates.json \
+  --operation-directory /absolute/new-operation-directory --apply
+```
+
+The signed authorization bounds a maximum 900-second admission window. Complete
+Validation and unchanged local/index state must pass inside that window before
+the sole signed commit is created. Its `SecPal-Validation-Receipt` trailer binds
+the exact receipt; independent final attestation reauthenticates its sole parent,
+tree, accepted signer and exact trailer cardinality. Caller-held attestation
+objects are not validation authority.
+
+```bash
+python3 -I scripts/secpal-pr-review-actions.py advance-enrolled-draft-source \
+  --repo OWNER/REPOSITORY --delivery-issue ISSUE --pr PR \
+  --repo-root /absolute/candidate/root \
+  --authorization /absolute/new-operation-directory/authorization.json --apply
+```
+
+Preparation and execution reuse ancillary claims in the existing protected
+journal. Source and integration reservations compete for the same predecessor;
+changing operation, directory or ID cannot mint a second candidate or push.
+Freshness is rechecked before source mutation. The exact non-force branch push
+and CURRENT readback preserve initial Draft state, all counters and histories.
+A later initial-Draft CURRENT may advance again with a new explicit authorization
+and validation epoch; no invocation grants the next invocation's authority.
+
+An uncertain push consumes the attempt. Only the same execution command with
+`--reconcile` may authenticate the original authorization, candidate, protected
+claims and live branch, then publish an already-authorized missing successor.
+Reconciliation never creates or pushes another candidate, including after expiry.
+A claimed candidate that is not live cannot be retried. Independently advancing
+main is reconciled later through enrolled-Draft current-main integration.
 
 ### `secpal_pr_review/lifecycle_publication.py`
 

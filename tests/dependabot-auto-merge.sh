@@ -717,20 +717,18 @@ if ! validate_immutable_action_references "$REUSABLE_WORKFLOW"; then
   exit 1
 fi
 
-pinned_reusable_workflow="$(
-  git -C "$REPO_ROOT" show \
-    "$caller_revision:.github/workflows/reusable-dependabot-auto-merge.yml"
-)" || {
+pinned_reusable_workflow="$base_fixture/pinned-reusable-workflow.yml"
+git -C "$REPO_ROOT" show \
+  "$caller_revision:.github/workflows/reusable-dependabot-auto-merge.yml" \
+  >"$pinned_reusable_workflow" || {
   echo "Pinned Dependabot reusable workflow is unavailable from the reviewed revision." >&2
   exit 1
 }
-if ! printf '%s\n' "$pinned_reusable_workflow" |
-  validate_immutable_action_references; then
+if ! validate_immutable_action_references "$pinned_reusable_workflow"; then
   echo "Pinned Dependabot reusable workflow must keep every nested action immutable." >&2
   exit 1
 fi
-if ! printf '%s\n' "$pinned_reusable_workflow" |
-  validate_documented_action_release_pins "pinned Dependabot reusable workflow"; then
+if ! validate_action_definition_pins "$pinned_reusable_workflow" "pinned Dependabot reusable workflow"; then
   echo "Pinned Dependabot reusable workflow must retain exact release provenance for every nested action." >&2
   exit 1
 fi
@@ -849,8 +847,8 @@ grep -q '@<trusted-commit-sha>' "$ROLLOUT_GUIDE" || {
   exit 1
 }
 
-grep -q '^# SPDX-FileCopyrightText: 2025-2026 SecPal$' "$REPO_ROOT/.github/workflows/quality.yml" || {
-  echo "Quality workflow SPDX year must stay current when the file is edited." >&2
+grep -q '^# SPDX-FileCopyrightText: 2025-2026 SecPal Contributors$' "$QUALITY_WORKFLOW" || {
+  echo "Quality workflow SPDX metadata must retain the first-publication year, current year and SecPal Contributors." >&2
   exit 1
 }
 

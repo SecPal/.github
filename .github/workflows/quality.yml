@@ -1,5 +1,5 @@
 ---
-# SPDX-FileCopyrightText: 2025-2026 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Note: This workflow uses inline jobs instead of calling reusable workflows
@@ -49,6 +49,12 @@ jobs:
       - name: Validate Node baseline governance
         run: npm run test:node-baseline
 
+      - name: Validate patched Markdown toolchain
+        run: |
+          npm run test:markdown-toolchain
+          bash tests/markdownlint-precommit-config.sh
+          bash tests/preflight-markdownlint-scope.sh
+
       - name: Verify external workflow references
         env:
           SECPAL_BASE_REVISION: ${{ github.event.pull_request.base.sha || github.sha }}
@@ -68,6 +74,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26.x"
+
+      - name: Install Node dependencies
+        run: npm ci
+
       - name: Run guarded-action unit tests
         run: python3 -m unittest tests/secpal-pr-review-actions-unit.py
 
@@ -76,6 +90,9 @@ jobs:
 
       - name: Run adopted Ready prior-authority bridge unit tests
         run: python3 -m unittest tests/secpal-adopted-ready-prior-authority-unit.py
+
+      - name: Run exact contracts Ready admission regressions
+        run: python3 -m unittest tests/secpal-contracts-524-loss-admission-unit.py
 
       - name: Run simple resolver unit tests
         run: python3 -m unittest tests/secpal-resolve-fixed-threads-unit.py

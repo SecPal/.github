@@ -187,6 +187,23 @@ class GitHubPullRequestTimelineEvent:
     commit_id: str | None = None
 
 
+_REVIEW_REQUEST_OBSERVATION_TOKEN = object()
+
+
+@dataclass(frozen=True)
+class _ReviewRequestObservationSeal:
+    digest: str
+    token: object
+
+
+@dataclass(frozen=True)
+class ObservedReviewRequestChronology:
+    """Ephemeral native observation, never caller-authored lifecycle evidence."""
+
+    facts: dict[str, Any]
+    _seal: _ReviewRequestObservationSeal | None = None
+
+
 _READY_CORRECTION_CONVERSION_SEAL = object()
 
 
@@ -560,11 +577,22 @@ def _observe_pull_request_lifecycle_timeline(
 ) -> tuple[GitHubPullRequestTimelineEvent, ...]:
     """Read the complete native Ready/Draft timeline without trusting caller data."""
 
+    return _normalize_pull_request_lifecycle_timeline(
+        _read_pull_request_native_timeline(repository, pull_request)
+    )
+
+
+def _read_pull_request_native_timeline(
+    repository: str, pull_request: int, *, complete_pages: bool = False,
+) -> list[dict[str, Any]]:
+    """Observe the maintained complete, bounded native REST sequence once."""
+
     result = _run_gh(
         [
             "api", "--hostname", "github.com",
             "-H", "Accept: application/vnd.github+json",
             "-H", "X-GitHub-Api-Version: 2026-03-10",
+            *(["--paginate", "--slurp"] if complete_pages else []),
             f"repos/{repository}/issues/{pull_request}/timeline?per_page=100",
         ]
     )
@@ -572,12 +600,29 @@ def _observe_pull_request_lifecycle_timeline(
         raise LifecyclePublicationError("GitHub lifecycle timeline is unavailable")
     try:
         items = json.loads(result.stdout, object_pairs_hook=_reject_duplicate_pairs)
+        if complete_pages:
+            # gh must finish native Link pagination successfully. The established
+            # closed bound admits exactly one page with fewer than 100 events.
+            if not isinstance(items, list) or len(items) != 1:
+                raise LifecyclePublicationError("native review timeline pagination is incomplete or exceeds its bound")
+            items = items[0]
         if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
             raise LifecyclePublicationError("GitHub lifecycle timeline is malformed")
         if len(items) >= 100:
             raise LifecyclePublicationError(
                 "GitHub lifecycle timeline exceeds the closed 99-event bound"
             )
+        return items
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LifecyclePublicationError("GitHub lifecycle timeline is malformed") from exc
+
+
+def _normalize_pull_request_lifecycle_timeline(
+    items: list[dict[str, Any]],
+) -> tuple[GitHubPullRequestTimelineEvent, ...]:
+    """Pure normalization of the established Ready/Draft representation."""
+
+    try:
         projected: list[GitHubPullRequestTimelineEvent] = []
         names = {
             "ready_for_review": "READY_FOR_REVIEW",
@@ -627,6 +672,92 @@ def _observe_pull_request_lifecycle_timeline(
     ) as exc:
         raise LifecyclePublicationError("GitHub lifecycle timeline is malformed") from exc
     return tuple(projected)
+
+
+def _normalize_review_request_chronology(
+    before: dict[str, Any], after: dict[str, Any], items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Pure normalization retaining native order and immutable request actors."""
+
+    def actor(value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            raise LifecyclePublicationError("native chronology actor is malformed")
+        return {
+            "login": authority._require_github_login(value.get("login"), "native actor"),
+            "node_id": authority._require_identity(value.get("node_id"), "native actor node"),
+            "database_id": authority._require_positive_int(value.get("id"), "native actor ID"),
+        }
+
+    events = []
+    try:
+        for item in items:
+            kind = item.get("event")
+            if kind not in {
+                "committed", "ready_for_review", "convert_to_draft", "review_requested",
+                "review_request_removed", "head_ref_force_pushed", "head_ref_deleted",
+                "head_ref_restored",
+            }:
+                continue
+            event = {
+                "kind": kind,
+                "node_id": authority._require_identity(item.get("node_id"), "native event node"),
+            }
+            if kind == "committed":
+                event["head_sha"] = authority._require_oid(item.get("sha"), "native commit")
+            else:
+                event.update({
+                    "database_id": authority._require_positive_int(item.get("id"), "native event ID"),
+                    "actor": actor(item.get("actor")),
+                    "created_at": fast_path._require_github_timestamp(item.get("created_at"), "native event timestamp"),
+                })
+            if kind == "review_requested":
+                reviewer = item.get("requested_reviewer")
+                event["requested_reviewer"] = actor(reviewer)
+                event["reviewer_type"] = reviewer.get("type")
+                # REST names this immutable provider Bot "Copilot", while the
+                # maintained GraphQL/Stable Feedback projection uses its app slug.
+                provider = fast_path.COPILOT_REVIEW_PROVIDER
+                if (
+                    reviewer.get("login") == "Copilot" and reviewer.get("type") == "Bot"
+                    and reviewer.get("node_id") == provider["node_id"]
+                    and reviewer.get("id") == provider["database_id"]
+                ):
+                    event["requested_reviewer"] = dict(provider)
+            events.append(event)
+        return {
+            "before": copy.deepcopy(before), "after": copy.deepcopy(after),
+            "events": events,
+            "lifecycle_events": [asdict(event) for event in _normalize_pull_request_lifecycle_timeline(items)],
+        }
+    except (TypeError, authority.LifecycleAuthorityError, SecurityBlocker) as exc:
+        raise LifecyclePublicationError("native review chronology is malformed") from exc
+
+
+def _observe_review_request_chronology(
+    repository: str, pull_request: int,
+) -> ObservedReviewRequestChronology:
+    """Reuse complete native observation between two independently read PR contexts."""
+
+    before = _observe_pre_enrollment_pull_request(repository, pull_request)
+    items = _read_pull_request_native_timeline(repository, pull_request, complete_pages=True)
+    after = _observe_pre_enrollment_pull_request(repository, pull_request)
+    facts = _normalize_review_request_chronology(before, after, items)
+    return ObservedReviewRequestChronology(
+        facts, _ReviewRequestObservationSeal(digest_json(facts), _REVIEW_REQUEST_OBSERVATION_TOKEN)
+    )
+
+
+def _require_observed_review_request_chronology(value: Any) -> dict[str, Any]:
+    """Reject caller assertions and altered observations without admitting order."""
+
+    if (
+        type(value) is not ObservedReviewRequestChronology
+        or type(value._seal) is not _ReviewRequestObservationSeal
+        or value._seal.token is not _REVIEW_REQUEST_OBSERVATION_TOKEN
+        or value._seal.digest != digest_json(value.facts)
+    ):
+        raise LifecyclePublicationError("complete native review chronology is unauthenticated")
+    return value.facts
 
 
 def _require_bound_github_ready_event(
@@ -2971,19 +3102,20 @@ def _add_enrolled_draft_claim(claims, document) -> None:
 
     selected = document["authorization"]
     evidence = selected["evidence"]
-    preparation = selected["kind"] == integration.PREPARATION_AUTHORIZATION_KIND
+    preparation_kind = integration.authorization_kind(evidence["kind"], preparation=True)
+    preparation = selected["kind"] == preparation_kind
     if not preparation:
         prior = claims.get(selected["preparation_authorization_digest"])
         if prior is None:
             raise LifecyclePublicationError("enrolled Draft candidate has no protected preparation reservation")
         old = prior["authorization"]
-        if old["kind"] != integration.PREPARATION_AUTHORIZATION_KIND or any(
+        if old["kind"] != preparation_kind or any(
             old[key] != selected[key] for key in ("authorization_id", "evidence", "validation_receipt", "signer_identity")
         ):
             raise LifecyclePublicationError("enrolled Draft candidate differs from preparation reservation")
     for prior in claims.values():
         old = prior["authorization"]
-        if (old["kind"] == integration.PREPARATION_AUTHORIZATION_KIND) != preparation:
+        if (old["kind"] == integration.authorization_kind(old["evidence"]["kind"], preparation=True)) != preparation:
             continue
         if old["evidence"]["repository"] == evidence["repository"] and (
             old["authorization_id"] == selected["authorization_id"]
@@ -3888,6 +4020,35 @@ def _ready_source_provider_binding_fields(
     }
 
 
+def _require_ordinary_ready_remediation_delta(
+    before: Mapping[str, Any], after: Mapping[str, Any], event_digest: str,
+    *, historical_proof_mode: str,
+) -> None:
+    """Use canonical State semantics for imported and published Ready remediation."""
+
+    try:
+        expected = authority._derive_state(
+            before, "REMEDIATION_COMPLETED", event_digest,
+            allow_adopted_observations=(
+                historical_proof_mode == authority.EXACT_ADOPTION_PROOF_MODE
+            ),
+        )
+        if (
+            before.get("unrestricted_review_count") != 1
+            or before.get("ready") is not True or before.get("draft") is not False
+            or before.get("ready_transition_count") != 1
+            or before.get("cycle_3_absent") is not True
+            or before.get("exceptional_recovery_count") != 0
+            or before.get("exceptional_continuation_count") != 0
+            or after != expected
+        ):
+            raise authority.LifecycleAuthorityError("finite Ready remediation changed State")
+    except (authority.LifecycleAuthorityError, TypeError, ValueError) as exc:
+        raise LifecyclePublicationError(
+            "Ready-source provider lifecycle is not the exact finite Ready remediation"
+        ) from exc
+
+
 def _derive_ordinary_ready_source_provider_binding(
     current: VerifiedLifecyclePublication,
     bundle: Mapping[str, Any],
@@ -3917,33 +4078,7 @@ def _derive_ordinary_ready_source_provider_binding(
     tail = list(zip(events[start:], snapshots[start:]))
     if not tail:
         return None
-    first_event, first_snapshot = tail[0]
-    before = first_snapshot.get("state_before")
-    final_state = current.lifecycle.state
-    if (
-        not isinstance(before, dict)
-        or before.get("unrestricted_review_count") != 1
-        or before.get("ready") is not True
-        or before.get("draft") is not False
-        or before.get("cycle_3_absent") is not True
-        or before.get("ready_transition_count") != 1
-        or before.get("exceptional_recovery_count") != 0
-        or before.get("exceptional_continuation_count") != 0
-        or final_state.get("unrestricted_review_count") != 1
-        or final_state.get("remediation_cycle_count") != before.get(
-            "remediation_cycle_count"
-        ) + len(tail)
-        or final_state.get("remediation_cycle_count") > authority.MAX_REMEDIATION_CYCLES
-        or final_state.get("ready") is not True
-        or final_state.get("draft") is not False
-        or final_state.get("cycle_3_absent") is not True
-        or final_state.get("ready_transition_count") != 1
-        or final_state.get("exceptional_recovery_count") != 0
-        or final_state.get("exceptional_continuation_count") != 0
-    ):
-        raise LifecyclePublicationError(
-            "Ready-source provider lifecycle is not the exact finite Ready remediation"
-        )
+    first_event, _ = tail[0]
     predecessor = first_event.get("predecessor_head_sha")
     expected_head = predecessor
     event_digests: list[str] = []
@@ -3965,6 +4100,10 @@ def _derive_ordinary_ready_source_provider_binding(
             raise LifecyclePublicationError(
                 "Ready-source provider remediation lineage is invalid"
             )
+        _require_ordinary_ready_remediation_delta(
+            snapshot["state_before"], snapshot["state_after"], event.get("event_digest"),
+            historical_proof_mode=current.lifecycle.historical_proof_mode,
+        )
         expected_head = event.get("resulting_head_sha")
         event_digests.append(event.get("event_digest"))
     if (
@@ -3972,6 +4111,7 @@ def _derive_ordinary_ready_source_provider_binding(
         or not _OID.fullmatch(predecessor)
         or predecessor == current.lifecycle.head_sha
         or expected_head != current.lifecycle.head_sha
+        or tail[-1][1].get("state_after") != current.lifecycle.state
         or any(not isinstance(item, str) or not authority._DIGEST.fullmatch(item)
                for item in event_digests)
     ):
@@ -4220,6 +4360,32 @@ def _exact_reviewed_ready_root_head(
             current.lifecycle, bundle, current.predecessor_publication_oid,
         )
         return current.lifecycle.head_sha
+    if (
+        isinstance(proof, Mapping)
+        and current.lifecycle.adoption_review_submitted is True
+        and events == [] and current.predecessor_publication_oid is None
+    ):
+        # Receipt-bearing adoption roots also authenticate their own review
+        # observations; a consumed review-budget admission is not provider review.
+        adopted = authority.verify_exact_state_adoption_proof(proof)
+        history = proof["observed_pre_enrollment_history"]
+        reviews = [index for index, item in enumerate(history)
+                   if item["kind"] == "REVIEW_SUBMITTED"]
+        state = current.lifecycle.state
+        if (
+            adopted == current.lifecycle and len(reviews) == 1
+            and history[reviews[0]]["reviewed_head_sha"] == current.lifecycle.head_sha
+            and all(item["kind"] == "DRAFT_TO_READY_OBSERVED"
+                    and item["head_sha"] == current.lifecycle.head_sha
+                    for item in history[reviews[0] + 1:])
+            and state["ready"] is True and state["draft"] is False
+            and state["ready_transition_count"] == 1
+            and state["unrestricted_review_count"] == 1
+            and state["cycle_3_absent"] is True
+            and state["exceptional_recovery_count"] == 0
+            and state["exceptional_continuation_count"] == 0
+        ):
+            return current.lifecycle.head_sha
     reviews = [index for index, event in enumerate(events)
                if event.get("transition_kind") == "UNRESTRICTED_REVIEW_CONSUMED"]
     state = current.lifecycle.state
@@ -4246,72 +4412,13 @@ def _authenticate_provider_integration_verifier() -> None:
 
     from . import bootstrap_source_admission as transport
 
-    helper = transport._load_actions_helper()
-    main = helper._authenticate_protected_bridge_main("SecPal/.github")
-    transport._git(
-        helper.REPOSITORY_ROOT,
-        ["fetch", "--quiet", "--no-tags", transport.PROTECTED_MAIN_REMOTE_URL, main],
-    )
-    # Authenticate loaded modules as well as their files: a pristine file must
-    # not conceal a verifier imported from a different candidate path.
-    modules = {"actions": helper, "evidence": helper.evidence}
-    paths = {
-        "actions": helper.REPOSITORY_ROOT / "scripts/secpal-pr-review-actions.py",
-        "evidence": helper.REPOSITORY_ROOT / "scripts/secpal-pr-review.py",
-    }
-    for name, module in tuple(sys.modules.items()):
-        if name.startswith(("secpal_pr_review.", "scripts.secpal_pr_review.")):
-            filename = name.rsplit(".", 1)[1]
-            # fast_path owns this existing alias for the standalone evidence
-            # helper; its origin remains the same fixed accepted-main file.
-            paths[name] = (
-                helper.EVIDENCE_HELPER if filename == "integration_evidence_helper"
-                else helper.FAST_PATH_HELPER.with_name(filename + ".py")
-            )
-            modules[name] = module
-    # Include execution references even if a substituted module was not
-    # registered under its canonical package name.
-    for name, module, filename in (
-        ("authority", authority, "lifecycle_authority.py"),
-        ("publication", sys.modules[__name__], "lifecycle_publication.py"),
-        ("transport", transport, "bootstrap_source_admission.py"),
-        ("fast_path", fast_path, "fast_path.py"),
-        ("helper_fast_path", helper.fast_path, "fast_path.py"),
-        ("local_follow_up", fast_path.follow_up, "follow_up.py"),
-        ("follow_up", helper.fast_path.follow_up, "follow_up.py"),
-        ("pre_enrollment", helper.pre_enrollment, "pre_enrollment_integration.py"),
-    ):
-        modules[name] = module
-        paths[name] = helper.FAST_PATH_HELPER.with_name(filename)
     try:
-        helper._require_bridge_import_provenance(
-            {name: (getattr(module, "__file__", None),
-                    getattr(getattr(module, "__spec__", None), "origin", None))
-             for name, module in modules.items()},
-            paths,
-        )
-        # Publication composition is part of the production verifier too.
-        # Candidate tooling can qualify behavior only in a hermetic test seam.
-        verifier_paths = {
-            path.relative_to(helper.REPOSITORY_ROOT).as_posix()
-            for path in paths.values()
-        }
-        verifier_paths.update({
-            "scripts/secpal-pr-review-actions.py", "scripts/secpal-pr-review.py",
-            "scripts/secpal_pr_review/fast_path.py",
-            "scripts/secpal_pr_review/follow_up.py",
-            "scripts/secpal_pr_review/pre_enrollment_integration.py",
-            "scripts/secpal_pr_review/lifecycle_authority.py",
-            "scripts/secpal_pr_review/lifecycle_publication.py",
-            "scripts/secpal_pr_review/lifecycle_orchestration.py",
-            "scripts/secpal_pr_review/bootstrap_source_admission.py",
-            "scripts/secpal_pr_review/exact_source_safety.py",
-            ".agents/skills/secpal-pr-review/references/repositories.json",
-            ".agents/skills/secpal-pr-review/references/repositories.schema.json",
-        })
-        for path in sorted(verifier_paths):
-            helper._require_exact_accepted_main_blob(helper.REPOSITORY_ROOT, main, path)
-    except helper.fast_path.SecurityBlocker as exc:
+        helper = transport._load_actions_helper()
+        main = helper._authenticate_protected_bridge_main("SecPal/.github")
+        transport._git(helper.REPOSITORY_ROOT,
+            ["fetch", "--quiet", "--no-tags", transport.PROTECTED_MAIN_REMOTE_URL, main])
+        helper._require_accepted_main_bridge_source("SecPal/.github", expected_main=main)
+    except (RuntimeError, fast_path.SecurityBlocker) as exc:
         raise LifecyclePublicationError(
             "Ready-source provider integration verifier is not accepted main"
         ) from exc
@@ -4374,7 +4481,10 @@ def verify_ready_integration_predecessor(
     independent_root = manifest.get("source_authority_mode") in {
         "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
         "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
-    }
+    } or (
+        manifest.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V3"
+        and manifest["source_authority"]["ready_transition"] is None
+    )
     if (
         fast_path.digest_json(manifest) != integration["prior_authority_digest"]
         or manifest["repository"] != predecessor.repository
@@ -4411,6 +4521,7 @@ def verify_ready_integration_predecessor(
                     pull_request=predecessor.pull_request, binding=provenance["registry"],
                     reviewed_state_digest=reviewed.state_digest,
                     reviewed_feedback_digest=reviewed.feedback_digest,
+                    reviewed_head_sha=reviewed.head_sha,
                     source_publication_oid=transition.predecessor.publication_oid,
                 ),
             )
@@ -4517,17 +4628,168 @@ def verify_ready_integration_prior_authority(
     )
 
 
-def _verify_ready_source_integration_suffix(
+def _require_ready_integration_source_context(
+    predecessor: VerifiedLifecyclePublication,
+    reviewed: fast_path.StableFeedbackState,
+    validation: fast_path.VerifiedValidationEvidence,
+    prior_authority: Mapping[str, Any],
+    earlier_integrations: tuple[tuple[Any, Any], ...],
+) -> None:
+    """Authenticate source validation context separately from provider terminality."""
+
+    provenance = json.loads(validation._verification_seal.provenance_json)
+    integration = provenance["integration_evidence"]
+    # Historical same-head and independently derived adopted/recovered roots
+    # retain their existing canonical source-authority verification above.
+    if (integration["schema_version"] == "1.1"
+        or "source_authority_mode" in prior_authority
+        or "recovery_publication" in prior_authority):
+        return
+    source = predecessor.lifecycle
+    parents = fast_path._run_integration_commit_git(
+        Path(provenance["repository_root"]),
+        ["rev-list", "--parents", "-n", "1", source.head_sha],
+    )
+    if parents.returncode != 0:
+        raise LifecyclePublicationError("Ready integration prior source topology is unavailable")
+    topology = parents.stdout.strip().split()
+    if topology == [source.head_sha, reviewed.head_sha]:
+        # Protected publication authenticates the original ordinary binding.
+        # Preserve both historical unbound and issue-bound immutable forms.
+        digests = {
+            fast_path.ordinary_validation_source_binding_digest(
+                repository=source.repository, head_sha=source.head_sha,
+                tree_sha=source.tree_sha,
+                validation_receipt_digest=source.validation_receipt_digest,
+                final_attestation_digest=source.adoption_source_evidence_digest,
+                reviewed_state=reviewed, delivery_issue_number=issue,
+            )
+            for issue in (None, source.delivery_issue)
+        }
+        if source.source_validation_evidence_digest in digests:
+            return
+    elif len(topology) == 3 and topology[0] == source.head_sha:
+        package = earlier_integrations[-1] if earlier_integrations else None
+        if (isinstance(package, tuple) and len(package) == 2
+            and isinstance(package[0], fast_path.VerifiedValidationEvidence)
+            and package[0].head_sha == source.head_sha):
+            prior_validation = package[0]
+            prior_reviewed, _ = fast_path.verified_ready_integration_review_context(prior_validation)
+            if (
+                prior_validation.source_validation_evidence_digest == source.source_validation_evidence_digest
+                and prior_reviewed.state_digest == reviewed.state_digest
+                and prior_reviewed.feedback_digest == reviewed.feedback_digest
+            ):
+                return
+    raise LifecyclePublicationError("Ready integration review context differs from prior source validation")
+
+
+def _verify_ready_source_successor_chain(
     current: VerifiedLifecyclePublication,
     ready_integrations: tuple[tuple[Any, Any], ...],
-) -> tuple[VerifiedLifecyclePublication, tuple[str, ...], tuple[str, ...]]:
-    """Peel a complete typed integration suffix before existing provider derivation."""
+) -> tuple[VerifiedLifecyclePublication, Mapping[str, Any], tuple[str, ...],
+           tuple[str, ...]]:
+    """Walk exact protected successors backward in their publication order."""
 
-    if not isinstance(ready_integrations, tuple) or not ready_integrations:
-        raise LifecyclePublicationError("Ready-source provider HEAD_ADVANCED evidence is missing")
-    try:
+    if not isinstance(ready_integrations, tuple):
+        raise LifecyclePublicationError("Ready-source provider integration packages are malformed")
+    if ready_integrations:
         _authenticate_provider_integration_verifier()
-        root, digests, reviewed_heads = _walk_ready_integration_chain(current, ready_integrations)
+    root = current
+    integration_index = len(ready_integrations) - 1
+    remediation_digests: list[str] = []
+    integration_digests: list[str] = []
+    seen: set[str] = set()
+    while True:
+        raw = authority._load_canonical_json(
+            root.serialized_lifecycle_evidence, "provider predecessor lifecycle",
+        )
+        bundle = raw.get("lifecycle_evidence", raw)
+        events = bundle.get("transition_authorizations")
+        if not isinstance(events, list):
+            raise LifecyclePublicationError("Ready-source provider successor history is malformed")
+        latest = events[-1] if events else None
+        kind = latest.get("transition_kind") if latest is not None else None
+        if kind not in {"REMEDIATION_COMPLETED", "HEAD_ADVANCED"}:
+            break
+        # A signed enrollment may import a closed ordinary remediation history.
+        # Its root derivation remains owned by the existing authenticated helper.
+        if kind == "REMEDIATION_COMPLETED" and root.predecessor_publication_oid is None:
+            if root.lifecycle.historical_proof_mode != authority.LEGACY_PROOF_MODE:
+                raise LifecyclePublicationError("Ready-source provider remediation predecessor is missing")
+            break
+        if root.publication_oid in seen:
+            raise LifecyclePublicationError("Ready-source provider successor chain repeats")
+        seen.add(root.publication_oid)
+        if kind == "HEAD_ADVANCED":
+            if integration_index < 0:
+                raise LifecyclePublicationError("Ready-source provider HEAD_ADVANCED evidence is missing")
+            package = ready_integrations[integration_index]
+            if not isinstance(package, tuple) or len(package) != 2:
+                raise LifecyclePublicationError("Ready integration predecessor package is malformed")
+            try:
+                predecessor, reviewed, _ = verify_ready_integration_predecessor(
+                    root, *package, require_current=root == current,
+                )
+                _require_ready_integration_source_context(
+                    predecessor, reviewed, package[0], package[1],
+                    ready_integrations[:integration_index],
+                )
+            except (SecurityBlocker, authority.LifecycleAuthorityError, KeyError,
+                    TypeError, ValueError) as exc:
+                raise LifecyclePublicationError(
+                    "Ready-source provider typed integration lineage is invalid"
+                ) from exc
+            integration_index -= 1
+            integration_digests.append(latest["event_digest"])
+        else:
+            transition = _verify_historical_lifecycle_transition(
+                root.lifecycle.repository, root.lifecycle.delivery_issue,
+                root.predecessor_publication_oid,
+                expected_current_publication_oid=(root.publication_oid if root == current else None),
+            )
+            predecessor = transition.predecessor
+            before = predecessor.lifecycle
+            after = root.lifecycle
+            successor_raw = authority._load_canonical_json(
+                transition.successor.serialized_lifecycle_evidence,
+                "provider remediation successor lifecycle",
+            )
+            successor_bundle = successor_raw.get("lifecycle_evidence", successor_raw)
+            # Accepted transport wrappers do not change the authenticated
+            # publication identity or its canonical inner lifecycle evidence.
+            if (
+                replace(
+                    transition.successor,
+                    serialized_lifecycle_evidence=canonical_json_bytes(successor_bundle),
+                ) != replace(root, serialized_lifecycle_evidence=canonical_json_bytes(bundle))
+                or predecessor.publication_oid != root.predecessor_publication_oid
+                or predecessor.publication_branch != root.publication_branch
+                or transition.transition_kind != kind
+                or transition.event_digest != latest.get("event_digest")
+                or transition.event_id != latest.get("event_id")
+                or transition.event_signer_identity != latest.get("signer_identity")
+                or transition.pull_request != after.pull_request
+                or transition.predecessor_authority_digest != before.authority_digest
+                or transition.predecessor_head_sha != before.head_sha
+                or transition.resulting_head_sha != after.head_sha
+                or before.head_sha == after.head_sha
+                or transition.initialization_evidence_digest != before.initialization_evidence_digest
+                or any(getattr(before, field) != getattr(after, field) for field in (
+                    "repository", "delivery_issue", "pull_request", "lifecycle_id",
+                    "initialization_evidence_digest", "historical_proof_mode",
+                ))
+            ):
+                raise LifecyclePublicationError("Ready-source provider remediation predecessor is invalid")
+            _require_ordinary_ready_remediation_delta(
+                before.state, after.state, transition.event_digest,
+                historical_proof_mode=before.historical_proof_mode,
+            )
+            remediation_digests.append(transition.event_digest)
+        root = predecessor
+    if integration_index != -1:
+        raise LifecyclePublicationError("Ready-source provider integration evidence is unconsumed")
+    if integration_digests:
         state = current.lifecycle.state
         if (
             state.get("unrestricted_review_count") != 1
@@ -4538,9 +4800,8 @@ def _verify_ready_source_integration_suffix(
             or state.get("exceptional_continuation_count") != 0
         ):
             raise LifecyclePublicationError("Ready-source provider integration changed finite lifecycle")
-    except (SecurityBlocker, authority.LifecycleAuthorityError, KeyError, TypeError, ValueError) as exc:
-        raise LifecyclePublicationError("Ready-source provider typed integration lineage is invalid") from exc
-    return root, digests, reviewed_heads
+    return (root, bundle, tuple(reversed(remediation_digests)),
+            tuple(reversed(integration_digests)))
 
 
 def derive_ready_source_recovery_provider_binding(
@@ -4593,20 +4854,14 @@ def derive_ready_source_recovery_provider_binding(
         raise LifecyclePublicationError(
             "Ready-source provider lifecycle shape is unsupported"
         )
-    events = bundle.get("transition_authorizations")
-    root = current
-    integration_digests: tuple[str, ...] = ()
-    reviewed_heads: tuple[str, ...] = ()
-    if isinstance(events, list) and events and events[-1].get("transition_kind") == "HEAD_ADVANCED":
-        root, integration_digests, reviewed_heads = _verify_ready_source_integration_suffix(
-            current, ready_integrations
-        )
-        root_raw = authority._load_canonical_json(root.serialized_lifecycle_evidence, "provider root lifecycle")
-        bundle = root_raw.get("lifecycle_evidence", root_raw)
-    elif ready_integrations:
-        raise LifecyclePublicationError("Ready-source provider integration evidence is unconsumed")
+    root, bundle, remediation_digests, integration_digests = (
+        _verify_ready_source_successor_chain(current, ready_integrations)
+    )
     ordinary = _derive_ordinary_ready_source_provider_binding(root, bundle)
-    exact_head = _exact_reviewed_ready_root_head(root, bundle) if integration_digests else None
+    exact_head = (
+        _exact_reviewed_ready_root_head(root, bundle)
+        if integration_digests or remediation_digests else None
+    )
     historical = _derive_exact_adoption_historical_provider_binding(root, bundle)
     adopted = _derive_provider_backed_adopted_ready_remediation(root, bundle)
     candidates = [
@@ -4622,11 +4877,11 @@ def derive_ready_source_recovery_provider_binding(
         raise LifecyclePublicationError(
             "Ready-source provider remediation lineage is incomplete"
         )
-    if len(set(candidates)) != 1 or any(head != candidates[0] for head in reviewed_heads):
+    if len(set(candidates)) != 1:
         raise LifecyclePublicationError(
             "Ready-source provider heads conflict across authenticated sources"
         )
-    event_digests = ordinary[1] if ordinary is not None else []
+    event_digests = (ordinary[1] if ordinary is not None else []) + list(remediation_digests)
     sources = tuple(
         source
         for source, present in (

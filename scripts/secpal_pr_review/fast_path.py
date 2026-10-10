@@ -13,14 +13,12 @@ import os
 import re
 import subprocess
 import tempfile
-import importlib.util
+import importlib
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
-FOLLOW_UP_HELPER = Path(__file__).resolve().with_name("follow_up.py")
-EVIDENCE_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
 CENTRAL_REGISTRY_ROOT = Path(__file__).resolve().parents[2]
 CENTRAL_REGISTRY_REPOSITORY = "SecPal/.github"
 DELIVERY_REGISTRY_PATH = (
@@ -72,13 +70,17 @@ DIRECT_VALIDATION_EXECUTABLES = frozenset(
 )
 COMPOSER_VALIDATION_SCRIPTS = frozenset({"analyse", "ci:check", "test"})
 EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
-# The maintained Actions owner consumes this inventory after Ready integration.
+# One inventory supplies both owner construction and its isolated safety closure.
 VERIFIER_MODULE_NAMES = (
     "bootstrap_source_admission",
     "enrolled_draft_integration",
     "exact_source_safety",
     "exceptional_recovery",
     "fast_path",
+    "fixed_thread_resolution",
+    "late_classification_cli",
+    "late_disposition_cli",
+    "exact_prerequisite_cli",
     "follow_up",
     "governance_amendment",
     "late_disposition",
@@ -91,13 +93,23 @@ VERIFIER_MODULE_NAMES = (
     "provider_acquisition",
     "provider_fallback",
     "provider_reacquisition",
+    "provider_reacquisition_cli",
+    "review_consumption_cli",
     "qualified_remediation_successor_loss",
     "unchanged_head_prerequisite",
     "unchanged_head_prerequisite_evidence",
     "validation_evidence_loss",
     "version_collision",
 )
+WORK_GRAPH_MODULE_NAMES = ("__init__", "acceptance_criteria", "github", "model", "replanning", "resolver")
+VERIFIER_EXECUTION_TOOLING_PATHS = (
+    "scripts/secpal-pr-review-actions.py", "scripts/secpal-pr-review.py",
+    *("scripts/secpal_pr_review/" + name + ".py" for name in VERIFIER_MODULE_NAMES),
+    *("scripts/secpal_work_graph/" + name + ".py" for name in WORK_GRAPH_MODULE_NAMES),
+)
 
+
+# Preserve the signed historical profile; the owner import closure is execution only.
 READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS = (
     "scripts/secpal-pr-review-actions.py",
     "scripts/secpal-pr-review.py",
@@ -109,51 +121,14 @@ READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS = (
 
 
 def _load_follow_up_helper() -> Any:
-    loaded = sys.modules.get("secpal_pr_review.follow_up")
-    if loaded is not None:
-        loaded_path = getattr(loaded, "__file__", None)
-        if (
-            not isinstance(loaded_path, str)
-            or Path(loaded_path).absolute() != FOLLOW_UP_HELPER.absolute()
-        ):
-            raise RuntimeError("Canonical follow-up module has an unexpected path")
-    spec = importlib.util.spec_from_file_location("secpal_pr_review.follow_up", FOLLOW_UP_HELPER)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load follow-up helper: {FOLLOW_UP_HELPER}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(spec.name, None)
-        raise
-    return module
+    return importlib.import_module(__package__ + ".follow_up")
 
 
 follow_up = _load_follow_up_helper()
 
 
 def _load_evidence_helper() -> Any:
-    module_name = "secpal_pr_review.integration_evidence_helper"
-    loaded = sys.modules.get(module_name)
-    if loaded is not None:
-        loaded_path = getattr(loaded, "__file__", None)
-        if (
-            not isinstance(loaded_path, str)
-            or Path(loaded_path).absolute() != EVIDENCE_HELPER.absolute()
-        ):
-            raise RuntimeError("Canonical evidence helper has an unexpected path")
-    spec = importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load evidence helper: {EVIDENCE_HELPER}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(spec.name, None)
-        raise
-    return module
+    return importlib.import_module("scripts.secpal-pr-review")
 
 
 evidence = _load_evidence_helper()
@@ -184,6 +159,7 @@ VALIDATION_REGISTRY_ENTRY_FIELDS = frozenset(
         "lifecycle_authority_policy",
         "pre_enrollment_integration_policy",
         "enrolled_draft_integration_policy",
+        "enrolled_draft_source_advancement_policy",
         "check_policy",
         "manual_gates",
         "unsupported_operations",
@@ -739,6 +715,8 @@ def validation_registry_projection(entry: Any) -> dict[str, Any]:
         binding["enrolled_draft_integration_policy"] = copy.deepcopy(
             entry["enrolled_draft_integration_policy"]
         )
+    if "enrolled_draft_source_advancement_policy" in entry:
+        binding["enrolled_draft_source_advancement_policy"] = copy.deepcopy(entry["enrolled_draft_source_advancement_policy"])
     return binding
 
 
@@ -1791,6 +1769,13 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         authority_mode == "ADOPTED"
         and source_mode == "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT"
     )
+    source = value.get("source_authority")
+    direct_root = (
+        authority_mode == "ADOPTED"
+        and source_mode == "EXACT_STATE_ADOPTION_V3"
+        and isinstance(source, dict)
+        and source.get("ready_transition") is None
+    )
     if authority_mode in {"ADOPTED", "ADOPTED_RECOVERED"}:
         lifecycle_keys |= {
             "ready_transition_count",
@@ -1837,12 +1822,13 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         ready_history = lifecycle.get("ready_history")
         ready_history_keys = (
             {"sequence", "transition_kind", "event_authorization_digest"}
-            if source_mode in {
+            if not direct_root and source_mode in {
                 "EXACT_STATE_ADOPTION_V3",
                 "EXISTING_AUTHORITY_COMPOSITION",
             }
             else {"sequence", "transition_kind", "observation_digest"}
             if source_mode in {
+                "EXACT_STATE_ADOPTION_V3",
                 "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
                 "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
                 "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
@@ -1867,7 +1853,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             or not _require_digest(
                 ready_history[0].get(
                     "event_authorization_digest"
-                    if source_mode in {
+                    if not direct_root and source_mode in {
                         "EXACT_STATE_ADOPTION_V3",
                         "EXISTING_AUTHORITY_COMPOSITION",
                     }
@@ -2047,7 +2033,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
     }:
         raise SecurityBlocker("adopted Ready enrollment publication is malformed")
     transition = source.get("ready_transition")
-    if not recovered_root and (not isinstance(transition, dict) or set(transition) != {
+    if not (recovered_root or direct_root) and (not isinstance(transition, dict) or set(transition) != {
         "event_id", "event_digest", "predecessor_authority_digest",
         "predecessor_head_sha", "resulting_head_sha",
     }):
@@ -2100,6 +2086,18 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             or normalized["prior_final_attestation_digest"] is not None
         ):
             raise SecurityBlocker("recovered adoption root historical identity is invalid")
+        normalized.update(
+            source_authority_mode=source_mode,
+            source_authority=copy.deepcopy(source),
+            historical_companions=copy.deepcopy(companions),
+        )
+        return normalized
+    if direct_root:
+        if (
+            enrollment != normalized["publication"]
+            or source["adoption_proof_digest"] != lifecycle["current_authority_digest"]
+        ):
+            raise SecurityBlocker("direct adopted Ready root publication changed")
         normalized.update(
             source_authority_mode=source_mode,
             source_authority=copy.deepcopy(source),
@@ -6849,9 +6847,13 @@ def validation_commands_for_evidence(
 
 def create_enrolled_draft_validation_receipt(integration_evidence: dict[str, Any]) -> dict[str, Any]:
     """Typed receipt owned here; trusted issuance follows Complete Validation."""
+    kind = integration_evidence["kind"]
+    if kind not in {"ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION", "ENROLLED_DRAFT_SOURCE_ADVANCEMENT"}:
+        raise SecurityBlocker("unsupported enrolled Draft receipt operation")
+    source = kind == "ENROLLED_DRAFT_SOURCE_ADVANCEMENT"
     fields = {
         "schema_version": "1.0",
-        "kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION_VALIDATION_RECEIPT",
+        "kind": kind + "_VALIDATION_RECEIPT",
         "repository": integration_evidence["repository"], "delivery_issue": integration_evidence["delivery_issue"],
         "pull_request": integration_evidence["pull_request"], "lifecycle_id": integration_evidence["lifecycle_id"],
         "current_publication_oid": integration_evidence["current_publication_oid"],
@@ -6859,8 +6861,8 @@ def create_enrolled_draft_validation_receipt(integration_evidence: dict[str, Any
         "predecessor_authority_digest": integration_evidence["predecessor_authority_digest"],
         "ordered_parent_shas": copy.deepcopy(integration_evidence["ordered_parent_shas"]),
         "validated_tree_sha": integration_evidence["validated_tree_sha"],
-        "current_main": copy.deepcopy(integration_evidence["current_main"]),
-        "integration_evidence_digest": digest_json(integration_evidence),
+        **({"user_authorization": copy.deepcopy(integration_evidence["user_authorization"])} if source else {"current_main": copy.deepcopy(integration_evidence["current_main"])}),
+        ("source_advancement_evidence_digest" if source else "integration_evidence_digest"): digest_json(integration_evidence),
         "registry_digest": integration_evidence["registry_digest"],
         "command_set_digest": integration_evidence["command_set_digest"],
         "expected_signer": integration_evidence["expected_signer"], "successful_result": True,
@@ -6880,13 +6882,13 @@ def create_enrolled_draft_final_attestation(
         raise SecurityBlocker("enrolled Draft signer fingerprint is malformed")
     fields = {
         "schema_version": "1.0",
-        "kind": "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION_FINAL_ATTESTATION",
+        "kind": integration_evidence["kind"] + "_FINAL_ATTESTATION",
         "candidate_head_sha": _require_oid(candidate_head_sha, "integrated candidate"),
         "candidate_tree_sha": integration_evidence["validated_tree_sha"],
         "ordered_parent_shas": copy.deepcopy(integration_evidence["ordered_parent_shas"]),
         "signature_fingerprint": signature_fingerprint,
         "expected_signer": integration_evidence["expected_signer"],
-        "integration_evidence_digest": digest_json(integration_evidence),
+        ("source_advancement_evidence_digest" if integration_evidence["kind"] == "ENROLLED_DRAFT_SOURCE_ADVANCEMENT" else "integration_evidence_digest"): digest_json(integration_evidence),
         "validation_receipt_digest": receipt["receipt_digest"],
     }
     return {**fields, "attestation_digest": digest_json(fields)}
@@ -7354,13 +7356,37 @@ def _verify_validation_attestation_unsealed(
         raise SecurityBlocker("validation attestation binding is invalid or stale")
     if attestation["successful_result"] is not True:
         raise SecurityBlocker("complete validation did not succeed")
+    return _unregistered_validation_evidence(
+        repository=repository,
+        delivery_issue_number=delivery_issue_number,
+        pull_request_number=reviewed_pull_request,
+        head_sha=head_sha,
+        tree_sha=commit_tree_sha,
+        validation_receipt_digest=receipt["receipt_digest"],
+        final_attestation_digest=expected["attestation_digest"],
+        source_validation_evidence_digest=ordinary_validation_source_binding_digest(
+            repository=repository, head_sha=head_sha, tree_sha=commit_tree_sha,
+            validation_receipt_digest=receipt["receipt_digest"],
+            final_attestation_digest=expected["attestation_digest"],
+            reviewed_state=reviewed_state, delivery_issue_number=delivery_issue_number,
+        ),
+    )
+
+
+def ordinary_validation_source_binding_digest(
+    *, repository: str, head_sha: str, tree_sha: str,
+    validation_receipt_digest: str, final_attestation_digest: str,
+    reviewed_state: StableFeedbackState, delivery_issue_number: int | None = None,
+) -> str:
+    """Canonical immutable ordinary source projection; a digest grants no authority."""
+
     source_binding = {
         "repository": repository,
-        "pull_request_number": reviewed_pull_request,
+        "pull_request_number": reviewed_state.pull_request_number,
         "head_sha": head_sha,
-        "tree_sha": commit_tree_sha,
-        "validation_receipt_digest": receipt["receipt_digest"],
-        "final_attestation_digest": expected["attestation_digest"],
+        "tree_sha": tree_sha,
+        "validation_receipt_digest": validation_receipt_digest,
+        "final_attestation_digest": final_attestation_digest,
         "reviewed_state_digest": reviewed_state.state_digest,
         "reviewed_feedback_digest": reviewed_state.feedback_digest,
     }
@@ -7372,16 +7398,7 @@ def _verify_validation_attestation_unsealed(
         ):
             raise SecurityBlocker("delivery issue identity is invalid")
         source_binding["delivery_issue_number"] = delivery_issue_number
-    return _unregistered_validation_evidence(
-        repository=repository,
-        delivery_issue_number=delivery_issue_number,
-        pull_request_number=reviewed_pull_request,
-        head_sha=head_sha,
-        tree_sha=commit_tree_sha,
-        validation_receipt_digest=receipt["receipt_digest"],
-        final_attestation_digest=expected["attestation_digest"],
-        source_validation_evidence_digest=digest_json(source_binding),
-    )
+    return digest_json(source_binding)
 
 
 def verify_ready_integration_attestation(
@@ -7506,11 +7523,21 @@ def verify_enrolled_draft_validation_evidence(
         }
     ):
         raise SecurityBlocker("enrolled Draft validation candidate topology or signer changed")
-    observed = derive_ready_integration_tree_evidence(root, integration_evidence["ordered_parent_shas"], integration_evidence["validated_tree_sha"], schema_version="1.0", kind=integration.KIND)
-    if observed != integration_evidence["tree_evidence"]:
-        raise SecurityBlocker("enrolled Draft validation tree differs from mechanical integration")
+    if integration_evidence["kind"] == integration.KIND:
+        observed = derive_ready_integration_tree_evidence(root, integration_evidence["ordered_parent_shas"], integration_evidence["validated_tree_sha"], schema_version="1.0", kind=integration.KIND)
+        if observed != integration_evidence["tree_evidence"]:
+            raise SecurityBlocker("enrolled Draft validation tree differs from mechanical integration")
+    else:
+        predecessor_tree = _run_integration_commit_git(root, ["rev-parse", integration_evidence["draft_head_sha"] + "^{tree}"])
+        if predecessor_tree.returncode != 0 or predecessor_tree.stdout.strip() == commit.tree_sha:
+            raise SecurityBlocker("source successor has no authenticated source delta")
     raw = _run_integration_commit_git(root, ["cat-file", "commit", head])
-    for name, expected in zip(integration.TRAILERS, (digest_json(integration_evidence), selected["validation_receipt"]["receipt_digest"])):
+    for name, expected in zip(integration.validation_trailers(integration_evidence), (digest_json(integration_evidence), selected["validation_receipt"]["receipt_digest"])):
+        if integration_evidence["kind"] == integration.SOURCE_KIND:
+            parsed = _run_integration_commit_git(root, ["show", "-s", f"--format=%(trailers:key={name},valueonly,separator=%x00)", head])
+            values = [value.strip() for value in parsed.stdout.rstrip("\n").split("\x00") if value.strip()]
+            if parsed.returncode != 0 or values != [expected]:
+                raise SecurityBlocker("source validation signed trailers are missing, duplicated or substituted")
         if raw.returncode != 0 or re.findall(rf"^{re.escape(name)}: ([0-9a-f]{{64}})$", raw.stdout, re.MULTILINE) != [expected]:
             raise SecurityBlocker("enrolled Draft validation signed trailers differ")
     result = _unregistered_validation_evidence(
@@ -7521,7 +7548,7 @@ def verify_enrolled_draft_validation_evidence(
         source_validation_evidence_digest=digest_json(integration_evidence), delivery_issue_number=integration_evidence["delivery_issue"],
     )
     return _seal_validation_evidence(result, {
-        "kind": integration.KIND, "authorization": selected, "repository_root": str(root),
+        "kind": integration_evidence["kind"], "authorization": selected, "repository_root": str(root),
     })
 
 
@@ -7587,7 +7614,7 @@ def is_verified_validation_evidence(value: Any) -> bool:
             verified = qualified_remediation_successor_loss_validation_evidence(
                 provenance["admission"], provenance["safety_facts"]
             )
-        elif kind == "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION":
+        elif kind in {"ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION", "ENROLLED_DRAFT_SOURCE_ADVANCEMENT"}:
             verified = verify_enrolled_draft_validation_evidence(
                 provenance["authorization"], repository_root=provenance["repository_root"]
             )
@@ -8746,7 +8773,12 @@ def execute_resolution_batch(
     return report
 
 
-def atomic_write_json(path: Path, value: Any) -> None:
+def atomic_write_json(
+    path: Path,
+    value: Any,
+    *,
+    before_publish: Callable[[Path], None] | None = None,
+) -> None:
     target = Path(path)
     parent = target.parent.resolve(strict=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=parent)
@@ -8756,6 +8788,8 @@ def atomic_write_json(path: Path, value: Any) -> None:
             stream.write(canonical_json_bytes(value))
             stream.flush()
             os.fsync(stream.fileno())
+        if before_publish is not None:
+            before_publish(Path(temporary_name))
         os.replace(temporary_name, target)
         directory_descriptor = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
         try:

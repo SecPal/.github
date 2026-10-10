@@ -16,6 +16,9 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tests.secpal_actions_fixture import load_actions
+actions_owner = load_actions()
+
 from scripts.secpal_pr_review import fast_path
 from scripts.secpal_pr_review.enrolled_draft_integration import KIND
 

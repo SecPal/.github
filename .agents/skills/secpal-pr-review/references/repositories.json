@@ -95,6 +95,16 @@
           "purpose": "Run exact secpal.app admission current-safety regressions"
         },
         {
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "tests/secpal-contracts-524-loss-admission-unit.py"
+          ],
+          "working_directory": ".",
+          "purpose": "Run exact contracts Ready admission regressions"
+        },
+        {
           "argv": ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
           "working_directory": ".",
           "purpose": "Run exact bootstrap source-admission unit tests"
@@ -148,9 +158,19 @@
           "argv": ["python3", "-m", "unittest", "tests/secpal-enrolled-draft-integration-unit.py"],
           "working_directory": ".",
           "purpose": "Run enrolled initial Draft current-main integration regressions"
+        },
+        {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-enrolled-draft-source-unit.py"],
+          "working_directory": ".",
+          "purpose": "Run enrolled initial Draft ordinary source advancement regressions"
         }
       ],
       "required_local_validation": [
+        {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-trivy-action-archive.py"],
+          "working_directory": ".",
+          "purpose": "Qualify central Trivy action archive and runtime closure"
+        },
         {
           "argv": ["python3", "-m", "unittest", "tests/secpal-pr-review-unit.py"],
           "working_directory": ".",
@@ -525,6 +545,18 @@
         "force_push": false,
         "automatic_retry": false,
         "merge_pull_request": false
+      },
+      "enrolled_draft_source_advancement_policy": {
+        "schema_version": "1.0",
+        "command": "advance-enrolled-draft-source",
+        "topology_kind": "ENROLLED_DRAFT_SOURCE_ADVANCEMENT",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false,
+        "maximum_authorization_age_seconds": 900
       }
     },
     {
@@ -1234,6 +1266,18 @@
         "force_push": false,
         "automatic_retry": false,
         "merge_pull_request": false
+      },
+      "enrolled_draft_source_advancement_policy": {
+        "schema_version": "1.0",
+        "command": "advance-enrolled-draft-source",
+        "topology_kind": "ENROLLED_DRAFT_SOURCE_ADVANCEMENT",
+        "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+        "maximum_candidates": 1,
+        "maximum_pushes": 1,
+        "force_push": false,
+        "automatic_retry": false,
+        "merge_pull_request": false,
+        "maximum_authorization_age_seconds": 900
       }
     }
   ]

@@ -4999,7 +4999,12 @@ def _authenticated_current(
             "CURRENT lifecycle publication identity does not match the delivery"
         )
     try:
-        state = authority._validate_state(copy.deepcopy(lifecycle.state))
+        state = authority._validate_state(
+            copy.deepcopy(lifecycle.state),
+            allow_adopted_observations=(
+                lifecycle.historical_proof_mode == authority.EXACT_ADOPTION_PROOF_MODE
+            ),
+        )
         _oid(publication_oid, "publication object")
         authority._require_digest(publication_digest, "publication digest")
     except authority.LifecycleAuthorityError as exc:
@@ -5099,6 +5104,9 @@ def _orchestrate_event(
     observed, lifecycle, state = _authenticated_current(
         repository, delivery_issue, current_reader
     )
+    adopted_predecessor = (
+        lifecycle.historical_proof_mode == authority.EXACT_ADOPTION_PROOF_MODE
+    )
     if request_pr != lifecycle.pull_request:
         raise LifecycleOrchestrationError(
             "event pull request differs from CURRENT lifecycle authority"
@@ -5147,7 +5155,10 @@ def _orchestrate_event(
             lifecycle=lifecycle,
             verifier=authorization_verifier,
         )
-        _prove_transition_is_finite(state, "PR_REBOUND", event_id)
+        _prove_transition_is_finite(
+            state, "PR_REBOUND", event_id,
+            adopted_predecessor=adopted_predecessor,
+        )
         return _base_decision(
             observed,
             lifecycle,
@@ -5192,7 +5203,10 @@ def _orchestrate_event(
             verifier=authorization_verifier,
             verified_item=verified_authorization,
         )
-        _prove_transition_is_finite(state, "REMEDIATION_COMPLETED", event_id)
+        _prove_transition_is_finite(
+            state, "REMEDIATION_COMPLETED", event_id,
+            adopted_predecessor=adopted_predecessor,
+        )
         return _base_decision(
             observed,
             lifecycle,
@@ -5258,7 +5272,10 @@ def _orchestrate_event(
             verifier=authorization_verifier,
             verified_item=verified_authorization,
         )
-        _prove_transition_is_finite(state, "EXCEPTIONAL_RECOVERY", event_id)
+        _prove_transition_is_finite(
+            state, "EXCEPTIONAL_RECOVERY", event_id,
+            adopted_predecessor=adopted_predecessor,
+        )
         return _base_decision(
             observed,
             lifecycle,
@@ -5314,7 +5331,10 @@ def _orchestrate_event(
                     reviewed, current, resulting_head_sha=request_head,
                     successor_safety_evidence=successor,
                 )
-                _prove_transition_is_finite(state, "EXCEPTIONAL_CONTINUATION", event_id)
+                _prove_transition_is_finite(
+                    state, "EXCEPTIONAL_CONTINUATION", event_id,
+                    adopted_predecessor=adopted_predecessor,
+                )
             except (fast_path.SecurityBlocker, version_collision.VersionCollisionError, OSError, ValueError) as exc:
                 raise LifecycleOrchestrationError("collision continuation authentication failed") from exc
             if _collision_validation_output is not None:
@@ -5361,7 +5381,10 @@ def _orchestrate_event(
             verifier=authorization_verifier,
             verified_item=verified_authorization,
         )
-        _prove_transition_is_finite(state, "EXCEPTIONAL_CONTINUATION", event_id)
+        _prove_transition_is_finite(
+            state, "EXCEPTIONAL_CONTINUATION", event_id,
+            adopted_predecessor=adopted_predecessor,
+        )
         return _base_decision(
             observed,
             lifecycle,
@@ -5401,10 +5424,7 @@ def _orchestrate_event(
         )
         _prove_transition_is_finite(
             state, event_kind, event_id,
-            adopted_predecessor=(
-                lifecycle.historical_proof_mode
-                == authority.EXACT_ADOPTION_PROOF_MODE
-            ),
+            adopted_predecessor=adopted_predecessor,
             adoption_review_submitted=lifecycle.adoption_review_submitted,
         )
         return _base_decision(
@@ -5439,7 +5459,8 @@ def _orchestrate_event(
             verifier=authorization_verifier,
         )
         _prove_transition_is_finite(
-            state, "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED", event_id
+            state, "ADDITIONAL_REVIEW_AUTHORIZATION_CONSUMED", event_id,
+            adopted_predecessor=adopted_predecessor,
         )
         return _base_decision(
             observed,

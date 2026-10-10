@@ -22,21 +22,18 @@ from typing import Any
 from unittest import TestCase, main
 from unittest.mock import patch
 
+from tests.secpal_actions_fixture import load_actions
+actions_owner = load_actions()
+
 from scripts.secpal_pr_review import lifecycle_authority as authority
 from scripts.secpal_pr_review import lifecycle_execution as execution
 from scripts.secpal_pr_review import lifecycle_publication as publication
 from scripts.secpal_pr_review import fast_path
 
+reacquisition_transport_fixture = importlib.import_module(
+    'tests.secpal-lifecycle-orchestration-unit'
+)
 
-def load_actions() -> Any:
-    path = Path(__file__).resolve().parents[1] / "scripts/secpal-pr-review-actions.py"
-    spec = importlib.util.spec_from_file_location("secpal_actions_for_publication", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("cannot load action helper")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
 
 REPOSITORY = "SecPal/.github"
 CONTRACTS_REPOSITORY = "SecPal/contracts"
@@ -1836,29 +1833,72 @@ class LifecyclePublicationTests(TestCase):
     ) -> None:
         chain = Chain(ISSUE + 10)
         chain.append("INITIALIZED_DRAFT")
-        chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+        publication.admit_native_genesis(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for(),
+        )
+        publication.enroll_existing_lifecycle(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for(),
+        )
         chain.append("DRAFT_TO_READY")
+        publication.advance_current_terminal(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for(),
+        )
+        chain.append("UNRESTRICTED_REVIEW_CONSUMED")
+        predecessor = publication.advance_current_terminal(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for(),
+        )
         chain.append("REMEDIATION_COMPLETED", head=HEADS[1])
+        current = publication.advance_current_terminal(
+            chain.raw(), signer_identity=SIGNER, signer=signer_for(),
+        )
         serialized = authority.serialize_publication_lifecycle_evidence(
-            lifecycle_evidence=chain.raw()
+            lifecycle_evidence=chain.raw(),
         )
-        verified = authority._verify_lifecycle_authority_for_journal(
-            serialized,
-            admitted_initialization=chain.initialization,
-        )
-        current = publication.VerifiedLifecyclePublication(
-            "1" * 40,
-            "2" * 64,
-            BRANCH,
-            "3" * 40,
-            "4" * 40,
-            verified,
-            serialized,
-        )
-
-        binding = publication.derive_ready_source_recovery_provider_binding(current)
+        # A transport wrapper must not alter the protected publication identity.
+        wrapped = replace(current, serialized_lifecycle_evidence=serialized)
+        binding = publication.derive_ready_source_recovery_provider_binding(wrapped)
 
         self.assertEqual(binding.provider_head_sha, HEADS[0])
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "predecessor is invalid"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(
+                replace(wrapped, publication_digest="f" * 64)
+            )
+
+    def test_exact_adoption_remediation_cannot_import_a_missing_publication(self) -> None:
+        from scripts.secpal_pr_review import lifecycle_execution as execution
+
+        raw, _ = exact_adoption_evidence(ready_before_remediation=True)
+        lifecycle = authority.verify_lifecycle_authority_for_publication(raw)
+        fixture = publication.VerifiedLifecyclePublication(
+            "b" * 40, "c" * 64, BRANCH, None, None, lifecycle, raw,
+        )
+        signers = execution.SigningAuthorities(
+            SIGNER, signer_for(), SIGNER, signer_for(), SIGNER, signer_for(),
+        )
+        validation = verified_validation_evidence(
+            head=HEADS[1], tree=HEADS[3], parent=lifecycle.head_sha,
+        )
+        successor = execution._append_successor_evidence(
+            fixture, {"authorization_digest": "d" * 64,
+                      "operation": "REMEDIATION_COMPLETED"},
+            signers, resulting_head_sha=HEADS[1], current_head_evidence=validation,
+        )
+        # Valid signed successors still require their exact protected predecessor.
+        verified = authority._verify_lifecycle_authority_for_journal(successor)
+        with self.assertRaisesRegex(
+            authority.LifecycleAuthorityError, "enrollment must begin at its proof baseline"
+        ):
+            publication.enroll_existing_lifecycle(
+                successor, signer_identity=SIGNER, signer=signer_for(),
+            )
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "remediation predecessor is missing"
+        ):
+            publication.derive_ready_source_recovery_provider_binding(
+                replace(fixture, lifecycle=verified, serialized_lifecycle_evidence=successor)
+            )
 
     def test_provider_backed_adoption_direct_ready_successor_derives_review_head(self) -> None:
         h0 = "ff85970362d3cd889e6418ba34b69930506e9b0d"
@@ -2406,7 +2446,12 @@ class LifecyclePublicationTests(TestCase):
         current, _proof, historical = self.exact_adoption_current(
             ordinary_provider_head=HEADS[1], historical_provider_head=HEADS[0]
         )
+        # Isolate provider-root consensus. Published suffix authentication is
+        # exercised independently with exact signed journal predecessors.
         with patch.object(
+            publication, "_verify_ready_source_successor_chain",
+            return_value=(current, json.loads(current.serialized_lifecycle_evidence), (), ()),
+        ), patch.object(
             authority,
             "_verify_lifecycle_authority_for_journal",
             return_value=current.lifecycle,
@@ -2444,7 +2489,12 @@ class LifecyclePublicationTests(TestCase):
             authority_digest="f" * 64,
             head_sha=HEADS[1],
         )
+        # Isolate provider-root consensus. Published suffix authentication is
+        # exercised independently with exact signed journal predecessors.
         with patch.object(
+            publication, "_verify_ready_source_successor_chain",
+            return_value=(current, json.loads(current.serialized_lifecycle_evidence), (), ()),
+        ), patch.object(
             authority,
             "_verify_lifecycle_authority_for_journal",
             return_value=current.lifecycle,
@@ -2472,7 +2522,12 @@ class LifecyclePublicationTests(TestCase):
         current, _proof, historical = self.exact_adoption_current(
             ordinary_provider_head=HEADS[1], historical_provider_head=HEADS[1]
         )
+        # Isolate provider-root consensus. Published suffix authentication is
+        # exercised independently with exact signed journal predecessors.
         with patch.object(
+            publication, "_verify_ready_source_successor_chain",
+            return_value=(current, json.loads(current.serialized_lifecycle_evidence), (), ()),
+        ), patch.object(
             authority,
             "_verify_lifecycle_authority_for_journal",
             return_value=current.lifecycle,
@@ -2892,7 +2947,7 @@ class LifecyclePublicationTests(TestCase):
             )
         self.assertNotIn("signature", safety)
         self.assertFalse(hasattr(fast_path, "is_verified_ready_source_recovery_safety"))
-        actions = load_actions()
+        actions = actions_owner
         entry = copy.deepcopy(actions.select_repository(
             actions.load_registry(), REPOSITORY
         ))
@@ -2971,7 +3026,7 @@ class LifecyclePublicationTests(TestCase):
                 signer_identity=SIGNER, signer=signer_for(),
                 _policy_loader=lambda _: ("f" * 40, entry),
                 _gateway_factory=lambda *_: gateway,
-                _validation_runner=lambda *_: actions.RegisteredValidationResult(),
+                _validation_runner=lambda *_: True,
                 _issuer_source_verifier=lambda _: None,
                 _current_lifecycle_loader=lambda *_: enrolled,
                 _authorization_factory=(
@@ -3693,7 +3748,7 @@ class LifecyclePublicationTests(TestCase):
             or advanced.lifecycle.source_validation_evidence_digest
             != advanced.lifecycle.source_validation_evidence_digest
         )
-        actions = load_actions()
+        actions = actions_owner
         with patch.object(
             actions,
             "_load_lifecycle_publication_helpers",
@@ -4704,9 +4759,7 @@ class LifecyclePublicationTests(TestCase):
 
     def reacquisition_claim_fixture(self, *, prior_assessment=False):
         from scripts.secpal_pr_review import provider_reacquisition as r
-        spec = importlib.util.spec_from_file_location("reacquisition_transport_fixture", Path(__file__).with_name("secpal-lifecycle-orchestration-unit.py"))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        module = reacquisition_transport_fixture
         _, feedback, _, _, _, fixture_current, raw = module.first_fallback_growth()
         chain = Chain()
         chain.append("INITIALIZED_DRAFT")
@@ -5704,46 +5757,39 @@ class ContractsLifecyclePolicyTests(TestCase):
             )
 
 
+class RegistryConsumerProjectionTests(TestCase):
+    """Pure consumer projections use the shared, unmodified verifier graph."""
+
+    def test_registry_and_consumer_projections_agree(self) -> None:
+        actions = load_actions()
+        resolver = actions._owned_verifier_module("fixed_thread_resolution")
+        self.assertIs(actions, actions_owner)
+        self.assertIs(actions._owned_verifier_module("lifecycle_publication"), publication)
+        registry = actions.load_registry()
+        for repository in ("SecPal/frontend", "SecPal/api", "SecPal/android"):
+            with self.subTest(repository=repository):
+                entry = actions.select_repository(registry, repository)
+                binding = actions._fast_registry_binding(entry)
+                self.assertEqual(binding, resolver._validation_registry_binding(entry))
+                self.assertEqual(binding["repository"], repository)
+                self.assertIn("BRANCH_WRITE", entry["unsupported_operations"])
+                self.assertEqual(
+                    entry["lifecycle_authority_policy"]["publication_remote_url"],
+                    f"https://github.com/{repository}.git",
+                )
+        with self.assertRaises(actions.RegistryError):
+            actions.select_repository(registry, "Other/frontend")
+        self.assertIs(load_actions(), actions)
+
+
 class FrontendLifecyclePolicyTests(ContractsLifecyclePolicyTests):
     """The Frontend registration consumes the existing lifecycle contract."""
 
     repository = "SecPal/frontend"
     expected_ruleset_id = 24431481
 
-    def test_registry_and_consumer_projections_agree(self) -> None:
-        modules = []
-        for name, script in (
-            ("frontend_policy_actions", "secpal-pr-review-actions.py"),
-            ("frontend_policy_resolver", "secpal-resolve-fixed-threads.py"),
-        ):
-            spec = importlib.util.spec_from_file_location(
-                name, Path(__file__).resolve().parents[1] / "scripts" / script
-            )
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[name] = module
-            spec.loader.exec_module(module)
-            modules.append(module)
-        actions, resolver = modules
-        entry = actions.select_repository(actions.load_registry(), self.repository)
-        binding = actions._fast_registry_binding(entry)
-        self.assertEqual(binding, resolver._validation_registry_binding(entry))
-        self.assertEqual(binding["repository"], self.repository)
-        self.assertIn("BRANCH_WRITE", entry["unsupported_operations"])
-        self.assertEqual(
-            entry["lifecycle_authority_policy"]["publication_remote_url"],
-            f"https://github.com/{self.repository}.git",
-        )
-        with self.assertRaises(actions.RegistryError):
-            actions.select_repository(actions.load_registry(), "Other/frontend")
-
     def test_ready_integration_authenticates_repository_bound_current(self) -> None:
-        spec = importlib.util.spec_from_file_location(
-            "frontend_ready_actions",
-            Path(__file__).resolve().parents[1] / "scripts/secpal-pr-review-actions.py",
-        )
-        actions = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = actions
-        spec.loader.exec_module(actions)
+        actions = actions_owner
         chain = self.chain()
         chain.append("INITIALIZED_DRAFT")
         publication.admit_native_genesis(

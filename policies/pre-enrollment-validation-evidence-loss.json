@@ -974,6 +974,109 @@
           }
         ]
       }
+    },
+    {
+      "admission_schema_version": "1.3",
+      "repository": "SecPal/contracts",
+      "delivery_issue": 524,
+      "pull_request": 525,
+      "head_sha": "f8e229ef68630e4e8363fb1af4137a53a55a304a",
+      "tree_sha": "1098de89884096b2c19c9ad6f88a1eeeb1babe16",
+      "parent_sha": "5fefdc0d8ed92779bdb74a8efa39baba8fdf331e",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "historical_validation_receipt_digest": "b34ab1e452e4c82e5cef84ad3e4728b206f392517e5c12de2e03f179bfab32f3",
+      "historical_package_status": "UNAVAILABLE",
+      "historical_final_attestation_digest": null,
+      "historical_bytes_reconstructed": false,
+      "observed_pre_enrollment_history": [
+        {
+          "sequence": 1,
+          "kind": "PR_CREATED_DRAFT",
+          "observed_at": "2026-09-29T21:16:32Z",
+          "head_sha": "5fefdc0d8ed92779bdb74a8efa39baba8fdf331e",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 2,
+          "kind": "DRAFT_TO_READY_OBSERVED",
+          "observed_at": "2026-09-29T21:22:56Z",
+          "head_sha": "5fefdc0d8ed92779bdb74a8efa39baba8fdf331e",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 3,
+          "kind": "REMEDIATION_HEAD_OBSERVED",
+          "observed_at": "2026-09-30T19:38:07Z",
+          "head_sha": "f8e229ef68630e4e8363fb1af4137a53a55a304a",
+          "reviewed_head_sha": null
+        }
+      ],
+      "intended_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 1,
+        "cycle_3_absent": true,
+        "draft": false,
+        "ready": true,
+        "ready_transition_count": 1,
+        "ready_history": [
+          {
+            "sequence": 1,
+            "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": "d57ab3ddf6954ed9b70573cd81553bf65eb0c1edf8a4160c3a6c36588dd635f7"
+          }
+        ],
+        "exceptional_recovery_count": 0,
+        "exceptional_recovery_history": [],
+        "exceptional_continuation_count": 0,
+        "exceptional_continuation_history": []
+      },
+      "historical_provider_summary_digest": "3a6bedf5323de1943cf2560fef461ba1edb0f55ec166666f515dd4fb6900996e",
+      "current_safety_harness_path": "tests/pre-enrollment-contracts-524-current-safety.py",
+      "feedback_digest": "2b5edfc8b11e6bd49453fab8d45ad1ab1e669da30c5dc2d38500f279de601bae",
+      "technical_decisions": [
+        {
+          "source_id": "PULL_REQUEST_REACTION:REA_lAHOQI4ygs8AAAABUACAj84f-q59",
+          "source_digest": "4f92474119940277b0d90a1280e0f33d988d7a2c6b4e6181bce0b29ad393f75e",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "d5186416d105cfede0d83a791969e2f9aa5577a4daaa969729e2222cc136834e"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOQI4ygs8AAAABP2cL1g",
+          "source_digest": "74974ddaef7e6097d6e88bd4928702dd8bbc0525665df2039419249de6faf379",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "b17bc7cc26da778b50f0de5f8376e66b0f4e378a49d95c6b7bc926039af98135"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDOQI4ygs8AAAABX56Xjw",
+          "source_digest": "619c9f9f66a93f7e7ea60049aa147d2cf183fb706a71e11a710216ed2ba19d92",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "ff35f4db85561b5a8f09f1b0388f9c128493916f4f953717c9274e4b2afb18be"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDOQI4ygs8AAAABX56gWw",
+          "source_digest": "3a6bedf5323de1943cf2560fef461ba1edb0f55ec166666f515dd4fb6900996e",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "7d2fce69bda863b0e190b3c98e9b90dfe72f2375aa34a47dbe48de9938a71810"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDOQI4ygs8AAAABYKI5CA",
+          "source_digest": "7750379659fbba413136c8bf4f500a59f1e03f0c36c0ab16b0a2475eb13ecb1a",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "7f00d27f8c248d07eed3c45bdb96130464aad9a81d68d4d299e1b23db3d5ea4b"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDOQI4ygs8AAAABYKMbUw",
+          "source_digest": "4a69a7b8cf305fecf949d19afcbaa0208a59b2b6c812573a8640507aa284d5b8",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "7ade5e39659fcc79d6403fd0bf1d5bd140eab0e00f0efcfcdfe337265a1253fa"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQI4ygs72rGLU",
+          "source_digest": "8b79ac4ffd4eda35009521f295465d3266bd728cd88be76a9e44ad657a0d6b8d",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "63e6b17fc821e54b88f6fd2d924891ff09899d348a313591f634ffa07cebf33f"
+        }
+      ]
     }
   ]
 }

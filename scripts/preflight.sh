@@ -97,14 +97,13 @@ FORMAT_EXIT=0
 if command -v npx >/dev/null 2>&1; then
   git ls-files -z -- '*.md' '*.yml' '*.yaml' '*.json' '*.ts' '*.tsx' '*.js' '*.jsx' \
     | xargs -0 npx --yes prettier@3.5.3 --check -- || FORMAT_EXIT=1
-  if [ -x ./node_modules/.bin/markdownlint ]; then
-    git ls-files -z -- '*.md' \
-      | xargs -0 ./node_modules/.bin/markdownlint --config .markdownlint.json -- || FORMAT_EXIT=1
-  else
-    echo "ℹ️  markdownlint not found in node_modules — run 'npm ci' first for reproducible linting." >&2
-    git ls-files -z -- '*.md' \
-      | xargs -0 npx --yes --package markdownlint-cli@0.49.0 markdownlint --config .markdownlint.json -- || FORMAT_EXIT=1
-  fi
+fi
+if [ -x ./node_modules/.bin/markdownlint ]; then
+  git ls-files -z -- '*.md' \
+    | xargs -0 ./node_modules/.bin/markdownlint --config .markdownlint.json -- || FORMAT_EXIT=1
+else
+  echo "ℹ️  markdownlint not found in node_modules — run 'npm ci' first for reproducible linting." >&2
+  FORMAT_EXIT=1
 fi
 # Workflow linting is enforced by pre-commit hooks and CI.
 # Local preflight keeps this as guidance only because direct actionlint runs
@@ -417,6 +416,7 @@ python3 -m unittest tests/polyscope-work-graph-advisory.py
 python3 -m unittest tests/secpal-pr-advisory-unit.py
 python3 -m unittest tests/secpal-work-graph-replan-unit.py
 python3 -m unittest tests/secpal-trivy-repository-scan-unit.py
+python3 -m unittest tests/secpal-trivy-action-archive.py
 python3 -m unittest tests/polyscope-work-graph-replanning.py
 
 for preview_test in \

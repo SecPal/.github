@@ -99,8 +99,8 @@ def read_live_follow_up(
     """Read the exact issue through the canonical work-graph implementation."""
 
     try:
-        from secpal_work_graph import github, resolver
-        from secpal_work_graph.acceptance_criteria import MarkdownParserUnavailable
+        from scripts.secpal_work_graph import github, resolver
+        from scripts.secpal_work_graph.acceptance_criteria import MarkdownParserUnavailable
     except ImportError as exc:
         raise FollowUpError("canonical work-graph implementation is unavailable") from exc
     try:

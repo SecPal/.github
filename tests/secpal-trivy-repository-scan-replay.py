@@ -9,10 +9,13 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
+import secrets
 import shutil
 import subprocess
 import tarfile
 import tempfile
+from textwrap import dedent
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,6 +74,13 @@ def main() -> int:
             encoding="utf-8",
         )
         template.unlink()
+        # Generate native-rule captures only at runtime, in disposable exact Git
+        # fixtures. Exercise both complete and bounded minified cause lines.
+        sendgrid = "SG." + secrets.token_urlsafe(16) + "." + secrets.token_urlsafe(32)
+        short_line = "sendgrid='" + sendgrid + "';"
+        (workspace / "short-secret.js").write_text(short_line + "\n")
+        (workspace / "long-secret.js").write_text("x" * 2000 + short_line + "y" * 2000 + "\n")
+        (workspace / "crlf-secret.js").write_bytes(("q" + "x" * 30 + sendgrid + "\r\n").encode())
         (workspace / "tests").mkdir()
         (workspace / "tests" / "example.md").write_text(secret_path.read_text())
         lock = json.loads((workspace / "package-lock.json").read_text())
@@ -114,36 +124,48 @@ def main() -> int:
             "--download-db-only", "--cache-dir", str(cache), "--quiet",
         ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             env={"HOME": str(root)})
-        scanned = subprocess.run(
-            [
-                str(trivy),
-                "--config",
-                str(trusted_config),
-                "fs",
-                "--scanners",
-                "vuln,secret,misconfig",
-                "--include-dev-deps",
-                "--include-non-failures", "--show-suppressed",
-                "--format",
-                "json",
-                "--exit-code",
-                "0",
-                "--skip-db-update",
-                "--skip-java-db-update",
-                "--skip-check-update", "--skip-version-check",
-                "--cache-dir",
-                str(cache),
-                "--secret-config",
-                str(SECRET_CONFIG),
-                "--output",
-                str(native),
-                str(workspace),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-            env={"HOME": str(root)},
-        )
+        scan_command = [
+            str(trivy),
+            "--config",
+            str(trusted_config),
+            "fs",
+            "--scanners",
+            "vuln,secret,misconfig",
+            "--include-dev-deps",
+            "--include-non-failures", "--show-suppressed",
+            "--format",
+            "json",
+            "--exit-code",
+            "0",
+            "--skip-db-update",
+            "--skip-java-db-update",
+            "--skip-check-update", "--skip-version-check",
+            "--cache-dir",
+            str(cache),
+            "--secret-config",
+            str(SECRET_CONFIG),
+            "--output",
+            str(native),
+            str(workspace),
+        ]
+        scanned = subprocess.run(scan_command, check=True, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.PIPE, env={"HOME": str(root)})
         module.verify_diagnostics(scanned.stderr.decode("utf-8"), cache)
+        generic_native = json.loads(native.read_text(encoding="utf-8"))
+        generic_commit = commit
+        # Keep the generic replay and add the downstream Composer development seam.
+        (workspace / "composer.lock").write_text(json.dumps({
+            "packages": [], "packages-dev": [{
+                "name": "symfony/http-foundation", "version": "v5.4.0", "type": "library",
+            }],
+        }) + "\n")
+        subprocess.run(["git", "-C", str(workspace), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(workspace), "-c", "commit.gpgsign=false",
+                        "commit", "--quiet", "-m", "Composer canary fixture"], check=True)
+        commit = subprocess.check_output(["git", "-C", str(workspace), "rev-parse", "HEAD"], text=True).strip()
+        module.verify_target(workspace, commit)
+        scanned = subprocess.run(scan_command, check=True, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.PIPE, env={"HOME": str(root)})
         native_value = json.loads(native.read_text(encoding="utf-8"))
         if native_value.get("ArtifactType") != "repository":
             raise RuntimeError("pinned Trivy did not identify the Git worktree as a repository")
@@ -167,8 +189,48 @@ def main() -> int:
             database=database,
             completed_at=completed_at,
         )
+        diagnostics = scanned.stderr.decode("utf-8")
+        if diagnostics.count("\tWARN\t" + module.SEVERITY_FALLBACK_DIAGNOSTIC) != 1:
+            raise RuntimeError("Composer fixture did not exercise the exact advisory")
+        module.verify_diagnostics(diagnostics, cache, native=native_value,
+                                  scanner=observation["scanner"], workspace=str(workspace))
+        for unexpected in ("WARN\tunknown warning", "ERROR\tparser failed"):
+            try:
+                module.verify_diagnostics(diagnostics + "2026-10-04T12:00:00Z\t" + unexpected + "\n",
+                                          cache, native=native_value,
+                                          scanner=observation["scanner"], workspace=str(workspace))
+            except module.ContractError:
+                pass
+            else:
+                raise RuntimeError("unexpected diagnostic was admitted")
+        generic_observation = module.normalize_native(
+            generic_native, repository="SecPal/repository-scan-fixture", commit=generic_commit,
+            workspace=str(workspace), scanner=observation["scanner"], database=database,
+            completed_at=completed_at,
+        )
+        generic_result = module.admit(generic_observation, json.loads(POLICY.read_text()))
+        module.verify_redaction(generic_native, generic_result, workspace,
+                                "SecPal/repository-scan-fixture", generic_commit)
+        if generic_result["gate_state"] != "ACTIONABLE" or {f["class"] for f in generic_result["findings"]} != {"VULNERABILITY", "SECRET", "MISCONFIGURATION"}:
+            raise RuntimeError("generic scanner replay regressed")
         result = module.admit(observation, json.loads(POLICY.read_text(encoding="utf-8")))
         module.verify_redaction(native_value, result, workspace, "SecPal/repository-scan-fixture", commit)
+        representations = {}
+        for path in ("short-secret.js", "long-secret.js", "crlf-secret.js"):
+            findings = [s for r in native_value["Results"] if r["Target"] == path
+                        for s in r.get("Secrets", []) if s["RuleID"] == "sendgrid-api-token"]
+            if len(findings) != 1:
+                raise RuntimeError("runtime SendGrid fixture did not exercise the native rule")
+            causes = [line for line in findings[0]["Code"]["Lines"] if line.get("IsCause") is True]
+            if len(causes) != 1 or causes[0]["Number"] != 1:
+                raise RuntimeError("runtime SendGrid fixture cause location mismatch")
+            source_size = len((workspace / path).read_bytes().split(b"\n")[0])
+            cause_size = len(causes[0]["Content"].encode())
+            if ((path == "short-secret.js" and source_size != cause_size)
+                    or (path != "short-secret.js" and not cause_size < source_size)
+                    or (path == "crlf-secret.js" and (source_size, cause_size) != (101, 99))):
+                raise RuntimeError("pinned cause-line representation was not exercised")
+            representations[path] = {"source_bytes": source_size, "cause_bytes": cause_size}
         for field in ("path", "resource", "title", "message", "package"):
             import copy
             unsafe = copy.deepcopy(result)
@@ -179,17 +241,70 @@ def main() -> int:
                 pass
             else:
                 raise RuntimeError("captured metadata bypassed the redaction guard")
+        unsafe = copy.deepcopy(result)
+        unsafe["findings"][0]["message"] = sendgrid
+        try:
+            module.verify_redaction(native_value, unsafe, workspace, "SecPal/repository-scan-fixture", commit)
+        except module.ContractError:
+            pass
+        else:
+            raise RuntimeError("long-line captured alias bypassed the redaction guard")
         encoded = json.dumps(result, sort_keys=True)
         classes = {finding["class"] for finding in result["findings"]}
         if classes != {"VULNERABILITY", "SECRET", "MISCONFIGURATION"}:
             raise RuntimeError(f"pinned Trivy did not exercise every scanner class: {sorted(classes)}")
-        if SYNTHETIC_SECRET in encoded or '"match"' in encoded.lower() or '"code"' in encoded.lower():
+        if (any(value in encoded or value in diagnostics for value in (SYNTHETIC_SECRET, sendgrid))
+                or '"match"' in encoded.lower() or '"code"' in encoded.lower()):
             raise RuntimeError("normalized evidence retained secret capture material")
         secret_paths = {f["path"] for f in result["findings"] if f["class"] == "SECRET"}
-        if not {"tests/example.md", "package-lock.json"} <= secret_paths:
+        if not {"tests/example.md", "package-lock.json", "short-secret.js", "long-secret.js", "crlf-secret.js"} <= secret_paths:
             raise RuntimeError("secret default exclusions remain enabled")
         if result["gate_state"] != "ACTIONABLE":
             raise RuntimeError("representative findings were not admitted as actionable")
+        # Exercise the maintained action boundary itself, including both DBs,
+        # health admission, redaction, public summary, and private-file cleanup.
+        action_path = ROOT / ".github" / "actions" / "trivy-repository-scan" / "action.yml"
+        # Extract the owned literal Bash block; this replay needs only the
+        # existing vulnerability-policy dependencies on the CI runner.
+        step_script = dedent(action_path.read_text().split("      run: |\n", 1)[1].split("\n    - name:", 1)[0])
+        runner = root / "runner"
+        runner.mkdir(mode=0o700)
+        output_path, summary_path = runner / "output", runner / "summary"
+        action_environment = {
+            "PATH": os.environ["PATH"], "HOME": str(root),
+            "GITHUB_ACTION_PATH": str(action_path.parent),
+            "GITHUB_WORKSPACE": str(workspace), "GITHUB_SHA": commit,
+            "GITHUB_REPOSITORY": "SecPal/repository-scan-fixture",
+            "GITHUB_RUN_ID": "1123", "GITHUB_RUN_ATTEMPT": "1",
+            "RUNNER_TEMP": str(runner), "RUNNER_OS": "Linux", "RUNNER_ARCH": "X64",
+            "GITHUB_OUTPUT": str(output_path), "GITHUB_STEP_SUMMARY": str(summary_path),
+            "TRIVY_VERSION": TRIVY_VERSION,
+            "TRIVY_ARCHIVE_SHA256": TRIVY_ARCHIVE_SHA256,
+        }
+        action = subprocess.run(["bash", "-c", step_script], env=action_environment,
+                                capture_output=True, check=False)
+        if action.returncode:
+            raise RuntimeError("maintained action execution failed")
+        outputs = dict(line.split("=", 1) for line in output_path.read_text().splitlines())
+        evidence_root = Path(outputs["evidence-path"])
+        action_result = json.loads((evidence_root / "result.json").read_text())
+        import jsonschema
+        jsonschema.validate(action_result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v1.schema.json").read_text()))
+        if (action_result["gate_state"] != "ACTIONABLE"
+                or {f["class"] for f in action_result["findings"]} != classes
+                or action_result["subject"] != {"repository": "SecPal/repository-scan-fixture", "commit": commit}
+                or action_result["scanner"] != observation["scanner"]
+                or action_result["database"]["status"] != "FRESH"
+                or action_result["policy"] != result["policy"]
+                or not any(f["class"] == "VULNERABILITY" and f.get("package") == "symfony/http-foundation" for f in action_result["findings"])):
+            raise RuntimeError("maintained action did not preserve Canary identities and findings")
+        public = action.stdout + action.stderr + summary_path.read_bytes() + output_path.read_bytes()
+        for retained in evidence_root.iterdir():
+            public += retained.read_bytes()
+        if any(value.encode() in public for value in (SYNTHETIC_SECRET, sendgrid)):
+            raise RuntimeError("maintained action exposed synthetic capture material")
+        if list(runner.glob("secpal-trivy-tool-*")) or list(runner.glob("secpal-trivy-cache-*")):
+            raise RuntimeError("maintained action retained private scanner material")
         # Inline source suppression is rejected from immutable source before
         # Trivy can omit ignored IaC findings from its native representation.
         terraform = workspace / "insecure.tf"
@@ -222,6 +337,12 @@ def main() -> int:
                 pass
             else:
                 raise RuntimeError("parser failure fixture was admitted as healthy")
+        broken_command = list(scan_command)
+        broken_command[broken_command.index("--cache-dir") + 1] = str(root / "missing-cache")
+        broken = subprocess.run(broken_command, env={"HOME": str(root)},
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=False)
+        if broken.returncode == 0:
+            raise RuntimeError("missing database did not fail the scanner process")
         print(
             json.dumps(
                 {
@@ -229,6 +350,19 @@ def main() -> int:
                     "scanner_version": TRIVY_VERSION,
                     "scanner_identity": "sha256:" + TRIVY_ARCHIVE_SHA256,
                     "target_identity_verified": True,
+                    "target_commit": commit,
+                    "configuration_identity": action_result["scanner"]["configuration_sha256"],
+                    "policy_identity": action_result["policy"],
+                    "composer_advisory_qualified": True,
+                    "generic_replay_passed": True,
+                    "short_line_redaction": "PASS",
+                    "long_line_redaction": "PASS",
+                    "crlf_threshold_redaction": "PASS",
+                    "cause_representations": representations,
+                    "maintained_action_passed": True,
+                    "unknown_warning_fail_closed": True,
+                    "parser_failure_fail_closed": True,
+                    "process_failure_fail_closed": True,
                     "database_identity": database["identity"],
                     "scanner_classes": sorted(classes),
                     "secret_capture_retained": False,

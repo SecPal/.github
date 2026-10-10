@@ -35,8 +35,10 @@ def load(name, path):
     spec.loader.exec_module(module)
     return module
 
+sys.path.insert(0, str(root))
+from tests.secpal_actions_fixture import load_actions
+actions = load_actions()
 p21 = load("p21_fixture", root / "tests/secpal-pr-review-unit.py")
-actions = load("actions_fixture", root / "scripts/secpal-pr-review-actions.py")
 snapshot = p21.snapshot()
 snapshot["review_threads"] = [p21.thread()]
 snapshot = p21.finalize_snapshot(snapshot)

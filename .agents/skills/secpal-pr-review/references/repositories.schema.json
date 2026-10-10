@@ -510,6 +510,9 @@
         "enrolled_draft_integration_policy": {
           "$ref": "#/$defs/enrolled_draft_integration_policy"
         },
+        "enrolled_draft_source_advancement_policy": {
+          "$ref": "#/$defs/enrolled_draft_source_advancement_policy"
+        },
         "check_policy": { "type": "object" },
         "manual_gates": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "unsupported_operations": {
@@ -594,6 +597,54 @@
         },
         "merge_pull_request": {
           "const": false
+        }
+      }
+    },
+    "enrolled_draft_source_advancement_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "command",
+        "topology_kind",
+        "allowed_mutation",
+        "maximum_candidates",
+        "maximum_pushes",
+        "force_push",
+        "automatic_retry",
+        "merge_pull_request",
+        "maximum_authorization_age_seconds"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "1.0"
+        },
+        "command": {
+          "const": "advance-enrolled-draft-source"
+        },
+        "topology_kind": {
+          "const": "ENROLLED_DRAFT_SOURCE_ADVANCEMENT"
+        },
+        "allowed_mutation": {
+          "const": "NON_FORCE_PUSH_EXACT_PR_BRANCH"
+        },
+        "maximum_candidates": {
+          "const": 1
+        },
+        "maximum_pushes": {
+          "const": 1
+        },
+        "force_push": {
+          "const": false
+        },
+        "automatic_retry": {
+          "const": false
+        },
+        "merge_pull_request": {
+          "const": false
+        },
+        "maximum_authorization_age_seconds": {
+          "const": 900
         }
       }
     },

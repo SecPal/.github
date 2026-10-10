@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""One exact enrolled initial-Draft integration, using maintained authorities.
+"""Closed initial-Draft source and current-main operations using maintained authority.
 
 Preparation creates and authorizes a single immutable signed candidate after
 Complete Validation. Execution cannot create a commit: it consumes that exact
@@ -14,6 +14,7 @@ import copy
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 from typing import Any
 
 from . import fast_path, lifecycle_authority as authority
@@ -22,6 +23,8 @@ from . import pre_enrollment_integration as draft
 from . import bootstrap_source_admission
 
 KIND = "ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION"
+SOURCE_KIND = "ENROLLED_DRAFT_SOURCE_ADVANCEMENT"
+MAXIMUM_SOURCE_AUTHORIZATION_SECONDS = 900
 AUTHORIZATION_KIND = KIND + "_AUTHORIZATION"
 AUTHORIZATION_DOMAIN = "secpal.enrolled-draft-current-main-integration-authorization/v1"
 PREPARATION_AUTHORIZATION_KIND = KIND + "_PREPARATION_AUTHORIZATION"
@@ -31,6 +34,11 @@ POLICY = {
     "topology_kind": KIND, "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
     "maximum_candidates": 1, "maximum_pushes": 1, "force_push": False,
     "automatic_retry": False, "merge_pull_request": False,
+}
+SOURCE_POLICY = {
+    **POLICY, "command": "advance-enrolled-draft-source",
+    "topology_kind": SOURCE_KIND,
+    "maximum_authorization_age_seconds": MAXIMUM_SOURCE_AUTHORIZATION_SECONDS,
 }
 EVIDENCE_FIELDS = frozenset({
     "schema_version", "kind", "repository", "delivery_issue", "pull_request",
@@ -48,6 +56,32 @@ AUTHORIZATION_FIELDS = frozenset({
 })
 PREPARATION_AUTHORIZATION_FIELDS = AUTHORIZATION_FIELDS - {"final_attestation", "preparation_authorization_digest"}
 TRAILERS = ("SecPal-Enrolled-Draft-Integration", "SecPal-Enrolled-Draft-Validation-Receipt")
+
+
+def authorization_kind(kind, *, preparation=False):
+    if not isinstance(kind, str) or kind not in {KIND, SOURCE_KIND}:
+        raise fast_path.SecurityBlocker("unsupported enrolled Draft operation")
+    return kind + ("_PREPARATION_AUTHORIZATION" if preparation else "_AUTHORIZATION")
+
+
+def authorization_domain(kind, *, preparation=False):
+    authorization_kind(kind, preparation=preparation)
+    if kind == KIND:
+        return PREPARATION_AUTHORIZATION_DOMAIN if preparation else AUTHORIZATION_DOMAIN
+    return "secpal.enrolled-draft-source-advancement-" + ("preparation/v1" if preparation else "authorization/v1")
+
+
+def validation_trailers(evidence):
+    authorization_kind(evidence["kind"])
+    return ("SecPal-Enrolled-Draft-Source", "SecPal-Validation-Receipt") if evidence["kind"] == SOURCE_KIND else TRAILERS
+
+
+def require_fresh_source_authorization(evidence):
+    """Observe time only at mutation admission; reconciliation grants no push."""
+    if evidence["kind"] == SOURCE_KIND:
+        bounds = evidence["user_authorization"]
+        if not bounds["issued_at"] <= time.time() < bounds["expires_at"]:
+            raise fast_path.SecurityBlocker("source authorization is stale or not yet valid")
 
 
 def require_initial_native_draft(current: publication.VerifiedLifecyclePublication) -> None:
@@ -84,8 +118,10 @@ def current_binding(current: publication.VerifiedLifecyclePublication) -> dict[s
 
 
 def normalize_evidence(value: Any) -> dict[str, Any]:
-    item = draft._closed(value, EVIDENCE_FIELDS, "enrolled Draft integration evidence")
-    if item["kind"] != KIND or item["schema_version"] != "1.0":
+    source = isinstance(value, dict) and value.get("kind") == SOURCE_KIND
+    fields = (EVIDENCE_FIELDS - {"current_main", "tree_evidence"}) | {"user_authorization"} if source else EVIDENCE_FIELDS
+    item = draft._closed(value, fields, "enrolled Draft source/integration evidence")
+    if item["kind"] not in {KIND, SOURCE_KIND} or item["schema_version"] != "1.0":
         raise fast_path.SecurityBlocker("enrolled Draft operation kind/version is unsupported")
     draft._repository(item["repository"])
     for key in ("delivery_issue", "pull_request"):
@@ -98,6 +134,15 @@ def normalize_evidence(value: Any) -> dict[str, Any]:
         draft._digest(item[key], key)
     for key in ("current_publication_oid", "draft_head_sha", "validated_tree_sha"):
         draft._oid(item[key], key)
+    if source:
+        bounds = draft._closed(item["user_authorization"], frozenset({"issued_at", "expires_at"}), "source authorization bounds")
+        if any(type(bounds[key]) is not int or bounds[key] <= 0 for key in bounds) or not 0 < bounds["expires_at"] - bounds["issued_at"] <= MAXIMUM_SOURCE_AUTHORIZATION_SECONDS:
+            raise fast_path.SecurityBlocker("source authorization freshness bounds are invalid")
+        if item["ordered_parent_shas"] != [item["draft_head_sha"]]:
+            raise fast_path.SecurityBlocker("source advancement requires the sole CURRENT parent")
+        if item["head_ref"] == "main" or item["head_ref"].startswith("refs/"):
+            raise fast_path.SecurityBlocker("source branch identity is invalid")
+        return copy.deepcopy(item)
     main = draft._closed(item["current_main"], frozenset({"ref", "sha"}), "current main")
     if main["ref"] != "main" or item["head_ref"] == main["ref"]:
         raise fast_path.SecurityBlocker("integration branch identity is invalid")
@@ -123,10 +168,12 @@ def normalize_evidence(value: Any) -> dict[str, Any]:
 
 
 def normalize_authorization(value: Any, *, allow_preparation: bool = False) -> dict[str, Any]:
-    preparation = allow_preparation and isinstance(value, dict) and value.get("kind") == PREPARATION_AUTHORIZATION_KIND
+    kind = value.get("evidence", {}).get("kind") if isinstance(value, dict) and isinstance(value.get("evidence"), dict) else None
+    expected_preparation = authorization_kind(kind, preparation=True)
+    preparation = allow_preparation and value.get("kind") == expected_preparation
     item = draft._closed(value, PREPARATION_AUTHORIZATION_FIELDS if preparation else AUTHORIZATION_FIELDS, "enrolled Draft authorization")
-    expected_kind = PREPARATION_AUTHORIZATION_KIND if preparation else AUTHORIZATION_KIND
-    domain = PREPARATION_AUTHORIZATION_DOMAIN if preparation else AUTHORIZATION_DOMAIN
+    expected_kind = authorization_kind(kind, preparation=preparation)
+    domain = authorization_domain(kind, preparation=preparation)
     if item["schema_version"] != "1.0" or item["kind"] != expected_kind:
         raise fast_path.SecurityBlocker("enrolled Draft authorization kind/version is unsupported")
     draft._identity(item["authorization_id"], "authorization identity")
@@ -171,29 +218,19 @@ def require_predecessor(current, evidence) -> None:
 
 
 def _trusted_source(actions, repository):
-    main = actions._require_accepted_main_bridge_source(repository)
-    expected = actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/enrolled_draft_integration.py"
-    if Path(__file__).resolve() != expected.resolve() or Path(__spec__.origin).resolve() != expected.resolve():
-        raise fast_path.SecurityBlocker("enrolled Draft integration import provenance changed")
-    actions._require_exact_accepted_main_blob(actions.REPOSITORY_ROOT, main, str(expected.relative_to(actions.REPOSITORY_ROOT)))
-    modules = {"authority": authority, "execution": execution, "publication": publication, "draft": draft, "fast_path": fast_path, "bootstrap": bootstrap_source_admission}
-    actions._require_bridge_import_provenance(
-        {name: (module.__file__, module.__spec__.origin) for name, module in modules.items()},
-        {"authority": actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_authority.py",
-         "execution": actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_execution.py",
-         "publication": actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_publication.py",
-         "draft": actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/pre_enrollment_integration.py",
-         "fast_path": actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/fast_path.py",
-         "bootstrap": actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/bootstrap_source_admission.py"},
-    )
-    return main
+    owner = bootstrap_source_admission._load_actions_helper()
+    if actions is not owner:
+        raise fast_path.SecurityBlocker("enrolled Draft Actions owner is substituted")
+    return owner._require_accepted_main_bridge_source(repository)
 
 
-def _entry(actions, repository):
+def _entry(actions, repository, kind=KIND):
     entry = actions.select_repository(actions.load_registry(), repository)
     binding = actions._fast_registry_binding(entry)
-    if fast_path.canonical_json_bytes(binding.get("enrolled_draft_integration_policy")) != fast_path.canonical_json_bytes(POLICY):
-        raise fast_path.SecurityBlocker("repository has no closed enrolled Draft integration policy")
+    authorization_kind(kind)
+    key, policy = ("enrolled_draft_source_advancement_policy", SOURCE_POLICY) if kind == SOURCE_KIND else ("enrolled_draft_integration_policy", POLICY)
+    if fast_path.canonical_json_bytes(binding.get(key)) != fast_path.canonical_json_bytes(policy):
+        raise fast_path.SecurityBlocker("repository has no closed enrolled Draft operation policy")
     return entry, binding
 
 
@@ -246,6 +283,11 @@ def _live(actions, repository, issue, pr, head, main, head_ref=None):
 
 
 def _tree(actions, root, evidence):
+    if evidence["kind"] == SOURCE_KIND:
+        before = actions._run_attestation_git(root, ["rev-parse", evidence["draft_head_sha"] + "^{tree}"])
+        if before.returncode != 0 or before.stdout.strip() == evidence["validated_tree_sha"]:
+            raise fast_path.SecurityBlocker("source successor has no authenticated source delta")
+        return
     observed = fast_path.derive_ready_integration_tree_evidence(
         root, evidence["ordered_parent_shas"], evidence["validated_tree_sha"],
         schema_version="1.0", kind=KIND, run_git=actions._run_attestation_git,
@@ -272,12 +314,12 @@ def _commit(actions, root, evidence, head):
     return verified
 
 
-def prepare(actions, arguments) -> int:
+def prepare(actions, arguments, *, kind=KIND) -> int:
     """Validate, create one signed candidate, then sign its exact authorization."""
     if not arguments.apply:
         raise fast_path.SecurityBlocker("candidate preparation requires --apply")
     _trusted_source(actions, arguments.repo)
-    entry, binding = _entry(actions, arguments.repo)
+    entry, binding = _entry(actions, arguments.repo, kind)
     root = Path(arguments.repo_root).resolve(strict=True)
     actions._require_distinct_candidate_repository_root(root)
     current = publication.verify_current_lifecycle_authority(arguments.repo, arguments.delivery_issue)
@@ -290,18 +332,30 @@ def prepare(actions, arguments) -> int:
     head, status = actions._attestation_local_state(root, arguments.repo)
     if head != bound["draft_head_sha"]:
         raise fast_path.SecurityBlocker("local delivery head differs from CURRENT")
-    necessary = actions._run_attestation_git(root, ["merge-base", "--is-ancestor", main, head], allow_failure=True)
-    if necessary.returncode != 1:
-        raise fast_path.SecurityBlocker("current-main reconciliation is unnecessary or ancestry unavailable")
+    if kind == KIND:
+        necessary = actions._run_attestation_git(root, ["merge-base", "--is-ancestor", main, head], allow_failure=True)
+        if necessary.returncode != 1:
+            raise fast_path.SecurityBlocker("current-main reconciliation is unnecessary or ancestry unavailable")
     tree = actions._staged_tree(root, status)
     policy = authority._load_lifecycle_trust_policy(arguments.repo)
     signer_id = execution._single_role_identity(policy.transition_signer_identities, "integration signer")
     signers = execution._production_signing_authorities(arguments.repo, signer_id)
+    if kind == SOURCE_KIND:
+        if (arguments.expected_predecessor, arguments.authorized_tree, arguments.expected_signer) != (head, tree, signer_id):
+            raise fast_path.SecurityBlocker("explicit user source authorization differs from exact predecessor, tree or signer")
+        operation_evidence = {
+            "ordered_parent_shas": [head],
+            "user_authorization": {"issued_at": int(time.time()), "expires_at": arguments.expires_at},
+        }
+    else:
+        operation_evidence = {
+            "current_main": {"ref": binding["default_branch"], "sha": main},
+            "ordered_parent_shas": [head, main],
+            "tree_evidence": fast_path.derive_ready_integration_tree_evidence(root, [head, main], tree, schema_version="1.0", kind=KIND, run_git=actions._run_attestation_git),
+        }
     evidence = normalize_evidence({
-        "schema_version": "1.0", "kind": KIND, **bound,
-        "current_main": {"ref": binding["default_branch"], "sha": main},
-        "ordered_parent_shas": [head, main], "validated_tree_sha": tree,
-        "tree_evidence": fast_path.derive_ready_integration_tree_evidence(root, [head, main], tree, schema_version="1.0", kind=KIND, run_git=actions._run_attestation_git),
+        "schema_version": "1.0", "kind": kind, **bound, **operation_evidence,
+        "validated_tree_sha": tree,
         "head_ref": head_ref, "work_graph_digest": graph,
         "registry_digest": fast_path.digest_json(binding),
         "command_set_digest": fast_path.digest_json(binding["validation"]),
@@ -311,6 +365,9 @@ def prepare(actions, arguments) -> int:
             binding["manual_gates"],
         ),
     })
+    if kind == SOURCE_KIND:
+        _tree(actions, root, evidence)
+    require_fresh_source_authorization(evidence)
     directory = Path(arguments.operation_directory)
     directory.mkdir(mode=0o700, parents=False, exist_ok=False)
     # Exclusive preparation directory is diagnostic evidence, never authority.
@@ -321,26 +378,32 @@ def prepare(actions, arguments) -> int:
         raise fast_path.SecurityBlocker("candidate changed during Complete Validation")
     _trusted_source(actions, arguments.repo)
     require_predecessor(publication.verify_current_lifecycle_authority(arguments.repo, arguments.delivery_issue), evidence)
-    if actions._authenticate_protected_bridge_main(arguments.repo) != main or _graph(actions, arguments.repo, arguments.delivery_issue) != graph:
+    if (kind == KIND and actions._authenticate_protected_bridge_main(arguments.repo) != main) or _graph(actions, arguments.repo, arguments.delivery_issue) != graph:
         raise fast_path.SecurityBlocker("main or work graph changed during validation")
-    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, main, head_ref)
+    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, main if kind == KIND else actions._authenticate_protected_bridge_main(arguments.repo), head_ref)
+    require_fresh_source_authorization(evidence)
     receipt = fast_path.create_enrolled_draft_validation_receipt(evidence)
     preparation_fields = {
-        "schema_version": "1.0", "kind": PREPARATION_AUTHORIZATION_KIND,
+        "schema_version": "1.0", "kind": authorization_kind(kind, preparation=True),
         "authorization_id": arguments.authorization_id, "evidence": evidence,
         "validation_receipt": receipt, "signer_identity": signer_id,
     }
-    preparation_signed = {**preparation_fields, "signature": dict(signers.transition_signer(fast_path.canonical_json_bytes(preparation_fields), PREPARATION_AUTHORIZATION_DOMAIN))}
+    preparation_signed = {**preparation_fields, "signature": dict(signers.transition_signer(fast_path.canonical_json_bytes(preparation_fields), authorization_domain(kind, preparation=True)))}
     preparation = normalize_authorization({**preparation_signed, "authorization_digest": fast_path.digest_json(preparation_signed)}, allow_preparation=True)
     actions._write_fast_report(str(directory / "preparation.json"), preparation)
     # The predecessor-scoped protected reservation is acquired before the sole
     # commit-tree call. Other directories, IDs, processes or clones cannot mint
     # a second candidate. A lost reservation response never grants ownership.
     publication.claim_enrolled_draft_integration(preparation, signer_identity=signers.publication_identity, signer=signers.publication_signer)
-    trailers = dict(zip(TRAILERS, (fast_path.digest_json(evidence), receipt["receipt_digest"])))
-    message = "Integrate protected main into enrolled Draft delivery\n\n" + "".join(f"{key}: {value}\n" for key, value in trailers.items())
+    trailers = dict(zip(validation_trailers(evidence), (fast_path.digest_json(evidence), receipt["receipt_digest"])))
+    subject = "Advance enrolled Draft delivery source" if kind == SOURCE_KIND else "Integrate protected main into enrolled Draft delivery"
+    message = subject + "\n\n" + "".join(f"{key}: {value}\n" for key, value in trailers.items())
+    require_fresh_source_authorization(evidence)
+    commit_arguments = ["commit-tree", "-S", tree]
+    for parent in evidence["ordered_parent_shas"]:
+        commit_arguments.extend(["-p", parent])
     try:
-        created = actions._create_signed_pre_enrollment_commit(root, ["commit-tree", "-S", tree, "-p", head, "-p", main], message)
+        created = actions._create_signed_pre_enrollment_commit(root, commit_arguments, message)
     except (actions.evidence.CommandPolicyError, OSError, subprocess.TimeoutExpired) as exc:
         raise fast_path.SecurityBlocker("signed enrolled Draft candidate creation unavailable; no retry") from exc
     candidate = created.stdout.strip()
@@ -349,13 +412,13 @@ def prepare(actions, arguments) -> int:
     verified = _commit(actions, root, evidence, candidate)
     attestation = fast_path.create_enrolled_draft_final_attestation(evidence, receipt, candidate_head_sha=candidate, signature_fingerprint=verified.signature_fingerprint)
     fields = {
-        "schema_version": "1.0", "kind": AUTHORIZATION_KIND,
+        "schema_version": "1.0", "kind": authorization_kind(kind),
         "authorization_id": arguments.authorization_id, "evidence": evidence,
         "validation_receipt": receipt, "final_attestation": attestation,
         "preparation_authorization_digest": preparation["authorization_digest"],
         "signer_identity": signer_id,
     }
-    signed = {**fields, "signature": dict(signers.transition_signer(fast_path.canonical_json_bytes(fields), AUTHORIZATION_DOMAIN))}
+    signed = {**fields, "signature": dict(signers.transition_signer(fast_path.canonical_json_bytes(fields), authorization_domain(kind)))}
     authorization = normalize_authorization({**signed, "authorization_digest": fast_path.digest_json(signed)})
     actions._write_fast_report(str(directory / "authorization.json"), authorization)
     return 0
@@ -368,7 +431,7 @@ def _verify_candidate_package(actions, root, authorization):
     if verified.signature_fingerprint != authorization["final_attestation"]["signature_fingerprint"]:
         raise fast_path.SecurityBlocker("candidate signer substitution")
     _tree(actions, root, evidence)
-    for name, expected in zip(TRAILERS, (fast_path.digest_json(evidence), authorization["validation_receipt"]["receipt_digest"])):
+    for name, expected in zip(validation_trailers(evidence), (fast_path.digest_json(evidence), authorization["validation_receipt"]["receipt_digest"])):
         if actions._commit_trailer_digest(root, head, name) != expected:
             raise fast_path.SecurityBlocker("signed candidate does not bind integration validation")
     return head
@@ -423,7 +486,10 @@ def _require_exact_published(authorization, current):
     head = authorization["final_attestation"]["candidate_head_sha"]
     require_initial_native_draft(current)
     if (
-        current.lifecycle.head_sha != head or current.lifecycle.lifecycle_id != evidence["lifecycle_id"]
+        current.lifecycle.repository != evidence["repository"]
+        or current.lifecycle.delivery_issue != evidence["delivery_issue"]
+        or current.lifecycle.initialization_evidence_digest != evidence["initialization_evidence_digest"]
+        or current.lifecycle.head_sha != head or current.lifecycle.lifecycle_id != evidence["lifecycle_id"]
         or current.lifecycle.pull_request != evidence["pull_request"]
         or current.predecessor_publication_oid != evidence["current_publication_oid"]
         or current.lifecycle.tree_sha != evidence["validated_tree_sha"]
@@ -440,16 +506,18 @@ def _require_exact_published(authorization, current):
         raise fast_path.SecurityBlocker("publication is not the exact authorized HEAD_ADVANCED")
 
 
-def integrate(actions, arguments) -> int:
+def integrate(actions, arguments, *, kind=KIND) -> int:
     """One push/publication attempt, or explicit exact read-back reconciliation."""
     if not arguments.apply:
-        raise fast_path.SecurityBlocker("enrolled Draft integration requires --apply")
+        raise fast_path.SecurityBlocker("enrolled Draft operation requires --apply")
     _trusted_source(actions, arguments.repo)
-    _, binding = _entry(actions, arguments.repo)
+    _, binding = _entry(actions, arguments.repo, kind)
     root = Path(arguments.repo_root).resolve(strict=True)
     actions._require_distinct_candidate_repository_root(root)
     authorization = normalize_authorization(actions._read_pre_enrollment_json(arguments.authorization, "integration authorization"))
     evidence = authorization["evidence"]
+    if evidence["kind"] != kind:
+        raise fast_path.SecurityBlocker("authorization belongs to another enrolled Draft operation")
     if (evidence["repository"], evidence["delivery_issue"], evidence["pull_request"]) != (arguments.repo, arguments.delivery_issue, arguments.pr):
         raise fast_path.SecurityBlocker("explicit integration delivery identity differs from authorization")
     # Initial dispatch consumes the currently registered validation policy.
@@ -465,34 +533,40 @@ def integrate(actions, arguments) -> int:
     signers = execution._production_signing_authorities(arguments.repo, authorization["signer_identity"])
     if arguments.reconcile:
         publication.verify_enrolled_draft_integration_claim(authorization)
-        _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
+        _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, evidence["current_main"]["sha"] if kind == KIND else actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
         execution._verify_live_github_commit_signature(arguments.repo, head)
         if current.lifecycle.head_sha == head:
             _require_exact_published(authorization, current)
-            _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
+            _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, evidence["current_main"]["sha"] if kind == KIND else actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
             return 0
         require_predecessor(current, evidence)
     else:
+        require_fresh_source_authorization(evidence)
         require_predecessor(current, evidence)
-        if actions._authenticate_protected_bridge_main(arguments.repo) != evidence["current_main"]["sha"] or _graph(actions, arguments.repo, arguments.delivery_issue) != evidence["work_graph_digest"]:
+        main = actions._authenticate_protected_bridge_main(arguments.repo)
+        if (kind == KIND and main != evidence["current_main"]["sha"]) or _graph(actions, arguments.repo, arguments.delivery_issue) != evidence["work_graph_digest"]:
             raise fast_path.SecurityBlocker("protected main or work graph is stale")
-        _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, evidence["draft_head_sha"], evidence["current_main"]["sha"], evidence["head_ref"])
+        _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, evidence["draft_head_sha"], main, evidence["head_ref"])
         # This signed ancillary record in the EXISTING protected journal consumes
         # push authority even if the process crashes before dispatch. Observing
         # it later never authorizes a push, including on an unchanged branch.
         publication.claim_enrolled_draft_integration(authorization, signer_identity=signers.publication_identity, signer=signers.publication_signer)
         require_predecessor(publication.verify_current_lifecycle_authority(arguments.repo, arguments.delivery_issue), evidence)
-        _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, evidence["draft_head_sha"], evidence["current_main"]["sha"], evidence["head_ref"])
+        main = actions._authenticate_protected_bridge_main(arguments.repo)
+        if kind == KIND and main != evidence["current_main"]["sha"]:
+            raise fast_path.SecurityBlocker("protected main changed after push claim")
+        _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, evidence["draft_head_sha"], main, evidence["head_ref"])
         if _graph(actions, arguments.repo, arguments.delivery_issue) != evidence["work_graph_digest"]:
             raise fast_path.SecurityBlocker("work graph changed after push claim; no retry")
+        require_fresh_source_authorization(evidence)
         _push_exact(actions, root, evidence, head)
-        _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, evidence["current_main"]["sha"], evidence["head_ref"])
+        _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, evidence["current_main"]["sha"] if kind == KIND else actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
         execution._verify_live_github_commit_signature(arguments.repo, head)
     # Both paths have authenticated predecessor CURRENT, the exact claimed
     # authorization and the already live signed candidate. No commit is created.
     successor = _successor(current, authorization, signers, root)
-    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
+    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, evidence["current_main"]["sha"] if kind == KIND else actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
     publication.advance_current_terminal(successor, signer_identity=signers.publication_identity, signer=signers.publication_signer)
     _require_exact_published(authorization, publication.verify_current_lifecycle_authority(arguments.repo, arguments.delivery_issue))
-    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
+    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, evidence["current_main"]["sha"] if kind == KIND else actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
     return 0

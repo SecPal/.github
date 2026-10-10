@@ -40,6 +40,18 @@ fail() {
   exit 1
 }
 
+# Complete Validation success belongs to canonical receipt publication.
+for validation_doc in "$SKILL" "$CONTRACT" "$WORKFLOW_DOC" "$SCRIPT_README"; do
+  grep -q 'REGISTERED COMMANDS PASS' "$validation_doc" \
+    || fail 'technical registered-command classification is missing'
+  grep -q 'COMPLETE REGISTERED VALIDATION PASS' "$validation_doc" \
+    || fail 'receipt-owning completion classification is missing'
+  grep -q 'SUCCESS_WITH_RECEIPT' "$validation_doc" \
+    || fail 'unchanged-tree rule is not bound to receipt-bearing success'
+done
+grep -q 'durable publication and authentication' "$WORKFLOW_DOC" \
+  || fail 'canonical durable-publication boundary is missing'
+
 assert_polyscope_template_baseline() {
   local template_path="$1"
   local accepted_baseline
@@ -1005,10 +1017,16 @@ grep -Fq 'tests/secpal-lifecycle-orchestration-unit.py' "$REGISTRY" \
 grep -Fq 'tests/secpal-lifecycle-execution-contract-unit.py' "$REGISTRY" \
   || fail 'lifecycle execution unit tests are not registered'
 
+# Review-tool behavior is protected by credentialless CLI regressions, not by
+# byte-locking the retired unauthenticated resolution path into its baseline.
+protected_mode_matches 100755 "$REPO_ROOT/scripts/copilot-review-tool.sh" \
+  || fail "review tool file type or mode changed"
+protected_mode_matches 100644 "$REPO_ROOT/docs/copilot-review-automation.md" \
+  || fail "review tool documentation file type or mode changed"
+bash "$REPO_ROOT/tests/copilot-review-memory.sh"
+
 protected_paths=(
   "$REPO_ROOT"/.github/workflows/*-review-memory.yml
-  "$REPO_ROOT"/scripts/*-review-tool.sh
-  "$REPO_ROOT"/docs/*-review-automation.md
   "$REPO_ROOT"/AGENTS.md
 )
 for path in "${protected_paths[@]}"; do
@@ -1312,6 +1330,7 @@ assert [
     ["python3", "-m", "unittest", "tests/secpal-pre-enrollment-integration-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-app-352-loss-admission-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-contracts-524-loss-admission-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-orchestration-unit.py"],
@@ -1321,6 +1340,7 @@ assert [
     ["./tests/secpal-pr-review-skill-policy.sh"],
     ["./tests/secpal-pr-review-skill-integration.sh"],
     ["python3", "-m", "unittest", "tests/secpal-enrolled-draft-integration-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-enrolled-draft-source-unit.py"],
 ], "SecPal/.github must register lifecycle and Exceptional Recovery authority regressions unconditionally"
 
 frontend_entries = [

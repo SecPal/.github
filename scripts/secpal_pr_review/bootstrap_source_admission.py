@@ -74,7 +74,6 @@ PROTECTED_MAIN_REMOTE_URL = "https://github.com/SecPal/.github.git"
 PROTECTED_MAIN_REGISTRY_PATH = (
     ".agents/skills/secpal-pr-review/references/repositories.json"
 )
-_ADMISSION_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review-actions.py"
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _VERIFIED_SOURCE = object()
@@ -432,29 +431,7 @@ def is_verified_bootstrap_source(value: Any) -> bool:
 
 
 def _load_actions_helper() -> Any:
-    module_name = "secpal_bootstrap_source_accepted_main_actions"
-    loaded = sys.modules.get(module_name)
-    if loaded is not None:
-        if Path(getattr(loaded, "__file__", "")).resolve() != _ADMISSION_HELPER:
-            raise BootstrapSourceAdmissionError(
-                "accepted-main validation helper path was substituted"
-            )
-        return loaded
-    spec = importlib.util.spec_from_file_location(module_name, _ADMISSION_HELPER)
-    if spec is None or spec.loader is None:
-        raise BootstrapSourceAdmissionError(
-            "accepted-main validation helper is unavailable"
-        )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException as exc:
-        sys.modules.pop(module_name, None)
-        raise BootstrapSourceAdmissionError(
-            "accepted-main validation helper could not be loaded"
-        ) from exc
-    return module
+    raise BootstrapSourceAdmissionError("Construct the authenticated Actions owner first")
 
 
 def _select_policy_from_trust(

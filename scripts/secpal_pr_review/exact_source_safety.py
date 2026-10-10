@@ -20,6 +20,7 @@ from typing import Any, Iterator, Mapping, Sequence
 
 from . import bootstrap_source_admission as transport
 from . import lifecycle_authority as authority
+from . import fast_path
 
 
 _EVIDENCE_VERSION = re.compile(
@@ -414,6 +415,8 @@ def admit_tooling_path(relative: str, *, allowed_paths: frozenset[str]) -> str:
             relative == "scripts/secpal-pr-review.py"
             or relative == "scripts/secpal-pr-review-actions.py"
             or relative.startswith("scripts/secpal_pr_review/")
+            or relative in {"scripts/secpal_work_graph/" + name + ".py"
+                            for name in fast_path.WORK_GRAPH_MODULE_NAMES}
         )
     ):
         raise authority.LifecycleAuthorityError(
@@ -1922,6 +1925,13 @@ def _verify_tooling_root(
         _verify_harness_file(repository_root, root, relative, *binding)
 
 
+def _execution_tooling_paths(declared: Sequence[str]) -> tuple[str, ...]:
+    """Keep signed profiles stable while closing their current Actions imports."""
+    if "scripts/secpal-pr-review-actions.py" not in declared:
+        return tuple(declared)
+    return tuple(dict.fromkeys((*declared, *fast_path.VERIFIER_EXECUTION_TOOLING_PATHS)))
+
+
 @contextmanager
 def two_provenance_execution_roots(
     repository_root: Path,
@@ -1964,6 +1974,14 @@ def two_provenance_execution_roots(
     harness_paths = tuple(item.get("path") for item in harness)
     tooling_paths = tuple(item.get("path") for item in tooling)
     harness_allowed = frozenset(harness_paths)
+    execution_paths = _execution_tooling_paths(tooling_paths)
+    tooling = list(tooling)
+    for path in execution_paths:
+        if path not in tooling_paths:
+            mode, blob, size = tooling_blob(repository_root, accepted_main, path,
+                allowed_paths=frozenset(execution_paths))
+            tooling.append({"path": path, "mode": mode, "blob_oid": blob, "size": size})
+    tooling_paths = execution_paths
     tooling_allowed = frozenset(tooling_paths)
     if (
         len(harness_allowed) != len(harness_paths)
@@ -2150,7 +2168,8 @@ def run_profile(
                     command["argv"][1],
                     "main",
                     json.dumps([
-                        item["path"] for item in [*profile["harness"], *profile["tooling"]]
+                        *[item["path"] for item in profile["harness"]],
+                        *_execution_tooling_paths(tuple(item["path"] for item in profile["tooling"]))
                     ]),
                 )
             else:
