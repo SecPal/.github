@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import time
 from typing import Any
+from urllib.parse import quote
 
 from . import fast_path, lifecycle_authority as authority
 from . import lifecycle_execution as execution, lifecycle_publication as publication
@@ -582,3 +583,307 @@ def integrate(actions, arguments, *, kind=KIND) -> int:
     _require_exact_published(authorization, publication.verify_current_lifecycle_authority(arguments.repo, arguments.delivery_issue))
     _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, evidence["current_main"]["sha"] if kind == KIND else actions._authenticate_protected_bridge_main(arguments.repo), evidence["head_ref"])
     return 0
+
+
+# A capability within the registered source family, not another lifecycle kind.
+REACQUISITION_KIND = SOURCE_KIND + "_PUSH_REACQUISITION_AUTHORIZATION"
+REACQUISITION_DOMAIN = "secpal.enrolled-draft-source-push-reacquisition/v1"
+REACQUISITION_POLICY = {
+    "schema_version": "1.0", "maximum_replacements": 1,
+    "candidate_creation": False, "automatic_retry": False,
+    "historical_validation": "EXACT_CURRENT_REGISTRY_AND_COMMAND_SET",
+    "original_authorization": "EXPIRED", "branch_history": "COMPLETE_NO_REWRITE",
+}
+REACQUISITION_FIELDS = frozenset({
+    "schema_version", "kind", "operation_id", "binding", "issued_at",
+    "expires_at", "signer_identity", "signature", "authorization_digest",
+})
+REACQUISITION_CLAIM_BINDINGS = frozenset({
+    "preparation_claim_digest", "original_push_claim_digest",
+    "accepted_main_sha", "policy_digest", "work_graph_digest",
+})
+_BRANCH_HISTORY_QUERY = """query($owner:String!, $name:String!, $number:Int!) {
+  repository(owner:$owner, name:$name) {
+    nameWithOwner
+    pullRequest(number:$number) {
+      number state isDraft headRefName headRefOid
+      timelineItems(first:100, itemTypes:[PULL_REQUEST_COMMIT,
+        HEAD_REF_FORCE_PUSHED_EVENT,HEAD_REF_DELETED_EVENT,HEAD_REF_RESTORED_EVENT]) {
+        nodes { __typename
+          ... on PullRequestCommit { id commit { oid } }
+          ... on HeadRefForcePushedEvent { id }
+          ... on HeadRefDeletedEvent { id }
+          ... on HeadRefRestoredEvent { id }
+        }
+        pageInfo { hasNextPage }
+      }
+    }
+  }
+}"""
+
+
+def _original_reacquisition_binding(authorization):
+    """Pure projection of identities independently authenticated by the package."""
+    if authorization["evidence"]["kind"] != SOURCE_KIND:
+        raise fast_path.SecurityBlocker("reacquisition requires the original source family")
+    evidence = authorization["evidence"]
+    attestation = authorization["final_attestation"]
+    keys = ("repository", "delivery_issue", "pull_request", "lifecycle_id",
+            "initialization_evidence_digest", "current_publication_oid",
+            "current_publication_digest", "predecessor_authority_digest",
+            "draft_head_sha", "validated_tree_sha", "ordered_parent_shas",
+            "head_ref", "expected_signer", "registry_digest", "command_set_digest")
+    return {
+        **{key: copy.deepcopy(evidence[key]) for key in keys},
+        "candidate_head_sha": attestation["candidate_head_sha"],
+        "signature_fingerprint": attestation["signature_fingerprint"],
+        "original_authorization_id": authorization["authorization_id"],
+        "original_source_authorization_digest": authorization["authorization_digest"],
+        "original_preparation_authorization_digest": authorization["preparation_authorization_digest"],
+        "validation_receipt_digest": authorization["validation_receipt"]["receipt_digest"],
+        "final_attestation_digest": attestation["attestation_digest"],
+    }
+
+
+def normalize_reacquisition_authorization(value, original):
+    """Authenticate new explicit exact authority without reinterpreting validation."""
+    item = draft._closed(value, REACQUISITION_FIELDS, "source push reacquisition authorization")
+    if item["schema_version"] != "1.0" or item["kind"] != REACQUISITION_KIND:
+        raise fast_path.SecurityBlocker("source push reacquisition kind/version is unsupported")
+    draft._identity(item["operation_id"], "reacquisition operation")
+    expected = _original_reacquisition_binding(original)
+    binding = draft._closed(item["binding"], frozenset(expected) | REACQUISITION_CLAIM_BINDINGS, "reacquisition binding")
+    if any(binding[key] != val for key, val in expected.items()):
+        raise fast_path.SecurityBlocker("fresh source reauthorization substitutes the original candidate/package")
+    for key in REACQUISITION_CLAIM_BINDINGS - {"accepted_main_sha"}:
+        draft._digest(binding[key], key)
+    draft._oid(binding["accepted_main_sha"], "accepted recovery authority")
+    if binding["policy_digest"] != fast_path.digest_json(REACQUISITION_POLICY):
+        raise fast_path.SecurityBlocker("source reacquisition policy identity changed")
+    if (any(type(item[key]) is not int or item[key] <= 0 for key in ("issued_at", "expires_at"))
+            or not 0 < item["expires_at"] - item["issued_at"] <= MAXIMUM_SOURCE_AUTHORIZATION_SECONDS):
+        raise fast_path.SecurityBlocker("source reacquisition freshness bounds are invalid")
+    signer = draft._identity(item["signer_identity"], "reacquisition signer")
+    if signer != original["signer_identity"]:
+        raise fast_path.SecurityBlocker("source reacquisition signer changed")
+    signature = draft._signature(item["signature"], signer)
+    if signature["format"] != "ssh":
+        raise fast_path.SecurityBlocker("source reacquisition requires SSH")
+    fields = {key: val for key, val in item.items() if key not in {"signature", "authorization_digest"}}
+    if item["authorization_digest"] != fast_path.digest_json({**fields, "signature": signature}):
+        raise fast_path.SecurityBlocker("source reacquisition authorization digest mismatch")
+    policy = authority._load_lifecycle_trust_policy(expected["repository"])
+    authority._verify_signature(fast_path.canonical_json_bytes(fields), signature, signer,
+        REACQUISITION_DOMAIN, policy.transition_signer_identities,
+        authority._policy_signature_verifier(policy))
+    return copy.deepcopy(item)
+
+
+def require_fresh_reacquisition_authorization(value):
+    if not value["issued_at"] <= time.time() < value["expires_at"]:
+        raise fast_path.SecurityBlocker("source reacquisition authorization is stale or not yet valid")
+
+
+def require_reacquisition_claim_bindings(replacement, original, preparation, consumed):
+    """Canonical claim owner calls this for both authenticated journal projections."""
+    selected = normalize_reacquisition_authorization(replacement, original)
+    binding = selected["binding"]
+    old = preparation["authorization"]
+    if (old["authorization_digest"] != original["preparation_authorization_digest"]
+            or old["kind"] != authorization_kind(SOURCE_KIND, preparation=True)
+            or any(old[key] != original[key] for key in ("authorization_id", "evidence", "validation_receipt", "signer_identity"))
+            or consumed["authorization"] != original
+            or consumed.get("reacquisition_authorization") is not None
+            or binding["preparation_claim_digest"] != preparation["publication_digest"]
+            or binding["original_push_claim_digest"] != consumed["publication_digest"]):
+        raise publication.LifecyclePublicationError("source reacquisition original protected bindings changed")
+
+
+def normalize_source_branch_history(raw):
+    """Pure normalization of GitHub's bounded complete branch timeline."""
+    try:
+        if not isinstance(raw, dict) or raw.get("errors"):
+            raise ValueError("incomplete response")
+        repo = raw["data"]["repository"]
+        pull = repo["pullRequest"]
+        connection = pull["timelineItems"]
+        nodes = connection["nodes"]
+        if connection["pageInfo"]["hasNextPage"] is not False or not isinstance(nodes, list) or len(nodes) > 100:
+            raise ValueError("incomplete history")
+        events = []
+        seen = set()
+        for node in nodes:
+            identity = draft._identity(node["id"], "branch history event")
+            if identity in seen:
+                raise ValueError("duplicate history event")
+            seen.add(identity)
+            kind = node["__typename"]
+            if kind not in {"PullRequestCommit", "HeadRefForcePushedEvent", "HeadRefDeletedEvent", "HeadRefRestoredEvent"}:
+                raise ValueError("unknown history event")
+            head = draft._oid(node["commit"]["oid"], "historical commit") if kind == "PullRequestCommit" else None
+            events.append((kind, head))
+        return {"repository": draft._repository(repo["nameWithOwner"]),
+                "pull_request": draft._positive(pull["number"], "historical PR"),
+                "state": pull["state"], "draft": pull["isDraft"],
+                "head_ref": draft._identity(pull["headRefName"], "historical branch"),
+                "head_sha": draft._oid(pull["headRefOid"], "historical head"),
+                "events": tuple(events)}
+    except (KeyError, TypeError, ValueError) as exc:
+        raise fast_path.SecurityBlocker("source branch history is unavailable, incomplete or malformed") from exc
+
+
+def admit_unpublished_source_history(observed, original):
+    """No rewritten branch can prove this candidate never persisted."""
+    evidence = original["evidence"]
+    head = original["final_attestation"]["candidate_head_sha"]
+    if (any(observed[key] != evidence[key] for key in ("repository", "pull_request", "head_ref"))
+            or observed["state"] != "OPEN" or observed["draft"] is not True
+            or observed["head_sha"] != evidence["draft_head_sha"]
+            or ("PullRequestCommit", evidence["draft_head_sha"]) not in observed["events"]
+            or any(kind != "PullRequestCommit" or oid == head for kind, oid in observed["events"])):
+        raise fast_path.SecurityBlocker("candidate was published or source branch history is ambiguous")
+
+
+def _require_unpublished_source_history(original):
+    evidence = original["evidence"]
+    owner, name = evidence["repository"].split("/")
+    result = publication._run_gh(["api", "--hostname", "github.com", "graphql",
+        "-f", "query=" + _BRANCH_HISTORY_QUERY, "-f", "owner=" + owner,
+        "-f", "name=" + name, "-F", "number=" + str(evidence["pull_request"])])
+    if result.returncode != 0:
+        raise fast_path.SecurityBlocker("source branch history observation is unavailable")
+    admit_unpublished_source_history(normalize_source_branch_history(draft.loads_closed_json(result.stdout)), original)
+
+
+def admit_exact_source_branch_ref(raw, *, ref, head):
+    """Pure admission of the independent Git ref, not a cached PR pointer."""
+    if (not isinstance(raw, dict) or raw.get("ref") != ref
+            or not isinstance(raw.get("object"), dict)
+            or raw["object"].get("type") != "commit"
+            or raw["object"].get("sha") != head):
+        raise fast_path.SecurityBlocker("exact source branch ref is missing or changed")
+
+
+def _require_exact_source_branch_ref(original, head):
+    evidence = original["evidence"]
+    draft._oid(head, "exact source branch head")
+    result = publication._run_gh(["api", "--hostname", "github.com",
+        f'repos/{evidence["repository"]}/git/ref/heads/{quote(evidence["head_ref"], safe="")}'])
+    if result.returncode != 0:
+        raise fast_path.SecurityBlocker("exact source branch ref observation is unavailable")
+    admit_exact_source_branch_ref(draft.loads_closed_json(result.stdout),
+        ref="refs/heads/" + evidence["head_ref"], head=head)
+
+
+def _qualify_source_reacquisition(actions, arguments, *, unused, owned=None):
+    accepted_main = _trusted_source(actions, arguments.repo)
+    _, binding = _entry(actions, arguments.repo, SOURCE_KIND)
+    root = Path(arguments.repo_root).resolve(strict=True)
+    actions._require_distinct_candidate_repository_root(root)
+    original = normalize_authorization(actions._read_pre_enrollment_json(arguments.authorization, "original source authorization"))
+    evidence = original["evidence"]
+    if (evidence["repository"], evidence["delivery_issue"], evidence["pull_request"]) != (arguments.repo, arguments.delivery_issue, arguments.pr):
+        raise fast_path.SecurityBlocker("source reacquisition delivery identity changed")
+    _original_reacquisition_binding(original)
+    head = _verify_candidate_package(actions, root, original)
+    # Read-back of a live candidate has no mutation authority and keeps the
+    # existing historical reconciliation policy, including after policy drift.
+    live = actions.LiveGitHub().observe_ready_integration_authority(arguments.repo, arguments.pr)
+    _require_exact_source_branch_ref(original, live.get("head_sha"))
+    main = actions._authenticate_protected_bridge_main(arguments.repo)
+    if live.get("head_sha") == head:
+        _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, head, main, evidence["head_ref"])
+        publication.verify_enrolled_draft_integration_claim(original)
+        return root, original, None
+    current = publication.verify_current_lifecycle_authority(arguments.repo, arguments.delivery_issue)
+    require_predecessor(current, evidence)
+    _live(actions, arguments.repo, arguments.delivery_issue, arguments.pr, evidence["draft_head_sha"], main, evidence["head_ref"])
+    if (evidence["registry_digest"] != fast_path.digest_json(binding)
+            or evidence["command_set_digest"] != fast_path.digest_json(binding["validation"])):
+        raise fast_path.SecurityBlocker("historical source validation is incompatible with current pre-push policy")
+    if time.time() < evidence["user_authorization"]["expires_at"]:
+        raise fast_path.SecurityBlocker("original source authorization has not expired")
+    preparation, consumed = publication.verify_enrolled_draft_source_claims(original, require_unused_reacquisition=unused, required_reacquisition=owned)
+    _require_unpublished_source_history(original)
+    graph = _graph(actions, arguments.repo, arguments.delivery_issue)
+    exact = {**_original_reacquisition_binding(original),
+        "preparation_claim_digest": preparation["publication_digest"],
+        "original_push_claim_digest": consumed["publication_digest"],
+        "accepted_main_sha": accepted_main,
+        "policy_digest": fast_path.digest_json(REACQUISITION_POLICY), "work_graph_digest": graph}
+    return root, original, exact
+
+
+def qualify_source_reacquisition(actions, arguments):
+    """Read-only retained-object qualification; never signs, claims or pushes."""
+    _, _, binding = _qualify_source_reacquisition(actions, arguments, unused=True)
+    actions._write_fast_report(arguments.output, {"status": "RECONCILE_ONLY" if binding is None else "ELIGIBLE",
+        "binding": binding, "binding_digest": None if binding is None else fast_path.digest_json(binding)})
+    return 0
+
+
+def authorize_source_reacquisition(actions, arguments):
+    """Sign one NEW user-approved exact binding; cannot create source evidence."""
+    if not arguments.apply:
+        raise fast_path.SecurityBlocker("source reauthorization requires --apply")
+    _, original, binding = _qualify_source_reacquisition(actions, arguments, unused=True)
+    if binding is None:
+        raise fast_path.SecurityBlocker("candidate is already live; use existing exact reconciliation")
+    if arguments.expected_binding_digest != fast_path.digest_json(binding):
+        raise fast_path.SecurityBlocker("explicit user reauthorization differs from independently derived exact binding")
+    signers = execution._production_signing_authorities(arguments.repo, original["signer_identity"])
+    fields = {"schema_version": "1.0", "kind": REACQUISITION_KIND,
+        "operation_id": arguments.operation_id, "binding": binding,
+        "issued_at": int(time.time()), "expires_at": arguments.expires_at,
+        "signer_identity": original["signer_identity"]}
+    signed = {**fields, "signature": dict(signers.transition_signer(fast_path.canonical_json_bytes(fields), REACQUISITION_DOMAIN))}
+    selected = normalize_reacquisition_authorization({**signed, "authorization_digest": fast_path.digest_json(signed)}, original)
+    require_fresh_reacquisition_authorization(selected)
+    actions._write_fast_report(arguments.output, selected)
+    return 0
+
+
+def _reconcile_source_reacquisition(actions, arguments):
+    reconciled = copy.copy(arguments)
+    reconciled.reconcile = True
+    original = normalize_authorization(actions._read_pre_enrollment_json(arguments.authorization, "original source authorization"))
+    head = original["final_attestation"]["candidate_head_sha"]
+    _require_exact_source_branch_ref(original, head)
+    result = integrate(actions, reconciled, kind=SOURCE_KIND)
+    _require_exact_source_branch_ref(original, head)
+    return result
+
+
+def reacquire_source_push(actions, arguments):
+    """One ephemeral CAS winner, one existing exact push, existing HEAD_ADVANCED."""
+    if not arguments.apply:
+        raise fast_path.SecurityBlocker("source push reacquisition requires --apply")
+    root, original, binding = _qualify_source_reacquisition(actions, arguments, unused=True)
+    if binding is None:
+        return _reconcile_source_reacquisition(actions, arguments)
+    selected = normalize_reacquisition_authorization(actions._read_pre_enrollment_json(arguments.reauthorization, "fresh exact reauthorization"), original)
+    if selected["binding"] != binding:
+        raise fast_path.SecurityBlocker("source reacquisition authority is stale or substituted")
+    require_fresh_reacquisition_authorization(selected)
+    signers = execution._production_signing_authorities(arguments.repo, original["signer_identity"])
+    publication.claim_enrolled_draft_integration(original, signer_identity=signers.publication_identity,
+        signer=signers.publication_signer, reacquisition_authorization=selected)
+    # Claim consumption survives failure of any post-claim observation or
+    # freshness check. Another invocation/ID/clone cannot receive ownership.
+    _, final_original, final_binding = _qualify_source_reacquisition(actions, arguments, unused=False, owned=selected)
+    if final_original != original:
+        raise fast_path.SecurityBlocker("original source package changed after replacement claim")
+    if final_binding is None:
+        return _reconcile_source_reacquisition(actions, arguments)
+    if final_binding != binding:
+        raise fast_path.SecurityBlocker("source reacquisition eligibility changed after claim; no retry")
+    require_fresh_reacquisition_authorization(selected)
+    try:
+        _push_exact(actions, root, original["evidence"], binding["candidate_head_sha"])
+    except (fast_path.SecurityBlocker, publication.LifecyclePublicationError, OSError, subprocess.TimeoutExpired):
+        # Uncertain persistence consumes the opportunity forever. Exactly-live
+        # authoritative readback may only use the existing branch-read-only path.
+        live = actions.LiveGitHub().observe_ready_integration_authority(arguments.repo, arguments.pr)
+        if live.get("head_sha") != binding["candidate_head_sha"]:
+            raise fast_path.SecurityBlocker("replacement persistence unproven; terminal stop, no further replacement")
+    return _reconcile_source_reacquisition(actions, arguments)

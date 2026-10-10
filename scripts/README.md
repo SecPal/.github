@@ -1282,8 +1282,99 @@ An uncertain push consumes the attempt. Only the same execution command with
 `--reconcile` may authenticate the original authorization, candidate, protected
 claims and live branch, then publish an already-authorized missing successor.
 Reconciliation never creates or pushes another candidate, including after expiry.
-A claimed candidate that is not live cannot be retried. Independently advancing
+A claimed candidate that is not live cannot use ordinary retry. The bounded
+reacquisition boundary below is its only additional dispatch authority. Advancing
 main is reconciled later through enrolled-Draft current-main integration.
+
+#### Exact unpublished source push reacquisition
+
+An expired original source authorization may leave one reserved signed candidate
+and a consumed push claim, with the exact branch and lifecycle CURRENT still at
+the predecessor. The registered source family supports one explicitly
+reauthorized replacement for this same candidate. It creates no commit, receipt,
+final attestation, lifecycle transition or provider request. Original signed
+preparation and consumed push claims must authenticate through the canonical
+protected journal. Local package files identify the objects to authenticate;
+they never grant claim ownership.
+
+First use current accepted-main tooling, with the retained candidate repository
+as a distinct root, for read-only qualification:
+
+```bash
+python3 -I scripts/secpal-pr-review-actions.py \
+  qualify-enrolled-draft-source-reacquisition \
+  --repo OWNER/REPOSITORY --delivery-issue ISSUE --pr PR \
+  --repo-root /absolute/retained/root --authorization /absolute/original.json \
+  --output /absolute/qualification.json
+```
+
+Qualification reauthenticates the original signature, candidate HEAD/tree/sole
+parent/signer/fingerprint/trailers, receipt, final attestation, exact preparation
+reservation and consumed push claim. Canonical journal ancestry must retain the
+original CURRENT; competing claims or any successor publication reject.
+The complete bounded GitHub branch timeline must contain the predecessor and
+no candidate publication, force push, deletion or restoration. A rewritten,
+incomplete or ambiguous history cannot prove absence. The exact primary PR must
+remain open, same-repository and Draft; an independent Git ref lookup must prove
+the exact branch still exists at the same SHA. A cached PR head cannot substitute
+for that ref. The work graph must permit continuation.
+An already-live candidate reports `RECONCILE_ONLY` and receives no replacement.
+The branch history query uses GitHub's documented
+[pull request timeline types](https://docs.github.com/en/graphql/reference/pulls).
+
+Historical receipt authentication remains the existing source package verifier.
+Pre-first-push compatibility additionally requires exact current registered
+repository and validation-command digests. The source operation must still be
+registered, and the original preparation must reconstruct from its authenticated
+claim under the same closed source schema and signing domain. An incompatible
+historic policy stops; there is no receipt refresh or candidate recreation.
+The new authorization also binds the current accepted-main SHA and maintained
+reacquisition policy digest. Policy or graph movement requires fresh user
+reauthorization before claim consumption.
+
+Review the complete derived binding, then explicitly authorize its digest, a
+fresh operation ID and at most a 900-second expiry:
+
+```bash
+python3 -I scripts/secpal-pr-review-actions.py \
+  authorize-enrolled-draft-source-reacquisition \
+  --repo OWNER/REPOSITORY --delivery-issue ISSUE --pr PR \
+  --repo-root /absolute/retained/root --authorization /absolute/original.json \
+  --expected-binding-digest REVIEWED_BINDING_DIGEST --operation-id FRESH_ID \
+  --expires-at UNIX_SECONDS --output /absolute/reauthorization.json --apply
+
+python3 -I scripts/secpal-pr-review-actions.py reacquire-enrolled-draft-source-push \
+  --repo OWNER/REPOSITORY --delivery-issue ISSUE --pr PR \
+  --repo-root /absolute/retained/root --authorization /absolute/original.json \
+  --reauthorization /absolute/reauthorization.json --apply
+```
+
+A schema-1.1 ancillary source claim consumes the replacement through the existing
+protected journal CAS. Uniqueness is scoped to the original consumed attempt and
+candidate, across operation IDs, processes and clones. Both canonical journal
+readers share that admission owner. Only the acknowledged CAS winner reaches
+the existing `_push_exact` engine, after fresh independent rechecks and exact
+replacement-claim authentication. A lost claim response grants no ownership.
+Expiry or drift after claiming consumes the opportunity without dispatch.
+
+One uncertain replacement write permits only exact authoritative readback.
+If the candidate is live, the existing branch-read-only reconciliation verifies
+GitHub signature/readback and publishes ordinary `HEAD_ADVANCED`. Exact Git ref
+readback also brackets that reconciliation. Otherwise the
+operation stops terminally. An already-live candidate always uses that same
+reconciliation path; a different live head rejects. No second replacement,
+force/ref selector, rebase, amend, preparation or generic branch write exists.
+
+The timing audit preserves ordinary #1133 semantics. The 900-second source window
+spans Complete Validation, reservation, candidate creation and dispatch.
+Executable evidence proves validation expiry stops before reservation/creation,
+and late expiry after a valid candidate and consumed claim stops before push.
+This bounded distributed-operation failure is recoverable with fresh exact
+mutation authorization. No evidence establishes a structural need to redesign
+ordinary preparation, so its ordering and freshness guards remain unchanged.
+The registered source regression command includes the new recovery scenarios,
+real retained SSH candidate verification, protected-journal CAS/replay tests and
+complete provider-history normalization/admission failures.
 
 ### `secpal_pr_review/lifecycle_publication.py`
 

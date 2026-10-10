@@ -3044,15 +3044,19 @@ def _verify_enrolled_draft_claim_document(
     from . import enrolled_draft_integration as integration
 
     document = authority.loads_closed_json(raw)
-    if (not isinstance(document, dict) or frozenset(document) != ENROLLED_DRAFT_CLAIM_FIELDS
+    replacement = isinstance(document, dict) and document.get("schema_version") == "1.1"
+    fields_expected = ENROLLED_DRAFT_CLAIM_FIELDS | ({"reacquisition_authorization"} if replacement else set())
+    if (not isinstance(document, dict) or frozenset(document) != fields_expected
             or canonical_json_bytes(document) != raw
-            or document["schema_version"] != "1.0"
+            or document["schema_version"] not in {"1.0", "1.1"}
             or document["kind"] != ENROLLED_DRAFT_CLAIM_KIND
             or document["domain"] != ENROLLED_DRAFT_CLAIM_DOMAIN
             or document["publication_branch"] != expected_branch
             or document["journal_predecessor_oid"] != parent or parent is None):
         raise LifecyclePublicationError("enrolled Draft integration claim is not canonical or bound")
     authorization = integration.normalize_authorization(document["authorization"], allow_preparation=True)
+    if replacement:
+        integration.normalize_reacquisition_authorization(document["reacquisition_authorization"], authorization)
     evidence = authorization["evidence"]
     oid, predecessor, lifecycle = previous
     if (
@@ -3092,6 +3096,24 @@ def _add_enrolled_draft_claim(claims, document) -> None:
 
     selected = document["authorization"]
     evidence = selected["evidence"]
+    replacement = document.get("reacquisition_authorization")
+    if replacement is not None:
+        # Scope is the consumed ORIGINAL attempt, never the fresh operation ID.
+        # Both full and identity-only journal walks enforce this same owner.
+        original = claims.get(selected["authorization_digest"])
+        preparation = claims.get(selected["preparation_authorization_digest"])
+        if original is None or preparation is None or original["authorization"] != selected:
+            raise LifecyclePublicationError("source reacquisition lacks exact original protected claims")
+        integration.require_reacquisition_claim_bindings(replacement, selected, preparation, original)
+        for prior in claims.values():
+            if prior.get("reacquisition_authorization") is not None and (
+                prior["authorization"]["authorization_digest"] == selected["authorization_digest"]
+                or prior["authorization"]["final_attestation"]["candidate_head_sha"] == selected["final_attestation"]["candidate_head_sha"]
+                and prior["authorization"]["evidence"]["repository"] == evidence["repository"]
+            ):
+                raise LifecyclePublicationError("source push reacquisition already consumed")
+        claims[replacement["authorization_digest"]] = document
+        return
     preparation_kind = integration.authorization_kind(evidence["kind"], preparation=True)
     preparation = selected["kind"] == preparation_kind
     if not preparation:
@@ -3104,6 +3126,8 @@ def _add_enrolled_draft_claim(claims, document) -> None:
         ):
             raise LifecyclePublicationError("enrolled Draft candidate differs from preparation reservation")
     for prior in claims.values():
+        if prior.get("reacquisition_authorization") is not None:
+            continue
         old = prior["authorization"]
         if (old["kind"] == integration.authorization_kind(old["evidence"]["kind"], preparation=True)) != preparation:
             continue
@@ -3118,6 +3142,7 @@ def _add_enrolled_draft_claim(claims, document) -> None:
 
 def claim_enrolled_draft_integration(
     authorization: Mapping[str, Any], *, signer_identity: str, signer: authority.Signer,
+    reacquisition_authorization: Mapping[str, Any] | None = None,
 ) -> None:
     """Consume one exact branch-push attempt in the existing protected journal.
 
@@ -3127,6 +3152,9 @@ def claim_enrolled_draft_integration(
     from . import enrolled_draft_integration as integration
 
     selected = integration.normalize_authorization(dict(authorization), allow_preparation=True)
+    replacement = None if reacquisition_authorization is None else integration.normalize_reacquisition_authorization(dict(reacquisition_authorization), selected)
+    if replacement is not None:
+        integration.require_fresh_reacquisition_authorization(replacement)
     evidence = selected["evidence"]
     policy = authority._load_lifecycle_trust_policy(evidence["repository"])
     _verify_live_protection(policy)
@@ -3139,10 +3167,11 @@ def claim_enrolled_draft_integration(
         if previous is None:
             raise LifecyclePublicationError("enrolled Draft CURRENT is unavailable")
         fields = {
-            "schema_version": "1.0", "kind": ENROLLED_DRAFT_CLAIM_KIND,
+            "schema_version": "1.0" if replacement is None else "1.1", "kind": ENROLLED_DRAFT_CLAIM_KIND,
             "domain": ENROLLED_DRAFT_CLAIM_DOMAIN, "authorization": selected,
             "publication_branch": policy.publication_branch, "journal_predecessor_oid": tip,
             "signer_identity": signer_identity,
+            **({} if replacement is None else {"reacquisition_authorization": replacement}),
         }
         signed = {**fields, "signature": dict(signer(canonical_json_bytes(fields), ENROLLED_DRAFT_CLAIM_DOMAIN))}
         raw = canonical_json_bytes({**signed, "publication_digest": digest_json(signed)})
@@ -3150,7 +3179,50 @@ def claim_enrolled_draft_integration(
         _add_enrolled_draft_claim(claims, document)
         oid = _write_publication_object(root, raw, tip)
         _walk_journal(root, oid, policy.publication_branch)
+        if replacement is not None:
+            integration.require_fresh_reacquisition_authorization(replacement)
         _cas_remote_ref(root, policy.publication_remote_url, policy.publication_branch, oid, tip, credential_environment=credential_environment)
+
+
+def verify_enrolled_draft_source_claims(authorization: Mapping[str, Any], *, require_unused_reacquisition: bool = False, required_reacquisition: Mapping[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Authenticate original claims and unchanged CURRENT from one canonical tip.
+
+    Historical journal ancestry, not local JSON, selects the exact reservation
+    and consumed push. Reading them never conveys ownership of a new dispatch.
+    """
+    from . import enrolled_draft_integration as integration
+
+    selected = integration.normalize_authorization(dict(authorization))
+    evidence = selected["evidence"]
+    if evidence["kind"] != integration.SOURCE_KIND:
+        raise LifecyclePublicationError("source reacquisition excludes current-main integration")
+    policy = authority._load_lifecycle_trust_policy(evidence["repository"])
+    _verify_live_protection(policy)
+    with _isolated_repository(policy, write=False) as (root, environment):
+        tip = _observe_remote_current_once(root, policy.publication_remote_url, policy.publication_branch, credential_environment=environment)
+        if tip is None:
+            raise LifecyclePublicationError("source claim journal is unavailable")
+        _, latest, _, claims = _walk_journal(root, tip, policy.publication_branch, include_integrations=True)
+        current = latest.get((evidence["repository"], evidence["delivery_issue"]))
+        if current is None or current[0] != evidence["current_publication_oid"]:
+            raise LifecyclePublicationError("source reacquisition CURRENT advanced or exact HEAD_ADVANCED exists")
+        original = claims.get(selected["authorization_digest"])
+        preparation = claims.get(selected["preparation_authorization_digest"])
+        if original is None or preparation is None or original["authorization"] != selected:
+            raise LifecyclePublicationError("exact original source preparation/push claims are unavailable")
+        if require_unused_reacquisition and any(
+            item.get("reacquisition_authorization") is not None
+            and item["authorization"]["authorization_digest"] == selected["authorization_digest"]
+            for item in claims.values()
+        ):
+            raise LifecyclePublicationError("source push reacquisition already consumed")
+        if required_reacquisition is not None:
+            replacement = integration.normalize_reacquisition_authorization(dict(required_reacquisition), selected)
+            owned = claims.get(replacement["authorization_digest"])
+            if (owned is None or owned.get("reacquisition_authorization") != replacement
+                    or owned["authorization"] != selected):
+                raise LifecyclePublicationError("exact replacement claim ownership is unavailable")
+    return copy.deepcopy(preparation), copy.deepcopy(original)
 
 
 def verify_enrolled_draft_integration_claim(authorization: Mapping[str, Any]) -> None:
