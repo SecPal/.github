@@ -11,6 +11,9 @@ import sys
 from types import SimpleNamespace
 from unittest import TestCase, main, mock
 
+from tests.secpal_actions_fixture import load_actions
+actions_owner = load_actions()
+
 from scripts.secpal_pr_review import fast_path
 from scripts.secpal_pr_review import lifecycle_authority
 from scripts.secpal_pr_review import pre_enrollment_integration as integration
@@ -18,11 +21,7 @@ from scripts.secpal_pr_review import pre_enrollment_integration as integration
 
 ROOT = Path(__file__).resolve().parents[1]
 ACTIONS = ROOT / "scripts" / "secpal-pr-review-actions.py"
-SPEC = importlib.util.spec_from_file_location("pre_enrollment_actions", ACTIONS)
-assert SPEC is not None and SPEC.loader is not None
-actions = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = actions
-SPEC.loader.exec_module(actions)
+actions = load_actions()
 
 
 class DeploymentIntegrationPolicyTests(TestCase):
@@ -44,13 +43,7 @@ class DeploymentIntegrationPolicyTests(TestCase):
     def test_policy_and_maintained_projections_agree(self) -> None:
         expected = registry()["pre_enrollment_integration_policy"]
         self.assertEqual(self.entry["pre_enrollment_integration_policy"], expected)
-        resolver_spec = importlib.util.spec_from_file_location(
-            "integration_policy_resolver", ROOT / "scripts/secpal-resolve-fixed-threads.py"
-        )
-        assert resolver_spec is not None and resolver_spec.loader is not None
-        resolver = importlib.util.module_from_spec(resolver_spec)
-        sys.modules[resolver_spec.name] = resolver
-        resolver_spec.loader.exec_module(resolver)
+        resolver = actions._owned_verifier_module("fixed_thread_resolution")
         binding = fast_path.validation_registry_projection(self.entry)
         self.assertEqual(binding["pre_enrollment_integration_policy"], expected)
         self.assertEqual(actions._fast_registry_binding(self.entry), binding)

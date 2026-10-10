@@ -27,6 +27,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+from tests.secpal_actions_fixture import load_actions
+actions_owner = load_actions()
+
 from scripts.secpal_pr_review import lifecycle_authority as authority
 from scripts.secpal_pr_review import fast_path
 from scripts.secpal_pr_review import lifecycle_orchestration as orchestration
@@ -13768,6 +13771,7 @@ class ReadyIntegrationRemediationTests(TestCase):
         )
         with mock.patch.object(helper, "_authenticate_protected_bridge_main", return_value="a" * 40), \
              mock.patch.object(helper, "_require_exact_accepted_main_blob"), \
+             mock.patch.object(helper, "_run_attestation_git", side_effect=lambda root, argv, **kwargs: SimpleNamespace(returncode=0, stdout="a"*40+"\n" if argv[0]=="rev-parse" else "scripts/secpal_pr_review/lifecycle_publication.py\nscripts/secpal_pr_review/lifecycle_orchestration.py\n")), \
              mock.patch.object(transport, "_git"):
             publication._authenticate_provider_integration_verifier()
             for module in modules:
@@ -14526,6 +14530,7 @@ class ReadyIntegrationRemediationTests(TestCase):
         helper = transport._load_actions_helper()
         with (mock.patch.object(helper, "_authenticate_protected_bridge_main", return_value="a" * 40),
               mock.patch.object(helper, "_require_exact_accepted_main_blob") as authenticate,
+              mock.patch.object(helper, "_run_attestation_git", side_effect=lambda root, argv, **kwargs: SimpleNamespace(returncode=0, stdout="a"*40+"\n" if argv[0]=="rev-parse" else "scripts/secpal_pr_review/lifecycle_publication.py\nscripts/secpal_pr_review/lifecycle_orchestration.py\n")),
               mock.patch.object(transport, "_git")):
             publication._authenticate_provider_integration_verifier()
         paths = {call.args[2] for call in authenticate.call_args_list}
@@ -15002,8 +15007,7 @@ class ProviderReacquisitionExecutionTests(TestCase):
         self.assertEqual(execute.call_count, 1)
 
     def test_cli_rejects_non_object_authorization_with_structured_failure(self):
-        spec = importlib.util.spec_from_file_location("secpal_reacquisition_cli_nonobject", REPO_ROOT / "scripts/secpal-provider-reacquisition.py")
-        cli = importlib.util.module_from_spec(spec);spec.loader.exec_module(cli)
+        cli = load_actions()._owned_verifier_module("provider_reacquisition_cli")
         with tempfile.TemporaryDirectory(prefix="secpal-reacquisition-input-") as directory:
             source, output = Path(directory) / "auth.json", Path(directory) / "result.json"
             for value in ([], None, "text", 7):
@@ -15069,9 +15073,7 @@ class ProviderReacquisitionExecutionTests(TestCase):
         claims.assert_not_called()
 
     def test_cli_records_signing_failure_without_an_external_operation(self):
-        spec = importlib.util.spec_from_file_location("secpal_reacquisition_cli_test", REPO_ROOT / "scripts/secpal-provider-reacquisition.py")
-        cli = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cli)
+        cli = load_actions()._owned_verifier_module("provider_reacquisition_cli")
         with tempfile.TemporaryDirectory(prefix="secpal-reacquisition-cli-") as directory:
             output = Path(directory) / "result.json"
             with mock.patch.object(sys, "argv", ["reacquisition", "authorize", "--repo", REPOSITORY,
@@ -15083,9 +15085,9 @@ class ProviderReacquisitionExecutionTests(TestCase):
 
     def test_existing_isolated_action_launcher_can_load_reacquisition_claims(self):
         action = REPO_ROOT / "scripts/secpal-pr-review-actions.py"
-        code = ("import importlib.util, importlib; "
+        code = ("import importlib.util, importlib, sys; "
             f"spec = importlib.util.spec_from_file_location('isolated_actions', {str(action)!r}); "
-            "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module); "
             "authority_module, publication_module = module._load_lifecycle_publication_helpers(); "
             "importlib.import_module(publication_module.__package__ + '.provider_reacquisition'); "
             "importlib.import_module(publication_module.__package__ + '.enrolled_draft_integration')")
@@ -15275,7 +15277,6 @@ class CorrectedReadyIntegrationRemediationTests(TestCase):
         actions = orchestration.bootstrap_source_admission._load_actions_helper()
         stack.enter_context(mock.patch.object(actions, "_load_lifecycle_publication_helpers", return_value=(authority, publication)))
         stack.enter_context(mock.patch.object(actions, "_require_accepted_main_bridge_source", return_value="9" * 40))
-        stack.enter_context(mock.patch.object(actions, "_require_bridge_import_provenance"))
         self.manifest = actions._derive_exact_state_adoption_ready_prior_authority(
             repository_root=self.root, repository=REPOSITORY, delivery_issue=source.ISSUE,
             pull_request=source.PR, binding=self.registry,

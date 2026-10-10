@@ -31,17 +31,13 @@ OPENPGP_FIXTURE_SIGNATURE = OPENPGP_FIXTURE_ROOT / "openpgp-signature.asc"
 OPENPGP_FIXTURE_FINGERPRINT = "00DC685679E00C93940505E3778A78CD1F7BF5FE"
 sys.path.insert(0, str(ROOT / "scripts"))
 SCRIPT = ROOT / "scripts/secpal-resolve-fixed-threads.py"
-SPEC = importlib.util.spec_from_file_location("secpal_resolve_fixed_threads", SCRIPT)
-if SPEC is None or SPEC.loader is None:
-    raise RuntimeError(f"Cannot load {SCRIPT}")
-MODULE = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = MODULE
-SPEC.loader.exec_module(MODULE)
+from tests.secpal_actions_fixture import load_actions
+MODULE = load_actions()._owned_verifier_module("fixed_thread_resolution")
 REAL_SUBPROCESS_RUN = subprocess.run
 
-from secpal_work_graph import acceptance_criteria as work_graph_acceptance_criteria  # noqa: E402
-from secpal_work_graph import github as work_graph_github  # noqa: E402
-from secpal_work_graph import model as work_graph_model  # noqa: E402
+from scripts.secpal_work_graph import acceptance_criteria as work_graph_acceptance_criteria  # noqa: E402
+from scripts.secpal_work_graph import github as work_graph_github  # noqa: E402
+from scripts.secpal_work_graph import model as work_graph_model  # noqa: E402
 
 
 class FakeGh:
@@ -1824,7 +1820,7 @@ class ResolveFixedThreadsTests(TestCase):
     def test_qualified_remediation_late_disposition_accepts_only_exact_boundary(
         self,
     ) -> None:
-        from secpal_pr_review import qualified_remediation_successor_loss as loss
+        from scripts.secpal_pr_review import qualified_remediation_successor_loss as loss
 
         record = loss.load_accepted_admission("SecPal/.github", 956)
         reviewed_payload = {"reviewed": "exact qualified successor"}
@@ -3956,11 +3952,7 @@ class ResolveFixedThreadsTests(TestCase):
                     sys.modules.pop(name, None)
                 with mock.patch.object(MODULE, "REPOSITORY_ROOT", root):
                     loaded = MODULE._load_lifecycle_orchestration_helper()
-                self.assertEqual(loaded.ORIGIN, "canonical")
-                self.assertEqual(
-                    Path(loaded.__file__).resolve(),
-                    (canonical_package / "lifecycle_orchestration.py").resolve(),
-                )
+                self.assertIs(loaded, load_actions()._owned_verifier_module("lifecycle_orchestration"))
                 self.assertFalse(marker.exists())
                 self.assertEqual(sys.path, original_path)
             finally:
@@ -10465,16 +10457,10 @@ class ResolveFixedThreadsTests(TestCase):
         )
 
         for index, (script, arguments) in enumerate(producer_arguments):
-            spec = importlib.util.spec_from_file_location(
-                f"late_producer_cli_{index}", script
+            producer = load_actions()._owned_verifier_module(
+                ("late_classification_cli", "late_disposition_cli")[index]
             )
-            self.assertIsNotNone(spec)
-            self.assertIsNotNone(spec.loader if spec is not None else None)
-            producer = importlib.util.module_from_spec(spec)
-            assert spec is not None and spec.loader is not None
-            sys.modules[spec.name] = producer
             try:
-                spec.loader.exec_module(producer)
                 with redirect_stderr(StringIO()) as error, self.assertRaises(
                     SystemExit
                 ):
@@ -10509,7 +10495,7 @@ class ResolveFixedThreadsTests(TestCase):
                 )
                 self.assertEqual(historical.final_validation_receipt, "receipt.json")
             finally:
-                sys.modules.pop(spec.name, None)
+                pass
 
     def test_cli_partitions_commit_bound_manifest_and_absence_modes(self) -> None:
         base = [

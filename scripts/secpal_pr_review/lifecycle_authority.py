@@ -15,9 +15,7 @@ import binascii
 import copy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from functools import cache
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -37,6 +35,7 @@ from .fast_path import (
     verify_commit_signatures,
     verify_ready_source_recovery_safety_facts,
 )
+from . import fast_path
 from . import pre_enrollment_integration
 
 
@@ -682,7 +681,6 @@ _TRUST_REGISTRY = (
     Path(__file__).resolve().parents[2]
     / ".agents/skills/secpal-pr-review/references/repositories.json"
 )
-_EVIDENCE_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
 
 
 def loads_closed_json(raw: bytes | str) -> Any:
@@ -1827,34 +1825,9 @@ def _load_delivery_signature_policy(repository: str) -> dict[str, Any]:
     return copy.deepcopy(matches[0]["signature_policy"])
 
 
-@cache
 def _load_trusted_command_helper() -> Any:
-    """Load the maintained external-command trust boundary by exact path."""
-
-    module_name = "secpal_lifecycle_trusted_commands"
-    loaded = sys.modules.get(module_name)
-    if loaded is not None:
-        loaded_path = getattr(loaded, "__file__", None)
-        if (
-            not isinstance(loaded_path, str)
-            or Path(loaded_path).absolute() != _EVIDENCE_HELPER.absolute()
-        ):
-            raise LifecycleAuthorityError(
-                "maintained command trust helper has an unexpected path"
-            )
-    spec = importlib.util.spec_from_file_location(module_name, _EVIDENCE_HELPER)
-    if spec is None or spec.loader is None:
-        raise LifecycleAuthorityError("maintained command trust helper is unavailable")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException as exc:
-        sys.modules.pop(module_name, None)
-        raise LifecycleAuthorityError(
-            "maintained command trust helper could not be loaded"
-        ) from exc
-    return module
+    """Reuse module identity; each signature operation still observes live trust."""
+    return fast_path.evidence
 
 
 def _trusted_signature_command(name: str) -> tuple[str, dict[str, str]]:

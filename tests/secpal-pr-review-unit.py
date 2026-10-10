@@ -23,12 +23,9 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HELPER = REPO_ROOT / "scripts" / "secpal-pr-review.py"
 FIXTURES = REPO_ROOT / "tests/fixtures/secpal-pr-review"
-SPEC = importlib.util.spec_from_file_location("secpal_pr_review", HELPER)
-if SPEC is None or SPEC.loader is None:
-    raise RuntimeError(f"Cannot load helper at {HELPER}")
-review = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = review
-SPEC.loader.exec_module(review)
+from tests.secpal_actions_fixture import load_actions
+
+review = load_actions().evidence
 
 HEAD = "a" * 40
 BASE = "b" * 40

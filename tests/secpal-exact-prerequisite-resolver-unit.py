@@ -15,11 +15,8 @@ from unittest import TestCase, main, mock
 
 
 RESOLVER_PATH = Path(__file__).resolve().parents[1] / "scripts/secpal-resolve-fixed-threads.py"
-SPEC = importlib.util.spec_from_file_location("exact_prerequisite_resolver_test", RESOLVER_PATH)
-assert SPEC is not None and SPEC.loader is not None
-RESOLVER = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = RESOLVER
-SPEC.loader.exec_module(RESOLVER)
+from tests.secpal_actions_fixture import load_actions
+RESOLVER = load_actions()._owned_verifier_module("fixed_thread_resolution")
 
 
 class ExactResolverTests(TestCase):
@@ -173,9 +170,11 @@ class ExactResolverTests(TestCase):
                 with self.assertRaises(RESOLVER.ResolutionError):
                     RESOLVER._verify_exact_helper_source("unchanged_head_prerequisite.py")
 
-    def test_preloaded_exact_helper_rejects(self) -> None:
-        with self.assertRaises(RESOLVER.ResolutionError):
-            RESOLVER._load_exact_prerequisite_helpers()
+    def test_owned_exact_helper_is_reused(self) -> None:
+        first = RESOLVER._load_exact_prerequisite_helpers()
+        self.assertIs(first[0], RESOLVER.exact_prerequisite)
+        self.assertIs(first[1], RESOLVER.exact_prerequisite_evidence)
+        self.assertEqual(first, RESOLVER._load_exact_prerequisite_helpers())
 
 
 if __name__ == "__main__":

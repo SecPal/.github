@@ -441,10 +441,10 @@ EXPECTED_CALLS = {
     "fast_path.py": FAST_PATH_CALLS,
     "exact_source_safety.py": EXACT_SOURCE_SAFETY_CALLS,
     "follow_up.py": (),
-    "secpal-resolve-fixed-threads.py": RESOLVER_CALLS,
+    "fixed_thread_resolution.py": RESOLVER_CALLS,
     "late_disposition.py": LATE_DISPOSITION_CALLS,
-    "secpal-create-late-classification.py": (),
-    "secpal-create-late-disposition.py": (),
+    "late_classification_cli.py": (),
+    "late_disposition_cli.py": (),
 }
 
 SAFE_SUBPROCESS_ATTRIBUTES = {
@@ -502,6 +502,7 @@ ALLOWED_IMPORT_ROOTS = {
     "re",
     "secrets",
     "shutil",
+    "scripts",
     "secpal_work_graph",
     "secpal_pr_review",
     "site",
@@ -540,6 +541,8 @@ ALLOWED_IMPORTS = {
         "import argparse",
         "import copy",
         "import hashlib",
+        "import importlib",
+        "import importlib.machinery",
         "import importlib.util",
         "import json",
         "import os",
@@ -554,13 +557,14 @@ ALLOWED_IMPORTS = {
         "from pathlib import Path",
         "from typing import Any, Iterable",
         "from urllib.parse import quote",
-        "from secpal_pr_review import lifecycle_execution, qualified_remediation_successor_loss as successor_loss",
-        "from secpal_pr_review import qualified_remediation_successor_loss",
+        "from scripts.secpal_pr_review import lifecycle_execution, qualified_remediation_successor_loss as successor_loss",
+        "from scripts.secpal_pr_review import qualified_remediation_successor_loss",
     },
     "fast_path.py": {
         "from __future__ import annotations",
         "import copy",
         "import hashlib",
+        "import importlib",
         "import importlib.util",
         "import json",
         "import os",
@@ -595,16 +599,21 @@ ALLOWED_IMPORTS = {
         "from typing import Any, Iterator, Mapping, Sequence",
         "from . import bootstrap_source_admission as transport",
         "from . import lifecycle_authority as authority",
+        "from . import fast_path",
     },
     "follow_up.py": {
         "from __future__ import annotations",
         "import re",
         "from dataclasses import dataclass",
         "from typing import Any, Callable, Mapping",
-        "from secpal_work_graph import github, resolver",
-        "from secpal_work_graph.acceptance_criteria import MarkdownParserUnavailable",
+        "from scripts.secpal_work_graph import github, resolver",
+        "from scripts.secpal_work_graph.acceptance_criteria import MarkdownParserUnavailable",
     },
-    "secpal-resolve-fixed-threads.py": {
+    "fixed_thread_resolution.py": {
+        "from . import unchanged_head_prerequisite as exact_prerequisite",
+        "from . import unchanged_head_prerequisite_evidence as exact_prerequisite_evidence",
+        "from . import bootstrap_source_admission, fast_path, follow_up, late_disposition",
+        "from . import lifecycle_orchestration, lifecycle_publication",
         "from __future__ import annotations",
         "import argparse",
         "import hashlib",
@@ -617,15 +626,15 @@ ALLOWED_IMPORTS = {
         "import subprocess",
         "import sys",
         "import tempfile",
-        "from secpal_pr_review import unchanged_head_prerequisite as source",
-        "from secpal_pr_review import unchanged_head_prerequisite_evidence as detached",
+        "from . import unchanged_head_prerequisite as source",
+        "from . import unchanged_head_prerequisite_evidence as detached",
         "from dataclasses import dataclass",
         "from enum import Enum",
         "from pathlib import Path",
         "from typing import Any, Callable, Sequence",
-        "from secpal_pr_review import lifecycle_orchestration as module",
-        "from secpal_pr_review import lifecycle_publication as module",
-        "from secpal_pr_review import qualified_remediation_successor_loss as loss",
+        "from . import lifecycle_orchestration as module",
+        "from . import lifecycle_publication as module",
+        "from . import qualified_remediation_successor_loss as loss",
     },
     "late_disposition.py": {
         "from __future__ import annotations",
@@ -643,7 +652,8 @@ ALLOWED_IMPORTS = {
         "from pathlib import Path",
         "from typing import Any, Sequence",
     },
-    "secpal-create-late-disposition.py": {
+    "late_disposition_cli.py": {
+        "from . import fixed_thread_resolution as resolver",
         "from __future__ import annotations",
         "import argparse",
         "import importlib.util",
@@ -652,7 +662,8 @@ ALLOWED_IMPORTS = {
         "from pathlib import Path",
         "from typing import Any, Sequence",
     },
-    "secpal-create-late-classification.py": {
+    "late_classification_cli.py": {
+        "from . import fixed_thread_resolution as resolver",
         "from __future__ import annotations",
         "import argparse",
         "import importlib.util",
@@ -726,7 +737,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "tempfile": {"mkstemp"},
     },
     "secpal-pr-review-actions.py": {
-        "importlib": {"util"},
+        "importlib": {"util", "machinery", "import_module"},
         "pwd": {"getpwuid"},
         "site": {"getusersitepackages"},
         "sys": {
@@ -734,6 +745,8 @@ DIRECT_MODULE_ATTRIBUTES = {
             "modules",
             "platform",
             "pycache_prefix",
+            "meta_path",
+            "path",
             "stderr",
             "stdout",
             "version_info",
@@ -743,7 +756,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "weakref": {"WeakKeyDictionary"},
     },
     "fast_path.py": {
-        "importlib": {"util"},
+        "importlib": {"import_module"},
         "subprocess": {"DEVNULL", "TimeoutExpired", "run"},
         "sys": {"modules"},
         "tempfile": {"mkstemp", "TemporaryDirectory"},
@@ -759,7 +772,7 @@ DIRECT_MODULE_ATTRIBUTES = {
         "github": {"GitHubError", "GitHubReadAdapter", "load_snapshot"},
         "resolver": {"ScopeRootUnresolved", "resolve"},
     },
-    "secpal-resolve-fixed-threads.py": {
+    "fixed_thread_resolution.py": {
         "importlib": {"util"},
         "operator": {"attrgetter"},
         "sys": {"argv", "modules", "path", "stderr"},
@@ -771,11 +784,11 @@ DIRECT_MODULE_ATTRIBUTES = {
         "stat": {"S_ISREG"},
         "tempfile": {"TemporaryDirectory", "TemporaryFile"},
     },
-    "secpal-create-late-disposition.py": {
+    "late_disposition_cli.py": {
         "importlib": {"util"},
         "sys": {"argv", "modules", "stderr"},
     },
-    "secpal-create-late-classification.py": {
+    "late_classification_cli.py": {
         "importlib": {"util"},
         "sys": {"argv", "modules", "stderr"},
     },
@@ -834,6 +847,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "digest_json",
             "execute_resolution_batch",
             "follow_up",
+            "evidence",
             "CODEX_REVIEW_SUMMARY_MARKER",
             "COPILOT_REVIEW_PROVIDER",
             "normalize_resolution_eligibility_evidence",
@@ -841,6 +855,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "normalize_ready_integration_prior_authority",
             "normalize_exceptional_recovery_evidence",
             "normalize_exceptional_continuation_evidence",
+            "WORK_GRAPH_MODULE_NAMES",
             "PROHIBITED_REGISTRY_OPERATIONS",
             "REGISTRY_CONFIGURATION_KEYS",
             "load_immutable_delivery_registry_binding",
@@ -926,7 +941,7 @@ LOADED_MODULE_ATTRIBUTES = {
             "_require_oid", "digest_json", "loads_closed_json",
         },
     },
-    "secpal-resolve-fixed-threads.py": {
+    "fixed_thread_resolution.py": {
         "evidence": {
             "CommandPolicyError",
             "ContractError",
@@ -989,13 +1004,13 @@ LOADED_MODULE_ATTRIBUTES = {
             "verify_exceptional_continuation_authority",
         },
     },
-    "secpal-create-late-disposition.py": {
+    "late_disposition_cli.py": {
         "resolver": {
             "ResolutionError",
             "create_late_disposition_artifact",
         },
     },
-    "secpal-create-late-classification.py": {
+    "late_classification_cli.py": {
         "resolver": {
             "ResolutionError",
             "create_late_classification_artifact",
@@ -1004,658 +1019,82 @@ LOADED_MODULE_ATTRIBUTES = {
 }
 DYNAMIC_IMPORT_CALLS = {
     "secpal-pr-review-actions.py": {
-        DynamicImportCall(
-            ("_load_enrolled_draft_integration_helper",),
-            "importlib.util.spec_from_file_location(module_name, FAST_PATH_HELPER.with_name('enrolled_draft_integration.py'))",
-        ),
-        DynamicImportCall(
-            ("_load_enrolled_draft_integration_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_enrolled_draft_integration_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "importlib.util.spec_from_file_location("
-            "f'{package_name}.exact_source_safety', EXACT_SOURCE_SAFETY_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "importlib.util.spec_from_file_location("
-            "'secpal_pr_review_evidence_shared', EVIDENCE_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "importlib.util.spec_from_file_location("
-            "'secpal_pr_review.fast_path', FAST_PATH_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_pre_enrollment_integration_helper",),
-            "importlib.util.spec_from_file_location("
-            "module_name, PRE_ENROLLMENT_INTEGRATION_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_pre_enrollment_integration_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_pre_enrollment_integration_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers", "load"),
-            "importlib.util.spec_from_file_location(module_name, path)",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers", "load"),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers", "load"),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper", "load"),
-            "importlib.util.spec_from_file_location(module_name, path)",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper", "load"),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper", "load"),
-            "spec.loader.exec_module(module)",
-        ),
+        DynamicImportCall(("_construct_verifier_owner",), "importlib.import_module('scripts.secpal_pr_review.fast_path')"),
+        DynamicImportCall(("_construct_verifier_owner",), "importlib.import_module('scripts.secpal_pr_review.' + name)"),
+        DynamicImportCall(("_construct_verifier_owner",), "importlib.import_module('scripts.secpal_work_graph' + ('' if name == '__init__' else '.' + name))"),
     },
-    "secpal-resolve-fixed-threads.py": {
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "importlib.util.spec_from_file_location("
-            "'secpal_pr_review_evidence_shared', EVIDENCE_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "importlib.util.spec_from_file_location("
-            "'secpal_pr_review.follow_up', FOLLOW_UP_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_late_disposition_helper",),
-            "importlib.util.spec_from_file_location("
-            "'secpal_pr_review.late_disposition', LATE_DISPOSITION_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_late_disposition_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_late_disposition_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "importlib.util.spec_from_file_location("
-            "'secpal_pr_review.fast_path', FAST_PATH_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-    },
+    "fixed_thread_resolution.py": set(),
     "fast_path.py": {
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "importlib.util.spec_from_file_location("
-            "'secpal_pr_review.follow_up', FOLLOW_UP_HELPER)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "spec.loader.exec_module(module)",
-        ),
+        DynamicImportCall(("_load_follow_up_helper",), "importlib.import_module(__package__ + '.follow_up')"),
+        DynamicImportCall(("_load_evidence_helper",), "importlib.import_module('scripts.secpal-pr-review')"),
     },
-    "secpal-create-late-disposition.py": {
-        DynamicImportCall(
-            ("_load_resolver",),
-            "importlib.util.spec_from_file_location("
-            "'secpal_resolve_fixed_threads_for_late_evidence', RESOLVER)",
-        ),
-        DynamicImportCall(
-            ("_load_resolver",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_resolver",),
-            "spec.loader.exec_module(module)",
-        ),
-    },
-    "secpal-create-late-classification.py": {
-        DynamicImportCall(
-            ("_load_resolver",),
-            "importlib.util.spec_from_file_location("
-            "'secpal_resolve_fixed_threads_for_late_classification', RESOLVER)",
-        ),
-        DynamicImportCall(
-            ("_load_resolver",),
-            "importlib.util.module_from_spec(spec)",
-        ),
-        DynamicImportCall(
-            ("_load_resolver",),
-            "spec.loader.exec_module(module)",
-        ),
-        DynamicImportCall(
-            ("_load_resolver",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_resolver",),
-            "sys.modules[spec.name]",
-        ),
-    },
+    "late_disposition_cli.py": set(),
+    "late_classification_cli.py": set(),
 }
 SAFE_GETATTR_CALLS = {
     "secpal-pr-review-actions.py": {
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "getattr(loaded, '__file__', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'manual_gate_evidence', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation", "reauthenticate_post_execution"),
-            "getattr(arguments, 'manual_gate_evidence', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'eligibility_evidence', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'integration_evidence', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'pre_enrollment_integration_evidence', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'exceptional_recovery_evidence', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'exceptional_recovery_delivery_issue', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'exceptional_recovery_authorization_id', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'exceptional_continuation_evidence', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'exceptional_continuation_delivery_issue', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'exceptional_continuation_authorization_id', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'delivery_issue', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'integration_authorization_id', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'expected_integration_signer', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'prior_authority', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'prior_authority_tag_ref', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'prior_reviewed_state', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'prior_receipt', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'prior_attestation', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'prior_integration_chain', None)",
-        ),
-        DynamicImportCall(
-            ("_command_attest_validation",),
-            "getattr(arguments, 'expected_prior_authority_signer', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'prior_authority', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'prior_reviewed_state', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'prior_receipt', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'prior_attestation', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'prior_integration_chain', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'prior_authority_tag_ref', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_ready_integration_prior_authority",),
-            "getattr(arguments, 'expected_prior_authority_signer', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_integration_selection",),
-            "getattr(arguments, 'delivery_issue', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_integration_selection",),
-            "getattr(arguments, 'integration_authorization_id', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_integration_selection",),
-            "getattr(arguments, 'expected_integration_signer', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_exceptional_recovery_selection",),
-            "getattr(arguments, 'exceptional_recovery_delivery_issue', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_exceptional_recovery_selection",),
-            "getattr(arguments, 'exceptional_recovery_authorization_id', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_exceptional_continuation_selection",),
-            "getattr(arguments, 'exceptional_continuation_delivery_issue', None)",
-        ),
-        DynamicImportCall(
-            ("_verify_exceptional_continuation_selection",),
-            "getattr(arguments, 'exceptional_continuation_authorization_id', None)",
-        ),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'manual_gate_evidence', None)"),
+        DynamicImportCall(('_command_attest_validation', 'reauthenticate_post_execution'), "getattr(arguments, 'manual_gate_evidence', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'eligibility_evidence', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'integration_evidence', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'pre_enrollment_integration_evidence', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'exceptional_recovery_evidence', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'exceptional_recovery_delivery_issue', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'exceptional_recovery_authorization_id', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'exceptional_continuation_evidence', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'exceptional_continuation_delivery_issue', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'exceptional_continuation_authorization_id', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'delivery_issue', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'integration_authorization_id', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'expected_integration_signer', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'prior_authority', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'prior_authority_tag_ref', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'prior_reviewed_state', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'prior_receipt', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'prior_attestation', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'prior_integration_chain', None)"),
+        DynamicImportCall(('_command_attest_validation',), "getattr(arguments, 'expected_prior_authority_signer', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'prior_authority', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'prior_reviewed_state', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'prior_receipt', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'prior_attestation', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'prior_integration_chain', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'prior_authority_tag_ref', None)"),
+        DynamicImportCall(('_verify_ready_integration_prior_authority',), "getattr(arguments, 'expected_prior_authority_signer', None)"),
+        DynamicImportCall(('_verify_integration_selection',), "getattr(arguments, 'delivery_issue', None)"),
+        DynamicImportCall(('_verify_integration_selection',), "getattr(arguments, 'integration_authorization_id', None)"),
+        DynamicImportCall(('_verify_integration_selection',), "getattr(arguments, 'expected_integration_signer', None)"),
+        DynamicImportCall(('_verify_exceptional_recovery_selection',), "getattr(arguments, 'exceptional_recovery_delivery_issue', None)"),
+        DynamicImportCall(('_verify_exceptional_recovery_selection',), "getattr(arguments, 'exceptional_recovery_authorization_id', None)"),
+        DynamicImportCall(('_verify_exceptional_continuation_selection',), "getattr(arguments, 'exceptional_continuation_delivery_issue', None)"),
+        DynamicImportCall(('_verify_exceptional_continuation_selection',), "getattr(arguments, 'exceptional_continuation_authorization_id', None)"),
+        DynamicImportCall(("_construct_verifier_owner",), "getattr(core, key)"),
+        DynamicImportCall(("_construct_verifier_owner",), "getattr(module, '__path__', None)"),
+        DynamicImportCall(("_construct_verifier_owner", "require_owner"), "getattr(module, key, None)"),
+        DynamicImportCall(("_construct_verifier_owner", "require_owner"), "getattr(modules[parent], child, None)")
     },
-    "secpal-resolve-fixed-threads.py": {
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "getattr(loaded, '__file__', None)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "getattr(loaded, '__file__', None)",
-        ),
-        DynamicImportCall(
-            ("_load_late_disposition_helper",),
-            "getattr(loaded, '__file__', None)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "getattr(loaded, '__file__', None)",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_orchestration_helper",),
-            "getattr(module, '__file__', None)",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helper",),
-            "getattr(module, '__file__', None)",
-        ),
-    },
-    "fast_path.py": {
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "getattr(loaded, '__file__', None)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "getattr(loaded, '__file__', None)",
-        ),
-    },
+    "fixed_thread_resolution.py": set(),
+    "fast_path.py": set(),
 }
 SAFE_SYS_MODULES_CALLS = {
     "secpal-pr-review-actions.py": {
-        DynamicImportCall(
-            ("_provider_binding_uses_historical_summary",),
-            "sys.modules.get(f'{package}.{owner}')",
-        ),
-        DynamicImportCall(
-            ("_command_enrolled_draft_integration",),
-            "sys.modules.get(__name__)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules.get(spec.name)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules.pop(module_name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules.get(package_name)",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules.pop(package_name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules.get(spec.name)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "sys.modules.get('secpal_pr_review.fast_path')",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "sys.modules.get(spec.name)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_pre_enrollment_integration_helper",),
-            "sys.modules.get(module_name)",
-        ),
-        DynamicImportCall(
-            ("_load_pre_enrollment_integration_helper",),
-            "sys.modules.pop(module_name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
-            "sys.modules.pop(module_name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper",),
-            "sys.modules.pop(f'{package_name}.{name}', None)",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper",),
-            "sys.modules.pop(f'{package_name}.fast_path', None)",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper",),
-            "sys.modules.pop(package_name, None)",
-        ),
+        DynamicImportCall(("_construct_verifier_owner",), "sys.modules.get(__name__)"),
+        DynamicImportCall(("_construct_verifier_owner", "entries"), "sys.modules.copy()"),
+        DynamicImportCall(("_construct_verifier_owner",), "sys.modules.pop(name, None)"),
+        DynamicImportCall(("_construct_verifier_owner", "require_owner"), "sys.modules.get(owner_name)"),
+        DynamicImportCall(("_construct_verifier_owner", "require_owner"), "sys.modules.get(name)"),
     },
-    "secpal-resolve-fixed-threads.py": {
-        DynamicImportCall(
-            ("_load_exact_prerequisite_helpers",),
-            "sys.modules.get('secpal_pr_review.unchanged_head_prerequisite')",
-        ),
-        DynamicImportCall(
-            ("_load_exact_prerequisite_helpers",),
-            "sys.modules.get('secpal_pr_review.unchanged_head_prerequisite_evidence')",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules.get('secpal_pr_review_evidence_shared')",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules.get(spec.name)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "sys.modules.get('secpal_pr_review.follow_up')",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_late_disposition_helper",),
-            "sys.modules.get('secpal_pr_review.late_disposition')",
-        ),
-        DynamicImportCall(
-            ("_load_late_disposition_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "sys.modules.get('secpal_pr_review.fast_path')",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-    },
-    "fast_path.py": {
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules.get(module_name)",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "sys.modules.get('secpal_pr_review.follow_up')",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-    },
-    "secpal-create-late-disposition.py": {
-        DynamicImportCall(
-            ("_load_resolver",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-    },
-    "secpal-create-late-classification.py": {
-        DynamicImportCall(
-            ("_load_resolver",),
-            "sys.modules.pop(spec.name, None)",
-        ),
-    },
+    "fixed_thread_resolution.py": set(),
+    "fast_path.py": set(),
+    "late_disposition_cli.py": set(),
+    "late_classification_cli.py": set(),
 }
 SAFE_SYS_MODULES_STORES = {
-    "secpal-pr-review-actions.py": {
-        DynamicImportCall(
-            ("_load_enrolled_draft_integration_helper",),
-            "sys.modules['scripts']",
-        ),
-        DynamicImportCall(
-            ("_load_enrolled_draft_integration_helper",),
-            "sys.modules[package_name]",
-        ),
-        DynamicImportCall(
-            ("_load_enrolled_draft_integration_helper",),
-            "sys.modules[module_name]",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules[package_name]",
-        ),
-        DynamicImportCall(
-            ("_load_exact_source_safety_helper",),
-            "sys.modules[spec.name]",
-        ),
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules[spec.name]",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "sys.modules[spec.name]",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
-            "sys.modules['scripts']",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
-            "sys.modules[package_name]",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
-            "sys.modules[f'{package_name}.fast_path']",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers",),
-            "sys.modules[f'{package_name}.pre_enrollment_integration']",
-        ),
-        DynamicImportCall(
-            ("_load_pre_enrollment_integration_helper",),
-            "sys.modules[module_name]",
-        ),
-        DynamicImportCall(
-            ("_load_lifecycle_publication_helpers", "load"),
-            "sys.modules[module_name]",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper",),
-            "sys.modules[package_name]",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper",),
-            "sys.modules[f'{package_name}.fast_path']",
-        ),
-        DynamicImportCall(
-            ("_load_protected_main_helper", "load"),
-            "sys.modules[module_name]",
-        ),
-    },
-    "secpal-resolve-fixed-threads.py": {
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules[spec.name]",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "sys.modules[spec.name]",
-        ),
-        DynamicImportCall(
-            ("_load_late_disposition_helper",),
-            "sys.modules[spec.name]",
-        ),
-        DynamicImportCall(
-            ("_load_fast_path_helper",),
-            "sys.modules[spec.name]",
-        ),
-    },
-    "fast_path.py": {
-        DynamicImportCall(
-            ("_load_evidence_helper",),
-            "sys.modules[spec.name]",
-        ),
-        DynamicImportCall(
-            ("_load_follow_up_helper",),
-            "sys.modules[spec.name]",
-        ),
-    },
-    "secpal-create-late-disposition.py": {
-        DynamicImportCall(
-            ("_load_resolver",),
-            "sys.modules[spec.name]",
-        ),
-    },
-    "secpal-create-late-classification.py": {
-        DynamicImportCall(
-            ("_load_resolver",),
-            "sys.modules[spec.name]",
-        ),
-    },
+    "secpal-pr-review-actions.py": set(),
+    "fixed_thread_resolution.py": set(),
+    "fast_path.py": set(),
+    "late_disposition_cli.py": set(),
+    "late_classification_cli.py": set(),
 }
 RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_verify_exact_helper_source",
@@ -1854,9 +1293,8 @@ SAFE_RESOLVER_FUNCTION_REFERENCES = {
     ),
 }
 RESOLVER_LOOP_SITES = {
-    LoopSite("for", ("_load_exact_prerequisite_helpers",), "((source, 'unchanged_head_prerequisite.py'), (detached, 'unchanged_head_prerequisite_evidence.py'))"),
-    LoopSite("comprehension", ("_ensure_exact_prerequisite_helpers",), "source.CASES.values()"),
-    LoopSite("comprehension", ("_ensure_exact_prerequisite_helpers",), "(case.pr_endpoint, case.commits_endpoint, case.commit_endpoint, case.comment_endpoint, case.agents_endpoint)"),
+    LoopSite("comprehension", (), "exact_prerequisite.CASES.values()"),
+    LoopSite("comprehension", (), "(case.pr_endpoint, case.commits_endpoint, case.commit_endpoint, case.comment_endpoint, case.agents_endpoint)"),
     LoopSite("comprehension", ("parse_args",), "forbidden"),
     LoopSite("comprehension", ("parse_args",), "(arguments.late_disposition_evidence, arguments.late_disposition_signature, arguments.late_classification_evidence, arguments.late_classification_signature)"),
     LoopSite("comprehension", ("resolve_exact_prerequisite_late_thread",), "target.thread.comments"),
@@ -2192,7 +1630,7 @@ class PolicyVisitor(ast.NodeVisitor):
                 self.finding(node, f"prohibited process-capable import: {root}")
             if root in {"os", "subprocess"} and alias.asname is not None:
                 self.finding(node, f"{root} must not be aliased")
-            if root == "importlib" and alias.name != "importlib.util":
+            if root == "importlib" and alias.name != "importlib.util" and (allowed_imports is None or ast.unparse(node) not in allowed_imports):
                 self.finding(node, "only importlib.util is allowed")
         self.generic_visit(node)
 
@@ -2217,7 +1655,11 @@ class PolicyVisitor(ast.NodeVisitor):
         if node.id in protected_names and isinstance(node.ctx, ast.Load):
             parent = self.parents.get(node)
             if not isinstance(parent, ast.Attribute) or parent.value is not node:
-                self.finding(node, f"bare {node.id} module reference is prohibited")
+                if not (self.source_name == "secpal-pr-review-actions.py" and (
+                    (node.id == "evidence" and tuple(self.functions) == ("_load_evidence_helper",) and isinstance(parent, ast.Return))
+                    or (tuple(self.functions) == ("_construct_verifier_owner",)
+                        and isinstance(parent, ast.Dict) and ast.unparse(parent) == SAFE_OWNER_ROLES))):
+                    self.finding(node, f"bare {node.id} module reference is prohibited")
         if (
             self.bounded_resolver
             and node.id in self.top_level_functions
@@ -2245,7 +1687,12 @@ class PolicyVisitor(ast.NodeVisitor):
             "locals",
             "vars",
         } and isinstance(node.ctx, ast.Load):
-            self.finding(node, f"dynamic execution reference is prohibited: {node.id}")
+            parent = self.parents.get(node)
+            allowed = (self.source_name == "secpal-pr-review-actions.py"
+                       and isinstance(parent, ast.Call) and parent.func is node
+                       and DynamicImportCall(tuple(self.functions), ast.unparse(parent)) in SAFE_OWNER_REFLECTION)
+            if not allowed:
+                self.finding(node, f"dynamic execution reference is prohibited: {node.id}")
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
@@ -2277,6 +1724,16 @@ class PolicyVisitor(ast.NodeVisitor):
                 )
             ):
                 self.finding(node, "importlib.util may not be aliased")
+            if node.value.id == "sys" and node.attr in {"path", "meta_path", "pycache_prefix"}:
+                if node.attr == "path":
+                    allowed = (isinstance(parent, ast.Subscript) and ast.unparse(parent) == "sys.path[:]"
+                               or isinstance(parent, ast.Attribute) and parent.attr == "insert")
+                elif node.attr == "meta_path":
+                    allowed = isinstance(parent, ast.Call) and ast.unparse(parent) == "tuple(sys.meta_path)"
+                else:
+                    allowed = isinstance(parent, ast.Assign) and node in parent.targets
+                if not allowed:
+                    self.finding(node, "import policy alias is prohibited")
             if (
                 node.value.id == "sys"
                 and node.attr == "modules"
@@ -2292,6 +1749,10 @@ class PolicyVisitor(ast.NodeVisitor):
                         and access
                         in SAFE_SYS_MODULES_STORES.get(self.source_name, set())
                     )
+                elif (self.source_name in LAUNCHER_NAMES and isinstance(parent, ast.Compare)
+                      and ast.unparse(parent) == "spec.name in sys.modules"
+                      and tuple(self.functions) == ("main",)):
+                    allowed = True
                 elif isinstance(parent, ast.Attribute) and parent.value is node:
                     grandparent = self.parents.get(parent)
                     if (
@@ -2338,7 +1799,9 @@ class PolicyVisitor(ast.NodeVisitor):
                 node,
                 f"prohibited process-capable attribute: {node.attr}",
             )
-        if node.attr in PROHIBITED_REFLECTION_ATTRIBUTES:
+        if (node.attr in PROHIBITED_REFLECTION_ATTRIBUTES
+                and not (self.source_name == "secpal-pr-review-actions.py"
+                         and DynamicImportCall(tuple(self.functions), ast.unparse(node)) in SAFE_OWNER_REFLECTION_ATTRIBUTES)):
             self.finding(
                 node,
                 f"prohibited reflection attribute: {node.attr}",
@@ -2354,8 +1817,41 @@ class PolicyVisitor(ast.NodeVisitor):
                 self.finding(node, "dynamic loader reference is outside the allowlist")
         self.generic_visit(node)
 
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            expression = ast.unparse(target)
+            if expression == "bootstrap._load_actions_helper" and not (
+                self.source_name == "secpal-pr-review-actions.py"
+                and tuple(self.functions) == ("_construct_verifier_owner",)
+                and ast.unparse(node) == "bootstrap._load_actions_helper = require_owner"
+            ):
+                self.finding(node, "Actions callback mutation is outside the closed allowlist")
+            if expression.startswith("sys.modules") and not (
+                self.source_name in LAUNCHER_NAMES and tuple(self.functions) == ("main",)
+                and ast.unparse(node) == "sys.modules[spec.name] = owner"
+            ):
+                self.finding(node, "module binding mutation is outside the closed allowlist")
+            if expression.startswith(("sys.path", "sys.meta_path", "sys.pycache_prefix")) or any(
+                isinstance(part, ast.Attribute) and part.attr == "__path__"
+                for part in ast.walk(target)
+            ):
+                allowed = (self.source_name == "secpal-pr-review-actions.py"
+                           and DynamicImportCall(tuple(self.functions), ast.unparse(node)) in SAFE_OWNER_MUTATIONS)
+                if not allowed:
+                    self.finding(node, "import policy mutation is outside the closed allowlist")
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        if ast.unparse(node.target).startswith(("sys.path", "sys.meta_path", "sys.pycache_prefix")):
+            self.finding(node, "augmented policy assignment is prohibited")
+        self.generic_visit(node)
+
     def visit_Call(self, node: ast.Call) -> None:
         function_expression = ast.unparse(node.func)
+        if function_expression.startswith(("sys.path.", "sys.meta_path.")) or function_expression == "types.ModuleType":
+            if not (self.source_name == "secpal-pr-review-actions.py"
+                    and DynamicImportCall(tuple(self.functions), ast.unparse(node)) in SAFE_OWNER_MUTATIONS):
+                self.finding(node, "import policy mutation is outside the closed allowlist")
         if (
             self.bounded_resolver
             and len(self.functions) == 1
@@ -2576,7 +2072,7 @@ def self_test() -> None:
     if hasattr(legacy_function, "type_params"):
         del legacy_function.type_params
     legacy_findings = PolicyVisitor(
-        "secpal-resolve-fixed-threads.py",
+        "fixed_thread_resolution.py",
         (),
         bounded_resolver=True,
     ).inspect(legacy_tree)
@@ -2836,7 +2332,7 @@ def self_test() -> None:
     for name, source in resolver_specific_unsafe.items():
         findings = inspect_source(
             source,
-            "secpal-resolve-fixed-threads.py",
+            "fixed_thread_resolution.py",
             (),
             bounded_resolver=True,
         )
@@ -2859,8 +2355,8 @@ def self_test() -> None:
         "    owner = 'validation_evidence_loss'\n"
         "    return sys.modules.get(f'{package}.{owner}')\n"
     )
-    if inspect_source(owner_module_read, "secpal-pr-review-actions.py", ()):
-        raise SystemExit("closed provider-owner module read was rejected")
+    if not inspect_source(owner_module_read, "secpal-pr-review-actions.py", ()):
+        raise SystemExit("unowned provider namespace scan was accepted")
 
     scripts_namespace = (
         "import sys\nimport types\ndef _load_lifecycle_publication_helpers():\n"
@@ -2868,8 +2364,8 @@ def self_test() -> None:
         "    scripts_package.__path__ = [str(REPOSITORY_ROOT / 'scripts')]\n"
         "    sys.modules['scripts'] = scripts_package\n"
     )
-    if inspect_source(scripts_namespace, "secpal-pr-review-actions.py", ()):
-        raise SystemExit("closed lifecycle scripts namespace was rejected")
+    if not inspect_source(scripts_namespace, "secpal-pr-review-actions.py", ()):
+        raise SystemExit("retired namespace rewriting was accepted")
     for substituted in (
         scripts_namespace.replace("['scripts']", "['subprocess']"),
         scripts_namespace.replace("_load_lifecycle_publication_helpers", "arbitrary_loader"),
@@ -2878,6 +2374,14 @@ def self_test() -> None:
             raise SystemExit("substituted lifecycle namespace was accepted")
 
     source_specific_unsafe = (
+        ("secpal-pr-review-actions.py", "import sys\nalias = sys.path\nalias.append(foreign)\n"),
+        ("secpal-resolve-fixed-threads.py", "import sys\ndef main():\n    sys.modules[spec.name] = foreign\n"),
+
+        ("secpal-pr-review-actions.py", "import sys\ndef _construct_verifier_owner():\n    sys.path.insert(0, str(foreign))\n"),
+        ("secpal-pr-review-actions.py", "import sys\ndef _construct_verifier_owner():\n    sys.path[:] = foreign\n"),
+        ("secpal-pr-review-actions.py", "import sys\nsys.meta_path[:] = []\n"),
+        ("secpal-pr-review-actions.py", "import sys\nsys.pycache_prefix = foreign\n"),
+
         (
             "secpal-pr-review-actions.py",
             "import sys\ndef _provider_binding_uses_historical_summary(value):\n"
@@ -2918,7 +2422,7 @@ def self_test() -> None:
             ),
         ),
         (
-            "secpal-resolve-fixed-threads.py",
+            "fixed_thread_resolution.py",
             (
                 "import sys\n"
                 "sys.modules['os'].__dict__['spawnv'](mode, path, argv)\n"
@@ -2936,6 +2440,73 @@ def self_test() -> None:
             )
 
 
+LAUNCHER_NAMES = (
+    "secpal-resolve-fixed-threads.py", "secpal-create-late-classification.py",
+    "secpal-create-late-disposition.py", "secpal-create-exact-prerequisite-disposition.py",
+    "secpal-provider-reacquisition.py", "secpal-publish-review-consumption.py",
+)
+for _launcher in LAUNCHER_NAMES:
+    EXPECTED_CALLS[_launcher] = ()
+    DIRECT_MODULE_ATTRIBUTES[_launcher] = {"importlib": {"util"}, "sys": {"modules"}}
+    DYNAMIC_IMPORT_CALLS[_launcher] = {
+        DynamicImportCall(("main",), "importlib.util.spec_from_file_location('secpal_pr_review_actions', Path(__file__).resolve().with_name('secpal-pr-review-actions.py'))"),
+        DynamicImportCall(("main",), "importlib.util.module_from_spec(spec)"),
+        DynamicImportCall(("main",), "spec.loader.exec_module(owner)"),
+    }
+    SAFE_SYS_MODULES_STORES[_launcher] = {
+        DynamicImportCall(("main",), "sys.modules[spec.name]"),
+    }
+    SAFE_SYS_MODULES_CALLS[_launcher] = set()
+
+EXPECTED_CALLS["exact_prerequisite_cli.py"] = ()
+DYNAMIC_IMPORT_CALLS["exact_prerequisite_cli.py"] = set()
+DIRECT_MODULE_ATTRIBUTES["exact_prerequisite_cli.py"] = {"sys": {"argv", "stderr"}}
+
+EXPECTED_CALLS["provider_reacquisition_cli.py"] = ()
+DYNAMIC_IMPORT_CALLS["provider_reacquisition_cli.py"] = set()
+DIRECT_MODULE_ATTRIBUTES["provider_reacquisition_cli.py"] = {"sys": {"argv", "stderr"}}
+
+EXPECTED_CALLS["review_consumption_cli.py"] = ()
+DYNAMIC_IMPORT_CALLS["review_consumption_cli.py"] = set()
+DIRECT_MODULE_ATTRIBUTES["review_consumption_cli.py"] = {"sys": {"argv", "stderr"}}
+
+ALLOWED_IMPORTS['secpal-resolve-fixed-threads.py'] = {'import importlib.util', 'import sys', 'from pathlib import Path'}
+
+ALLOWED_IMPORTS['secpal-create-late-classification.py'] = {'import importlib.util', 'import sys', 'from pathlib import Path'}
+
+ALLOWED_IMPORTS['secpal-create-late-disposition.py'] = {'import importlib.util', 'import sys', 'from pathlib import Path'}
+
+ALLOWED_IMPORTS['secpal-create-exact-prerequisite-disposition.py'] = {'import importlib.util', 'import sys', 'from pathlib import Path'}
+
+ALLOWED_IMPORTS['secpal-provider-reacquisition.py'] = {'import importlib.util', 'import sys', 'from pathlib import Path'}
+
+ALLOWED_IMPORTS['secpal-publish-review-consumption.py'] = {'import importlib.util', 'import sys', 'from pathlib import Path'}
+
+ALLOWED_IMPORTS['exact_prerequisite_cli.py'] = {'from __future__ import annotations', 'import argparse', 'from pathlib import Path', 'import sys', 'import json', 'from typing import Any, Sequence', 'import importlib.util', 'from . import fixed_thread_resolution as resolver'}
+
+ALLOWED_IMPORTS['provider_reacquisition_cli.py'] = {'from . import fast_path, lifecycle_authority as authority, lifecycle_execution', 'from __future__ import annotations', 'import argparse', 'from pathlib import Path', 'from . import lifecycle_publication as publication, provider_reacquisition', 'import sys'}
+
+ALLOWED_IMPORTS['review_consumption_cli.py'] = {'from __future__ import annotations', 'import argparse', 'from pathlib import Path', 'from . import lifecycle_execution', 'import sys', 'import json'}
+
+SAFE_OWNER_ROLES = "{'fast_path': fast_path, 'evidence': evidence, 'follow_up': follow_up, 'pre_enrollment': pre_enrollment, 'exact_source_safety': exact_source_safety}"
+
+SAFE_OWNER_MUTATIONS = {
+    DynamicImportCall(("_construct_verifier_owner",), "sys.path.insert(0, str(root))"),
+    DynamicImportCall(("_construct_verifier_owner",), "sys.path[:] = original_path"),
+    DynamicImportCall(("_construct_verifier_owner",), "sys.pycache_prefix = BRIDGE_BYTECODE_CACHE.name"),
+}
+
+SAFE_OWNER_REFLECTION = {
+    DynamicImportCall(("_construct_verifier_owner",), "globals()"),
+    DynamicImportCall(("_construct_verifier_owner",), "vars(module)"),
+    DynamicImportCall(("_construct_verifier_owner", "require_owner"), "vars(module)"),
+}
+SAFE_OWNER_REFLECTION_ATTRIBUTES = {
+    DynamicImportCall(("_construct_verifier_owner",), "owner.__dict__"),
+    DynamicImportCall(("_construct_verifier_owner", "require_owner"), "owner.__dict__"),
+    DynamicImportCall(("_construct_verifier_owner", "require_owner"), "require_owner.__globals__"),
+}
+
 def main(argv: list[str]) -> int:
     if len(argv) != 10:
         raise SystemExit(
@@ -2945,7 +2516,13 @@ def main(argv: list[str]) -> int:
         )
     self_test()
     findings: list[str] = []
-    for value in argv[1:]:
+    paths = [Path(value) for value in argv[1:]]
+    root = paths[1].parent
+    paths.extend(root / "secpal_pr_review" / name for name in
+                 ("fixed_thread_resolution.py", "late_classification_cli.py", "late_disposition_cli.py",
+                  "exact_prerequisite_cli.py", "provider_reacquisition_cli.py", "review_consumption_cli.py"))
+    paths.extend(root / name for name in LAUNCHER_NAMES if root / name not in paths)
+    for value in paths:
         path = Path(value)
         expected = EXPECTED_CALLS.get(path.name)
         if expected is None:
@@ -2955,7 +2532,7 @@ def main(argv: list[str]) -> int:
                 path.read_text(encoding="utf-8"),
                 str(path),
                 expected,
-                bounded_resolver=path.name == "secpal-resolve-fixed-threads.py",
+                bounded_resolver=path.name == "fixed_thread_resolution.py",
             )
         )
     if findings:

@@ -16,6 +16,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase, main, mock
 
+from tests.secpal_actions_fixture import load_actions
+actions_owner = load_actions()
+
 from scripts.secpal_pr_review import governance_amendment as amendment
 from scripts.secpal_pr_review import fast_path
 from scripts.secpal_pr_review import lifecycle_authority as authority
@@ -348,11 +351,7 @@ class GovernanceAmendmentTests(TestCase):
         from scripts.secpal_pr_review import lifecycle_publication as publication
 
         root = Path(__file__).resolve().parents[1]
-        spec = importlib.util.spec_from_file_location(
-            "v4_ready_actions", root / "scripts/secpal-pr-review-actions.py",
-        )
-        actions = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(actions)
+        actions = load_actions()
         first, second = self.patches()
         with first, second, tempfile.TemporaryDirectory() as directory:
             self._ready_integration_commits = {}
@@ -2762,6 +2761,12 @@ class GovernanceAmendmentTests(TestCase):
             git("fetch", str(amendment.ROOT),
                 "HEAD")
             git("read-tree", "--reset", "-u", "FETCH_HEAD")
+            # Qualify the exact current implementation before it is committed.
+            delta = subprocess.run(["git", "diff", "--binary", "HEAD", "--"],
+                cwd=amendment.ROOT, check=True, capture_output=True).stdout
+            if delta:
+                subprocess.run(["git", "apply", "--index", "--binary"],
+                    cwd=root, input=delta, check=True, capture_output=True)
             git("commit", "-m", "accepted corrected tooling")
             accepted = git("rev-parse", "HEAD")
             verifier = root / "scripts/secpal_pr_review/lifecycle_authority.py"

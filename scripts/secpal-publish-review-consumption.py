@@ -1,39 +1,23 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
+"""Launch maintained evidence production through the Actions owner."""
 
-"""Publish one authenticated post-Ready review on lifecycle CURRENT."""
-
-from __future__ import annotations
-
-import argparse
-import json
+import importlib.util
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from scripts.secpal_pr_review import lifecycle_execution
-
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repository", required=True)
-    parser.add_argument("--delivery-issue", required=True, type=int)
-    parser.add_argument("--apply", action="store_true")
-    arguments = parser.parse_args()
-    if not arguments.apply:
-        parser.error("--apply is required for protected publication")
-    current = lifecycle_execution.publish_review_consumption(
-        arguments.repository, arguments.delivery_issue
+    spec = importlib.util.spec_from_file_location(
+        "secpal_pr_review_actions", Path(__file__).resolve().with_name("secpal-pr-review-actions.py")
     )
-    print(json.dumps({
-        "publication_oid": current.publication_oid,
-        "authority_digest": current.lifecycle.authority_digest,
-        "review_count": current.lifecycle.state["unrestricted_review_count"],
-        "head_sha": current.lifecycle.head_sha,
-    }, sort_keys=True))
-    return 0
+    if spec.name in sys.modules:
+        raise RuntimeError("Cannot replace a preloaded Actions owner")
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    return owner._owned_verifier_module("review_consumption_cli").main()
 
 
 if __name__ == "__main__":

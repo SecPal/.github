@@ -10,7 +10,6 @@ import hashlib
 import importlib
 import inspect
 import importlib.util
-import inspect
 import io
 import json
 import os
@@ -26,6 +25,9 @@ from unittest import TestCase, main, mock
 
 import jsonschema
 
+from tests.secpal_actions_fixture import load_actions
+
+actions = load_actions()
 from scripts import secpal_pr_review as review_package
 from scripts.secpal_pr_review import lifecycle_publication
 
@@ -46,7 +48,6 @@ def load_module(name: str, path: Path) -> Any:
     return module
 
 
-actions = load_module("secpal_pr_review_actions", ACTIONS_HELPER)
 fast_path = actions.fast_path
 p21 = load_module("secpal_pr_review_p21_tests", P21_TESTS)
 
@@ -7121,37 +7122,31 @@ class FastPathTests(TestCase):
                 validator.validate(incompatible)
 
     def test_actions_uses_the_canonical_fast_path_module(self) -> None:
-        self.assertEqual(actions.fast_path.__name__, "secpal_pr_review.fast_path")
+        self.assertEqual(actions.fast_path.__name__, "scripts.secpal_pr_review.fast_path")
         self.assertIs(
             actions.fast_path,
-            importlib.import_module("secpal_pr_review.fast_path"),
+            importlib.import_module("scripts.secpal_pr_review.fast_path"),
         )
 
     def test_fast_path_loader_rejects_a_preloaded_module_from_another_path(self) -> None:
         with mock.patch.dict(
             actions.sys.modules,
             {
-                "secpal_pr_review.fast_path": SimpleNamespace(
+                "scripts.secpal_pr_review.fast_path": SimpleNamespace(
                     __file__="/tmp/untrusted-fast-path.py"
                 )
             },
         ):
-            with self.assertRaisesRegex(RuntimeError, "unexpected path"):
+            with self.assertRaisesRegex(RuntimeError, "identity changed"):
                 actions._load_fast_path_helper()
 
-    def test_fast_path_loader_removes_a_partially_initialized_module(self) -> None:
-        module_name = "secpal_pr_review.fast_path"
-        partial_module = SimpleNamespace(__file__=str(actions.FAST_PATH_HELPER))
-        loader = SimpleNamespace(exec_module=mock.Mock(side_effect=SyntaxError("broken")))
-        spec = SimpleNamespace(name=module_name, loader=loader)
-        with (
-            mock.patch.dict(actions.sys.modules, {module_name: None}),
-            mock.patch.object(actions.importlib.util, "spec_from_file_location", return_value=spec),
-            mock.patch.object(actions.importlib.util, "module_from_spec", return_value=partial_module),
-        ):
-            with self.assertRaisesRegex(SyntaxError, "broken"):
+    def test_fast_path_loader_rejects_deleted_owned_module_without_healing(self) -> None:
+        name = "scripts.secpal_pr_review.fast_path"
+        with mock.patch.dict(sys.modules, {name: None}):
+            with self.assertRaises(RuntimeError):
                 actions._load_fast_path_helper()
-            self.assertIsNone(actions.sys.modules.get(module_name))
+            self.assertIsNone(sys.modules[name])
+
 
     def test_batch_request_identity_must_match_reviewed_feedback(self) -> None:
         reviewed = fast_feedback()
@@ -9197,22 +9192,13 @@ class FastPathTests(TestCase):
         ):
             helper.run_profile(REPO_ROOT, profile, expected_profile=copy.deepcopy(profile))
 
-    def test_exact_source_loader_cleans_synthetic_package_on_failure(self) -> None:
-        package_name = "secpal_exact_source_safety"
-        previous_package = sys.modules.pop(package_name, None)
-        previous_module = sys.modules.pop(f"{package_name}.exact_source_safety", None)
-        try:
-            with mock.patch.object(
-                actions.importlib.util, "spec_from_file_location", return_value=None,
-            ), self.assertRaisesRegex(RuntimeError, "Cannot load exact-source"):
+    def test_exact_source_loader_rejects_rebinding_without_reconstruction(self) -> None:
+        owned = actions.exact_source_safety
+        with mock.patch.object(owned, "__file__", "/tmp/foreign.py"):
+            with self.assertRaises(RuntimeError):
                 actions._load_exact_source_safety_helper()
-            self.assertNotIn(package_name, sys.modules)
-            self.assertNotIn(f"{package_name}.exact_source_safety", sys.modules)
-        finally:
-            if previous_package is not None:
-                sys.modules[package_name] = previous_package
-            if previous_module is not None:
-                sys.modules[f"{package_name}.exact_source_safety"] = previous_module
+        self.assertIs(actions._load_exact_source_safety_helper(), owned)
+
 
     def test_ready_source_recovery_review_decision_requires_authenticated_policy(self) -> None:
         reviewed = fast_feedback(thread_count=0)
@@ -16005,7 +15991,7 @@ class ReadySourceCurrentSafetyTests(TestCase):
         self.accepted.mkdir()
         accepted_paths = (
             actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH,
-            *actions.READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS,
+            *fast_path.VERIFIER_EXECUTION_TOOLING_PATHS,
         )
         for relative in accepted_paths:
             destination = self.accepted / relative
@@ -16422,7 +16408,6 @@ class QualifiedRemediationSuccessorApplicationTests(TestCase):
             )
 
         with (
-            mock.patch.dict(sys.modules, {"secpal_pr_review": review_package}),
             mock.patch.object(
                 actions,
                 "_load_current_recovery_policy",
@@ -16457,11 +16442,11 @@ class QualifiedRemediationSuccessorApplicationTests(TestCase):
                 ),
             ),
             mock.patch(
-                "secpal_pr_review.lifecycle_execution._production_signing_authorities",
+                "scripts.secpal_pr_review.lifecycle_execution._production_signing_authorities",
                 return_value=signers,
             ),
             mock.patch(
-                "secpal_pr_review.lifecycle_execution._append_successor_evidence",
+                "scripts.secpal_pr_review.lifecycle_execution._append_successor_evidence",
                 append,
             ),
         ):
@@ -16566,6 +16551,7 @@ class PolicyScriptTests(TestCase):
         self.assertNotIn("command -v rg", quality)
 
 
+
 ROOT = REPO_ROOT
 CONSTRUCT = """
 spec = importlib.util.spec_from_file_location('secpal_pr_review_actions', root/'scripts/secpal-pr-review-actions.py')
@@ -16599,6 +16585,259 @@ assert a._load_fast_path_helper() is a.fast_path
 assert a._load_pre_enrollment_integration_helper() is a.pre_enrollment
 """)
 
+    def test_forged_same_path_preloads_are_rejected_without_adoption(self):
+        for name, path in (
+            ('secpal_pr_review.fast_path', 'scripts/secpal_pr_review/fast_path.py'),
+            ('secpal_pr_review.pre_enrollment_integration', 'scripts/secpal_pr_review/pre_enrollment_integration.py'),
+            ('scripts.secpal_pr_review.fast_path', 'scripts/secpal_pr_review/fast_path.py'),
+            ('scripts.secpal_work_graph.replanning', 'scripts/secpal_work_graph/replanning.py'),
+            ('scripts', 'scripts'),
+        ):
+            with self.subTest(name=name):
+                self.run_process(f"""
+foreign = types.ModuleType({name!r})
+foreign.__file__ = str(root/{path!r})
+foreign.__spec__ = importlib.util.spec_from_file_location({name!r}, foreign.__file__)
+foreign._ACTIONS_BRIDGE_INITIALIZED = True
+sys.modules[{name!r}] = foreign
+try:
+{''.join('    '+line+'\n' for line in CONSTRUCT.strip().splitlines())}
+except RuntimeError:
+    pass
+else:
+    raise AssertionError('forged preload adopted')
+assert sys.modules[{name!r}] is foreign
+""")
+
+    def test_duplicate_actions_execution_is_rejected(self):
+        self.run_process(CONSTRUCT + """
+other = importlib.util.module_from_spec(spec)
+sys.modules['second_actions_fixture'] = other
+try:
+    spec.loader.exec_module(other)
+except RuntimeError:
+    pass
+else:
+    raise AssertionError('second Actions owner constructed')
+""")
+
+    def test_equality_spoof_cannot_own_import_machinery(self):
+        self.run_process("""
+import argparse, copy, hashlib, json, os, pwd, re, site, subprocess, tempfile, weakref
+import urllib.parse, typing, __future__
+class ForeignFinder:
+    def __eq__(self, other):
+        return True
+    def find_spec(self, fullname, path=None, target=None):
+        raise AssertionError('foreign finder executed')
+sys.meta_path[-1] = ForeignFinder()
+try:
+""" + ''.join('    ' + line + '\n' for line in CONSTRUCT.strip().splitlines()) + """
+except RuntimeError:
+    pass
+else:
+    raise AssertionError('foreign import machinery adopted through equality')
+""")
+
+    def test_foreign_same_path_provider_binding_is_rejected(self):
+        self.run_process(CONSTRUCT + """
+name = 'scripts.secpal_pr_review.qualified_remediation_successor_loss'
+foreign = types.ModuleType(name)
+foreign.__file__ = str(root/'scripts/secpal_pr_review/qualified_remediation_successor_loss.py')
+foreign.QualifiedProviderBinding = type('QualifiedProviderBinding', (), {})
+sys.modules[name] = foreign
+try:
+    a._provider_binding_uses_historical_summary(foreign.QualifiedProviderBinding())
+except a.MutationBlocked:
+    pass
+else:
+    raise AssertionError('foreign caller authority adopted')
+""")
+
+    def run_bridge(self, body):
+        self.run_process("sys.path.insert(0, str(root))\nfrom tests.secpal_actions_fixture import load_actions\na = load_actions()\nprefix = a.fast_path.__package__\nfrom unittest import mock\n" + body)
+
+    def test_cli_launchers_keep_nested_bootstrap_with_their_owner(self):
+        for script in ('secpal-resolve-fixed-threads.py', 'secpal-publish-review-consumption.py'):
+            with self.subTest(script=script):
+                self.run_process(f"""
+spec = importlib.util.spec_from_file_location('__main__', root/'scripts'/{script!r})
+cli = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = cli
+sys.argv = [str(spec.origin), '--help']
+try:
+    spec.loader.exec_module(cli)
+except SystemExit as exc:
+    assert exc.code == 0
+owner = sys.modules['secpal_pr_review_actions']
+publication = owner._load_lifecycle_publication_helpers()[1]
+bootstrap = importlib.import_module(publication.__package__ + '.bootstrap_source_admission')
+assert bootstrap._load_actions_helper() is owner
+assert bootstrap.publication is publication
+""")
+
+    def test_shared_fixture_keeps_one_owner_across_module_execution(self):
+        self.run_process("""
+sys.path.insert(0, str(root))
+from tests.secpal_actions_fixture import load_actions
+first = load_actions()
+spec = importlib.util.spec_from_file_location('second_composition_fixture', root/'tests/secpal-pr-review-actions-unit.py')
+fixture = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = fixture
+spec.loader.exec_module(fixture)
+assert fixture.actions is first
+assert load_actions() is first
+""")
+
+    def test_reexecuted_shared_fixture_rejects_duplicate_owner_without_rebinding(self):
+        self.run_process("""
+sys.path.insert(0, str(root))
+from tests.secpal_actions_fixture import load_actions
+first = load_actions()
+spec = importlib.util.spec_from_file_location('reexecuted_shared_fixture', root/'tests/secpal_actions_fixture.py')
+fixture = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fixture)
+try:
+    fixture.load_actions()
+except RuntimeError:
+    pass
+else:
+    raise AssertionError('duplicate fixture created an Actions owner')
+assert sys.modules['secpal_pr_review_actions'] is first
+assert load_actions() is first
+""")
+
+    def test_owned_graph_rejects_token_and_namespace_substitution(self):
+        for expression in (
+            "r._FRESH_ACQUISITION_TOKEN = object()",
+            "r._FreshAcquisitionSeal = type('ForgedSeal', (), {})",
+            "sys.modules['scripts.secpal_pr_review'].__path__ = ['/tmp/foreign']",
+            "r.__spec__.origin = '/tmp/foreign.py'",
+            "r.__spec__.loader = object()",
+            "r.__package__ = 'foreign'",
+            "sys.modules['scripts'].foreign = types.ModuleType('scripts.foreign')",
+            "a.fast_path = types.ModuleType('scripts.secpal_pr_review.fast_path')",
+            "a.pre_enrollment = types.ModuleType('scripts.secpal_pr_review.pre_enrollment_integration')",
+            "sys.modules['scripts'].__path__ = list(sys.modules['scripts'].__path__)",
+        ):
+            with self.subTest(expression=expression):
+                self.run_process(CONSTRUCT + """
+r = importlib.import_module(a.fast_path.__package__ + '.provider_reacquisition')
+""" + expression + """
+try:
+    a._load_lifecycle_publication_helpers()
+except RuntimeError:
+    pass
+else:
+    raise AssertionError('owned graph alteration accepted')
+""")
+    def test_accepted_source_authenticates_work_graph_imports(self):
+        self.run_process(CONSTRUCT + """
+from unittest import mock
+paths = []
+real = a._run_attestation_git
+with mock.patch.object(a, '_require_exact_accepted_main_blob', side_effect=lambda root, main, path: paths.append(path)):
+    a._require_accepted_main_tooling_blobs(root, a._run_attestation_git(root, ['rev-parse', 'HEAD']).stdout.strip())
+assert 'scripts/secpal_work_graph/github.py' in paths
+assert 'scripts/secpal_work_graph/acceptance_criteria.py' in paths
+""")
+
+    def test_retained_graph_does_not_cache_live_protected_main_authority(self):
+        self.run_process(CONSTRUCT + """
+from unittest import mock
+first = a._load_lifecycle_publication_helpers()
+with mock.patch.object(a, '_authenticate_protected_bridge_main', side_effect=['a'*40, 'b'*40]) as observe, mock.patch.object(a, '_require_accepted_main_tooling_blobs') as blobs:
+    assert a._require_accepted_main_bridge_source('SecPal/.github', expected_main='a'*40) == 'a'*40
+    try:
+        a._require_accepted_main_bridge_source('SecPal/.github', expected_main='a'*40)
+    except a.fast_path.SecurityBlocker:
+        pass
+    else:
+        raise AssertionError('live protected-main authority cached')
+    assert observe.call_count == 2 and blobs.call_count == 1
+assert a._load_lifecycle_publication_helpers() == first
+""")
+
+    def test_signed_reacquisition_journal_survives_nested_production_load(self) -> None:
+        body = """
+import subprocess
+from dataclasses import replace
+from tests import secpal_actions_fixture
+fixture_spec = importlib.util.spec_from_file_location('signed_loader_fixture', root / 'tests/secpal-lifecycle-publication-unit.py')
+pf = importlib.util.module_from_spec(fixture_spec)
+fixture_spec.loader.exec_module(pf)
+f = pf.LifecyclePublicationTests()
+f.setUp()
+try:
+    signing_key = Path(f.directory.name) / 'fixture-key'
+    subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(signing_key)], check=True)
+    public = signing_key.with_suffix('.pub').read_text().strip()
+    def signer_for(identity=pf.SIGNER):
+        def sign(payload, domain):
+            signed = subprocess.run(['ssh-keygen', '-Y', 'sign', '-f', str(signing_key), '-n', domain], input=payload, capture_output=True, check=True)
+            return {'format': 'ssh', 'signer_identity': identity, 'value': signed.stdout.decode()}
+        return sign
+    pf.signer_for = signer_for
+    def verify(payload, signature, identity, domain):
+        pf.authority._verify_ssh_signature(payload, signature['value'], pf.authority.TrustedSigner(identity, (public,), ()), domain)
+        return pf.authority.VerifiedSignature(identity, 'ssh')
+    pf.verify_signature = verify
+    f.verifier_patch.stop()
+    policy = replace(f.policy, signers={identity: pf.authority.TrustedSigner(identity, (public,), ()) for identity in f.policy.signers})
+    pf.authority._load_lifecycle_trust_policy.return_value = policy
+    current, document, keys = f.reacquisition_claim_fixture()
+    for key in keys:
+        pf.publication._publish_provider_dispatch_claim(key, eligibility_evidence_digest=document['loss_proof_digest'], signer_identity=pf.SIGNER, signer=signer_for(), reacquisition_authorization=document)
+    f.policy_patch.stop()
+    f.protection_patch.stop()
+    first_authority, first_publication = a._load_lifecycle_publication_helpers()
+    r = importlib.import_module(prefix + '.provider_reacquisition')
+    with mock.patch.object(first_authority, '_load_lifecycle_trust_policy', return_value=policy), mock.patch.object(first_publication, '_verify_live_protection', return_value=pf.RULESET_ID):
+        first, claims = first_publication.verify_provider_dispatch_claims(pf.REPOSITORY, pf.ISSUE)
+        assert len(claims) == 2, (len(claims), [claim.key.review_type for claim in claims])
+        assert all(type(claim) is first_publication.VerifiedProviderDispatchClaim for claim in claims)
+        print('FIRST_SIGNED_JOURNAL: PASS', flush=True)
+        claim_type = first_publication.VerifiedProviderDispatchClaim
+        verified = r.verify_authorization(document, first)
+        feedback = r.fast_path.verify_reviewed_state_evidence(document['loss_proof']['historical_feedback'])
+        assessment = {'status': 'PROVIDER_REACQUISITION_COMPLETE', 'operation': r.OPERATION,
+            'acquisition_kind': 'SAME_HEAD_BOUNDED_REACQUISITION', 'authorization': document,
+            'stable_feedback': feedback.to_dict(), 'current_publication_oid': first.publication_oid,
+            'current_publication_digest': first.publication_digest}
+        assessment['assessment_digest'] = r.fast_path.digest_json(assessment)
+        fresh = r._seal_fresh_assessment(assessment)
+        assert r.require_verified_fresh_acquisitions(fresh, first, feedback) is fresh
+        seal_type, fresh_type, token = r._FreshAcquisitionSeal, r.VerifiedFreshProviderAcquisitions, r._FRESH_ACQUISITION_TOKEN
+        assert r.fast_path.canonical_json_bytes(r._require_authorization(verified)) == r.fast_path.canonical_json_bytes(document)
+    print('RETAINED_VERIFIER_OBJECTS: PASS', flush=True)
+    nested_actions = r.transport._load_actions_helper()
+    assert nested_actions is a
+    second_authority, second_publication = nested_actions._load_lifecycle_publication_helpers()
+    with mock.patch.object(second_authority, '_load_lifecycle_trust_policy', return_value=policy), mock.patch.object(second_publication, '_verify_live_protection', return_value=pf.RULESET_ID):
+        second, second_claims = second_publication.verify_provider_dispatch_claims(pf.REPOSITORY, pf.ISSUE)
+        assert second.publication_oid == first.publication_oid
+        assert second_claims == claims
+        assert second_publication.VerifiedProviderDispatchClaim is claim_type
+        assert r.require_verified_fresh_acquisitions(fresh, second, feedback) is fresh
+        assert r._FreshAcquisitionSeal is seal_type and r.VerifiedFreshProviderAcquisitions is fresh_type
+        assert r._FRESH_ACQUISITION_TOKEN is token
+        for forged in (types.SimpleNamespace(canonical_assessment=fresh.canonical_assessment, _seal=fresh._seal),
+                       replace(fresh, _seal=types.SimpleNamespace(token=token, digest=fresh._seal.digest)),
+                       replace(fresh, _seal=replace(fresh._seal, token=object()))):
+            try:
+                r.require_verified_fresh_acquisitions(forged, second, feedback)
+            except a.fast_path.SecurityBlocker:
+                pass
+            else:
+                raise AssertionError('foreign type or seal accepted')
+        assert r.verify_authorization(document, second).document == verified.document
+        assert r.fast_path.canonical_json_bytes(r._require_authorization(verified)) == r.fast_path.canonical_json_bytes(document)
+        assert first_authority is second_authority and first_publication is second_publication
+        assert r.publication is second_publication
+finally:
+    f.tearDown()
+"""
+        self.run_bridge(body)
 
 if __name__ == "__main__":
     main()

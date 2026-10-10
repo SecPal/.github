@@ -218,22 +218,10 @@ def require_predecessor(current, evidence) -> None:
 
 
 def _trusted_source(actions, repository):
-    main = actions._require_accepted_main_bridge_source(repository)
-    expected = actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/enrolled_draft_integration.py"
-    if Path(__file__).resolve() != expected.resolve() or Path(__spec__.origin).resolve() != expected.resolve():
-        raise fast_path.SecurityBlocker("enrolled Draft integration import provenance changed")
-    actions._require_exact_accepted_main_blob(actions.REPOSITORY_ROOT, main, str(expected.relative_to(actions.REPOSITORY_ROOT)))
-    modules = {"authority": authority, "execution": execution, "publication": publication, "draft": draft, "fast_path": fast_path, "bootstrap": bootstrap_source_admission}
-    actions._require_bridge_import_provenance(
-        {name: (module.__file__, module.__spec__.origin) for name, module in modules.items()},
-        {"authority": actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_authority.py",
-         "execution": actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_execution.py",
-         "publication": actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_publication.py",
-         "draft": actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/pre_enrollment_integration.py",
-         "fast_path": actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/fast_path.py",
-         "bootstrap": actions.REPOSITORY_ROOT / "scripts/secpal_pr_review/bootstrap_source_admission.py"},
-    )
-    return main
+    owner = bootstrap_source_admission._load_actions_helper()
+    if actions is not owner:
+        raise fast_path.SecurityBlocker("enrolled Draft Actions owner is substituted")
+    return owner._require_accepted_main_bridge_source(repository)
 
 
 def _entry(actions, repository, kind=KIND):
