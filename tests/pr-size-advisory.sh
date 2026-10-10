@@ -107,7 +107,7 @@ create_preflight_fixture() {
   local seed_renames="${3-false}"
 
   create_git_fixture "$repository" "$exclude_patterns" "$seed_renames"
-  mkdir -p "$repository/scripts" "$repository/bin" "$repository/tests"
+  mkdir -p "$repository/scripts" "$repository/bin" "$repository/tests" "$repository/node_modules/.bin"
   cp "$PREFLIGHT_SCRIPT" "$repository/scripts/preflight.sh"
 
   cat >"$repository/tests/polyscope-work-graph-advisory.py" <<'EOF'
@@ -206,6 +206,7 @@ EOF
 exit 0
 EOF
   chmod +x "$repository/bin/npx" "$repository/bin/reuse"
+  cp "$repository/bin/npx" "$repository/node_modules/.bin/markdownlint"
 }
 
 run_preflight_fixture() {

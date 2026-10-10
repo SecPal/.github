@@ -36,7 +36,7 @@ assert.equal(hook.language, 'system');
 assert.notEqual(hook.pass_filenames, false);
 NODE
 
-workspace="$(mktemp -d "${TMPDIR:-/tmp}/markdownlint-hook-setup.XXXXXX")"
+workspace="$(mktemp -d "${TMPDIR:-/tmp}/markdownlint-precommit-config.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 mkdir -p "$workspace/scripts" "$workspace/bin"
 cp "$REPO_ROOT/scripts/setup-pre-commit.sh" "$workspace/scripts/"
