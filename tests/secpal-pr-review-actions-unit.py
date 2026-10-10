@@ -16566,5 +16566,39 @@ class PolicyScriptTests(TestCase):
         self.assertNotIn("command -v rg", quality)
 
 
+ROOT = REPO_ROOT
+CONSTRUCT = """
+spec = importlib.util.spec_from_file_location('secpal_pr_review_actions', root/'scripts/secpal-pr-review-actions.py')
+a = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = a
+spec.loader.exec_module(a)
+"""
+
+
+class VerifierOwnershipTests(TestCase):
+    def run_process(self, body):
+        result = subprocess.run(
+            [sys.executable, '-I', '-c',
+             'import importlib, importlib.util, sys, types\nfrom pathlib import Path\n'
+             + f'root = Path({str(ROOT)!r})\n' + body],
+            cwd=ROOT, text=True, capture_output=True, timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_repeated_and_nested_loads_preserve_types_tokens_and_seals(self):
+        self.run_process(CONSTRUCT + """
+first = a._load_lifecycle_publication_helpers(include_orchestration=True)
+r = importlib.import_module(first[0].__package__ + '.provider_reacquisition')
+identities = (r.VerifiedFreshProviderAcquisitions, r._FreshAcquisitionSeal, r._FRESH_ACQUISITION_TOKEN)
+assert r.transport._load_actions_helper() is a
+second = a._load_lifecycle_publication_helpers(include_orchestration=True)
+assert all(x is y for x, y in zip(first, second)), 'verifier graph reconstructed'
+assert r.publication is first[1]
+assert identities == (r.VerifiedFreshProviderAcquisitions, r._FreshAcquisitionSeal, r._FRESH_ACQUISITION_TOKEN)
+assert a._load_fast_path_helper() is a.fast_path
+assert a._load_pre_enrollment_integration_helper() is a.pre_enrollment
+""")
+
+
 if __name__ == "__main__":
     main()
