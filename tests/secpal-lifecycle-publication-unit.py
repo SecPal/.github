@@ -2450,7 +2450,7 @@ class LifecyclePublicationTests(TestCase):
         # exercised independently with exact signed journal predecessors.
         with patch.object(
             publication, "_verify_ready_source_successor_chain",
-            return_value=(current, json.loads(current.serialized_lifecycle_evidence), (), (), ()),
+            return_value=(current, json.loads(current.serialized_lifecycle_evidence), (), ()),
         ), patch.object(
             authority,
             "_verify_lifecycle_authority_for_journal",
@@ -2493,7 +2493,7 @@ class LifecyclePublicationTests(TestCase):
         # exercised independently with exact signed journal predecessors.
         with patch.object(
             publication, "_verify_ready_source_successor_chain",
-            return_value=(current, json.loads(current.serialized_lifecycle_evidence), (), (), ()),
+            return_value=(current, json.loads(current.serialized_lifecycle_evidence), (), ()),
         ), patch.object(
             authority,
             "_verify_lifecycle_authority_for_journal",
@@ -2526,7 +2526,7 @@ class LifecyclePublicationTests(TestCase):
         # exercised independently with exact signed journal predecessors.
         with patch.object(
             publication, "_verify_ready_source_successor_chain",
-            return_value=(current, json.loads(current.serialized_lifecycle_evidence), (), (), ()),
+            return_value=(current, json.loads(current.serialized_lifecycle_evidence), (), ()),
         ), patch.object(
             authority,
             "_verify_lifecycle_authority_for_journal",
