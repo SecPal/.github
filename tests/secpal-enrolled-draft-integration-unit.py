@@ -34,6 +34,9 @@ draft = load_fixture("enrolled_draft_fixture", "tests/secpal-pre-enrollment-inte
 lifecycle = load_fixture("enrolled_lifecycle_fixture", "tests/secpal-lifecycle-authority-unit.py")
 ready = load_fixture("enrolled_ready_fixture", "tests/secpal-pr-review-actions-unit.py")
 native = load_fixture("enrolled_native_fixture", "tests/secpal-lifecycle-execution-contract-unit.py")
+from tests.secpal_actions_fixture import load_actions
+actions_owner = load_actions()
+
 from scripts.secpal_pr_review import enrolled_draft_integration as enrolled
 
 
@@ -261,9 +264,7 @@ class FrontendEnrolledDraftPolicyTests(TestCase):
     def test_exact_policy_and_maintained_projections_agree(self):
         self.assertEqual(self.entry["enrolled_draft_integration_policy"], enrolled.POLICY)
         self.assertIn("lifecycle_authority_policy", self.entry)
-        # The historical reviewer fixture uses the legacy module name.
-        with mock.patch.dict(sys.modules, {"secpal_pr_review": ready.review_package}):
-            resolver = load_fixture("enrolled_policy_resolver", "scripts/secpal-resolve-fixed-threads.py")
+        resolver = draft.actions._owned_verifier_module("fixed_thread_resolution")
         binding = enrolled.fast_path.validation_registry_projection(self.entry)
         self.assertEqual(binding, draft.actions._fast_registry_binding(self.entry))
         self.assertEqual(binding, resolver._validation_registry_binding(self.entry))

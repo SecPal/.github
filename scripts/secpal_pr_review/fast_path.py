@@ -13,14 +13,12 @@ import os
 import re
 import subprocess
 import tempfile
-import importlib.util
+import importlib
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
-FOLLOW_UP_HELPER = Path(__file__).resolve().with_name("follow_up.py")
-EVIDENCE_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
 CENTRAL_REGISTRY_ROOT = Path(__file__).resolve().parents[2]
 CENTRAL_REGISTRY_REPOSITORY = "SecPal/.github"
 DELIVERY_REGISTRY_PATH = (
@@ -72,6 +70,45 @@ DIRECT_VALIDATION_EXECUTABLES = frozenset(
 )
 COMPOSER_VALIDATION_SCRIPTS = frozenset({"analyse", "ci:check", "test"})
 EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
+# One inventory supplies both owner construction and its isolated safety closure.
+VERIFIER_MODULE_NAMES = (
+    "bootstrap_source_admission",
+    "enrolled_draft_integration",
+    "exact_source_safety",
+    "exceptional_recovery",
+    "fast_path",
+    "fixed_thread_resolution",
+    "late_classification_cli",
+    "late_disposition_cli",
+    "exact_prerequisite_cli",
+    "follow_up",
+    "governance_amendment",
+    "late_disposition",
+    "legacy_enrolled_package_loss",
+    "lifecycle_authority",
+    "lifecycle_execution",
+    "lifecycle_orchestration",
+    "lifecycle_publication",
+    "pre_enrollment_integration",
+    "provider_acquisition",
+    "provider_reacquisition",
+    "provider_reacquisition_cli",
+    "review_consumption_cli",
+    "qualified_remediation_successor_loss",
+    "unchanged_head_prerequisite",
+    "unchanged_head_prerequisite_evidence",
+    "validation_evidence_loss",
+    "version_collision",
+)
+WORK_GRAPH_MODULE_NAMES = ("__init__", "acceptance_criteria", "github", "model", "replanning", "resolver")
+VERIFIER_EXECUTION_TOOLING_PATHS = (
+    "scripts/secpal-pr-review-actions.py", "scripts/secpal-pr-review.py",
+    *("scripts/secpal_pr_review/" + name + ".py" for name in VERIFIER_MODULE_NAMES),
+    *("scripts/secpal_work_graph/" + name + ".py" for name in WORK_GRAPH_MODULE_NAMES),
+)
+
+
+# Preserve the signed historical profile; the owner import closure is execution only.
 READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS = (
     "scripts/secpal-pr-review-actions.py",
     "scripts/secpal-pr-review.py",
@@ -83,51 +120,14 @@ READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS = (
 
 
 def _load_follow_up_helper() -> Any:
-    loaded = sys.modules.get("secpal_pr_review.follow_up")
-    if loaded is not None:
-        loaded_path = getattr(loaded, "__file__", None)
-        if (
-            not isinstance(loaded_path, str)
-            or Path(loaded_path).absolute() != FOLLOW_UP_HELPER.absolute()
-        ):
-            raise RuntimeError("Canonical follow-up module has an unexpected path")
-    spec = importlib.util.spec_from_file_location("secpal_pr_review.follow_up", FOLLOW_UP_HELPER)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load follow-up helper: {FOLLOW_UP_HELPER}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(spec.name, None)
-        raise
-    return module
+    return importlib.import_module(__package__ + ".follow_up")
 
 
 follow_up = _load_follow_up_helper()
 
 
 def _load_evidence_helper() -> Any:
-    module_name = "secpal_pr_review.integration_evidence_helper"
-    loaded = sys.modules.get(module_name)
-    if loaded is not None:
-        loaded_path = getattr(loaded, "__file__", None)
-        if (
-            not isinstance(loaded_path, str)
-            or Path(loaded_path).absolute() != EVIDENCE_HELPER.absolute()
-        ):
-            raise RuntimeError("Canonical evidence helper has an unexpected path")
-    spec = importlib.util.spec_from_file_location(module_name, EVIDENCE_HELPER)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load evidence helper: {EVIDENCE_HELPER}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(spec.name, None)
-        raise
-    return module
+    return importlib.import_module("scripts.secpal-pr-review")
 
 
 evidence = _load_evidence_helper()

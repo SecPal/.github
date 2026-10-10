@@ -4386,72 +4386,13 @@ def _authenticate_provider_integration_verifier() -> None:
 
     from . import bootstrap_source_admission as transport
 
-    helper = transport._load_actions_helper()
-    main = helper._authenticate_protected_bridge_main("SecPal/.github")
-    transport._git(
-        helper.REPOSITORY_ROOT,
-        ["fetch", "--quiet", "--no-tags", transport.PROTECTED_MAIN_REMOTE_URL, main],
-    )
-    # Authenticate loaded modules as well as their files: a pristine file must
-    # not conceal a verifier imported from a different candidate path.
-    modules = {"actions": helper, "evidence": helper.evidence}
-    paths = {
-        "actions": helper.REPOSITORY_ROOT / "scripts/secpal-pr-review-actions.py",
-        "evidence": helper.REPOSITORY_ROOT / "scripts/secpal-pr-review.py",
-    }
-    for name, module in tuple(sys.modules.items()):
-        if name.startswith(("secpal_pr_review.", "scripts.secpal_pr_review.")):
-            filename = name.rsplit(".", 1)[1]
-            # fast_path owns this existing alias for the standalone evidence
-            # helper; its origin remains the same fixed accepted-main file.
-            paths[name] = (
-                helper.EVIDENCE_HELPER if filename == "integration_evidence_helper"
-                else helper.FAST_PATH_HELPER.with_name(filename + ".py")
-            )
-            modules[name] = module
-    # Include execution references even if a substituted module was not
-    # registered under its canonical package name.
-    for name, module, filename in (
-        ("authority", authority, "lifecycle_authority.py"),
-        ("publication", sys.modules[__name__], "lifecycle_publication.py"),
-        ("transport", transport, "bootstrap_source_admission.py"),
-        ("fast_path", fast_path, "fast_path.py"),
-        ("helper_fast_path", helper.fast_path, "fast_path.py"),
-        ("local_follow_up", fast_path.follow_up, "follow_up.py"),
-        ("follow_up", helper.fast_path.follow_up, "follow_up.py"),
-        ("pre_enrollment", helper.pre_enrollment, "pre_enrollment_integration.py"),
-    ):
-        modules[name] = module
-        paths[name] = helper.FAST_PATH_HELPER.with_name(filename)
     try:
-        helper._require_bridge_import_provenance(
-            {name: (getattr(module, "__file__", None),
-                    getattr(getattr(module, "__spec__", None), "origin", None))
-             for name, module in modules.items()},
-            paths,
-        )
-        # Publication composition is part of the production verifier too.
-        # Candidate tooling can qualify behavior only in a hermetic test seam.
-        verifier_paths = {
-            path.relative_to(helper.REPOSITORY_ROOT).as_posix()
-            for path in paths.values()
-        }
-        verifier_paths.update({
-            "scripts/secpal-pr-review-actions.py", "scripts/secpal-pr-review.py",
-            "scripts/secpal_pr_review/fast_path.py",
-            "scripts/secpal_pr_review/follow_up.py",
-            "scripts/secpal_pr_review/pre_enrollment_integration.py",
-            "scripts/secpal_pr_review/lifecycle_authority.py",
-            "scripts/secpal_pr_review/lifecycle_publication.py",
-            "scripts/secpal_pr_review/lifecycle_orchestration.py",
-            "scripts/secpal_pr_review/bootstrap_source_admission.py",
-            "scripts/secpal_pr_review/exact_source_safety.py",
-            ".agents/skills/secpal-pr-review/references/repositories.json",
-            ".agents/skills/secpal-pr-review/references/repositories.schema.json",
-        })
-        for path in sorted(verifier_paths):
-            helper._require_exact_accepted_main_blob(helper.REPOSITORY_ROOT, main, path)
-    except helper.fast_path.SecurityBlocker as exc:
+        helper = transport._load_actions_helper()
+        main = helper._authenticate_protected_bridge_main("SecPal/.github")
+        transport._git(helper.REPOSITORY_ROOT,
+            ["fetch", "--quiet", "--no-tags", transport.PROTECTED_MAIN_REMOTE_URL, main])
+        helper._require_accepted_main_bridge_source("SecPal/.github", expected_main=main)
+    except (RuntimeError, fast_path.SecurityBlocker) as exc:
         raise LifecyclePublicationError(
             "Ready-source provider integration verifier is not accepted main"
         ) from exc

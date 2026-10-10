@@ -14,7 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from secpal_pr_review import unchanged_head_prerequisite as prerequisite
+from tests.secpal_actions_fixture import load_actions
+actions_owner = load_actions()
+
+from scripts.secpal_pr_review import unchanged_head_prerequisite as prerequisite
 
 
 @dataclass(frozen=True)

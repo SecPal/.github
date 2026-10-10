@@ -25,6 +25,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tests.secpal_actions_fixture import load_actions
+actions_owner = load_actions()
+
 from scripts.secpal_pr_review import bootstrap_source_admission as source
 from scripts.secpal_pr_review import fast_path
 

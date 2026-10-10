@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+"""Create detached signed evidence for exact post-push review disposition."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from typing import Sequence
+
+
+from . import fixed_thread_resolution as resolver
+
+
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--delivery-issue", required=True, type=int)
+    parser.add_argument("--pr", required=True, type=int)
+    parser.add_argument("--repo-root", required=True)
+    parser.add_argument("--expected-head", required=True)
+    parser.add_argument("--final-reviewed-state", required=True)
+    parser.add_argument("--expected-final-reviewed-state-digest", required=True)
+    parser.add_argument("--final-validation-evidence")
+    parser.add_argument("--final-validation-receipt")
+    parser.add_argument("--final-eligibility-evidence")
+    parser.add_argument("--integration-evidence")
+    parser.add_argument("--ready-source-recovery-publication")
+    parser.add_argument("--classification-evidence", required=True)
+    parser.add_argument("--classification-signature", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--signature-output", required=True)
+    arguments = parser.parse_args(argv)
+    if arguments.ready_source_recovery_publication is not None:
+        if any(
+            value is not None
+            for value in (
+                arguments.final_validation_evidence,
+                arguments.final_validation_receipt,
+                arguments.final_eligibility_evidence,
+                arguments.integration_evidence,
+            )
+        ):
+            parser.error(
+                "--ready-source-recovery-publication rejects incompatible source evidence"
+            )
+        return arguments
+    if arguments.final_validation_evidence is None:
+        parser.error(
+            "--final-validation-evidence is required without Ready-source recovery"
+        )
+    if (
+        arguments.integration_evidence is not None
+        and arguments.final_eligibility_evidence is None
+        and arguments.final_validation_receipt is None
+    ):
+        parser.error(
+            "--integration-evidence requires final eligibility or the historical validation receipt"
+        )
+    if arguments.final_validation_receipt is not None and (
+        arguments.integration_evidence is None
+        or arguments.final_eligibility_evidence is not None
+    ):
+        parser.error(
+            "--final-validation-receipt is only for historical Ready integration without final eligibility"
+        )
+    return arguments
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        result = resolver.create_late_disposition_artifact(
+            arguments.repo,
+            arguments.delivery_issue,
+            arguments.pr,
+            arguments.expected_head,
+            repository_root=arguments.repo_root,
+            final_reviewed_state_path=arguments.final_reviewed_state,
+            expected_final_reviewed_state_digest=(
+                arguments.expected_final_reviewed_state_digest
+            ),
+            final_validation_evidence_path=arguments.final_validation_evidence,
+            final_eligibility_evidence_path=(
+                arguments.final_eligibility_evidence
+            ),
+            classification_evidence_path=arguments.classification_evidence,
+            classification_signature_path=arguments.classification_signature,
+            output_path=arguments.output,
+            signature_output_path=arguments.signature_output,
+            integration_evidence_path=arguments.integration_evidence,
+            integration_validation_receipt_path=(
+                arguments.final_validation_receipt
+            ),
+            ready_source_recovery_publication_oid=(
+                arguments.ready_source_recovery_publication
+            ),
+        )
+    except resolver.ResolutionError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

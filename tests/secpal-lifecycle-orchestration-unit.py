@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 import zlib
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +26,9 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+from tests.secpal_actions_fixture import load_actions
+actions_owner = load_actions()
 
 from scripts.secpal_pr_review import lifecycle_authority as authority
 from scripts.secpal_pr_review import fast_path
@@ -13303,15 +13306,8 @@ class ReadyIntegrationRemediationTests(TestCase):
 
     @classmethod
     def setUpClass(cls):
-        def load(name, filename):
-            spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "tests" / filename)
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[name] = module
-            spec.loader.exec_module(module)
-            return module
-
-        cls.actions_fixture = load("ready_remediation_actions_fixture", "secpal-pr-review-actions-unit.py")
-        cls.publication_fixture = load("ready_remediation_publication_fixture", "secpal-lifecycle-publication-unit.py")
+        cls.actions_fixture = importlib.import_module("tests.secpal-pr-review-actions-unit")
+        cls.publication_fixture = importlib.import_module("tests.secpal-lifecycle-publication-unit")
 
     def git(self, *args):
         return subprocess.run(["git", *args], cwd=self.root, check=True,
@@ -13330,6 +13326,17 @@ class ReadyIntegrationRemediationTests(TestCase):
         return self.git("write-tree")
 
     def setUp(self):
+        self.assertIs(load_actions(), actions_owner)
+        # This unit model supplies a hermetic trust policy and signature verifier.
+        # Keep its transport seam explicit; real ownership is tested unmocked in
+        # VerifierOwnershipTests and qualified against retained signed evidence.
+        owned_transport = mock.patch.object(
+            orchestration.bootstrap_source_admission, "_load_actions_helper",
+            return_value=actions_owner,
+        )
+        owned_transport.start()
+        self.owned_transport = owned_transport
+        self.addCleanup(owned_transport.stop)
         directory = tempfile.TemporaryDirectory(prefix="ready-remediation-source-")
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
@@ -13386,6 +13393,7 @@ class ReadyIntegrationRemediationTests(TestCase):
         pf = self.publication_fixture
         journal = pf.LifecyclePublicationTests()
         journal.setUp()
+        self.journal = journal
         self.addCleanup(journal.tearDown)
         chain = pf.Chain(1070, pull_request=self.reviewed.pull_request_number)
         exhausted = self._testMethodName == "test_provider_lineage_exhausted_remediation"
@@ -13657,7 +13665,7 @@ class ReadyIntegrationRemediationTests(TestCase):
             metadata_pull_request=self.reviewed.pull_request_number,
         )
         wrong_summary["headRefOid"] = self.current.lifecycle.head_sha
-        with mock.patch.object(publication, "_authenticate_provider_integration_verifier"), \
+        with self.owned_graph_for_provider_parser(binding), \
              self.assertRaises(fixture.actions.MutationBlocked):
             fixture.actions._require_review_providers_terminal(
                 wrong_summary, repository=REPOSITORY,
@@ -13759,24 +13767,20 @@ class ReadyIntegrationRemediationTests(TestCase):
                 publication.derive_ready_source_recovery_provider_binding(
                     self.current, ready_integrations=((self.predecessor, self.prior_authority),))
 
-    def test_provider_integration_rejects_substituted_loaded_module_origins(self):
-        transport = orchestration.bootstrap_source_admission
-        helper = transport._load_actions_helper()
-        modules = (
-            authority, transport, fast_path, helper.evidence,
-            fast_path.follow_up, helper.pre_enrollment,
-        )
-        with mock.patch.object(helper, "_authenticate_protected_bridge_main", return_value="a" * 40), \
-             mock.patch.object(helper, "_require_exact_accepted_main_blob"), \
-             mock.patch.object(transport, "_git"):
-            publication._authenticate_provider_integration_verifier()
-            for module in modules:
-                for field in ("__file__", "origin"):
-                    with self.subTest(module=module.__name__, field=field):
-                        target = module if field == "__file__" else module.__spec__
-                        with mock.patch.object(target, field, "/tmp/candidate-verifier.py"):
-                            with self.assertRaises(publication.LifecyclePublicationError):
-                                publication._authenticate_provider_integration_verifier()
+    @contextmanager
+    def owned_graph_for_provider_parser(self, binding):
+        # Restore real construction bindings before testing owned type dispatch.
+        # Only the provider-head observation is controlled at its existing seam.
+        patches = (self.owned_transport, self.journal.policy_patch,
+                   self.journal.verifier_patch, self.journal.protection_patch)
+        for patcher in patches:
+            patcher.stop()
+        try:
+            with mock.patch.object(type(binding), "provider_head", return_value=binding.provider_head_sha):
+                yield
+        finally:
+            for patcher in reversed(patches):
+                patcher.start()
 
     def test_provider_lineage_historical_summary_does_not_review_current_head(self):
         fixture = self.actions_fixture
@@ -13788,7 +13792,7 @@ class ReadyIntegrationRemediationTests(TestCase):
         summary = pull["comments"]["nodes"][0]["body"]
         with self.assertRaisesRegex(fixture.actions.MutationBlocked, "stale"):
             fixture.actions._require_review_providers_terminal(pull)
-        with mock.patch.object(publication, "_authenticate_provider_integration_verifier"):
+        with self.owned_graph_for_provider_parser(binding):
             fixture.actions._require_review_providers_terminal(
                 pull, repository=REPOSITORY, pull_request_number=self.reviewed.pull_request_number,
                 ready_source_provider_binding=binding)
@@ -14404,6 +14408,7 @@ class ReadyIntegrationRemediationTests(TestCase):
         name = self._testMethodName
         self._testMethodName = "test_provider_lineage_exhausted_remediation"
         try:
+            self.doCleanups()
             self.setUp()
         finally:
             self._testMethodName = name
@@ -14520,18 +14525,6 @@ class ReadyIntegrationRemediationTests(TestCase):
                 validation_receipt=self.receipt, integration_evidence=self.integration)
             with self.subTest(label=label), self.assertRaises(self.actions_fixture.fast_path.SecurityBlocker):
                 self.admit_next_integration([package])
-
-    def test_chained_integration_verifier_authenticates_composition_owners(self):
-        transport = orchestration.bootstrap_source_admission
-        helper = transport._load_actions_helper()
-        with (mock.patch.object(helper, "_authenticate_protected_bridge_main", return_value="a" * 40),
-              mock.patch.object(helper, "_require_exact_accepted_main_blob") as authenticate,
-              mock.patch.object(transport, "_git")):
-            publication._authenticate_provider_integration_verifier()
-        paths = {call.args[2] for call in authenticate.call_args_list}
-        self.assertIn("scripts/secpal_pr_review/lifecycle_publication.py", paths)
-        self.assertIn("scripts/secpal_pr_review/lifecycle_orchestration.py", paths)
-
 
     def test_chained_integration_historical_v11_semantics(self):
         self.assertEqual(self.integration["schema_version"], "1.1")
@@ -15002,8 +14995,7 @@ class ProviderReacquisitionExecutionTests(TestCase):
         self.assertEqual(execute.call_count, 1)
 
     def test_cli_rejects_non_object_authorization_with_structured_failure(self):
-        spec = importlib.util.spec_from_file_location("secpal_reacquisition_cli_nonobject", REPO_ROOT / "scripts/secpal-provider-reacquisition.py")
-        cli = importlib.util.module_from_spec(spec);spec.loader.exec_module(cli)
+        cli = load_actions()._owned_verifier_module("provider_reacquisition_cli")
         with tempfile.TemporaryDirectory(prefix="secpal-reacquisition-input-") as directory:
             source, output = Path(directory) / "auth.json", Path(directory) / "result.json"
             for value in ([], None, "text", 7):
@@ -15069,9 +15061,7 @@ class ProviderReacquisitionExecutionTests(TestCase):
         claims.assert_not_called()
 
     def test_cli_records_signing_failure_without_an_external_operation(self):
-        spec = importlib.util.spec_from_file_location("secpal_reacquisition_cli_test", REPO_ROOT / "scripts/secpal-provider-reacquisition.py")
-        cli = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cli)
+        cli = load_actions()._owned_verifier_module("provider_reacquisition_cli")
         with tempfile.TemporaryDirectory(prefix="secpal-reacquisition-cli-") as directory:
             output = Path(directory) / "result.json"
             with mock.patch.object(sys, "argv", ["reacquisition", "authorize", "--repo", REPOSITORY,
@@ -15083,9 +15073,9 @@ class ProviderReacquisitionExecutionTests(TestCase):
 
     def test_existing_isolated_action_launcher_can_load_reacquisition_claims(self):
         action = REPO_ROOT / "scripts/secpal-pr-review-actions.py"
-        code = ("import importlib.util, importlib; "
+        code = ("import importlib.util, importlib, sys; "
             f"spec = importlib.util.spec_from_file_location('isolated_actions', {str(action)!r}); "
-            "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module); "
             "authority_module, publication_module = module._load_lifecycle_publication_helpers(); "
             "importlib.import_module(publication_module.__package__ + '.provider_reacquisition'); "
             "importlib.import_module(publication_module.__package__ + '.enrolled_draft_integration')")
@@ -15138,20 +15128,14 @@ class CorrectedReadyIntegrationRemediationTests(TestCase):
     def setUp(self):
         stack = ExitStack()
         self.addCleanup(stack.close)
-        # Standalone fixture loaders use production module aliases. Restore
-        # those aliases after each case so later CLI tests retain their package.
-        stack.enter_context(mock.patch.dict(sys.modules))
-
-        def load(name, filename):
-            spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "tests" / filename)
-            value = importlib.util.module_from_spec(spec)
-            sys.modules[name] = value
-            spec.loader.exec_module(value)
-            return value
-
-        source = load("corrected_remediation_root_fixture", "secpal-adopted-ready-prior-authority-unit.py")
-        actions_fixture = load("corrected_remediation_actions_fixture", "secpal-pr-review-actions-unit.py")
-        pf = load("corrected_remediation_journal_fixture", "secpal-lifecycle-publication-unit.py")
+        self.assertIs(load_actions(), actions_owner)
+        source = importlib.import_module("tests.secpal-adopted-ready-prior-authority-unit")
+        actions_fixture = importlib.import_module("tests.secpal-pr-review-actions-unit")
+        pf = importlib.import_module("tests.secpal-lifecycle-publication-unit")
+        stack.enter_context(mock.patch.object(
+            orchestration.bootstrap_source_admission, "_load_actions_helper",
+            return_value=actions_owner,
+        ))
         directory = stack.enter_context(tempfile.TemporaryDirectory(prefix="corrected-ready-remediation-"))
         self.root = Path(directory)
         key = self.root / "fixture-key"
@@ -15275,7 +15259,6 @@ class CorrectedReadyIntegrationRemediationTests(TestCase):
         actions = orchestration.bootstrap_source_admission._load_actions_helper()
         stack.enter_context(mock.patch.object(actions, "_load_lifecycle_publication_helpers", return_value=(authority, publication)))
         stack.enter_context(mock.patch.object(actions, "_require_accepted_main_bridge_source", return_value="9" * 40))
-        stack.enter_context(mock.patch.object(actions, "_require_bridge_import_provenance"))
         self.manifest = actions._derive_exact_state_adoption_ready_prior_authority(
             repository_root=self.root, repository=REPOSITORY, delivery_issue=source.ISSUE,
             pull_request=source.PR, binding=self.registry,
@@ -15783,15 +15766,8 @@ class OrdinaryAdoptedCurrentTests(TestCase):
 
     @classmethod
     def setUpClass(cls):
-        def load(name, filename):
-            spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "tests" / filename)
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[name] = module
-            spec.loader.exec_module(module)
-            return module
-
-        cls.p = load("ordinary_adopted_publication", "secpal-lifecycle-publication-unit.py")
-        cls.g = load("ordinary_adopted_amendment", "secpal-governance-amendment-unit.py")
+        cls.p = importlib.import_module("tests.secpal-lifecycle-publication-unit")
+        cls.g = importlib.import_module("tests.secpal-governance-amendment-unit")
         from scripts.secpal_pr_review import lifecycle_execution
         cls.execution = lifecycle_execution
 

@@ -11,10 +11,8 @@ import tempfile
 from unittest import TestCase, main, mock
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("gov_actions", ROOT / "scripts/secpal-pr-review-actions.py")
-actions = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = actions
-spec.loader.exec_module(actions)
+from tests.secpal_actions_fixture import load_actions
+actions = load_actions()
 
 
 class GovernanceValidationTests(TestCase):
