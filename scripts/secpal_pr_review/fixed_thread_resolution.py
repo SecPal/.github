@@ -154,18 +154,6 @@ FollowUpIdentity = follow_up.FollowUpIdentity
 LiveFollowUpState = follow_up.LiveFollowUpState
 
 
-def _load_evidence_helper() -> Any:
-    return bootstrap_source_admission._load_actions_helper().evidence
-
-
-def _load_follow_up_helper() -> Any:
-    return bootstrap_source_admission._load_actions_helper().follow_up
-
-
-def _load_late_disposition_helper() -> Any:
-    return bootstrap_source_admission._load_actions_helper()._owned_verifier_module("late_disposition")
-
-
 def _verify_exact_helper_source(name: str) -> None:
     """Authenticate regular helper bytes against the committed HEAD first."""
 
@@ -230,20 +218,6 @@ _EXACT_PREREQUISITE_GETS = frozenset(
 def _ensure_exact_prerequisite_helpers() -> None:
     """Authenticate retained exact-case imports before each closed operation."""
     _load_exact_prerequisite_helpers()
-
-
-def _load_fast_path_helper() -> Any:
-    return bootstrap_source_admission._load_actions_helper()._load_fast_path_helper()
-
-
-def _load_lifecycle_orchestration_helper() -> Any:
-    return bootstrap_source_admission._load_actions_helper()._owned_verifier_module("lifecycle_orchestration")
-
-
-def _load_lifecycle_publication_helper() -> Any:
-    return bootstrap_source_admission._load_actions_helper()._owned_verifier_module("lifecycle_publication")
-
-
 
 
 def _resolve_trusted_markdown_node() -> str:

@@ -30,6 +30,10 @@ from scripts.secpal_pr_review import lifecycle_execution as execution
 from scripts.secpal_pr_review import lifecycle_publication as publication
 from scripts.secpal_pr_review import fast_path
 
+reacquisition_transport_fixture = importlib.import_module(
+    'tests.secpal-lifecycle-orchestration-unit'
+)
+
 
 REPOSITORY = "SecPal/.github"
 CONTRACTS_REPOSITORY = "SecPal/contracts"
@@ -2943,7 +2947,7 @@ class LifecyclePublicationTests(TestCase):
             )
         self.assertNotIn("signature", safety)
         self.assertFalse(hasattr(fast_path, "is_verified_ready_source_recovery_safety"))
-        actions = load_actions()
+        actions = actions_owner
         entry = copy.deepcopy(actions.select_repository(
             actions.load_registry(), REPOSITORY
         ))
@@ -3744,7 +3748,7 @@ class LifecyclePublicationTests(TestCase):
             or advanced.lifecycle.source_validation_evidence_digest
             != advanced.lifecycle.source_validation_evidence_digest
         )
-        actions = load_actions()
+        actions = actions_owner
         with patch.object(
             actions,
             "_load_lifecycle_publication_helpers",
@@ -4755,9 +4759,7 @@ class LifecyclePublicationTests(TestCase):
 
     def reacquisition_claim_fixture(self, *, prior_assessment=False):
         from scripts.secpal_pr_review import provider_reacquisition as r
-        spec = importlib.util.spec_from_file_location("reacquisition_transport_fixture", Path(__file__).with_name("secpal-lifecycle-orchestration-unit.py"))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        module = reacquisition_transport_fixture
         _, feedback, _, _, _, fixture_current, raw = module.first_fallback_growth()
         chain = Chain()
         chain.append("INITIALIZED_DRAFT")
@@ -5752,29 +5754,39 @@ class ContractsLifecyclePolicyTests(TestCase):
             )
 
 
+class RegistryConsumerProjectionTests(TestCase):
+    """Pure consumer projections use the shared, unmodified verifier graph."""
+
+    def test_registry_and_consumer_projections_agree(self) -> None:
+        actions = load_actions()
+        resolver = actions._owned_verifier_module("fixed_thread_resolution")
+        self.assertIs(actions, actions_owner)
+        self.assertIs(actions._owned_verifier_module("lifecycle_publication"), publication)
+        registry = actions.load_registry()
+        for repository in ("SecPal/frontend", "SecPal/api", "SecPal/android"):
+            with self.subTest(repository=repository):
+                entry = actions.select_repository(registry, repository)
+                binding = actions._fast_registry_binding(entry)
+                self.assertEqual(binding, resolver._validation_registry_binding(entry))
+                self.assertEqual(binding["repository"], repository)
+                self.assertIn("BRANCH_WRITE", entry["unsupported_operations"])
+                self.assertEqual(
+                    entry["lifecycle_authority_policy"]["publication_remote_url"],
+                    f"https://github.com/{repository}.git",
+                )
+        with self.assertRaises(actions.RegistryError):
+            actions.select_repository(registry, "Other/frontend")
+        self.assertIs(load_actions(), actions)
+
+
 class FrontendLifecyclePolicyTests(ContractsLifecyclePolicyTests):
     """The Frontend registration consumes the existing lifecycle contract."""
 
     repository = "SecPal/frontend"
     expected_ruleset_id = 24431481
 
-    def test_registry_and_consumer_projections_agree(self) -> None:
-        actions = load_actions()
-        resolver = actions._owned_verifier_module("fixed_thread_resolution")
-        entry = actions.select_repository(actions.load_registry(), self.repository)
-        binding = actions._fast_registry_binding(entry)
-        self.assertEqual(binding, resolver._validation_registry_binding(entry))
-        self.assertEqual(binding["repository"], self.repository)
-        self.assertIn("BRANCH_WRITE", entry["unsupported_operations"])
-        self.assertEqual(
-            entry["lifecycle_authority_policy"]["publication_remote_url"],
-            f"https://github.com/{self.repository}.git",
-        )
-        with self.assertRaises(actions.RegistryError):
-            actions.select_repository(actions.load_registry(), "Other/frontend")
-
     def test_ready_integration_authenticates_repository_bound_current(self) -> None:
-        actions = load_actions()
+        actions = actions_owner
         chain = self.chain()
         chain.append("INITIALIZED_DRAFT")
         publication.admit_native_genesis(

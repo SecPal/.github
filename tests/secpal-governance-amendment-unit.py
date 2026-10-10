@@ -351,7 +351,7 @@ class GovernanceAmendmentTests(TestCase):
         from scripts.secpal_pr_review import lifecycle_publication as publication
 
         root = Path(__file__).resolve().parents[1]
-        actions = load_actions()
+        actions = actions_owner
         first, second = self.patches()
         with first, second, tempfile.TemporaryDirectory() as directory:
             self._ready_integration_commits = {}

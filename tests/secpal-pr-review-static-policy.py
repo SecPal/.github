@@ -656,21 +656,17 @@ ALLOWED_IMPORTS = {
         "from . import fixed_thread_resolution as resolver",
         "from __future__ import annotations",
         "import argparse",
-        "import importlib.util",
         "import json",
         "import sys",
-        "from pathlib import Path",
-        "from typing import Any, Sequence",
+        "from typing import Sequence",
     },
     "late_classification_cli.py": {
         "from . import fixed_thread_resolution as resolver",
         "from __future__ import annotations",
         "import argparse",
-        "import importlib.util",
         "import json",
         "import sys",
-        "from pathlib import Path",
-        "from typing import Any, Sequence",
+        "from typing import Sequence",
     },
 }
 PROHIBITED_IMPORT_ROOTS = {
@@ -1068,7 +1064,6 @@ SAFE_GETATTR_CALLS = {
         DynamicImportCall(('_verify_exceptional_recovery_selection',), "getattr(arguments, 'exceptional_recovery_authorization_id', None)"),
         DynamicImportCall(('_verify_exceptional_continuation_selection',), "getattr(arguments, 'exceptional_continuation_delivery_issue', None)"),
         DynamicImportCall(('_verify_exceptional_continuation_selection',), "getattr(arguments, 'exceptional_continuation_authorization_id', None)"),
-        DynamicImportCall(("_construct_verifier_owner",), "getattr(core, key)"),
         DynamicImportCall(("_construct_verifier_owner",), "getattr(module, '__path__', None)"),
         DynamicImportCall(("_construct_verifier_owner", "require_owner"), "getattr(module, key, None)"),
         DynamicImportCall(("_construct_verifier_owner", "require_owner"), "getattr(modules[parent], child, None)")
@@ -1114,12 +1109,6 @@ RESOLVER_TOP_LEVEL_FUNCTIONS = {
     "_consume_thread",
     "_digest_json",
     "_graphql",
-    "_load_evidence_helper",
-    "_load_follow_up_helper",
-    "_load_late_disposition_helper",
-    "_load_fast_path_helper",
-    "_load_lifecycle_orchestration_helper",
-    "_load_lifecycle_publication_helper",
     "_load_recovered_ready_source_validation",
     "_load_qualified_remediation_successor_validation",
     "_late_signing_key",
@@ -1655,10 +1644,12 @@ class PolicyVisitor(ast.NodeVisitor):
         if node.id in protected_names and isinstance(node.ctx, ast.Load):
             parent = self.parents.get(node)
             if not isinstance(parent, ast.Attribute) or parent.value is not node:
-                if not (self.source_name == "secpal-pr-review-actions.py" and (
-                    (node.id == "evidence" and tuple(self.functions) == ("_load_evidence_helper",) and isinstance(parent, ast.Return))
-                    or (tuple(self.functions) == ("_construct_verifier_owner",)
-                        and isinstance(parent, ast.Dict) and ast.unparse(parent) == SAFE_OWNER_ROLES))):
+                if not (
+                    self.source_name == "secpal-pr-review-actions.py"
+                    and node.id == "evidence"
+                    and tuple(self.functions) == ("_load_evidence_helper",)
+                    and isinstance(parent, ast.Return)
+                ):
                     self.finding(node, f"bare {node.id} module reference is prohibited")
         if (
             self.bounded_resolver
@@ -1729,7 +1720,8 @@ class PolicyVisitor(ast.NodeVisitor):
                     allowed = (isinstance(parent, ast.Subscript) and ast.unparse(parent) == "sys.path[:]"
                                or isinstance(parent, ast.Attribute) and parent.attr == "insert")
                 elif node.attr == "meta_path":
-                    allowed = isinstance(parent, ast.Call) and ast.unparse(parent) == "tuple(sys.meta_path)"
+                    allowed = ((isinstance(parent, ast.Call) and ast.unparse(parent) == "tuple(sys.meta_path)")
+                               or (isinstance(parent, ast.Subscript) and ast.unparse(parent) == "sys.meta_path[:]"))
                 else:
                     allowed = isinstance(parent, ast.Assign) and node in parent.targets
                 if not allowed:
@@ -2380,6 +2372,8 @@ def self_test() -> None:
         ("secpal-pr-review-actions.py", "import sys\ndef _construct_verifier_owner():\n    sys.path.insert(0, str(foreign))\n"),
         ("secpal-pr-review-actions.py", "import sys\ndef _construct_verifier_owner():\n    sys.path[:] = foreign\n"),
         ("secpal-pr-review-actions.py", "import sys\nsys.meta_path[:] = []\n"),
+        ("secpal-pr-review-actions.py", "import sys\ndef _construct_verifier_owner():\n    sys.meta_path[:] = foreign\n"),
+        ("secpal-pr-review-actions.py", "import sys\ndef foreign_scope():\n    sys.meta_path[:] = original_importers\n"),
         ("secpal-pr-review-actions.py", "import sys\nsys.pycache_prefix = foreign\n"),
 
         (
@@ -2482,17 +2476,14 @@ ALLOWED_IMPORTS['secpal-provider-reacquisition.py'] = {'import importlib.util', 
 
 ALLOWED_IMPORTS['secpal-publish-review-consumption.py'] = {'import importlib.util', 'import sys', 'from pathlib import Path'}
 
-ALLOWED_IMPORTS['exact_prerequisite_cli.py'] = {'from __future__ import annotations', 'import argparse', 'from pathlib import Path', 'import sys', 'import json', 'from typing import Any, Sequence', 'import importlib.util', 'from . import fixed_thread_resolution as resolver'}
-
 ALLOWED_IMPORTS['provider_reacquisition_cli.py'] = {'from . import fast_path, lifecycle_authority as authority, lifecycle_execution', 'from __future__ import annotations', 'import argparse', 'from pathlib import Path', 'from . import lifecycle_publication as publication, provider_reacquisition', 'import sys'}
 
-ALLOWED_IMPORTS['review_consumption_cli.py'] = {'from __future__ import annotations', 'import argparse', 'from pathlib import Path', 'from . import lifecycle_execution', 'import sys', 'import json'}
-
-SAFE_OWNER_ROLES = "{'fast_path': fast_path, 'evidence': evidence, 'follow_up': follow_up, 'pre_enrollment': pre_enrollment, 'exact_source_safety': exact_source_safety}"
 
 SAFE_OWNER_MUTATIONS = {
     DynamicImportCall(("_construct_verifier_owner",), "sys.path.insert(0, str(root))"),
     DynamicImportCall(("_construct_verifier_owner",), "sys.path[:] = original_path"),
+    DynamicImportCall(("_construct_verifier_owner",), "sys.meta_path[:] = importers"),
+    DynamicImportCall(("_construct_verifier_owner",), "sys.meta_path[:] = original_importers"),
     DynamicImportCall(("_construct_verifier_owner",), "sys.pycache_prefix = BRIDGE_BYTECODE_CACHE.name"),
 }
 
@@ -2500,12 +2491,20 @@ SAFE_OWNER_REFLECTION = {
     DynamicImportCall(("_construct_verifier_owner",), "globals()"),
     DynamicImportCall(("_construct_verifier_owner",), "vars(module)"),
     DynamicImportCall(("_construct_verifier_owner", "require_owner"), "vars(module)"),
+    DynamicImportCall(("_construct_verifier_owner", "require_owner"), "vars(owner)"),
+    DynamicImportCall(("_construct_verifier_owner", "seal_owner"), "vars(owner)"),
 }
 SAFE_OWNER_REFLECTION_ATTRIBUTES = {
     DynamicImportCall(("_construct_verifier_owner",), "owner.__dict__"),
     DynamicImportCall(("_construct_verifier_owner", "require_owner"), "owner.__dict__"),
     DynamicImportCall(("_construct_verifier_owner", "require_owner"), "require_owner.__globals__"),
 }
+
+
+
+ALLOWED_IMPORTS['exact_prerequisite_cli.py'] = {'import sys', 'import json', 'from typing import Sequence', 'from . import fixed_thread_resolution as resolver', 'from __future__ import annotations', 'import argparse', 'from pathlib import Path'}
+
+ALLOWED_IMPORTS['review_consumption_cli.py'] = {'from . import lifecycle_execution', 'from __future__ import annotations', 'import json', 'import argparse'}
 
 def main(argv: list[str]) -> int:
     if len(argv) != 10:

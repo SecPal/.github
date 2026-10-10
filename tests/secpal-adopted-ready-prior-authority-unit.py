@@ -2043,6 +2043,33 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             ):
                 actions._require_exact_accepted_main_blob(root, accepted, "tool.py")
 
+    def bridge_transport(self, responses):
+        """Model external observations without replacing owned verifier bindings."""
+        observations = iter(responses)
+
+        def run(arguments, **kwargs):
+            if "api" in arguments:
+                return next(observations)
+            if "rev-parse" in arguments:
+                value = "9" * 40
+            elif "--name-only" in arguments:
+                value = "\n".join(
+                    str(path.relative_to(actions.REPOSITORY_ROOT))
+                    for path in (actions.REPOSITORY_ROOT / "scripts/secpal_pr_review").glob("*.py")
+                )
+            else:
+                relative = arguments[-1]
+                path = actions.REPOSITORY_ROOT / relative
+                content = path.read_bytes()
+                blob = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+                value = blob if "hash-object" in arguments else (
+                    ("100755" if path.stat().st_mode & 0o111 else "100644")
+                    + " blob " + blob + "\t" + relative
+                )
+            return subprocess.CompletedProcess(arguments, 0, value + "\n", "")
+
+        return mock.patch.object(subprocess, "run", side_effect=run)
+
     def test_accepted_main_gate_requires_protection_and_bounded_metadata(self) -> None:
         repository = subprocess.CompletedProcess(
             [],
@@ -2059,18 +2086,13 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             [], 0, stdout=json.dumps({"sha": "9" * 40, "verified": True}), stderr=""
         )
         with (
-            mock.patch.object(
-                actions, "_run_bridge_gh", side_effect=[repository, branch, commit]
-            ) as run_gh,
-            mock.patch.object(
-                actions, "_require_accepted_main_tooling_blobs"
-            ),
+            self.bridge_transport([repository, branch, commit]) as run_gh,
         ):
             self.assertEqual(
                 actions._require_accepted_main_bridge_source(REPOSITORY),
                 "9" * 40,
             )
-        calls = [item.args[0] for item in run_gh.call_args_list]
+        calls = [item.args[0] for item in run_gh.call_args_list if "api" in item.args[0]]
         self.assertEqual(len(calls), 3)
         self.assertIn("--jq", calls[0])
         self.assertIn("--jq", calls[1])
@@ -2079,18 +2101,13 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
         unprotected = subprocess.CompletedProcess(
             [], 0, stdout=json.dumps({"sha": "9" * 40, "protected": False}), stderr=""
         )
-        with mock.patch.object(actions, "_run_bridge_gh", return_value=unprotected), self.assertRaises(
+        with self.bridge_transport([repository, unprotected]), self.assertRaises(
             fast_path.SecurityBlocker
         ):
             actions._require_accepted_main_bridge_source(REPOSITORY)
 
         with (
-            mock.patch.object(
-                actions,
-                "_run_bridge_gh",
-                side_effect=[repository, branch, commit],
-            ),
-            mock.patch.object(actions, "_require_accepted_main_tooling_blobs"),
+            self.bridge_transport([repository, branch, commit]),
             self.assertRaisesRegex(fast_path.SecurityBlocker, "changed during"),
         ):
             actions._require_accepted_main_bridge_source(
@@ -2113,8 +2130,7 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
             result({"sha": "9" * 40, "verified": True}),
         ]
         with (
-            mock.patch.object(actions, "_run_bridge_gh", side_effect=responses) as provider,
-            mock.patch.object(actions, "_require_accepted_main_tooling_blobs") as blobs,
+            self.bridge_transport(responses) as provider,
         ):
             self.assertEqual(
                 actions._require_accepted_main_bridge_source(
@@ -2122,15 +2138,17 @@ class AdoptedReadyPriorAuthorityTests(TestCase):
                 ),
                 "9" * 40,
             )
-        self.assertEqual(provider.call_count, 6)
-        blobs.assert_called_once_with(actions.REPOSITORY_ROOT, "9" * 40)
+        calls = [item.args[0] for item in provider.call_args_list]
+        self.assertEqual(sum("api" in call for call in calls), 6)
+        self.assertTrue(any("rev-parse" in call for call in calls))
+        self.assertTrue(all("8" * 40 not in call for call in calls if "api" not in call))
 
     def test_bridge_provider_failures_are_guarded(self) -> None:
         with mock.patch.object(
-            actions,
-            "_run_bridge_gh",
-            side_effect=fast_path.SecurityBlocker("bridge observation unavailable"),
-        ), self.assertRaisesRegex(fast_path.SecurityBlocker, "observation unavailable"):
+            subprocess,
+            "run",
+            side_effect=OSError("provider unavailable"),
+        ), self.assertRaisesRegex(fast_path.SecurityBlocker, "observation is unavailable"):
             actions._require_accepted_main_bridge_source(REPOSITORY)
 
         with (

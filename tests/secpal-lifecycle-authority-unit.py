@@ -3219,7 +3219,7 @@ class ValidationEvidenceLossTests(TestCase):
                                        text=True).strip()
 
     def test_current_safety_profile_does_not_project_unrelated_repository_tests(self) -> None:
-        helper = self.loss.transport._load_actions_helper()
+        helper = actions_owner
         entry = helper.select_repository(helper.load_registry(), REPOSITORY)
         paths = self.loss._current_validation_harness_paths("HEAD", helper, entry)
         self.assertEqual(paths, ("tests/pre-enrollment-current-safety.py",))
@@ -4407,7 +4407,7 @@ printf 'Usage: fixture\\n'
         return current, bundle, document, record, summary
 
     def test_authenticated_direct_v3_current_receipt_root_and_contracts_525_shape(self) -> None:
-        actions = load_actions()
+        actions = actions_owner
         for contracts_shape in (False, True):
             with self.subTest(contracts_shape=contracts_shape):
                 current, bundle, document, record, summary = self.issued_ready_root(contracts_shape=contracts_shape)
@@ -4459,7 +4459,7 @@ printf 'Usage: fixture\\n'
     def test_direct_v3_issued_root_composes_with_typed_head_advanced_readback(self) -> None:
         from scripts.secpal_pr_review import bootstrap_source_admission as transport
 
-        actions = load_actions()
+        actions = actions_owner
         for contracts_shape in (False, True):
             with self.subTest(contracts_shape=contracts_shape):
                 current, _bundle, document, _record, _summary = self.issued_ready_root(contracts_shape=contracts_shape)
@@ -4507,6 +4507,7 @@ printf 'Usage: fixture\\n'
                     patch.object(fast_path, "_run_integration_commit_git", side_effect=git),
                     patch.object(actions, "_run_attestation_git", side_effect=git),
                     patch.object(publication, "_authenticate_provider_integration_verifier"),
+                    patch.object(transport, "_load_actions_helper", return_value=actions_owner),
                 ):
                     manifest = actions._derive_exact_state_adoption_ready_prior_authority(
                         repository_root=REPO_ROOT.parent, repository=document["repository"],

@@ -51,7 +51,7 @@ EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
 LOCAL_VALIDATION_TIMEOUT_SECONDS = 600
 
 
-def _construct_verifier_owner() -> tuple[Any, Any]:
+def _construct_verifier_owner() -> tuple[Any, Any, Any]:
     """Own ordinary imports once; never adopt an existing verifier namespace."""
     owner = sys.modules.get(__name__)
     if type(owner) is not types.ModuleType or owner.__dict__ is not globals():
@@ -69,14 +69,7 @@ def _construct_verifier_owner() -> tuple[Any, Any]:
         raise RuntimeError("Unowned preloaded verifier namespace")
     importers = (importlib.machinery.BuiltinImporter,
                  importlib.machinery.FrozenImporter, importlib.machinery.PathFinder)
-    def owned_importers() -> bool:
-        current = tuple(sys.meta_path)
-        return len(current) == len(importers) and all(
-            observed is expected for observed, expected in zip(current, importers)
-        )
-
-    if not owned_importers():
-        raise RuntimeError("Foreign verifier import machinery")
+    original_importers = tuple(sys.meta_path)
     global BRIDGE_BYTECODE_CACHE, fast_path, evidence, follow_up, pre_enrollment, exact_source_safety
     BRIDGE_BYTECODE_CACHE = tempfile.TemporaryDirectory(
         prefix="secpal-accepted-main-bytecode-"
@@ -89,6 +82,7 @@ def _construct_verifier_owner() -> tuple[Any, Any]:
     owner_spec = owner.__spec__
     owner_name = owner.__name__
     sys.path.insert(0, str(root))
+    sys.meta_path[:] = importers
     try:
         # The closed, flat graph is constructed before it is exposed. Python
         # handles dependency ordering and relative imports; no finder or alias
@@ -104,6 +98,7 @@ def _construct_verifier_owner() -> tuple[Any, Any]:
         raise
     finally:
         sys.path[:] = original_path
+        sys.meta_path[:] = original_importers
     modules = entries()
     records = {}
     metadata = {}
@@ -118,17 +113,15 @@ def _construct_verifier_owner() -> tuple[Any, Any]:
             if set(module.__path__) != {str(expected)}:
                 raise RuntimeError("Verifier namespace path changed")
             records[name] = (module, None, None, module.__spec__,
-                             {key: value for key, value in vars(module).items()
-                              if isinstance(value, types.ModuleType)})
+                             dict(vars(module)))
             continue
         if (module.__file__ != str(path) or module.__spec__.origin != str(path)
                 or type(module.__loader__) is not importlib.machinery.SourceFileLoader
                 or path.resolve(strict=True) != path):
             raise RuntimeError("Verifier import origin changed")
-        # Types, private identity tokens and module references are immutable
-        # construction facts. Operation results and live authority are absent.
-        bindings = {key: value for key, value in vars(module).items()
-                    if isinstance(value, (type, types.ModuleType)) or type(value) is object}
+        # Retain every construction binding, including callables and policy
+        # paths. This records references, never operation results or live trust.
+        bindings = dict(vars(module))
         records[name] = (module, path, hashlib.sha256(path.read_bytes()).digest(),
                          module.__spec__, bindings)
 
@@ -137,23 +130,24 @@ def _construct_verifier_owner() -> tuple[Any, Any]:
     follow_up = modules["scripts.secpal_pr_review.follow_up"]
     pre_enrollment = modules["scripts.secpal_pr_review.pre_enrollment_integration"]
     exact_source_safety = modules["scripts.secpal_pr_review.exact_source_safety"]
-    roles = {"fast_path": fast_path, "evidence": evidence, "follow_up": follow_up,
-             "pre_enrollment": pre_enrollment, "exact_source_safety": exact_source_safety}
-    for key in ("VERIFIER_MODULE_NAMES", "WORK_GRAPH_MODULE_NAMES", "VERIFIER_EXECUTION_TOOLING_PATHS",
-                "READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS"):
-        records[core.__name__][4][key] = getattr(core, key)
+    owner_bindings = None
+
+    def seal_owner() -> None:
+        nonlocal owner_bindings
+        if owner_bindings is not None:
+            raise RuntimeError("Actions owner bindings are already retained")
+        owner_bindings = dict(vars(owner))
 
     def require_owner() -> Any:
-        if (sys.modules.get(owner_name) is not owner
+        if (owner_bindings is None
+                or set(vars(owner)) != set(owner_bindings)
+                or any(owner.__dict__.get(key) is not value for key, value in owner_bindings.items())
+                or sys.modules.get(owner_name) is not owner
                 or owner.__name__ != owner_name
                 or owner.__dict__ is not require_owner.__globals__
                 or owner.__spec__ is not owner_spec or REPOSITORY_ROOT is not root
                 or owner.__file__ != str(source)
-                or any(owner.__dict__.get(key) is not module for key, module in roles.items())
-                or owner.__dict__.get("_require_owned_actions_bridge") is not require_owner
-                or owner.__dict__.get("_owned_verifier_module") is not owned_module
                 or hashlib.sha256(source.read_bytes()).digest() != source_digest
-                or not owned_importers()
                 or set(entries()) != set(modules)
                 or any(sys.modules.get(name) is not module for name, module in modules.items())):
             raise RuntimeError("Verifier owner or namespace identity changed")
@@ -170,13 +164,14 @@ def _construct_verifier_owner() -> tuple[Any, Any]:
                         or any(isinstance(value, types.ModuleType) and key not in bindings
                                for key, value in vars(module).items())):
                     raise RuntimeError("Verifier namespace path or children changed")
+            if (set(vars(module)) != set(bindings)
+                    or any(getattr(module, key, None) is not value for key, value in bindings.items())):
+                raise RuntimeError("Verifier binding identity changed")
             if path is None:
                 if spec.origin is not None:
                     raise RuntimeError("Verifier namespace origin changed")
             elif (module.__file__ != str(path) or spec.origin != str(path)
-                  or hashlib.sha256(path.read_bytes()).digest() != digest
-                  or any(getattr(module, key, None) is not value
-                         for key, value in bindings.items())):
+                  or hashlib.sha256(path.read_bytes()).digest() != digest):
                 raise RuntimeError("Verifier type, token or source identity changed")
             parent, _, child = name.rpartition(".")
             if parent in modules and getattr(modules[parent], child, None) is not module:
@@ -190,10 +185,10 @@ def _construct_verifier_owner() -> tuple[Any, Any]:
     bootstrap = modules["scripts.secpal_pr_review.bootstrap_source_admission"]
     bootstrap._load_actions_helper = require_owner
     records[bootstrap.__name__][4]["_load_actions_helper"] = require_owner
-    return require_owner, owned_module
+    return require_owner, owned_module, seal_owner
 
 
-_require_owned_actions_bridge, _owned_verifier_module = _construct_verifier_owner()
+_require_owned_actions_bridge, _owned_verifier_module, _seal_verifier_owner = _construct_verifier_owner()
 del _construct_verifier_owner
 PROHIBITED_OPERATION_KINDS = tuple(fast_path.PROHIBITED_REGISTRY_OPERATIONS)
 
@@ -10807,6 +10802,8 @@ def main(argv: list[str] | None = None) -> int:
         print(canonical_json_bytes(report).decode("utf-8"), file=sys.stderr, end="")
         return 2
 
+
+_seal_verifier_owner()
 
 if __name__ == "__main__":
     raise SystemExit(main())

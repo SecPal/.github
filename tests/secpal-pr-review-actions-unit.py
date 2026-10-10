@@ -9644,6 +9644,16 @@ class FastPathTests(TestCase):
             metadata_pull_request=reviewed.pull_request_number,
         )
 
+        # Authenticate provider composition before controlled acquisition seams
+        # replace Actions bindings; ownership must reject those replacements.
+        with mock.patch.object(type(binding), "provider_head", return_value=binding.provider_head_sha):
+            actions._require_review_providers_terminal(
+                provider_state,
+                repository=reviewed.repository,
+                pull_request_number=reviewed.pull_request_number,
+                ready_source_provider_binding=binding,
+            )
+
         def read_feedback(
             _plan: Any,
             _entry: Any,
@@ -9651,12 +9661,7 @@ class FastPathTests(TestCase):
             *,
             ready_source_provider_binding: Any,
         ) -> dict[str, Any]:
-            actions._require_review_providers_terminal(
-                provider_state,
-                repository=reviewed.repository,
-                pull_request_number=reviewed.pull_request_number,
-                ready_source_provider_binding=ready_source_provider_binding,
-            )
+            self.assertIs(ready_source_provider_binding, binding)
             return copy.deepcopy(observation)
 
         gateway = actions.FastPathGateway(
@@ -16621,22 +16626,43 @@ else:
     raise AssertionError('second Actions owner constructed')
 """)
 
-    def test_equality_spoof_cannot_own_import_machinery(self):
+    def test_unrelated_import_hooks_are_preserved_without_loading_verifiers(self):
         self.run_process("""
-import argparse, copy, hashlib, json, os, pwd, re, site, subprocess, tempfile, weakref
-import urllib.parse, typing, __future__
-class ForeignFinder:
+class Hook:
     def __eq__(self, other):
-        return True
+        raise AssertionError('finder equality used as ownership')
     def find_spec(self, fullname, path=None, target=None):
-        raise AssertionError('foreign finder executed')
-sys.meta_path[-1] = ForeignFinder()
+        if fullname == 'scripts' or fullname.startswith('scripts.'):
+            raise AssertionError('foreign finder executed for verifier graph')
+        return None
+hook = Hook()
+sys.meta_path.insert(0, hook)
+original = tuple(sys.meta_path)
+""" + CONSTRUCT + """
+assert len(sys.meta_path) == len(original)
+assert all(current is before for current, before in zip(sys.meta_path, original))
+assert a._load_fast_path_helper() is a.fast_path
+assert a._load_lifecycle_publication_helpers()[1] is a._owned_verifier_module('lifecycle_publication')
+""")
+
+    def test_owned_verifier_and_actions_callables_cannot_be_rebound(self):
+        for expression in (
+            "p.verify_current_ready_source_recovery = lambda *args, **kwargs: object()",
+            "a._authenticate_protected_bridge_main = lambda *args, **kwargs: 'a'*40",
+            "authority._load_lifecycle_trust_policy = lambda *args, **kwargs: object()",
+            "authority._TRUST_REGISTRY = root / 'foreign-policy.json'",
+            "a._owned_verifier_module('fixed_thread_resolution').REPOSITORY_ROOT = root / 'foreign'",
+        ):
+            with self.subTest(expression=expression):
+                self.run_process(CONSTRUCT + """
+authority, p = a._load_lifecycle_publication_helpers()
+""" + expression + """
 try:
-""" + ''.join('    ' + line + '\n' for line in CONSTRUCT.strip().splitlines()) + """
+    a._load_lifecycle_publication_helpers()
 except RuntimeError:
     pass
 else:
-    raise AssertionError('foreign import machinery adopted through equality')
+    raise AssertionError('retained verifier binding substitution accepted')
 """)
 
     def test_foreign_same_path_provider_binding_is_rejected(self):
@@ -16713,6 +16739,12 @@ assert load_actions() is first
             "r._FreshAcquisitionSeal = type('ForgedSeal', (), {})",
             "sys.modules['scripts.secpal_pr_review'].__path__ = ['/tmp/foreign']",
             "r.__spec__.origin = '/tmp/foreign.py'",
+            "a._owned_verifier_module('lifecycle_authority').__file__ = '/tmp/foreign.py'",
+            "a._owned_verifier_module('lifecycle_publication').__file__ = '/tmp/foreign.py'",
+            "a._owned_verifier_module('bootstrap_source_admission').__spec__.origin = '/tmp/foreign.py'",
+            "a.evidence.__file__ = '/tmp/foreign.py'",
+            "a.follow_up.__file__ = '/tmp/foreign.py'",
+            "a.pre_enrollment.__file__ = '/tmp/foreign.py'",
             "r.__spec__.loader = object()",
             "r.__package__ = 'foreign'",
             "sys.modules['scripts'].foreign = types.ModuleType('scripts.foreign')",
@@ -16746,15 +16778,19 @@ assert 'scripts/secpal_work_graph/acceptance_criteria.py' in paths
         self.run_process(CONSTRUCT + """
 from unittest import mock
 first = a._load_lifecycle_publication_helpers()
-with mock.patch.object(a, '_authenticate_protected_bridge_main', side_effect=['a'*40, 'b'*40]) as observe, mock.patch.object(a, '_require_accepted_main_tooling_blobs') as blobs:
-    assert a._require_accepted_main_bridge_source('SecPal/.github', expected_main='a'*40) == 'a'*40
-    try:
-        a._require_accepted_main_bridge_source('SecPal/.github', expected_main='a'*40)
-    except a.fast_path.SecurityBlocker:
-        pass
-    else:
-        raise AssertionError('live protected-main authority cached')
-    assert observe.call_count == 2 and blobs.call_count == 1
+observations = iter([
+    {'full_name': 'SecPal/.github', 'default_branch': 'main'},
+    {'sha': 'a'*40, 'protected': True}, {'sha': 'a'*40, 'verified': True},
+    {'full_name': 'SecPal/.github', 'default_branch': 'main'},
+    {'sha': 'b'*40, 'protected': True}, {'sha': 'b'*40, 'verified': True},
+])
+def observe(arguments, **kwargs):
+    return a.subprocess.CompletedProcess(arguments, 0, a.json.dumps(next(observations)), '')
+with mock.patch.object(a.subprocess, 'run', side_effect=observe) as transport:
+    assert a._authenticate_protected_bridge_main('SecPal/.github') == 'a'*40
+    assert a._load_lifecycle_publication_helpers() == first
+    assert a._authenticate_protected_bridge_main('SecPal/.github') == 'b'*40
+    assert transport.call_count == 6
 assert a._load_lifecycle_publication_helpers() == first
 """)
 
@@ -16763,9 +16799,7 @@ assert a._load_lifecycle_publication_helpers() == first
 import subprocess
 from dataclasses import replace
 from tests import secpal_actions_fixture
-fixture_spec = importlib.util.spec_from_file_location('signed_loader_fixture', root / 'tests/secpal-lifecycle-publication-unit.py')
-pf = importlib.util.module_from_spec(fixture_spec)
-fixture_spec.loader.exec_module(pf)
+pf = importlib.import_module('tests.secpal-lifecycle-publication-unit')
 f = pf.LifecyclePublicationTests()
 f.setUp()
 try:

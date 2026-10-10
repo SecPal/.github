@@ -72,12 +72,14 @@ class ExactResolverTests(TestCase):
         )
 
     def run_exact(self, *, auth_side_effect=None, response=None):
+        owned_helpers = RESOLVER._load_exact_prerequisite_helpers()
         authentication = (
             mock.Mock(side_effect=auth_side_effect)
             if auth_side_effect is not None
             else mock.Mock(return_value=self.facts)
         )
         with (
+            mock.patch.object(RESOLVER, "_load_exact_prerequisite_helpers", return_value=owned_helpers),
             mock.patch.object(RESOLVER, "read_stable_target_thread",
                               return_value=self.target) as read,
             mock.patch.object(RESOLVER, "_authenticate_exact_prerequisite",

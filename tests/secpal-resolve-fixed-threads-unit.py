@@ -33,6 +33,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 SCRIPT = ROOT / "scripts/secpal-resolve-fixed-threads.py"
 from tests.secpal_actions_fixture import load_actions
 MODULE = load_actions()._owned_verifier_module("fixed_thread_resolution")
+from scripts.secpal_pr_review import late_classification_cli, late_disposition_cli
 REAL_SUBPROCESS_RUN = subprocess.run
 
 from scripts.secpal_work_graph import acceptance_criteria as work_graph_acceptance_criteria  # noqa: E402
@@ -3920,48 +3921,6 @@ class ResolveFixedThreadsTests(TestCase):
             self.assertFalse(
                 any("mutation" in " ".join(call).lower() for call in github.calls)
             )
-
-    def test_lifecycle_helper_import_ignores_repository_root_shadow(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            canonical_package = root / "scripts/secpal_pr_review"
-            shadow_package = root / "secpal_pr_review"
-            canonical_package.mkdir(parents=True)
-            shadow_package.mkdir()
-            (canonical_package / "__init__.py").write_text("", encoding="utf-8")
-            (canonical_package / "lifecycle_orchestration.py").write_text(
-                'ORIGIN = "canonical"\n', encoding="utf-8"
-            )
-            marker = root / "shadow-executed"
-            (shadow_package / "__init__.py").write_text("", encoding="utf-8")
-            (shadow_package / "lifecycle_orchestration.py").write_text(
-                "from pathlib import Path\n"
-                f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
-                encoding="utf-8",
-            )
-            module_names = (
-                "secpal_pr_review",
-                "secpal_pr_review.lifecycle_orchestration",
-            )
-            loaded_modules = {
-                name: sys.modules.get(name) for name in module_names
-            }
-            original_path = list(sys.path)
-            try:
-                for name in module_names:
-                    sys.modules.pop(name, None)
-                with mock.patch.object(MODULE, "REPOSITORY_ROOT", root):
-                    loaded = MODULE._load_lifecycle_orchestration_helper()
-                self.assertIs(loaded, load_actions()._owned_verifier_module("lifecycle_orchestration"))
-                self.assertFalse(marker.exists())
-                self.assertEqual(sys.path, original_path)
-            finally:
-                for name in module_names:
-                    sys.modules.pop(name, None)
-                for name, loaded in loaded_modules.items():
-                    if loaded is not None:
-                        sys.modules[name] = loaded
-                sys.path[:] = original_path
 
     def test_recovery_bound_source_requires_independent_recovery_authority(
         self,
@@ -10457,9 +10416,7 @@ class ResolveFixedThreadsTests(TestCase):
         )
 
         for index, (script, arguments) in enumerate(producer_arguments):
-            producer = load_actions()._owned_verifier_module(
-                ("late_classification_cli", "late_disposition_cli")[index]
-            )
+            producer = (late_classification_cli, late_disposition_cli)[index]
             try:
                 with redirect_stderr(StringIO()) as error, self.assertRaises(
                     SystemExit

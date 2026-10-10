@@ -7,11 +7,9 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import sys
-from pathlib import Path
-from typing import Any, Sequence
+from typing import Sequence
 
 
 from . import fixed_thread_resolution as resolver
