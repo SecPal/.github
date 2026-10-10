@@ -13910,6 +13910,20 @@ class ReadyIntegrationRemediationTests(TestCase):
                     repository=REPOSITORY, pull_request=self.reviewed.pull_request_number,
                     current_head_sha=self.current.lifecycle.head_sha)
 
+    def test_mixed_historical_unbound_ordinary_source_context(self):
+        provenance = json.loads(self.candidate._verification_seal.provenance_json)
+        # Historical ordinary attestations retain their original unbound source
+        # digest. Protected publication selects that form without rewriting it.
+        self.candidate = fast_path.verify_validation_attestation(
+            provenance["attestation"], repository=REPOSITORY,
+            head_sha=self.candidate.head_sha, registry=self.registry,
+            command_set=self.registry["validation"], reviewed_state=self.resulting,
+            commit_parent_sha=self.resulting.head_sha,
+            commit_tree_sha=self.candidate.tree_sha,
+            commit_validation_receipt_digest=self.candidate.validation_receipt_digest,
+        )
+        self.test_mixed_source_validation_and_historical_provider_authorities_compose()
+
     def test_mixed_source_context_rejects_historical_provider_substitution(self):
         self.publish_provider_remediation(self.candidate)
         with self.assertRaisesRegex(fast_path.SecurityBlocker, "prior reviewed-state identity changed"):

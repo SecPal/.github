@@ -1845,6 +1845,15 @@ root derivation. Binding reauthentication reconstructs mixed event order from
 the protected publications while retaining complete per-type event digests and
 integration packages; it adds no durable schema. Historical terminality belongs
 only to the provider root, and fresh feedback belongs only to exact CURRENT.
+An integration's `reviewed_state` is its source-validation context, which may
+be a distinct authenticated successor of that provider root. For ordinary prior
+source authority, the consumer compares the canonical ordinary source-binding
+digest and exact sole parent with the protected predecessor. For a typed prior
+integration, it reuses that predecessor's original verified package and exact
+reviewed-state/feedback identity. Historical same-head v1.1 and independently
+verified adopted/recovered prior authorities retain their existing semantics.
+No integration snapshot selects a provider head or claims historical review at
+the current source head.
 The #1078 historical contract and issued artifacts remain unchanged.
 
 Ordinary remediation and recovery continue to require one parent. A separately
