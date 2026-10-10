@@ -4602,11 +4602,67 @@ def verify_ready_integration_prior_authority(
     )
 
 
+def _require_ready_integration_source_context(
+    predecessor: VerifiedLifecyclePublication,
+    reviewed: fast_path.StableFeedbackState,
+    validation: fast_path.VerifiedValidationEvidence,
+    prior_authority: Mapping[str, Any],
+    earlier_integrations: tuple[tuple[Any, Any], ...],
+) -> None:
+    """Authenticate source validation context separately from provider terminality."""
+
+    provenance = json.loads(validation._verification_seal.provenance_json)
+    integration = provenance["integration_evidence"]
+    # Historical same-head and independently derived adopted/recovered roots
+    # retain their existing canonical source-authority verification above.
+    if (integration["schema_version"] == "1.1"
+        or "source_authority_mode" in prior_authority
+        or "recovery_publication" in prior_authority):
+        return
+    source = predecessor.lifecycle
+    parents = fast_path._run_integration_commit_git(
+        Path(provenance["repository_root"]),
+        ["rev-list", "--parents", "-n", "1", source.head_sha],
+    )
+    if parents.returncode != 0:
+        raise LifecyclePublicationError("Ready integration prior source topology is unavailable")
+    topology = parents.stdout.strip().split()
+    if topology == [source.head_sha, reviewed.head_sha]:
+        # Protected publication authenticates the original ordinary binding.
+        # Preserve both historical unbound and issue-bound immutable forms.
+        digests = {
+            fast_path.ordinary_validation_source_binding_digest(
+                repository=source.repository, head_sha=source.head_sha,
+                tree_sha=source.tree_sha,
+                validation_receipt_digest=source.validation_receipt_digest,
+                final_attestation_digest=source.adoption_source_evidence_digest,
+                reviewed_state=reviewed, delivery_issue_number=issue,
+            )
+            for issue in (None, source.delivery_issue)
+        }
+        if source.source_validation_evidence_digest in digests:
+            return
+    elif len(topology) == 3 and topology[0] == source.head_sha:
+        package = earlier_integrations[-1] if earlier_integrations else None
+        if (isinstance(package, tuple) and len(package) == 2
+            and isinstance(package[0], fast_path.VerifiedValidationEvidence)
+            and package[0].head_sha == source.head_sha):
+            prior_validation = package[0]
+            prior_reviewed, _ = fast_path.verified_ready_integration_review_context(prior_validation)
+            if (
+                prior_validation.source_validation_evidence_digest == source.source_validation_evidence_digest
+                and prior_reviewed.state_digest == reviewed.state_digest
+                and prior_reviewed.feedback_digest == reviewed.feedback_digest
+            ):
+                return
+    raise LifecyclePublicationError("Ready integration review context differs from prior source validation")
+
+
 def _verify_ready_source_successor_chain(
     current: VerifiedLifecyclePublication,
     ready_integrations: tuple[tuple[Any, Any], ...],
 ) -> tuple[VerifiedLifecyclePublication, Mapping[str, Any], tuple[str, ...],
-           tuple[str, ...], tuple[str, ...]]:
+           tuple[str, ...]]:
     """Walk exact protected successors backward in their publication order."""
 
     if not isinstance(ready_integrations, tuple):
@@ -4617,7 +4673,6 @@ def _verify_ready_source_successor_chain(
     integration_index = len(ready_integrations) - 1
     remediation_digests: list[str] = []
     integration_digests: list[str] = []
-    reviewed_heads: list[str] = []
     seen: set[str] = set()
     while True:
         raw = authority._load_canonical_json(
@@ -4650,6 +4705,10 @@ def _verify_ready_source_successor_chain(
                 predecessor, reviewed, _ = verify_ready_integration_predecessor(
                     root, *package, require_current=root == current,
                 )
+                _require_ready_integration_source_context(
+                    predecessor, reviewed, package[0], package[1],
+                    ready_integrations[:integration_index],
+                )
             except (SecurityBlocker, authority.LifecycleAuthorityError, KeyError,
                     TypeError, ValueError) as exc:
                 raise LifecyclePublicationError(
@@ -4657,7 +4716,6 @@ def _verify_ready_source_successor_chain(
                 ) from exc
             integration_index -= 1
             integration_digests.append(latest["event_digest"])
-            reviewed_heads.append(reviewed.head_sha)
         else:
             transition = _verify_historical_lifecycle_transition(
                 root.lifecycle.repository, root.lifecycle.delivery_issue,
@@ -4717,7 +4775,7 @@ def _verify_ready_source_successor_chain(
         ):
             raise LifecyclePublicationError("Ready-source provider integration changed finite lifecycle")
     return (root, bundle, tuple(reversed(remediation_digests)),
-            tuple(reversed(integration_digests)), tuple(reviewed_heads))
+            tuple(reversed(integration_digests)))
 
 
 def derive_ready_source_recovery_provider_binding(
@@ -4770,7 +4828,7 @@ def derive_ready_source_recovery_provider_binding(
         raise LifecyclePublicationError(
             "Ready-source provider lifecycle shape is unsupported"
         )
-    root, bundle, remediation_digests, integration_digests, reviewed_heads = (
+    root, bundle, remediation_digests, integration_digests = (
         _verify_ready_source_successor_chain(current, ready_integrations)
     )
     ordinary = _derive_ordinary_ready_source_provider_binding(root, bundle)
@@ -4793,7 +4851,7 @@ def derive_ready_source_recovery_provider_binding(
         raise LifecyclePublicationError(
             "Ready-source provider remediation lineage is incomplete"
         )
-    if len(set(candidates)) != 1 or any(head != candidates[0] for head in reviewed_heads):
+    if len(set(candidates)) != 1:
         raise LifecyclePublicationError(
             "Ready-source provider heads conflict across authenticated sources"
         )

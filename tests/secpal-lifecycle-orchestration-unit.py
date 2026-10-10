@@ -13693,7 +13693,8 @@ class ReadyIntegrationRemediationTests(TestCase):
         self.assertEqual(self.current.lifecycle.state["exceptional_continuation_count"], 0)
 
     def derive_provider_lineage(self, **updates):
-        arguments = {"ready_integrations": ((self.predecessor, self.prior_authority),)}
+        arguments = {"ready_integrations": getattr(
+            self, "provider_packages", ((self.predecessor, self.prior_authority),))}
         arguments.update(updates)
         with mock.patch.object(publication, "_authenticate_provider_integration_verifier"):
             return publication.derive_ready_source_recovery_provider_binding(self.current, **arguments)
@@ -13842,9 +13843,116 @@ class ReadyIntegrationRemediationTests(TestCase):
         self.assertNotEqual(captured.feedback_digest, self.reviewed.feedback_digest)
         self.assertEqual(captured.provider_summary_body, provider_body)
 
-    def publish_next_provider_integration(self):
+    def verify_ordinary_integration_prior(self, first, prior, integration, reviewed):
+        """Exercise the production prior companion gate before issuing integration."""
+        actions = self.actions_fixture.actions
+        provenance = json.loads(self.candidate._verification_seal.provenance_json)
+        files = {
+            "prior.json": prior, "reviewed.json": self.resulting.to_dict(),
+            "receipt.json": fast_path.create_validation_receipt(
+                repository=REPOSITORY, head_sha=self.resulting.head_sha,
+                validated_tree_sha=first.lifecycle.tree_sha, registry=self.registry,
+                command_set=self.registry["validation"], successful_result=True,
+                reviewed_state=self.resulting, manual_gate_evidence=[],
+                eligibility_evidence_digest=provenance["attestation"]["eligibility_evidence_digest"],
+            ),
+            "attestation.json": provenance["attestation"],
+        }
+        for name, document in files.items():
+            (self.root / name).write_bytes(fast_path.canonical_json_bytes(document))
+        arguments = SimpleNamespace(
+            repo=REPOSITORY, delivery_issue=1070,
+            prior_authority=str(self.root / "prior.json"),
+            prior_reviewed_state=str(self.root / "reviewed.json"),
+            prior_receipt=str(self.root / "receipt.json"),
+            prior_attestation=str(self.root / "attestation.json"),
+            prior_authority_tag_ref=actions._canonical_ready_prior_authority_tag_ref(prior),
+            expected_prior_authority_signer="aroviqen", prior_integration_chain=None,
+        )
+        # The source fixture has real signed Git objects; its registry observation
+        # substitutes only the external immutable registry transport.
+        with (
+            mock.patch.object(actions, "_prior_delivery_registry_binding", return_value=self.registry),
+            mock.patch.object(actions, "_load_lifecycle_publication_helpers",
+                              return_value=(authority, publication)),
+        ):
+            result = actions._verify_ready_integration_prior_authority(
+                arguments=arguments, repository_root=self.root, binding=self.registry,
+                integration_evidence=integration, live_observation=None, reviewed_state=reviewed,
+            )
+        self.assertEqual(result, prior)
+
+    def test_mixed_source_validation_and_historical_provider_authorities_compose(self):
+        self.publish_provider_remediation(self.candidate)
+        source = self.current
+        validation, prior, _ = self.publish_next_provider_integration()
+        packages = ((self.predecessor, self.prior_authority), (validation, prior))
+        binding = self.derive_provider_lineage(ready_integrations=packages)
+        source_reviewed, _ = fast_path.verified_ready_integration_review_context(validation)
+        self.assertEqual(source_reviewed.head_sha, self.resulting.head_sha)
+        self.assertNotEqual(source_reviewed.head_sha, self.reviewed.head_sha)
+        self.assertEqual(binding.provider_head_sha, self.reviewed.head_sha)
+        self.assertEqual(binding.current_head_sha, validation.head_sha)
+        self.assertEqual(self.current.lifecycle.state, source.lifecycle.state)
+        self.provider_packages = packages
+        self.test_provider_lineage_historical_summary_does_not_review_current_head()
+        self.resulting = copy.deepcopy(self.resulting)
+        self.resulting.head_sha = self.current.lifecycle.head_sha
+        self.resulting.refresh_digests()
+        self.test_provider_lineage_feedback_capture_keeps_current_state()
+        self.test_provider_lineage_feedback_capture_rejects_historical_state()
+        with mock.patch.object(publication, "_authenticate_provider_integration_verifier"):
+            self.assertEqual(binding.provider_head(
+                repository=REPOSITORY, pull_request=self.reviewed.pull_request_number,
+                current_head_sha=self.current.lifecycle.head_sha), self.reviewed.head_sha)
+            with self.assertRaises(publication.LifecyclePublicationError):
+                replace(binding, provider_head_sha=source.lifecycle.head_sha).provider_head(
+                    repository=REPOSITORY, pull_request=self.reviewed.pull_request_number,
+                    current_head_sha=self.current.lifecycle.head_sha)
+
+    def test_mixed_source_context_rejects_historical_provider_substitution(self):
+        self.publish_provider_remediation(self.candidate)
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "prior reviewed-state identity changed"):
+            self.publish_next_provider_integration(reviewed_state=self.reviewed)
+        # Even a fully signed integration cannot substitute H0 for the protected
+        # ordinary source companion at the independent provider consumer.
+        self.git("tag", "-d", "secpal-ready-integration-prior-authority-1070-"
+                 + str(self.reviewed.pull_request_number) + "-" + self.current.lifecycle.head_sha)
+        validation, prior, _ = self.publish_next_provider_integration(
+            reviewed_state=self.reviewed, verify_prior=False)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "typed integration lineage is invalid",
+        ) as blocked:
+            self.derive_provider_lineage(ready_integrations=(
+                (self.predecessor, self.prior_authority), (validation, prior)))
+        self.assertIn("prior source validation", str(blocked.exception.__cause__))
+
+    def test_mixed_source_context_rejects_forged_feedback_at_correct_head(self):
+        self.publish_provider_remediation(self.candidate)
+        forged = copy.deepcopy(self.resulting)
+        forged.feedback["threads"][0]["is_resolved"] = not forged.feedback["threads"][0]["is_resolved"]
+        forged.refresh_digests()
+        with self.assertRaisesRegex(fast_path.SecurityBlocker, "prior reviewed-state identity changed"):
+            self.publish_next_provider_integration(reviewed_state=forged)
+        self.git("tag", "-d", "secpal-ready-integration-prior-authority-1070-"
+                 + str(self.reviewed.pull_request_number) + "-" + self.current.lifecycle.head_sha)
+        validation, prior, _ = self.publish_next_provider_integration(
+            reviewed_state=forged, verify_prior=False)
+        with self.assertRaisesRegex(
+            publication.LifecyclePublicationError, "typed integration lineage is invalid",
+        ) as blocked:
+            self.derive_provider_lineage(ready_integrations=(
+                (self.predecessor, self.prior_authority), (validation, prior)))
+        self.assertIn("prior source validation", str(blocked.exception.__cause__))
+
+    def publish_next_provider_integration(self, *, reviewed_state=None, verify_prior=True):
         pf = self.publication_fixture
         first = self.current
+        ordinary_source = first.lifecycle.head_sha == self.candidate.head_sha
+        reviewed = reviewed_state or (self.resulting if ordinary_source else self.reviewed)
+        eligibility = copy.deepcopy(self.predecessor_eligibility)
+        eligibility.update(reviewed_head_sha=reviewed.head_sha,
+                           reviewed_state_digest=reviewed.state_digest)
         parent2 = self.integration["ordered_parent_shas"][1]
         main_tree = self.source_tree(self.git("rev-parse", parent2 + "^{tree}"), "next-main.txt", "later accepted main\n")
         later_main = self.signed_commit(main_tree, [parent2], "later protected main")
@@ -13863,7 +13971,9 @@ class ReadyIntegrationRemediationTests(TestCase):
         self.git("tag", "-s", tag_ref.removeprefix("refs/tags/"), first.lifecycle.head_sha,
                  "-m", "Ready prior authority\n\nSecPal-Prior-Authority: " + fast_path.digest_json(prior))
         integration = copy.deepcopy(self.integration)
-        integration.update(schema_version="1.2", reviewed_head_sha=self.reviewed.head_sha,
+        integration.update(schema_version="1.2", reviewed_head_sha=reviewed.head_sha,
+                           reviewed_state_digest=reviewed.state_digest,
+                           reviewed_feedback_digest=reviewed.feedback_digest,
                            prior_delivery_head_sha=first.lifecycle.head_sha,
                            prior_authority_digest=fast_path.digest_json(prior),
                            prior_authority_tag_object_sha=self.git("rev-parse", tag_ref + "^{tag}"),
@@ -13876,22 +13986,24 @@ class ReadyIntegrationRemediationTests(TestCase):
         )
         integration.update(fast_path.derive_ready_integration_tree_evidence(
             self.root, integration["ordered_parent_shas"], tree, schema_version="1.2"))
+        if ordinary_source and verify_prior:
+            self.verify_ordinary_integration_prior(first, prior, integration, reviewed)
         receipt = fast_path.create_validation_receipt(
             repository=REPOSITORY, head_sha=first.lifecycle.head_sha, validated_tree_sha=tree,
             registry=self.registry, command_set=self.registry["validation"], successful_result=True,
-            reviewed_state=self.reviewed, manual_gate_evidence=[],
+            reviewed_state=reviewed, manual_gate_evidence=[],
             integration_evidence_digest=fast_path.digest_json(integration),
-            eligibility_evidence_digest=fast_path.digest_json(self.predecessor_eligibility))
+            eligibility_evidence_digest=fast_path.digest_json(eligibility))
         head = self.signed_commit(tree, integration["ordered_parent_shas"],
             "later integration\n\nSecPal-Validation-Receipt: " + receipt["receipt_digest"]
             + "\nSecPal-Integration-Evidence: " + fast_path.digest_json(integration))
         attestation = fast_path.create_ready_integration_attestation(
             repository=REPOSITORY, head_sha=head, registry=self.registry,
-            command_set=self.registry["validation"], reviewed_state=self.reviewed,
+            command_set=self.registry["validation"], reviewed_state=reviewed,
             validation_receipt=receipt, integration_evidence=integration)
         validation = fast_path.verify_ready_integration_attestation(
             attestation, repository=REPOSITORY, head_sha=head, registry=self.registry,
-            command_set=self.registry["validation"], reviewed_state=self.reviewed,
+            command_set=self.registry["validation"], reviewed_state=reviewed,
             validation_receipt=receipt, integration_evidence=integration,
             commit_parent_shas=integration["ordered_parent_shas"], commit_tree_sha=tree,
             commit_validation_receipt_digest=receipt["receipt_digest"],

@@ -7352,13 +7352,37 @@ def _verify_validation_attestation_unsealed(
         raise SecurityBlocker("validation attestation binding is invalid or stale")
     if attestation["successful_result"] is not True:
         raise SecurityBlocker("complete validation did not succeed")
+    return _unregistered_validation_evidence(
+        repository=repository,
+        delivery_issue_number=delivery_issue_number,
+        pull_request_number=reviewed_pull_request,
+        head_sha=head_sha,
+        tree_sha=commit_tree_sha,
+        validation_receipt_digest=receipt["receipt_digest"],
+        final_attestation_digest=expected["attestation_digest"],
+        source_validation_evidence_digest=ordinary_validation_source_binding_digest(
+            repository=repository, head_sha=head_sha, tree_sha=commit_tree_sha,
+            validation_receipt_digest=receipt["receipt_digest"],
+            final_attestation_digest=expected["attestation_digest"],
+            reviewed_state=reviewed_state, delivery_issue_number=delivery_issue_number,
+        ),
+    )
+
+
+def ordinary_validation_source_binding_digest(
+    *, repository: str, head_sha: str, tree_sha: str,
+    validation_receipt_digest: str, final_attestation_digest: str,
+    reviewed_state: StableFeedbackState, delivery_issue_number: int | None = None,
+) -> str:
+    """Canonical immutable ordinary source projection; a digest grants no authority."""
+
     source_binding = {
         "repository": repository,
-        "pull_request_number": reviewed_pull_request,
+        "pull_request_number": reviewed_state.pull_request_number,
         "head_sha": head_sha,
-        "tree_sha": commit_tree_sha,
-        "validation_receipt_digest": receipt["receipt_digest"],
-        "final_attestation_digest": expected["attestation_digest"],
+        "tree_sha": tree_sha,
+        "validation_receipt_digest": validation_receipt_digest,
+        "final_attestation_digest": final_attestation_digest,
         "reviewed_state_digest": reviewed_state.state_digest,
         "reviewed_feedback_digest": reviewed_state.feedback_digest,
     }
@@ -7370,16 +7394,7 @@ def _verify_validation_attestation_unsealed(
         ):
             raise SecurityBlocker("delivery issue identity is invalid")
         source_binding["delivery_issue_number"] = delivery_issue_number
-    return _unregistered_validation_evidence(
-        repository=repository,
-        delivery_issue_number=delivery_issue_number,
-        pull_request_number=reviewed_pull_request,
-        head_sha=head_sha,
-        tree_sha=commit_tree_sha,
-        validation_receipt_digest=receipt["receipt_digest"],
-        final_attestation_digest=expected["attestation_digest"],
-        source_validation_evidence_digest=digest_json(source_binding),
-    )
+    return digest_json(source_binding)
 
 
 def verify_ready_integration_attestation(
