@@ -1007,10 +1007,10 @@ def _accepted_main_bytes(root: Path, accepted_main_sha: str, path: str) -> bytes
     return result.stdout
 
 
-def _canonical_required_check_contexts(
+def _canonical_required_check_policy(
     root: Path, repository: str, accepted_main_sha: str,
-) -> tuple[str, ...]:
-    """Read the sole required-check inventory from bound accepted main."""
+) -> tuple[tuple[str, ...], dict[str, int]]:
+    """Read inventory and explicit producer bindings from bound accepted main."""
 
     if repository != "SecPal/.github":
         raise GovernanceAmendmentError(
@@ -1024,22 +1024,49 @@ def _canonical_required_check_contexts(
         source,
     )
     try:
-        policy = json.loads(match.group(1)) if match is not None else None
+        policy = authority.loads_closed_json(match.group(1)) if match is not None else None
         contexts = policy[".github"]
-    except (AttributeError, KeyError, TypeError, json.JSONDecodeError) as exc:
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
         raise GovernanceAmendmentError(
             "accepted-main required check inventory is malformed"
         ) from exc
     if (
         not isinstance(contexts, list)
-        or len(contexts) != 13
-        or len(set(contexts)) != len(contexts)
+        or not contexts
         or any(not isinstance(item, str) or not item for item in contexts)
+        or len(set(contexts)) != len(contexts)
     ):
         raise GovernanceAmendmentError(
             "accepted-main required check inventory is not canonical"
         )
-    return tuple(contexts)
+    binding_match = re.search(r"(?m)^REQUIRED_APP_BINDINGS_JSON='([^']*)'$", source)
+    try:
+        # Accepted historical policy predates explicit source bindings.
+        binding_policy = (
+            authority.loads_closed_json(binding_match.group(1))
+            if binding_match is not None else {}
+        )
+        bindings = binding_policy.get(".github", {})
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise GovernanceAmendmentError(
+            "accepted-main required check producer bindings are malformed"
+        ) from exc
+    if (
+        not isinstance(bindings, dict)
+        or any(
+            context not in contexts
+            or not isinstance(app_id, int) or isinstance(app_id, bool) or app_id <= 0
+            for context, app_id in bindings.items()
+        )
+        or (
+            "Evidence Architecture PR Gate" in contexts
+            and "Evidence Architecture PR Gate" not in bindings
+        )
+    ):
+        raise GovernanceAmendmentError(
+            "accepted-main required check producer bindings are not canonical"
+        )
+    return tuple(contexts), bindings
 
 
 def _reviewed_target_work_graph_blocker(
@@ -1328,7 +1355,7 @@ def _live_required_check_policy(
         raise GovernanceAmendmentError(
             "governance amendment repository is outside bootstrap scope"
         )
-    canonical_contexts = _canonical_required_check_contexts(
+    canonical_contexts, canonical_bindings = _canonical_required_check_policy(
         ROOT.resolve(), repository,
         authority._require_oid(accepted_main_sha, "required-check accepted main"),
     )
@@ -1362,6 +1389,11 @@ def _live_required_check_policy(
                 item["app_id"] is None
                 or (isinstance(item["app_id"], int) and not isinstance(item["app_id"], bool))
             )
+            for item in checks
+        )
+        or any(
+            item["context"] in canonical_bindings
+            and item["app_id"] != canonical_bindings[item["context"]]
             for item in checks
         )
     ):
