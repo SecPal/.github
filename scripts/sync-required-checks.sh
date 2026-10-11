@@ -6,6 +6,11 @@ set -euo pipefail
 
 REQUIRED_APPROVING_REVIEW_COUNT=0
 
+# Publication inventory only. Successful hosted execution, exact check/source
+# authentication and separately authorized activation are still prerequisites.
+# This list is intentionally never consumed by an apply payload.
+PENDING_CONTEXTS_JSON='{".github":[{"context":"Evidence Architecture PR Gate","workflow":".github/workflows/quality.yml","job":"evidence-architecture","activation":"separately_authorized"}]}'
+
 REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
 {
   ".github": [
@@ -132,6 +137,7 @@ usage() {
 Usage:
   bash scripts/sync-required-checks.sh --repo <name> --print-payload
   bash scripts/sync-required-checks.sh --repo <name> --print-review-payload
+  bash scripts/sync-required-checks.sh --repo <name> --print-pending-checks
   bash scripts/sync-required-checks.sh [--repo <name>] --apply
   bash scripts/sync-required-checks.sh [--repo <name>] --apply-review-baseline
 
@@ -139,6 +145,7 @@ Options:
   --repo <name>            Restrict output or apply mode to a single repository.
   --print-payload          Print the required-check payload for one repository.
   --print-review-payload   Print the review-baseline payload for one repository.
+  --print-pending-checks   Print publication identities awaiting separate activation.
   --apply                  Apply required checks via gh api.
   --apply-review-baseline  Apply the approval-count baseline via gh api.
   -h, --help               Show this help text.
@@ -357,6 +364,10 @@ while [[ $# -gt 0 ]]; do
       set_mode "print-review-payload"
       shift
       ;;
+    --print-pending-checks)
+      set_mode "print-pending-checks"
+      shift
+      ;;
     --apply)
       set_mode "apply"
       shift
@@ -384,6 +395,12 @@ if [[ -z "$mode" ]]; then
 fi
 
 require_command jq
+
+if [[ "$mode" == "print-pending-checks" ]]; then
+  ensure_known_repository "$repo"
+  jq --arg repo "$repo" '.[$repo] // []' <<<"$PENDING_CONTEXTS_JSON"
+  exit 0
+fi
 
 if [[ "$mode" == "print-payload" ]]; then
   if [[ -z "$repo" ]]; then

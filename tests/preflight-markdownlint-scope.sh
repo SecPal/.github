@@ -122,6 +122,22 @@ assert_unit_suites_ran() {
   done
 }
 
+# Focused stand-ins: these fixtures test preflight wiring, not architecture semantics.
+  for suite in secpal-evidence-architecture polyscope-evidence-architecture; do
+    cat >"$workspace/tests/$suite.py" <<'EOF'
+import os
+from pathlib import Path
+with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
+    log.write(Path(__file__).stem + "\n")
+EOF
+  done
+  cat >"$workspace/scripts/secpal-evidence-architecture.py" <<'EOF'
+import os
+with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
+    log.write("evidence-architecture-validator\n")
+raise SystemExit(int(os.environ.get("ARCHITECTURE_FIXTURE_EXIT", "0")))
+EOF
+
 cat >"$workspace/tests/evidence-architecture-governance.py" <<'EOF'
 """Fixture stand-in proving preflight requires the governance suite."""
 
@@ -210,6 +226,16 @@ EOF
 )
 
 assert_unit_suites_ran
+
+if (
+  cd "$workspace"
+  ARCHITECTURE_FIXTURE_EXIT=1 LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/bin:$PATH" \
+    bash scripts/preflight.sh >"$workspace/architecture-failure.log" 2>&1
+); then
+  echo "A disconnected architecture validator must fail preflight" >&2
+  exit 1
+fi
+grep -qF 'Evidence Architecture declaration validation failed' "$workspace/architecture-failure.log"
 
 # Exercise a real PATH without Node tooling, retaining only fixture prerequisites.
 mkdir -p "$workspace/no-node-bin"

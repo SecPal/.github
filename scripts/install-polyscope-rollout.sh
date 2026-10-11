@@ -215,6 +215,17 @@ if [[ ! -x "$VALIDATOR_SOURCE" ]]; then
     exit 1
 fi
 VALIDATOR_YAML_CHECK="$(dirname -- "$SOURCE_SCRIPT")/verify-js-yaml-package.cjs"
+EVIDENCE_VALIDATOR="$(dirname -- "$SOURCE_SCRIPT")/secpal-evidence-architecture.py"
+for evidence_source in "$EVIDENCE_VALIDATOR" \
+    "$(dirname -- "$SOURCE_SCRIPT")/secpal_evidence_architecture/__init__.py" \
+    "$(dirname -- "$SOURCE_SCRIPT")/secpal_evidence_architecture/governance.py" \
+    "$(dirname -- "$SOURCE_SCRIPT")/secpal_evidence_architecture/execution.py" \
+    "$(dirname -- "$SOURCE_SCRIPT")/secpal_evidence_architecture/markdown_references.mjs"; do
+    if [[ ! -f "$evidence_source" || -L "$evidence_source" ]]; then
+        echo "Error: canonical Evidence Architecture source bundle is incomplete." >&2
+        exit 1
+    fi
+done
 if [[ ! -f "$VALIDATOR_YAML_CHECK" ]]; then
     echo "Error: canonical js-yaml verifier is missing next to the rollout source: $VALIDATOR_YAML_CHECK" >&2
     exit 1
@@ -249,6 +260,11 @@ if [[ ! -f "$VALIDATOR_PACKAGE_LOCK" \
     || ! -x "$VALIDATOR_MARKDOWNLINT" ]] \
     || ! validator_yaml_usable; then
     echo "Error: rollout validator toolchain is incomplete; install the source bundle's committed npm dependencies before installing the rollout." >&2
+    exit 1
+fi
+
+if ! PATH="$SERVICE_PATH" python3 -I "$EVIDENCE_VALIDATOR" --self-check >/dev/null 2>&1; then
+    echo "Error: Evidence Architecture package or markdown-it parser is unavailable; restore the committed source and dependencies before activation." >&2
     exit 1
 fi
 
@@ -488,6 +504,42 @@ PathChanged=$VALIDATOR_PACKAGE_LOCK
 PathChanged=$VALIDATOR_INSTALLED_PACKAGE_LOCK
 PathChanged=$NGINX_LIBRARY_SOURCE
 PathChanged=$NGINX_HELPER_SOURCE
+PathChanged=$EVIDENCE_VALIDATOR
+PathChanged=$VALIDATOR_TOOLCHAIN_ROOT/scripts/secpal_evidence_architecture
+PathChanged=$VALIDATOR_TOOLCHAIN_ROOT/scripts/secpal_evidence_architecture/__init__.py
+PathChanged=$VALIDATOR_TOOLCHAIN_ROOT/scripts/secpal_evidence_architecture/governance.py
+PathChanged=$VALIDATOR_TOOLCHAIN_ROOT/scripts/secpal_evidence_architecture/execution.py
+PathChanged=$VALIDATOR_TOOLCHAIN_ROOT/scripts/secpal_evidence_architecture/markdown_references.mjs
+PathChanged=$WORKSPACE_ROOT/api/.secpal
+PathChanged=$WORKSPACE_ROOT/frontend/.secpal
+PathChanged=$WORKSPACE_ROOT/contracts/.secpal
+PathChanged=$WORKSPACE_ROOT/android/.secpal
+PathChanged=$WORKSPACE_ROOT/secpal.app/.secpal
+PathChanged=$WORKSPACE_ROOT/guardguide.de/.secpal
+PathChanged=$WORKSPACE_ROOT/GuardGuide/.secpal
+PathChanged=$WORKSPACE_ROOT/operations/.secpal
+PathChanged=$WORKSPACE_ROOT/.github/.secpal
+PathChanged=$WORKSPACE_ROOT/deployment/.secpal
+PathChanged=$WORKSPACE_ROOT/api/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/api/.secpal/evidence-agreement-results.json
+PathChanged=$WORKSPACE_ROOT/frontend/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/frontend/.secpal/evidence-agreement-results.json
+PathChanged=$WORKSPACE_ROOT/contracts/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/contracts/.secpal/evidence-agreement-results.json
+PathChanged=$WORKSPACE_ROOT/android/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/android/.secpal/evidence-agreement-results.json
+PathChanged=$WORKSPACE_ROOT/secpal.app/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/secpal.app/.secpal/evidence-agreement-results.json
+PathChanged=$WORKSPACE_ROOT/guardguide.de/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/guardguide.de/.secpal/evidence-agreement-results.json
+PathChanged=$WORKSPACE_ROOT/GuardGuide/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/GuardGuide/.secpal/evidence-agreement-results.json
+PathChanged=$WORKSPACE_ROOT/operations/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/operations/.secpal/evidence-agreement-results.json
+PathChanged=$WORKSPACE_ROOT/.github/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/.github/.secpal/evidence-agreement-results.json
+PathChanged=$WORKSPACE_ROOT/deployment/.secpal/evidence-architecture.json
+PathChanged=$WORKSPACE_ROOT/deployment/.secpal/evidence-agreement-results.json
 
 [Install]
 WantedBy=default.target

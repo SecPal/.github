@@ -229,3 +229,19 @@ Apply these rules only when the session says it is running inside Polyscope.
 - These coordination rules layer on top of that contract and never redefine it.
   Where a session-local instruction and the contract disagree about work-graph
   semantics, the contract governs.
+
+## Evidence Architecture Enforcement
+
+- Consume `docs/evidence-architecture-contract.md` through the canonical
+  `docs/work-graph-contract.md` owner. Keep undeclared semantic completeness,
+  responsibility boundaries, representation realism and trust justification
+  explicit for human architecture review.
+- Before a costly or privileged external-system dispatch, run the maintained
+  governance checkout's `scripts/secpal-evidence-architecture.py --dispatch`
+  against the owning repository and refuse dispatch unless it passes. This is
+  read-only admission; it grants no provider or cloud mutation authority.
+- Declare reachable trusted failure boundaries, pure surfaces and explicit
+  invariant ownership in `.secpal/evidence-architecture.json`. A passing report
+  covers only those declarations and the maintained executable pure subset.
+  Independent enforcement requires fresh executable agreement over reviewed
+  accepting and rejecting representations; a stored success status is insufficient.

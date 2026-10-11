@@ -54,6 +54,15 @@ def write_valid_instructions(root: pathlib.Path, repo_name: str | None = None) -
     root.joinpath(".markdownlint.json").write_text(repo_root.joinpath(".markdownlint.json").read_text())
     if repo_name == "api":
         root.joinpath("composer.json").write_text('{"name":"secpal/api"}\n')
+        root.joinpath(".secpal").mkdir(exist_ok=True)
+        root.joinpath(".secpal/evidence-architecture.json").write_text(json.dumps({
+            "schema": "secpal-evidence-architecture/v1", "repository": "SecPal/api",
+            "runtime_baseline": {"delegation": "transitive_work_graph", "generic_authorities": ["docs/work-graph-contract.md"]},
+            "external_operations": [{"id": operation, "reachable": True, "fallible": True, "trusted": True,
+                                     "diagnostic_identity": {"id": "api." + operation, "kind": "semantic"}}
+                                    for operation in ("prepare", "bootstrap", "refresh", "run")],
+            "pure_surfaces": [], "invariant_declarations": [],
+        }))
     root.joinpath("AGENTS.md").write_text(
         "<!--\n"
         "SPDX-FileCopyrightText: 2026 SecPal Contributors\n"
@@ -62,7 +71,8 @@ def write_valid_instructions(root: pathlib.Path, repo_name: str | None = None) -
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
         "## Scope and Safety\n\n"
-        "- Preserve existing work.\n"
+        "- Preserve existing work.\n\n"
+        "`docs/work-graph-contract.md` is canonical.\n\n"
         "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
         "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
         "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"

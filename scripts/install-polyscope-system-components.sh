@@ -114,6 +114,11 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
     for runtime_file in \
         "$RUNTIME_ROLLOUT_SOURCE" \
         "$RUNTIME_SCRIPT_DIR/validate-ai-instructions.sh" \
+        "$RUNTIME_SCRIPT_DIR/secpal-evidence-architecture.py" \
+        "$RUNTIME_SCRIPT_DIR/secpal_evidence_architecture/__init__.py" \
+        "$RUNTIME_SCRIPT_DIR/secpal_evidence_architecture/governance.py" \
+        "$RUNTIME_SCRIPT_DIR/secpal_evidence_architecture/execution.py" \
+        "$RUNTIME_SCRIPT_DIR/secpal_evidence_architecture/markdown_references.mjs" \
         "$RUNTIME_SCRIPT_DIR/polyscope_nginx.py" \
         "$RUNTIME_YAML_CHECK" \
         "$RUNTIME_TOOLCHAIN_ROOT/package-lock.json" \
@@ -133,6 +138,11 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
     if ! /usr/bin/sudo -u secpal -- \
         "$NODE_BIN" "$RUNTIME_YAML_CHECK" "$RUNTIME_YAML_PACKAGE"; then
         echo "Error: canonical Polyscope runtime js-yaml package is unusable; reinstall the committed dependencies before activation." >&2
+        exit 1
+    fi
+    if ! /usr/bin/sudo -u secpal -- /usr/bin/env "PATH=$SYSTEM_SERVICE_PATH" \
+        python3 -I "$RUNTIME_SCRIPT_DIR/secpal-evidence-architecture.py" --self-check >/dev/null 2>&1; then
+        echo "Error: Evidence Architecture package or markdown-it parser is unusable by the service account; restore committed dependencies before activation." >&2
         exit 1
     fi
 fi

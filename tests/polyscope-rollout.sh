@@ -195,6 +195,7 @@ for repo_dir in workspace_root.iterdir():
         "-->\n\n"
         f"# {repo_dir.name} Agent Instructions\n\n"
         "This file is the authoritative, provider-neutral runtime baseline for this repository.\n"
+        "Generic governance delegates to `docs/work-graph-contract.md`.\n"
         "Edit this file first. Keep the focused overlay files below aligned when a rule also needs path-specific or stack-specific enforcement.\n\n"
         "## Focused Overlays\n\n"
         f"{overlays}\n\n"
@@ -206,6 +207,15 @@ for repo_dir in workspace_root.iterdir():
     )
     (repo_dir / "AGENTS.md").write_text(agents_text.rstrip() + "\n")
 
+(workspace_root / "api" / ".secpal").mkdir()
+(workspace_root / "api" / ".secpal/evidence-architecture.json").write_text(json.dumps({
+    "schema": "secpal-evidence-architecture/v1", "repository": "SecPal/api",
+    "runtime_baseline": {"delegation": "transitive_work_graph", "generic_authorities": ["docs/work-graph-contract.md"]},
+    "external_operations": [{"id": operation, "reachable": True, "fallible": True, "trusted": True,
+                             "diagnostic_identity": {"id": "api." + operation, "kind": "semantic"}}
+                            for operation in ("prepare", "bootstrap", "refresh", "run")],
+    "pure_surfaces": [], "invariant_declarations": [],
+}))
 (workspace_root / "api" / "composer.json").write_text('{"name":"secpal/api"}\n')
 (workspace_root / "api" / "artisan").write_text("#!/usr/bin/env php\n")
 (workspace_root / "api" / "scripts").mkdir(parents=True, exist_ok=True)
@@ -307,6 +317,16 @@ seed_api_worktree_files() {
     local worktree_dir="$1"
 
     write_valid_worktree_instructions "$worktree_dir" CC0-1.0
+    python3 -B - "$worktree_dir" "$workspace_root/api/.secpal/evidence-architecture.json" "${2:-api}" <<'PYDECLARATION'
+import json
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+(root / ".secpal").mkdir(exist_ok=True)
+declaration = json.loads(Path(sys.argv[2]).read_text())
+declaration["repository"] = "SecPal/" + sys.argv[3]
+(root / ".secpal/evidence-architecture.json").write_text(json.dumps(declaration))
+PYDECLARATION
     printf '{"name":"secpal/api"}\n' > "$worktree_dir/composer.json"
     printf '#!/usr/bin/env php\n' > "$worktree_dir/artisan"
     chmod +x "$worktree_dir/artisan"
@@ -340,6 +360,9 @@ write_valid_worktree_instructions() {
         '## Scope and Safety' \
         '' \
         '- Preserve existing work.' \
+        '' \
+        'Delegate to `docs/work-graph-contract.md`.' \
+        '' \
         '- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`' \
         '- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`' \
         '- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`' \
@@ -380,6 +403,8 @@ assert_rollout_rejects_invalid_local_config() {
     cp "$source_script" "$script_copy"
     cp "$REPO_ROOT/scripts/validate-ai-instructions.sh" \
         "$script_root/scripts/validate-ai-instructions.sh"
+    cp "$REPO_ROOT/scripts/secpal-evidence-architecture.py" "$script_root/scripts/"
+    cp -R "$REPO_ROOT/scripts/secpal_evidence_architecture" "$script_root/scripts/"
     if [ ! -e "$script_root/node_modules" ]; then
         ln -s "$REPO_ROOT/node_modules" "$script_root/node_modules"
     fi
@@ -1060,6 +1085,16 @@ for executable in ("composer", "php", "psql"):
 
 def write_valid_instruction_root(root: pathlib.Path) -> None:
     (root / ".github").mkdir(parents=True)
+    import json
+    (root / ".secpal").mkdir()
+    (root / ".secpal/evidence-architecture.json").write_text(json.dumps({
+        "schema": "secpal-evidence-architecture/v1", "repository": "SecPal/api",
+        "runtime_baseline": {"delegation": "transitive_work_graph", "generic_authorities": ["docs/work-graph-contract.md"]},
+        "external_operations": [{"id": operation, "reachable": True, "fallible": True, "trusted": True,
+                                 "diagnostic_identity": {"id": "api." + operation, "kind": "semantic"}}
+                                for operation in ("prepare", "bootstrap", "refresh", "run")],
+        "pure_surfaces": [], "invariant_declarations": [],
+    }))
     shutil.copy2(repo_root / ".markdownlint.json", root / ".markdownlint.json")
     (root / "composer.json").write_text('{"name":"secpal/api"}\n')
     (root / "AGENTS.md").write_text(
@@ -1069,7 +1104,8 @@ def write_valid_instruction_root(root: pathlib.Path) -> None:
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
         "## Scope and Safety\n\n"
-        "- Preserve existing work.\n"
+        "- Preserve existing work.\n\n"
+        "`docs/work-graph-contract.md` is canonical.\n\n"
         "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
         "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
         "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
@@ -1327,6 +1363,16 @@ release_first = fixture / "release-first"
 
 def write_valid_instruction_root(root: pathlib.Path) -> None:
     (root / ".github").mkdir(parents=True)
+    import json
+    (root / ".secpal").mkdir()
+    (root / ".secpal/evidence-architecture.json").write_text(json.dumps({
+        "schema": "secpal-evidence-architecture/v1", "repository": "SecPal/api",
+        "runtime_baseline": {"delegation": "transitive_work_graph", "generic_authorities": ["docs/work-graph-contract.md"]},
+        "external_operations": [{"id": operation, "reachable": True, "fallible": True, "trusted": True,
+                                 "diagnostic_identity": {"id": "api." + operation, "kind": "semantic"}}
+                                for operation in ("prepare", "bootstrap", "refresh", "run")],
+        "pure_surfaces": [], "invariant_declarations": [],
+    }))
     shutil.copy2(repo_root / ".markdownlint.json", root / ".markdownlint.json")
     (root / "composer.json").write_text('{"name":"secpal/api"}\n')
     (root / "AGENTS.md").write_text(
@@ -1335,7 +1381,8 @@ def write_valid_instruction_root(root: pathlib.Path) -> None:
         "SPDX-License" "-Identifier: CC0-1.0\n"
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
-        "- Preserve existing work.\n"
+        "- Preserve existing work.\n\n"
+        "`docs/work-graph-contract.md` is canonical.\n\n"
         "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
         "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
         "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
@@ -1858,6 +1905,7 @@ fixture = workspace / "instruction-contract-worktree"
     "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Runtime Instructions\n\n"
+    "`docs/work-graph-contract.md` is canonical.\n\n"
     "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
     "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
     "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
@@ -1948,6 +1996,7 @@ fixture = workspace / "instruction root with shell $ characters"
     "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Runtime Instructions\n\n"
+    "`docs/work-graph-contract.md` is canonical.\n\n"
     "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
     "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
     "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
@@ -2166,6 +2215,7 @@ fake_bin.mkdir()
 
 for instruction_root in (source_api, api_worktree):
     instruction_root.joinpath(".github").mkdir(exist_ok=True)
+    shutil.copytree(workspace / "SecPal/api/.secpal", instruction_root / ".secpal")
     shutil.copy2(repo_root / ".markdownlint.json", instruction_root / ".markdownlint.json")
     instruction_root.joinpath("composer.json").write_text('{"name":"secpal/api"}\n')
     instruction_root.joinpath("AGENTS.md").write_text(
@@ -2174,7 +2224,8 @@ for instruction_root in (source_api, api_worktree):
         "SPDX-License" "-Identifier: CC0-1.0\n"
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
-        "- Preserve existing work.\n"
+        "- Preserve existing work.\n\n"
+        "`docs/work-graph-contract.md` is canonical.\n\n"
         "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
         "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
         "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
@@ -3304,6 +3355,7 @@ repo_spec_frontend = workspace / "repo-spec-root" / "frontend"
     "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Frontend Runtime Instructions\n\n"
+    "`docs/work-graph-contract.md` is canonical.\n\n"
     "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
     "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
     "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
@@ -6417,7 +6469,7 @@ seed_api_worktree_files "$failing_api_cleanup_clone"
 seed_api_worktree_files "$failing_api_alias_clone"
 seed_node_worktree_files "$failing_frontend_manifest_clone" "frontend-broken-ibis"
 seed_node_worktree_files "$failing_frontend_io_clone" "frontend-locked-oryx"
-seed_api_worktree_files "$guardguide_clone"
+seed_api_worktree_files "$guardguide_clone" GuardGuide
 seed_node_worktree_files "$guardguide_clone" "guardguide"
 cp "$workspace_root/api/.env" "$failing_api_clone/.env"
 mkdir -p "$home_dir/.polyscope/clones/api12345/$failing_api_alias_workspace"
@@ -7066,6 +7118,8 @@ cp "$REPO_ROOT/scripts/validate-ai-instructions.sh" \
     "$missing_toolchain_source_dir/validate-ai-instructions.sh"
 cp "$REPO_ROOT/scripts/verify-js-yaml-package.cjs" \
     "$missing_toolchain_source_dir/verify-js-yaml-package.cjs"
+cp "$REPO_ROOT/scripts/secpal-evidence-architecture.py" "$missing_toolchain_source_dir/"
+cp -R "$REPO_ROOT/scripts/secpal_evidence_architecture" "$missing_toolchain_source_dir/"
 cp "$REPO_ROOT/scripts/polyscope_nginx.py" \
     "$missing_toolchain_source_dir/polyscope_nginx.py"
 cp "$REPO_ROOT/scripts/secpal-polyscope-nginx-apply.py" \
@@ -7553,6 +7607,13 @@ fi
 grep -q '/templates/polyscope-codex-AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/validate-ai-instructions\.sh$' "$fake_unit_dir/polyscope-rollout-sync.path"
+for managed_repository in api frontend contracts android secpal.app guardguide.de GuardGuide .github deployment operations; do
+    for evidence_file in evidence-architecture.json evidence-agreement-results.json; do
+        grep -qF "PathChanged=$workspace_root/$managed_repository/.secpal/$evidence_file" \
+            "$fake_unit_dir/polyscope-rollout-sync.path"
+    done
+done
+grep -qE '^PathChanged=.*/scripts/secpal_evidence_architecture/execution\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/package-lock\.json$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/node_modules/\.package-lock\.json$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope_nginx\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"

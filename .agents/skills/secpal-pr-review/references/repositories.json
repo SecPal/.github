@@ -167,6 +167,32 @@
       ],
       "required_local_validation": [
         {
+          "argv": [
+            "./scripts/secpal-evidence-architecture.py",
+            "--repository-root",
+            ".",
+            "--repository",
+            "SecPal/.github"
+          ],
+          "working_directory": ".",
+          "purpose": "Validate declared Evidence Architecture before delivery"
+        },
+        {
+          "argv": ["python3", "-m", "unittest", "tests/secpal-evidence-architecture.py"],
+          "working_directory": ".",
+          "purpose": "Prove closed declared-surface enforcement and fresh executable agreement"
+        },
+        {
+          "argv": ["python3", "-m", "unittest", "tests/polyscope-evidence-architecture.py"],
+          "working_directory": ".",
+          "purpose": "Prove source and active-worktree Evidence Architecture admission"
+        },
+        {
+          "argv": ["python3", "-m", "unittest", "tests/evidence-architecture-governance.py"],
+          "working_directory": ".",
+          "purpose": "Prove canonical delegation and distinct live enforcement job"
+        },
+        {
           "argv": ["python3", "-m", "unittest", "tests/secpal-trivy-action-archive.py"],
           "working_directory": ".",
           "purpose": "Qualify central Trivy action archive and runtime closure"

@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-11 - Enforce Declared Evidence Architecture
+
+**Added:**
+
+- Bounded declared-surface admission for trusted failure diagnostics, pure
+  capabilities, canonical delegation and invariant ownership, including freshly
+  executed agreement evidence and source/worktree validation in Polyscope.
+- Installer package/parser checks and an unconditional Node 26.x Evidence
+  Architecture PR Gate. Required-check activation and live rollout remain
+  separately authorized operations.
+
 ## 2026-10-07 - Fix Markdown Toolchain Vulnerabilities
 
 **Fixed:**
