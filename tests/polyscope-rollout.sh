@@ -6728,7 +6728,7 @@ if [[ $# -eq 0 ]]; then
     exit 0
 fi
 if [[ $# -eq 1 && "$1" == "--check" ]]; then
-    echo "Polyscope nginx helper check passed bundle=2 manifest_schema=1 manifest_schema=2"
+    echo "Polyscope nginx helper check passed bundle=3 manifest_schema=3"
     exit 0
 fi
 exit 64

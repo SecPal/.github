@@ -45,6 +45,7 @@ API_RUNTIME_UNIT_DIRECTORY = pathlib.Path("/home/secpal/.config/systemd/user")
 API_RUNTIME_UNIT_PREFIX = "polyscope-api-worktree-"
 FIXED_SETFACL_BIN = "/usr/bin/setfacl"
 NGINX_MANIFEST_USER = "secpal"
+NGINX_MANIFEST_VERSION = 3
 CANONICAL_VALIDATION_SPEC_KEY = "_canonical_ai_instruction_root"
 EVIDENCE_VALIDATION_ARGUMENTS_SPEC_KEY = "_evidence_architecture_arguments"
 NATIVE_SETUP_COMMANDS_KEY = "_native_setup_commands"
@@ -5589,6 +5590,8 @@ def render_nginx_config(
                 f"    {prefix}-{physical_workspace}.preview.secpal.dev {prefix}-{canonical_workspace}.preview.secpal.dev;"
             )
     preview_redirect_map = "\n".join(redirect_lines)
+    # Retired GuardGuide prefixes remain denied so they cannot become generic
+    # workspace aliases. This deny boundary grants no live repository membership.
     # NOTE: workspace names starting with api-, frontend-,
     # or secpal-app- are reserved for per-repository routing (for example,
     # api-WORKSPACE.preview.secpal.dev). Generic workspaces must not use these prefixes
@@ -5607,6 +5610,10 @@ def render_nginx_config(
             listen [::]:80;
             server_name ~^(?:(?<repo>api|frontend|secpal-app)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
 
+            if ($host ~* ^guardguide-) {{
+                return 404;
+            }}
+
             if ($preview_canonical_host) {{
                 return 308 https://$preview_canonical_host$request_uri;
             }}
@@ -5622,6 +5629,10 @@ def render_nginx_config(
             listen 443 ssl{http2_listen_suffix};
             listen [::]:443 ssl{http2_listen_suffix};{http2_directive}
             server_name ~^(?:(?<repo>api|frontend|secpal-app)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
+
+            if ($host ~* ^guardguide-) {{
+                return 404;
+            }}
 
             if ($preview_canonical_host) {{
                 return 308 https://$preview_canonical_host$request_uri;

@@ -47,6 +47,13 @@ six repositories, work-graph audit discovery and review tooling cover seven,
 Polyscope specifications cover eight, and preview routing covers three. This
 issue introduces no additional checks, repository topology, or preview route.
 
+The reduced nginx manifest uses schema/bundle 3. Publication and installation
+require the matching root-owned helper and renderer; historical schema-1/2
+manifests are rejected. Consumer installation precedes producer publication.
+Retired `guardguide-` and `guardguide-de-` hosts remain explicitly denied on
+HTTP, HTTPS, and expose announcement so they cannot become generic workspace
+aliases. These deny references confer no live membership.
+
 ## Remaining References
 
 Every remaining occurrence belongs to one of these categories. Paths identify
@@ -59,6 +66,7 @@ the complete retained surface, including its explanatory comments and labels.
 | `GENERIC_TEST_FIXTURE`        | `scripts/check-domains.sh`; `tests/check-domains.sh`; `scripts/README.md`                                                                                                                                                            | The historical non-`secpal` domain demonstrates the scanner's namespace boundary; it grants no live domain authority. |
 | `GENERIC_TEST_FIXTURE`        | `tests/polyscope-rollout-followups-unit.py`; `tests/render-polyscope-container-caddy.py`; `tests/polyscope-nginx-helper.sh`; `tests/sync-required-checks.sh`                                                                         | Prove that saved retired registrations cannot re-enroll repositories, create routes, or enter live check manifests.   |
 | `RETAINED_NON_LIVE_REFERENCE` | `docs/adr/BRAND-0007-secpal-product-family-architecture.md`; `docs/product-positioning.md`; `docs/brand/brand-architecture.md`; `docs/brand/naming.md`; `docs/secpal-pr-review-workflow.md`; `docs/retired-guardguide-references.md` | Document retirement and existing brand/review boundaries without changing their authority or restoring membership.    |
+| `RETAINED_NON_LIVE_REFERENCE` | `scripts/polyscope-rollout.py`; `scripts/polyscope-expose-wrapper.sh`                                                                                                                                                                | Explicitly deny retired preview prefixes before generic routing or announcement.                                      |
 
 This audit changes no product-family, name, brand, slogan, public-positioning,
 or historical-source authority. It does not establish Assure or Visit

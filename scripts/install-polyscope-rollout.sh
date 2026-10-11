@@ -150,7 +150,7 @@ can_apply_nginx_non_interactively() {
     helper_check_output="$(
         "$SUDO_BIN" -k -n "$POLYSCOPE_NGINX_HELPER_CHECK" --check 2>/dev/null
     )" || return 1
-    [[ " $helper_check_output " == *" manifest_schema=2 "* ]]
+    [[ " $helper_check_output " == *" manifest_schema=3 "* ]]
 }
 
 is_managed_codex_agents_link() {

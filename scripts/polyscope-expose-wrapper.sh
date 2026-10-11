@@ -199,6 +199,11 @@ announce_direct_preview() {
 if [[ $# -ge 2 && "$1" == "share" ]]; then
 	direct_preview_url="$(normalize_preview_url "$2" || true)"
 	if [[ -n "$direct_preview_url" ]]; then
+		# Retired prefixes are denied, including the historical guardguide-de route.
+		if [[ "${direct_preview_url,,}" == https://guardguide-* ]]; then
+			echo "Error: retired preview prefixes cannot be announced: $direct_preview_url" >&2
+			exit 1
+		fi
 		canonical_preview_url=""
 		if canonical_preview_url="$(canonicalize_preview_url_from_marker "$direct_preview_url")"; then
 			direct_preview_url="$canonical_preview_url"

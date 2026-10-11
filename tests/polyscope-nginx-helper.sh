@@ -85,7 +85,7 @@ else:
 assert not unsafe_import_marker.exists()
 
 manifest = {
-    "version": 2,
+    "version": 3,
     "preview_domain": "preview.secpal.dev",
     "clone_root": "/home/secpal/.polyscope/clones",
     "repositories": {
@@ -115,20 +115,22 @@ built_manifest = library.build_manifest(
     active_repo_state,
     nginx_http2_syntax="modern",
 )
-assert library.SUPPORTED_MANIFEST_VERSIONS == (1, 2)
+assert library.SUPPORTED_MANIFEST_VERSIONS == (3,)
 library.validate_installed_bundle()
 
-legacy_manifest = copy.deepcopy(manifest)
-legacy_manifest["version"] = 1
-legacy_manifest.pop("workspace_redirects")
-normalized_legacy_manifest = library.validate_manifest_data(legacy_manifest)
-assert normalized_legacy_manifest["version"] == 2
-assert normalized_legacy_manifest["workspace_redirects"] == {
-    repository: {}
-    for repository in library.EXPECTED_REPOSITORIES
-}
+# Historical manifests bind the retired five-repository contract. They cannot
+# be accepted as the reduced live contract under their former version identity.
+for version in (1, 2):
+    legacy_manifest = copy.deepcopy(manifest)
+    legacy_manifest["version"] = version
+    try:
+        library.validate_manifest_data(legacy_manifest)
+    except ValueError as error:
+        assert "version must be 3" in str(error), error
+    else:
+        raise AssertionError("legacy nginx manifest must fail closed")
 
-boolean_version_manifest = copy.deepcopy(legacy_manifest)
+boolean_version_manifest = copy.deepcopy(manifest)
 boolean_version_manifest["version"] = True
 try:
     library.validate_manifest_data(boolean_version_manifest)

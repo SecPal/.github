@@ -20,6 +20,12 @@ Log of notable changes to SecPal organization defaults (newest first).
   for supported repositories, historical evidence, and generic classifier
   fixtures. See [the reference audit](docs/retired-guardguide-references.md).
 
+**Changed:**
+
+- Reduced preview manifests use schema/bundle 3 and require a matching
+  root-owned consumer before publication. Retired preview prefixes return 404
+  and cannot be announced as generic workspace aliases.
+
 ## 2026-10-11 - Enforce Declared Evidence Architecture
 
 **Added:**

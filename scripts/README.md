@@ -1884,8 +1884,11 @@ rejects helper-path overrides, and exits before writing user units when the
 fixed helper, fixed manifest path, system server drop-in, or exact
 authorization is unavailable. The helper check validates the installed
 root-owned bundle independently of the current manifest and advertises
-`manifest_schema=2`; the unprivileged producer refuses to publish unless that
-capability is present on the same fixed helper used for activation.
+`manifest_schema=3`; the unprivileged producer refuses to publish unless that
+capability is present on the same fixed helper used for activation. Schema 3
+binds the reduced three-repository preview inventory. Older schema-1/2 manifests
+and mismatched installed renderers fail closed; update the root-owned consumer
+bundle before publishing the new producer manifest.
 Environment-selected helper paths cannot authorize publication. This permits
 consumer-first schema upgrades and allows a malformed active manifest to be
 replaced without leaving Nginx on an unreadable manifest. Both system- and
