@@ -199,8 +199,8 @@ This exception changes only provider-summary head binding. The same bounded
 read still captures all current-head feedback. Every later material,
 actionable, security, authentication, integrity, unclassified, or otherwise
 blocking source must be dispositioned under the existing current-feedback
-rules. Ordinary capture and Ready integration continue to require exact-head
-provider terminality.
+rules. Capture without authenticated successor evidence and new Ready
+integration continue to require exact-head provider terminality.
 
 A current recovered Ready source uses the same Stable Feedback projection. Its
 capture-only invocation supplies the exact delivery issue and recovery
@@ -1818,6 +1818,27 @@ arguments. The transport is a closed JSON object with schema `1.0`, kind
 order. Each entry contains exactly `integration_evidence`, `reviewed_state`,
 `validation_receipt`, `final_attestation`, and `prior_authority`. These are
 original evidence documents, not caller-authored verifier results.
+
+Ordinary read-only Stable Feedback capture accepts the same immutable transport
+through `resolve-batch --ready-integration-chain PATH --delivery-issue NUMBER
+--capture-reviewed-state PATH`. Supply every typed integration package in
+protected publication order, including integrations separated by ordinary
+remediation. The command shares the existing package authenticator, then
+delegates the complete mixed successor history to
+`derive_ready_source_recovery_provider_binding`. It accepts no provider-head or
+transition selector. Protected CURRENT is reauthenticated after the complete
+current-feedback observation; terminal Code/Security evidence must bind the
+derived historical H0, while the Stable Feedback output binds current H2.
+An H2 provider summary cannot substitute for required H0 terminality.
+The existing `--capture-provider-summary` option can retain the provider body
+from that same bounded observation. This capture mode cannot combine with
+recovery/remediation provider modes or batch application arguments. It creates
+no classification, remediation, provider-request, lifecycle-publication,
+thread-resolution or merge authority. Complete findings remain subject to the
+existing disposition and material-blocker gates; no historical summary replaces
+current source validation or current feedback. Historical artifact schemas and
+the exact-head, remediation-specific and recovery-specific capture modes are
+unchanged.
 
 The canonical integration verifier independently authenticates each package's
 supported historical evidence semantics, actual commit trailers, ordered parents,
