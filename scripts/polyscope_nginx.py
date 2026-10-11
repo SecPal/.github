@@ -23,13 +23,11 @@ EXPECTED_CLONE_ROOT = "/home/secpal/.polyscope/clones"
 EXPECTED_REPOSITORIES = (
     "api",
     "frontend",
-    "GuardGuide",
     "secpal.app",
-    "guardguide.de",
 )
 EXPECTED_UNIX_UPSTREAM = "/run/php/php8.4-fpm-secpal-preview.sock"
-SUPPORTED_MANIFEST_VERSIONS = (1, 2)
-BUNDLE_VERSION = 2
+SUPPORTED_MANIFEST_VERSIONS = (3,)
+BUNDLE_VERSION = 3
 TOP_LEVEL_KEYS = {
     "version",
     "preview_domain",
@@ -63,16 +61,9 @@ def validate_manifest_data(payload: Any) -> dict[str, Any]:
     if isinstance(version, bool) or not isinstance(version, int):
         raise ValueError("nginx manifest version must be an integer")
     if version not in SUPPORTED_MANIFEST_VERSIONS:
-        raise ValueError("nginx manifest version must be 1 or 2")
-    expected_keys = TOP_LEVEL_KEYS if version == 2 else TOP_LEVEL_KEYS - {"workspace_redirects"}
-    _require_exact_keys(payload, expected_keys, "nginx manifest")
+        raise ValueError("nginx manifest version must be 3")
+    _require_exact_keys(payload, TOP_LEVEL_KEYS, "nginx manifest")
     payload = dict(payload)
-    if version == 1:
-        payload["version"] = 2
-        payload["workspace_redirects"] = {
-            repo_name: {}
-            for repo_name in EXPECTED_REPOSITORIES
-        }
     if payload["preview_domain"] != EXPECTED_PREVIEW_DOMAIN:
         raise ValueError(f"preview_domain must be exactly {EXPECTED_PREVIEW_DOMAIN}")
     if payload["clone_root"] != EXPECTED_CLONE_ROOT:
@@ -170,7 +161,7 @@ def build_manifest(
     workspace_redirects: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     payload = {
-        "version": 2,
+        "version": 3,
         "preview_domain": EXPECTED_PREVIEW_DOMAIN,
         "clone_root": EXPECTED_CLONE_ROOT,
         "repositories": {
@@ -242,9 +233,13 @@ def validate_installed_bundle() -> None:
     if not callable(render_function):
         raise RuntimeError("root-owned nginx renderer lacks render_nginx_config")
     parameters = inspect.signature(render_function).parameters
-    if "workspace_redirects" not in parameters or "nginx_http2_syntax" not in parameters:
+    if (
+        "workspace_redirects" not in parameters
+        or "nginx_http2_syntax" not in parameters
+        or getattr(renderer, "NGINX_MANIFEST_VERSION", None) != BUNDLE_VERSION
+    ):
         raise RuntimeError(
-            "root-owned nginx renderer is incompatible with manifest bundle version 2"
+            f"root-owned nginx renderer is incompatible with manifest bundle version {BUNDLE_VERSION}"
         )
 
 

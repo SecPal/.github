@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: 2026 SecPal
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
 set -euo pipefail
@@ -28,26 +28,6 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Work-Graph PR Advisory",
     "Work-Graph PR Gate"
   ],
-  "GuardGuide": [
-    "check-conflicts / Detect Git Conflict Markers",
-    "Check PR Size / Check PR Size",
-    "Detect repository manifests",
-    "AI Instructions / Validate AI Instructions",
-    "Check REUSE Compliance / Check REUSE Compliance",
-    "Detect JavaScript manifest",
-    "Detect PHP manifest",
-    "Check License Compatibility / Check License Compatibility",
-    "Formatting Check / Check Code Formatting",
-    "Markdown Lint / Lint Markdown Files",
-    "ESLint / Run Linter",
-    "TypeScript Check / Build Project",
-    "Vitest Tests / Build Project",
-    "Laravel Pint / Check Code Style",
-    "PHPStan / Static Analysis",
-    "Pest Tests (PostgreSQL)",
-    "Pest Tests (MariaDB)",
-    "Analyze with CodeQL (javascript-typescript)"
-  ],
   "android": [
     "Check REUSE Compliance / Check REUSE Compliance",
     "Check License Compatibility / Check License Compatibility",
@@ -73,20 +53,6 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "PEST Tests",
     "check-conflicts / Detect Git Conflict Markers",
     "AI Instructions / Validate AI Instructions"
-  ],
-  "guardguide.de": [
-    "Check REUSE Compliance / Check REUSE Compliance",
-    "Check License Compatibility / Check License Compatibility",
-    "Formatting Check / Check Code Formatting",
-    "Markdown Lint / Lint Markdown Files",
-    "ESLint / Run Linter",
-    "Astro TypeScript Check / Build Project",
-    "Astro Build / Build Project",
-    "Check PR Size / Check PR Size",
-    "check-conflicts / Detect Git Conflict Markers",
-    "Analyze Code (javascript-typescript)",
-    "AI Instructions / Validate AI Instructions",
-    "Node Tests / Run Tests"
   ],
   "contracts": [
     "REUSE Compliance / Check REUSE Compliance",

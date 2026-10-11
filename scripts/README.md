@@ -1516,9 +1516,11 @@ architecture decision adds one.
 
 - The match regex is `secpal\.[A-Za-z0-9.-]+`, so only `secpal.*` strings are
   ever inspected. Non-`secpal` domains are out of scope by design — even when
-  they belong to SecPal (e.g. `guardguide.de`).
-- SecPal-owned external hosts such as `guardguide.de` (managed via
-  SecPal/.github#483) are governed by their own repository policy guards and
+  they belong to SecPal. The historical `guardguide.de` fixture still proves
+  that matcher boundary.
+- Non-`secpal` hosts need their own policy guards; the historical
+  `guardguide.de` example from SecPal/.github#483 supplies no live repository
+  membership. Such hosts
   are not first-class entries here. Adding them to this allowlist would be
   inert because the matcher never sees them.
 - Treat the banner's "Forbidden" list as "forbidden `secpal.*` variants",
@@ -1757,7 +1759,7 @@ the SecPal application repositories.
 
 ```bash
 # Inspect the payload for one repository without writing to GitHub
-bash scripts/sync-required-checks.sh --repo guardguide.de --print-payload | jq
+bash scripts/sync-required-checks.sh --repo secpal.app --print-payload | jq
 
 # Apply the configured payload to one repository
 bash scripts/sync-required-checks.sh --repo api --apply
@@ -1774,8 +1776,6 @@ bash scripts/sync-required-checks.sh --apply
 - `contracts`
 - `android`
 - `secpal.app`
-- `GuardGuide`
-- `guardguide.de`
 
 **What It Does:**
 
@@ -1884,8 +1884,11 @@ rejects helper-path overrides, and exits before writing user units when the
 fixed helper, fixed manifest path, system server drop-in, or exact
 authorization is unavailable. The helper check validates the installed
 root-owned bundle independently of the current manifest and advertises
-`manifest_schema=2`; the unprivileged producer refuses to publish unless that
-capability is present on the same fixed helper used for activation.
+`manifest_schema=3`; the unprivileged producer refuses to publish unless that
+capability is present on the same fixed helper used for activation. Schema 3
+binds the reduced three-repository preview inventory. Older schema-1/2 manifests
+and mismatched installed renderers fail closed; update the root-owned consumer
+bundle before publishing the new producer manifest.
 Environment-selected helper paths cannot authorize publication. This permits
 consumer-first schema upgrades and allows a malformed active manifest to be
 replaced without leaving Nginx on an unreadable manifest. Both system- and

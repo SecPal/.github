@@ -14,8 +14,7 @@ from .model import CLOSED, Node, Snapshot
 SCHEMA = "secpal-work-graph-audit/v1"
 DEFAULT_REPOSITORIES = (
     "SecPal/.github", "SecPal/android", "SecPal/frontend", "SecPal/deployment",
-    "SecPal/api", "SecPal/contracts", "SecPal/secpal.app", "SecPal/GuardGuide",
-    "SecPal/guardguide.de",
+    "SecPal/api", "SecPal/contracts", "SecPal/secpal.app",
 )
 _PRIORITY = {"before_rollout": 0, "normal": 1, "cleanup": 2}
 

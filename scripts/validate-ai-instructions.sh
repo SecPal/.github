@@ -58,6 +58,8 @@ raise SystemExit(
 PY
 }
 
+# Historical GuardGuide classification supports archived instruction roots and
+# generic classifier fixtures; it does not enroll repositories in live tooling.
 detect_repo_type() {
     local repository_name="${1:-}"
 

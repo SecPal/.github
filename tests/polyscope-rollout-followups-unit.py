@@ -11,6 +11,7 @@ import inspect
 import io
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -38,6 +39,102 @@ rollout = load_rollout_module()
 
 
 class PolyscopeRolloutFollowupTests(TestCase):
+    def test_retired_preview_hosts_are_rejected_before_workspace_routing(self) -> None:
+        state = {name: {"id": name.replace(".", "-")} for name in rollout.REPO_SETTINGS}
+        rendered = rollout.render_nginx_config(state)
+        servers = rendered.split("server {")[1:]
+        self.assertEqual(len(servers), 2)
+        for server in servers:
+            rejection = re.search(r"if \(\$host ~\* (\S+)\) \{\s*return 404;", server)
+            self.assertIsNotNone(rejection, "retired host can enter generic workspace routing")
+            pattern = rejection.group(1)
+            for host in ("guardguide-otter.preview.secpal.dev", "guardguide-de-otter.preview.secpal.dev"):
+                self.assertIsNotNone(re.search(pattern, host, re.IGNORECASE))
+            for host in ("api-guardguide-otter.preview.secpal.dev", "frontend-otter.preview.secpal.dev",
+                         "secpal-app-otter.preview.secpal.dev", "otter.preview.secpal.dev"):
+                self.assertIsNone(re.search(pattern, host, re.IGNORECASE))
+            self.assertLess(rejection.start(), server.index("if ($preview_canonical_host)"))
+
+    def test_retired_preview_urls_cannot_be_announced(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            for prefix in ("guardguide", "guardguide-de"):
+                result = subprocess.run(
+                    ["bash", str(REPO_ROOT / "scripts/polyscope-expose-wrapper.sh"), "share",
+                     f"https://{prefix}-otter.preview.secpal.dev"], cwd=temporary,
+                    env={**os.environ, "POLYSCOPE_EXPOSE_WRAPPER_EXIT_AFTER_ANNOUNCE": "1"},
+                    capture_output=True, text=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("Public URL", result.stdout)
+                self.assertIn("retired preview", result.stderr)
+
+    def test_reduced_manifest_cannot_be_published_to_the_previous_helper(self) -> None:
+        spec = importlib.util.spec_from_file_location("nginx_contract_test", REPO_ROOT / "scripts/polyscope_nginx.py")
+        library = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(library)
+        state = {name: {"id": name.replace(".", "-")} for name in rollout.REPO_SETTINGS}
+        manifest = library.build_manifest(state, nginx_http2_syntax="modern")
+        writer = mock.Mock()
+        previous_helper = mock.Mock(return_value=SimpleNamespace(
+            returncode=0, stdout="bundle=2 manifest_schema=1 manifest_schema=2", stderr=""))
+        with self.assertRaisesRegex(RuntimeError, "manifest schema 3"):
+            rollout.write_compatible_nginx_manifest(
+                rollout.DEFAULT_NGINX_MANIFEST_PATH, manifest, writer=writer,
+                helper_runner=previous_helper, service_user=SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid()))
+        writer.assert_not_called()
+        previous_helper.return_value.stdout = "bundle=3 manifest_schema=3"
+        rollout.write_compatible_nginx_manifest(
+            rollout.DEFAULT_NGINX_MANIFEST_PATH, manifest, writer=writer,
+            helper_runner=previous_helper, service_user=SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid()))
+        writer.assert_called_once()
+
+    def test_installer_requires_the_reduced_manifest_capability(self) -> None:
+        source = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
+        function = re.search(r"^can_apply_nginx_non_interactively\(\) \{.*?^\}", source, re.MULTILINE | re.DOTALL).group(0)
+        with tempfile.TemporaryDirectory() as temporary:
+            helper = Path(temporary) / "helper"
+            sudo = Path(temporary) / "sudo"
+            sudo.write_text('#!/usr/bin/env bash\nshift 2\nexec "$@"\n')
+            sudo.chmod(0o755)
+            for capability, expected in (("bundle=2 manifest_schema=1 manifest_schema=2", 1),
+                                         ("bundle=3 manifest_schema=3", 0)):
+                helper.write_text(f"#!/usr/bin/env bash\necho '{capability}'\n")
+                helper.chmod(0o755)
+                result = subprocess.run(["bash", "-c", function + "\ncan_apply_nginx_non_interactively"],
+                                        env={**os.environ, "SUDO_BIN": str(sudo),
+                                             "POLYSCOPE_NGINX_HELPER_CHECK": str(helper)}, capture_output=True)
+                self.assertEqual(result.returncode, expected)
+
+    def test_helper_rejects_a_renderer_without_the_new_contract(self) -> None:
+        spec = importlib.util.spec_from_file_location("nginx_bundle_test", REPO_ROOT / "scripts/polyscope_nginx.py")
+        library = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(library)
+        previous_renderer = SimpleNamespace(render_nginx_config=lambda repo_state, nginx_http2_syntax, workspace_redirects: "")
+        with mock.patch.object(library, "_load_rollout_renderer", return_value=previous_renderer):
+            with self.assertRaisesRegex(RuntimeError, "bundle version 3"):
+                library.validate_installed_bundle()
+
+    def test_active_repository_state_does_not_require_retired_sources(self) -> None:
+        active_names = {".github", "api", "frontend", "contracts", "android",
+                        "secpal.app", "deployment", "operations"}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            state_path = Path(temporary_directory) / "repositories.json"
+            active_state = {
+                name: {"id": name.replace(".", "-"), "path": str(Path(temporary_directory) / name)}
+                for name in active_names
+            }
+            state_path.write_text(json.dumps(active_state))
+            self.assertEqual(rollout.load_repo_state(state_path), active_state)
+            # Historical saved registrations must not re-enroll retired sources.
+            historical_state = dict(active_state)
+            historical_state["GuardGuide"] = {"id": "retired"}
+            historical_state["guardguide.de"] = {"id": "retired-site"}
+            state_path.write_text(json.dumps(historical_state))
+            self.assertEqual(rollout.load_repo_state(state_path), active_state)
+            self.assertEqual(set(rollout.REPO_SETTINGS), active_names)
+            for name in ("GuardGuide", "guardguide.de", "Assure", "Visit", "unknown"):
+                self.assertIsNone(rollout.build_repo_all_checks_command(name))
+
     def test_metadata_sync_preserves_links_outside_automation_authority(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             db_path = Path(temporary_directory) / "polyscope.db"
@@ -1339,9 +1436,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
         repo_state = {
             "api": {"id": "api-id"},
             "frontend": {"id": "frontend-id"},
-            "GuardGuide": {"id": "guardguide-id"},
             "secpal.app": {"id": "secpal-app-id"},
-            "guardguide.de": {"id": "guardguide-de-id"},
         }
 
         rendered = rollout.render_nginx_config(repo_state)

@@ -85,24 +85,20 @@ else:
 assert not unsafe_import_marker.exists()
 
 manifest = {
-    "version": 2,
+    "version": 3,
     "preview_domain": "preview.secpal.dev",
     "clone_root": "/home/secpal/.polyscope/clones",
     "repositories": {
         "api": "d35c0cdc",
         "frontend": "b6624c93",
-        "GuardGuide": "8fadd2fb",
         "secpal.app": "c46a8454",
-        "guardguide.de": "3d0fcf01",
     },
     "workspace_redirects": {
         "api": {},
         "frontend": {
             "gilded-dingo-ebf3bca4": "gilded-dingo",
         },
-        "GuardGuide": {},
         "secpal.app": {},
-        "guardguide.de": {},
     },
     "php_upstream": {
         "kind": "unix",
@@ -119,20 +115,22 @@ built_manifest = library.build_manifest(
     active_repo_state,
     nginx_http2_syntax="modern",
 )
-assert library.SUPPORTED_MANIFEST_VERSIONS == (1, 2)
+assert library.SUPPORTED_MANIFEST_VERSIONS == (3,)
 library.validate_installed_bundle()
 
-legacy_manifest = copy.deepcopy(manifest)
-legacy_manifest["version"] = 1
-legacy_manifest.pop("workspace_redirects")
-normalized_legacy_manifest = library.validate_manifest_data(legacy_manifest)
-assert normalized_legacy_manifest["version"] == 2
-assert normalized_legacy_manifest["workspace_redirects"] == {
-    repository: {}
-    for repository in library.EXPECTED_REPOSITORIES
-}
+# Historical manifests bind the retired five-repository contract. They cannot
+# be accepted as the reduced live contract under their former version identity.
+for version in (1, 2):
+    legacy_manifest = copy.deepcopy(manifest)
+    legacy_manifest["version"] = version
+    try:
+        library.validate_manifest_data(legacy_manifest)
+    except ValueError as error:
+        assert "version must be 3" in str(error), error
+    else:
+        raise AssertionError("legacy nginx manifest must fail closed")
 
-boolean_version_manifest = copy.deepcopy(legacy_manifest)
+boolean_version_manifest = copy.deepcopy(manifest)
 boolean_version_manifest["version"] = True
 try:
     library.validate_manifest_data(boolean_version_manifest)
@@ -163,9 +161,7 @@ assert "set $preview_entrypoint /home/secpal/.polyscope/__missing_preview_entryp
 assert "if (-f $preview_entrypoint) {" in rendered
 for repository, entrypoint in {
     "secpal-app": "$secpal_app_dist/index.html",
-    "guardguide-de": "$guardguide_de_dist/index.html",
     "frontend": "$frontend_dist/index.html",
-    "guardguide": "$guardguide_public/index.php",
     "api": "$api_public/index.php",
 }.items():
     route_start = rendered.index(f"if ($repo = {repository}) {{")
@@ -178,6 +174,12 @@ assert (
 assert "return 308 https://$preview_canonical_host$request_uri;" in rendered
 
 invalid_payloads = []
+# Retired and substituted identities cannot enter the privileged live manifest.
+for repository in ("GuardGuide", "guardguide.de", "Assure", "Visit", "unknown"):
+    payload = copy.deepcopy(manifest)
+    payload["repositories"][repository] = "unexpected-id"
+    payload["workspace_redirects"][repository] = {}
+    invalid_payloads.append(payload)
 for key, value in (
     ("unexpected", True),
     ("raw_nginx", "load_module /tmp/evil.so;"),

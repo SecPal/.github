@@ -221,21 +221,11 @@ for repo_dir in workspace_root.iterdir():
 (workspace_root / "api" / "scripts").mkdir(parents=True, exist_ok=True)
 (workspace_root / "api" / "scripts" / "preflight.sh").write_text("#!/usr/bin/env bash\n")
 
-(workspace_root / "GuardGuide" / "composer.json").write_text("{}\n")
-(workspace_root / "GuardGuide" / "artisan").write_text("#!/usr/bin/env php\n")
 
 (workspace_root / ".github" / "scripts").mkdir(parents=True, exist_ok=True)
 (workspace_root / ".github" / "scripts" / "preflight.sh").write_text("#!/usr/bin/env bash\n")
 
 package_scripts = {
-    "GuardGuide": {
-        "build": "tsc --noEmit && vite build",
-        "dev": "vite",
-        "format:check": "prettier --check '**/*.{md,yml,yaml,json}'",
-        "lint:check": "eslint .",
-        "typecheck": "tsc --noEmit",
-        "test": "npm run build",
-    },
     "frontend": {
         "build": "vite build",
         "lint": "eslint .",
@@ -265,12 +255,6 @@ package_scripts = {
         "lint": "eslint .",
         "test": "node --test tests/**/*.mjs",
     },
-    "guardguide.de": {
-        "build": "astro build",
-        "check": "astro check",
-        "lint": "eslint .",
-        "test": "node --test tests/**/*.mjs",
-    },
     "deployment": {
         "test:integration:browser": "node --test tests/**/*.mjs",
     },
@@ -280,16 +264,6 @@ package_scripts = {
         "test:openapi-verified-presence": "bash tests/check-openapi-verified-endpoints.sh",
     },
 }
-
-guardguide_composer = {
-    "scripts": {
-        "analyse": ["./vendor/bin/phpstan analyse"],
-        "lint": ["./vendor/bin/pint --test"],
-        "lint:check": ["./vendor/bin/pint --test"],
-        "test": ["@php artisan test"],
-    }
-}
-(workspace_root / "GuardGuide" / "composer.json").write_text(json.dumps(guardguide_composer, indent=2) + "\n")
 
 for repo_name, scripts in package_scripts.items():
     repo_dir = workspace_root / repo_name
@@ -642,59 +616,6 @@ applyTo: 'src/**/*.tsx'
 - Keep load, action, and destructive-flow error state separate.
 "
 
-create_repo "GuardGuide" "$common_header
-
-# GuardGuide Instructions
-
-## Always-On Rules
-
-- Run git status --short --branch before any write action.
-- TDD is mandatory for behavior and code changes.
-- Keep one topic per branch and pull request.
-
-## Issue And PR Discipline
-
-- The first PR state must be draft.
-
-## Required Validation
-
-- the branch still covers exactly one topic
-- TDD happened for behavior changes
-- the smallest relevant validation passed for the touched area
-- CHANGELOG.md was updated for real changes
-- no bypass was used
-
-## AI Findings Triage
-
-- Treat AI findings and AI-generated fix proposals as hints, not proof.
-- Before merge, prove a claimed defect with a failing test, a reproducible defect, or an explicit invariant.
-- Green CI alone is not enough for AI-generated changes.
-" "react-shadcn.instructions.md" "---
-name: React shadcn Rules
-applyTo: 'resources/js/**/*.tsx'
----
-
-# React shadcn Rules
-
-- Use React 19 with strict TypeScript.
-- Keep English source text and German translation in Lingui catalogs from the start.
-- shadcn/ui is the exclusive UI baseline.
-"
-
-printf '%s' "---
-# SPDX-FileCopyrightText: 2026 SecPal Contributors
-# ${spdx_license_identifier}: ${agpl_license}
-name: Laravel PHP Rules
-applyTo: '**/*.php'
----
-
-# Laravel PHP Rules
-
-- Use Form Requests for validation and services for business logic.
-- Add or update the smallest relevant Pest test for each PHP change, then run the affected tests.
-- Use vendor/bin/pint --dirty after changes.
-" > "$workspace_root/GuardGuide/.github/instructions/php-laravel.instructions.md"
-
 create_repo "contracts" "$common_header
 
 # Contracts Instructions
@@ -771,42 +692,6 @@ applyTo: 'src/**/*.tsx'
 create_repo "secpal.app" "$common_header
 
 # secpal.app Instructions
-
-## Always-On Rules
-
-- Run git status --short --branch before any write action.
-- Validate-first.
-
-## Issue And PR Discipline
-
-- The first PR state must be draft.
-
-## Required Validation
-
-- the smallest relevant validation passed for the touched area: formatting, lint, typecheck, and build when applicable
-- CHANGELOG.md was updated for real changes
-- no bypass was used
-
-## AI Findings Triage
-
-- Treat AI findings and AI-generated fix PRs as hints, not proof.
-- Before merge, prove the defect with a failing test, a reproducible defect, or a stated invariant.
-- Green CI alone is not enough for AI-generated changes.
-" "astro-static.instructions.md" "---
-name: Astro Static Site Rules
-applyTo: 'src/**/*.astro'
----
-
-# Astro Static Site Rules
-
-- Prefer semantic HTML, accessible landmarks, and keyboard-safe interactions.
-- Keep client-side JavaScript minimal.
-- Run formatting, lint, typecheck, and build.
-"
-
-create_repo "guardguide.de" "$common_header
-
-# guardguide.de Instructions
 
 ## Always-On Rules
 
@@ -974,13 +859,11 @@ repo_state = {
     'contracts': {'id': 'co123456', 'name': 'SecPal/contracts', 'path': str(workspace_root / 'contracts')},
     'android': {'id': 'an123456', 'name': 'SecPal/android', 'path': str(workspace_root / 'android')},
     'secpal.app': {'id': 'sa123456', 'name': 'SecPal/secpal.app', 'path': str(workspace_root / 'secpal.app')},
-    'guardguide.de': {'id': 'gd123456', 'name': 'SecPal/guardguide.de', 'path': str(workspace_root / 'guardguide.de')},
     'deployment': {'id': 'de123456', 'name': 'SecPal/deployment', 'path': str(workspace_root / 'deployment')},
     'operations': {'id': 'op123456', 'name': 'SecPal/operations', 'path': str(workspace_root / 'operations')},
     # Preserve a retired database row to prove rollout ignores repositories
     # that are no longer part of the managed workspace.
     'retired-docs': {'id': 'rd123456', 'name': 'SecPal/retired-docs', 'path': str(workspace_root / 'retired-docs')},
-    'GuardGuide': {'id': 'gg123456', 'name': 'SecPal/GuardGuide', 'path': str(workspace_root / 'GuardGuide')},
     '.github': {'id': 'gh123456', 'name': 'SecPal/.github', 'path': str(workspace_root / '.github')},
 }
 
@@ -1020,26 +903,26 @@ PY
 }
 
 assert_rollout_rejects_instruction_contract \
-    "GuardGuide" "AGENTS.md" "missing" 'Missing: AGENTS.md'
+    "frontend" "AGENTS.md" "missing" 'Missing: AGENTS.md'
 assert_rollout_rejects_instruction_contract \
-    "GuardGuide" "AGENTS.md" "invalid-utf8" \
+    "frontend" "AGENTS.md" "invalid-utf8" \
     'File must be non-empty UTF-8 Markdown with a top-level heading'
 assert_rollout_rejects_instruction_contract \
-    "GuardGuide" "AGENTS.md" "no-heading" \
+    "frontend" "AGENTS.md" "no-heading" \
     'File must be non-empty UTF-8 Markdown with a top-level heading'
 assert_rollout_rejects_instruction_contract \
-    "GuardGuide" "AGENTS.md" "markdown-invalid" 'instruction Markdown passes lint'
+    "frontend" "AGENTS.md" "markdown-invalid" 'instruction Markdown passes lint'
 assert_rollout_rejects_instruction_contract \
-    "GuardGuide" "AGENTS.md" "missing-spdx" \
+    "frontend" "AGENTS.md" "missing-spdx" \
     'AGENTS.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later'
 assert_rollout_rejects_instruction_contract \
-    "GuardGuide" "AGENTS.md" "invalid-spdx-expression" \
+    "frontend" "AGENTS.md" "invalid-spdx-expression" \
     'AGENTS.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later'
 assert_rollout_rejects_instruction_contract \
-    "GuardGuide" "AGENTS.md" "obsolete-attribution-spdx" \
+    "frontend" "AGENTS.md" "obsolete-attribution-spdx" \
     'AGENTS.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later'
 assert_rollout_rejects_instruction_contract \
-    "GuardGuide" "AGENTS.md" "oversized" 'bytes exceeds 32768 bytes'
+    "frontend" "AGENTS.md" "oversized" 'bytes exceeds 32768 bytes'
 assert_rollout_rejects_instruction_contract \
     "frontend" ".github/copilot-instructions.md" "missing" \
     'Missing: .github/copilot-instructions.md'
@@ -2014,6 +1897,7 @@ resolved_fixture = module.validate_instruction_root(fixture, validated_roots, "f
 assert resolved_fixture == fixture.resolve()
 assert validated_roots == {(fixture.resolve(), "frontend")}
 
+# Generic classifier fixture: a historical label cannot override an API manifest.
 misleading_guardguide_fixture = workspace / "GuardGuide instruction root"
 shutil.copytree(fixture, misleading_guardguide_fixture)
 (misleading_guardguide_fixture / "composer.json").write_text(
@@ -2058,12 +1942,6 @@ else:
 
 module.CANONICAL_AI_INSTRUCTIONS_VALIDATOR = original_validator
 PY
-
-assert_rollout_rejects_invalid_local_config \
-    "$PYTHON_SCRIPT" \
-    'composer run analyse' \
-    'composer run missing-script' \
-    "GuardGuide polyscope config references missing composer script 'missing-script'"
 
 grep -q 'https://api-{{worktree}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
 grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polyscope.local.json"
@@ -2142,9 +2020,7 @@ if grep -qF 'mirrors the authoritative root `AGENTS.md`' \
     exit 1
 fi
 grep -q '## Always-On Rules' "$workspace_root/frontend/.github/copilot-instructions.md"
-grep -q 'https://guardguide-{{worktree}}.preview.secpal.dev' "$workspace_root/GuardGuide/polyscope.local.json"
 grep -q 'https://secpal-app-{{worktree}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
-grep -q 'https://guardguide-de-{{worktree}}.preview.secpal.dev' "$workspace_root/guardguide.de/polyscope.local.json"
 grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'VITE_API_URL' "$workspace_root/frontend/polyscope.local.json"
 grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$workspace_root/frontend/polyscope.local.json"
@@ -4678,39 +4554,6 @@ assert result.returncode == 0, result.stderr
 assert fixture.joinpath("npm-ci-attempts.txt").read_text() == "1"
 PY
 
-# GuardGuide preview env setup must write APP_URL for the normalized preview
-# workspace host, not the physical worktree directory basename.
-python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
-import importlib.util
-import pathlib
-import subprocess
-import sys
-
-script_path = pathlib.Path(sys.argv[1])
-workspace = pathlib.Path(sys.argv[2])
-fixture = workspace / "guardguide-env-setup-fixture"
-worktree_path = fixture / "clones" / "gg123456" / "Steady Otter"
-worktree_path.mkdir(parents=True)
-historical_host = "guardguide." + "sec" + "pal" + ".dev"
-worktree_path.joinpath(".env").write_text(f"APP_URL=https://{historical_host}\n")
-
-spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
-module = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(module)
-
-result = subprocess.run(
-    ["bash", "-c", "set -euo pipefail; " + module.build_guardguide_preview_env_setup_command()],
-    cwd=worktree_path,
-    capture_output=True,
-    text=True,
-)
-assert result.returncode == 0, result.stderr
-env_text = worktree_path.joinpath(".env").read_text()
-assert "APP_URL=https://guardguide-steady-otter.preview.secpal.dev" in env_text, env_text
-assert "APP_URL=https://guardguide-Steady Otter.preview.secpal.dev" not in env_text, env_text
-PY
-
 # build_verified_npm_ci_command must retry a zero-exit npm ci attempt that
 # leaves a declared development dependency incomplete, even though provisioning
 # runs the generated shell under `set -euo pipefail`.
@@ -4841,13 +4684,6 @@ grep -qF '"label": "Build Watch"' "$workspace_root/secpal.app/polyscope.local.js
 grep -qF 'Watching secpal.app preview sources for changes...' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF 'public/og-default.svg' "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF 'public/og-de.png' "$workspace_root/secpal.app/polyscope.local.json"
-grep -qF '"command": "npm run check && npm run lint && npm run test && npm run build"' "$workspace_root/guardguide.de/polyscope.local.json"
-assert_no_generated_preflight_action "$workspace_root/guardguide.de/polyscope.local.json"
-grep -qF '"label": "Fix current findings"' "$workspace_root/guardguide.de/polyscope.local.json"
-grep -qF '"label": "Build Watch"' "$workspace_root/guardguide.de/polyscope.local.json"
-grep -qF 'Watching guardguide.de preview sources for changes...' "$workspace_root/guardguide.de/polyscope.local.json"
-grep -qF 'public/og-default.svg' "$workspace_root/guardguide.de/polyscope.local.json"
-grep -qF 'public/og-de.png' "$workspace_root/guardguide.de/polyscope.local.json"
 assert_no_generated_preflight_action "$workspace_root/.github/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.local.json"
 
@@ -5017,83 +4853,7 @@ if "public/generated.svg" not in command:
     )
 PY
 
-python3 -B - <<'PY' "$PYTHON_SCRIPT"
-import importlib.util
-import sys
-from pathlib import Path
-
-script_path = Path(sys.argv[1]).resolve()
-spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
-module = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(module)
-
-command = module.build_guardguide_preview_build_watch_command()
-
-for required_input in ("tailwind.config.js", "tailwind.config.ts", ".png", ".jpg", ".webp", ".woff2"):
-    if required_input not in command:
-        raise SystemExit(
-            f"GuardGuide preview build watcher must track {required_input} changes so preview output stays current"
-        )
-PY
-
-grep -q 'GuardGuide/AGENTS.md before taking action' "$workspace_root/GuardGuide/polyscope.local.json"
-if grep -q 'POLYSCOPE_WORKSPACE=.*python3 -c' "$workspace_root/GuardGuide/polyscope.local.json"; then
-    echo "GuardGuide preview env setup must resolve the normalized workspace directly and not pass the physical basename via POLYSCOPE_WORKSPACE" >&2
-    exit 1
-fi
-grep -q 'APP_URL=https://guardguide-{workspace}\.preview\.secpal\.dev' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -q 'php artisan db:seed --class=Database.*GuardGuideAccessSeeder --force && php artisan tinker --execute=' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF "firstOrNew" "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF "test@example.com" "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"command": "npm run format:check && npm run lint:check && npm run typecheck && npm run test && composer run lint:check && composer run analyse && composer run test"' "$workspace_root/GuardGuide/polyscope.local.json"
-assert_no_generated_preflight_action "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"label": "Fix current findings"' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"label": "Typecheck"' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"command": "npm run typecheck"' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"label": "Build"' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"command": "npm run build"' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF '"label": "Build Watch"' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF 'Watching GuardGuide preview sources for changes...' "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF "public/build" "$workspace_root/GuardGuide/polyscope.local.json"
-grep -qF "def is_ignored(path: Path) -> bool:" "$workspace_root/GuardGuide/polyscope.local.json"
-
-if grep -qF '"label": "Vite Dev"' "$workspace_root/GuardGuide/polyscope.local.json"; then
-    echo "GuardGuide Polyscope config must not start the Vite dev server for nginx-backed previews" >&2
-    exit 1
-fi
-
-if grep -qF '"command": "npm run dev"' "$workspace_root/GuardGuide/polyscope.local.json"; then
-    echo "GuardGuide Polyscope config must not run npm dev for nginx-backed previews" >&2
-    exit 1
-fi
-
-if grep -q 'react-catalyst.instructions.md' "$workspace_root/GuardGuide/polyscope.local.json"; then
-    echo "GuardGuide Polyscope config must not reference the legacy Catalyst instruction path" >&2
-    exit 1
-fi
-
-if grep -q 'Catalyst' "$workspace_root/GuardGuide/polyscope.local.json"; then
-    echo "GuardGuide Polyscope config must not reference Catalyst wording after the shadcn reset" >&2
-    exit 1
-fi
-
-if grep -qF '"command": "npm run start"' "$workspace_root/GuardGuide/polyscope.local.json"; then
-    echo "GuardGuide Polyscope config must not reference the removed npm run start command" >&2
-    exit 1
-fi
-
-if grep -qF '"command": "npm run test:watch"' "$workspace_root/GuardGuide/polyscope.local.json"; then
-    echo "GuardGuide Polyscope config must not reference the removed npm run test:watch command" >&2
-    exit 1
-fi
-
-if grep -q 'node_modules' "$workspace_root/api/polyscope.local.json"; then
-    echo "api polyscope config must not reference node_modules" >&2
-    exit 1
-fi
-
-if [ "$(grep -cF 'server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app)-)?(?<workspace>' "$nginx_output")" -ne 2 ]; then
+if [ "$(grep -cF 'server_name ~^(?:(?<repo>api|frontend|secpal-app)-)?(?<workspace>' "$nginx_output")" -ne 2 ]; then
     echo "preview nginx config must reserve every active repository hostname prefix in both servers" >&2
     exit 1
 fi
@@ -5309,10 +5069,7 @@ assert command_log.read_text().splitlines() == ["", "", ""], command_log.read_te
 PY
 
 grep -q "/home/secpal/.polyscope/clones/api12345/\\\$workspace" "$nginx_output"
-grep -q "/home/secpal/.polyscope/clones/gg123456/\\\$workspace" "$nginx_output"
-grep -qF "if (\$repo = guardguide) {" "$nginx_output"
 grep -qF "set \$php_root \$api_public;" "$nginx_output"
-grep -qF "set \$php_root \$guardguide_public;" "$nginx_output"
 grep -qF "try_files \$uri @preview_router;" "$nginx_output"
 grep -qF "try_files \$uri/index.html /index.html =404;" "$nginx_output"
 grep -qF "set \$preview_ready 0;" "$nginx_output"
@@ -5384,9 +5141,7 @@ grep -qF "set \$preview_entrypoint /home/secpal/.polyscope/__missing_preview_ent
 grep -qF "if (-f \$preview_entrypoint) {" "$nginx_output"
 for _repo_entrypoint in \
     "secpal-app:\$secpal_app_dist/index.html" \
-    "guardguide-de:\$guardguide_de_dist/index.html" \
     "frontend:\$frontend_dist/index.html" \
-    "guardguide:\$guardguide_public/index.php" \
     "api:\$api_public/index.php"; do
     _repo="${_repo_entrypoint%%:*}"
     _entrypoint="${_repo_entrypoint#*:}"
@@ -5465,15 +5220,13 @@ fi
 api_if_line="$(grep -nF "if (-f \$api_public/index.php) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
 frontend_if_line="$(grep -nF "if (-f \$frontend_dist/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
 secpal_app_if_line="$(grep -nF "if (-f \$secpal_app_dist/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
-guardguide_de_if_line="$(grep -nF "if (-f \$guardguide_de_dist/index.html) {" "$nginx_output" | head -n 1 | cut -d: -f1)"
 
 test -n "$api_if_line"
 test -n "$frontend_if_line"
 test -n "$secpal_app_if_line"
-test -n "$guardguide_de_if_line"
 
-if (( api_if_line >= frontend_if_line || frontend_if_line >= secpal_app_if_line || secpal_app_if_line >= guardguide_de_if_line )); then
-    echo "generic preview precedence must prefer guardguide.de > secpal.app > frontend > api" >&2
+if (( api_if_line >= frontend_if_line || frontend_if_line >= secpal_app_if_line )); then
+    echo "generic preview precedence must prefer secpal.app > frontend > api" >&2
     exit 1
 fi
 
@@ -5482,9 +5235,7 @@ fi
     "$workspace_root/frontend/polyscope.local.json" \
     "$workspace_root/contracts/polyscope.local.json" \
     "$workspace_root/android/polyscope.local.json" \
-    "$workspace_root/GuardGuide/polyscope.local.json" \
     "$workspace_root/secpal.app/polyscope.local.json" \
-    "$workspace_root/guardguide.de/polyscope.local.json" \
     "$workspace_root/deployment/polyscope.local.json" \
     "$workspace_root/.github/polyscope.local.json" \
     >/dev/null
@@ -5567,10 +5318,6 @@ for row in prompt_rows:
 assert ('api12345', 'an123456') in links
 assert ('api12345', 'co123456') in links
 assert ('api12345', 'fe123456') in links
-assert ('gg123456', 'an123456') in links
-assert ('gg123456', 'api12345') in links
-assert ('gg123456', 'co123456') in links
-assert ('gg123456', 'fe123456') in links
 assert ('op123456', 'api12345') in links
 assert ('sa123456', 'rd123456') not in links
 assert operations_prompts is not None
@@ -5582,18 +5329,14 @@ summary = json.loads(summary_path.read_text())
 assert summary['db_backup'] is not None
 assert summary['repositories']['api']['preview_prefix'] == 'api'
 assert summary['repositories']['frontend']['preview_prefix'] == 'frontend'
-assert summary['repositories']['GuardGuide']['preview_prefix'] == 'guardguide'
 assert summary['repositories']['secpal.app']['preview_prefix'] == 'secpal-app'
-assert summary['repositories']['guardguide.de']['preview_prefix'] == 'guardguide-de'
 assert 'retired-docs' not in summary['repositories']
 assert summary['repositories']['contracts']['preview_prefix'] is None
 assert summary['repositories']['deployment']['preview_prefix'] is None
 assert summary['repositories']['operations']['workspace_automation'] == 'registration-only'
 assert summary['repositories']['api']['agent_instructions'].endswith('/api/AGENTS.md')
 assert summary['repositories']['api']['focus_instruction_paths'][0].endswith('org-shared.instructions.md')
-assert summary['repositories']['GuardGuide']['focus_instruction_paths'][1].endswith('php-laravel.instructions.md')
 assert summary['repositories']['.github']['linked_repositories'] == []
-assert summary['repositories']['GuardGuide']['linked_repositories'] == ['api', 'frontend', 'contracts', 'android']
 PY
 
 python3 -B - <<'PY' "$workspace_root"
@@ -5615,7 +5358,7 @@ PY
 
 initial_db_hash="$(file_sha256 "$db_path")"
 initial_backup_count="$(find "$workspace" -maxdepth 1 -name 'polyscope.db.backup-*' | wc -l)"
-initial_guardguide_copilot_hash="$(file_sha256 "$workspace_root/GuardGuide/.github/copilot-instructions.md")"
+initial_frontend_profile_hash="$(file_sha256 "$workspace_root/frontend/.github/copilot-instructions.md")"
 
 python3 "$PYTHON_SCRIPT" \
     --workspace-root "$workspace_root" \
@@ -5627,7 +5370,7 @@ python3 "$PYTHON_SCRIPT" \
 
 repeat_db_hash="$(file_sha256 "$db_path")"
 repeat_backup_count="$(find "$workspace" -maxdepth 1 -name 'polyscope.db.backup-*' | wc -l)"
-repeat_guardguide_copilot_hash="$(file_sha256 "$workspace_root/GuardGuide/.github/copilot-instructions.md")"
+repeat_frontend_profile_hash="$(file_sha256 "$workspace_root/frontend/.github/copilot-instructions.md")"
 
 if [ "$repeat_backup_count" -ne "$initial_backup_count" ]; then
     echo "repeat metadata sync must not create another DB backup when repository metadata is unchanged" >&2
@@ -5639,7 +5382,7 @@ if [ "$repeat_db_hash" != "$initial_db_hash" ]; then
     exit 1
 fi
 
-if [ "$repeat_guardguide_copilot_hash" != "$initial_guardguide_copilot_hash" ]; then
+if [ "$repeat_frontend_profile_hash" != "$initial_frontend_profile_hash" ]; then
     echo "repeat metadata sync must preserve independent Copilot profiles" >&2
     exit 1
 fi
@@ -6440,7 +6183,7 @@ failing_api_cleanup_clone="$home_dir/.polyscope/clones/api12345/broken-mole"
 failing_api_alias_clone="$home_dir/.polyscope/clones/api12345/Steady Otter"
 failing_frontend_manifest_clone="$home_dir/.polyscope/clones/fe123456/broken-ibis"
 failing_frontend_io_clone="$home_dir/.polyscope/clones/fe123456/locked-oryx"
-guardguide_clone="$home_dir/.polyscope/clones/gg123456/steady-otter"
+healthy_api_clone="$home_dir/.polyscope/clones/api12345/clear-water"
 failure_isolation_summary_json="$workspace/failure-isolation-summary.json"
 failing_api_alias_workspace="$(python3 - <<'PY'
 import hashlib
@@ -6453,14 +6196,14 @@ mkdir -p "$failing_api_cleanup_clone/.git/info" "$failing_api_cleanup_clone/.git
 mkdir -p "$failing_api_alias_clone/.git/info" "$failing_api_alias_clone/.git/hooks" "$failing_api_alias_clone/scripts"
 mkdir -p "$failing_frontend_manifest_clone/.git/info" "$failing_frontend_manifest_clone/.git/hooks" "$failing_frontend_manifest_clone/scripts"
 mkdir -p "$failing_frontend_io_clone/.git/info" "$failing_frontend_io_clone/.git/hooks" "$failing_frontend_io_clone/scripts"
-mkdir -p "$guardguide_clone/.git/info" "$guardguide_clone/.git/hooks" "$guardguide_clone/database"
+mkdir -p "$healthy_api_clone/.git/info" "$healthy_api_clone/.git/hooks" "$healthy_api_clone/database"
 for fixture_repo in \
     "$failing_api_clone" \
     "$failing_api_cleanup_clone" \
     "$failing_api_alias_clone" \
     "$failing_frontend_manifest_clone" \
     "$failing_frontend_io_clone" \
-    "$guardguide_clone"; do
+    "$healthy_api_clone"; do
     git -C "$fixture_repo" init --quiet
 done
 
@@ -6469,16 +6212,15 @@ seed_api_worktree_files "$failing_api_cleanup_clone"
 seed_api_worktree_files "$failing_api_alias_clone"
 seed_node_worktree_files "$failing_frontend_manifest_clone" "frontend-broken-ibis"
 seed_node_worktree_files "$failing_frontend_io_clone" "frontend-locked-oryx"
-seed_api_worktree_files "$guardguide_clone" GuardGuide
-seed_node_worktree_files "$guardguide_clone" "guardguide"
+seed_api_worktree_files "$healthy_api_clone"
 cp "$workspace_root/api/.env" "$failing_api_clone/.env"
 mkdir -p "$home_dir/.polyscope/clones/api12345/$failing_api_alias_workspace"
-printf '{\n  "packages": []\n}\n' > "$guardguide_clone/composer.lock"
+printf '{\n  "packages": []\n}\n' > "$healthy_api_clone/composer.lock"
 printf '{"scripts": ' > "$failing_api_cleanup_clone/composer.json"
 printf '{"scripts": ' > "$failing_frontend_manifest_clone/package.json"
 rm -rf "$failing_frontend_io_clone/.git/info"
 printf 'not a directory\n' > "$failing_frontend_io_clone/.git/info"
-printf 'APP_KEY=\n' > "$guardguide_clone/.env.example"
+cp "$workspace_root/api/.env" "$healthy_api_clone/.env"
 
 python3 - <<'PY' "$fake_pg_state"
 import json
@@ -6496,7 +6238,7 @@ replace_registered_worktrees \
     "api12345" "$failing_api_alias_clone" \
     "fe123456" "$failing_frontend_manifest_clone" \
     "fe123456" "$failing_frontend_io_clone" \
-    "gg123456" "$guardguide_clone"
+    "api12345" "$healthy_api_clone"
 
 env HOME="$home_dir" \
     PATH="$service_path" \
@@ -6526,7 +6268,7 @@ provisioned = summary.get('provisioned_worktrees', [])
 failed = summary.get('failed_provision_worktrees', [])
 cleaned = summary.get('cleaned_preview_storage_targets', [])
 
-assert 'GuardGuide:steady-otter' in provisioned, provisioned
+assert 'api:clear-water' in provisioned, provisioned
 assert 'api:abort-hawk' not in provisioned, provisioned
 assert 'api:broken-mole' not in provisioned, provisioned
 assert 'api:steady-otter' not in provisioned, provisioned
@@ -6575,30 +6317,27 @@ assert 'secpal__preview__broken_mole' in state.get('schemas', []), state.get('sc
 PY
 
 grep -qF "php:$failing_api_clone:artisan config:clear" "$provision_log"
-grep -qF "composer:$guardguide_clone:install" "$provision_log"
-grep -qF "npm:$guardguide_clone:ci" "$provision_log"
-grep -q "php:$guardguide_clone:artisan db:seed --class=Database.*GuardGuideAccessSeeder --force" "$provision_log"
-grep -qF "php:$guardguide_clone:artisan tinker --execute=" "$provision_log"
-test -f "$guardguide_clone/.polyscope-secpal-provisioned.json"
+grep -qF "composer:$healthy_api_clone:install" "$provision_log"
+test -f "$healthy_api_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_api_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_api_cleanup_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_api_alias_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_frontend_manifest_clone/.polyscope-secpal-provisioned.json"
 test ! -f "$failing_frontend_io_clone/.polyscope-secpal-provisioned.json"
 
-python3 - <<'PY' "$guardguide_clone/composer.lock"
+python3 - <<'PY' "$healthy_api_clone/composer.lock"
 import json
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
 payload = json.loads(path.read_text())
-payload["packages"].append({"name": "guardguide/app", "version": "1.0.1"})
+payload["packages"].append({"name": "secpal/api", "version": "1.0.1"})
 path.write_text(json.dumps(payload, indent=2) + "\n")
 PY
 
-guardguide_lockfile_summary_json="$workspace/guardguide-lockfile-summary.json"
-guardguide_composer_install_count_before="$(grep -cF "composer:$guardguide_clone:install" "$provision_log" || true)"
+api_lockfile_summary_json="$workspace/api-lockfile-summary.json"
+api_composer_install_count_before="$(grep -cF "composer:$healthy_api_clone:install" "$provision_log" || true)"
 env HOME="$home_dir" \
     PATH="$service_path" \
     PROVISION_LOG="$provision_log" \
@@ -6610,24 +6349,24 @@ env HOME="$home_dir" \
     --db-path "$db_path" \
     --repo-state-file "$repos_json" \
     --nginx-output "$nginx_output" \
-    --summary-output "$guardguide_lockfile_summary_json" \
+    --summary-output "$api_lockfile_summary_json" \
     --skip-local-configs \
     --skip-db-sync \
     --provision-worktrees \
-    > /dev/null || guardguide_lockfile_exit=$?
+    > /dev/null || api_lockfile_exit=$?
 
-test "${guardguide_lockfile_exit:-0}" -eq 1
+test "${api_lockfile_exit:-0}" -eq 1
 
-python3 - "$guardguide_lockfile_summary_json" <<'PY'
+python3 - "$api_lockfile_summary_json" <<'PY'
 import json
 import sys
 
 summary = json.loads(open(sys.argv[1]).read())
 provisioned = summary.get('provisioned_worktrees', [])
-assert 'GuardGuide:steady-otter' in provisioned, provisioned
+assert 'api:clear-water' in provisioned, provisioned
 PY
 
-test "$guardguide_composer_install_count_before" -lt "$(grep -cF "composer:$guardguide_clone:install" "$provision_log")"
+test "$api_composer_install_count_before" -lt "$(grep -cF "composer:$healthy_api_clone:install" "$provision_log")"
 
 schema_home_dir="$workspace/schema-home"
 schema_api_clone="$schema_home_dir/.polyscope/clones/api12345/schema-badger"
@@ -6989,7 +6728,7 @@ if [[ $# -eq 0 ]]; then
     exit 0
 fi
 if [[ $# -eq 1 && "$1" == "--check" ]]; then
-    echo "Polyscope nginx helper check passed bundle=2 manifest_schema=1 manifest_schema=2"
+    echo "Polyscope nginx helper check passed bundle=3 manifest_schema=3"
     exit 0
 fi
 exit 64
@@ -7599,7 +7338,7 @@ grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/pol
 grep -q 'Environment=POLYSCOPE_NGINX_HELPER=/usr/local/libexec/secpal-polyscope-nginx-apply' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q -- '--nginx-manifest-output .*nginx-manifest.json --clone-root .* --provision-lock-path .* --refresh-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
-grep -q '/GuardGuide/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
+grep -q '/frontend/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 if grep -q '/retired-docs/' "$fake_unit_dir/polyscope-rollout-sync.path"; then
     echo "rollout sync watcher must not retain an unmanaged repository" >&2
     exit 1
@@ -7607,7 +7346,7 @@ fi
 grep -q '/templates/polyscope-codex-AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/validate-ai-instructions\.sh$' "$fake_unit_dir/polyscope-rollout-sync.path"
-for managed_repository in api frontend contracts android secpal.app guardguide.de GuardGuide .github deployment operations; do
+for managed_repository in api frontend contracts android secpal.app .github deployment operations; do
     for evidence_file in evidence-architecture.json evidence-agreement-results.json; do
         grep -qF "PathChanged=$workspace_root/$managed_repository/.secpal/$evidence_file" \
             "$fake_unit_dir/polyscope-rollout-sync.path"

@@ -17,8 +17,6 @@ import tempfile
 
 ROUTES = (
     ("SecPal/api", "api", "api", "public", "php"),
-    ("SecPal/guardguide.de", "guardguide.de", "guardguide-de", "dist", "static"),
-    ("SecPal/GuardGuide", "GuardGuide", "guardguide", "public", "php"),
     ("SecPal/frontend", "frontend", "frontend", "dist", "static"),
     ("SecPal/secpal.app", "secpal.app", "secpal-app", "dist", "static"),
 )
