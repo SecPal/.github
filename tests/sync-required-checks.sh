@@ -46,7 +46,9 @@ assert_payload_contexts_equal() {
     ([.checks[].context] | length) == ([.checks[].context] | unique | length) and
     ($expected | length) == ($expected | unique | length) and
     ([.checks[].context] | sort) == ($expected | sort) and
-    all(.checks[]; .app_id == -1)
+    all(.checks[];
+      .app_id == (if .context == "Evidence Architecture PR Gate" then 15368 else -1 end)
+    )
   ' >/dev/null <<<"$payload"; then
     echo "Payload did not contain exactly the expected required checks" >&2
     echo "$payload" >&2
@@ -83,10 +85,8 @@ if [[ ! -x "$SYNC_SCRIPT" ]]; then
 fi
 
 pending="$(bash "$SYNC_SCRIPT" --repo .github --print-pending-checks)"
-jq -e '. == [{context: "Evidence Architecture PR Gate", workflow: ".github/workflows/quality.yml", job: "evidence-architecture", activation: "separately_authorized"}]' <<<"$pending" >/dev/null
-payload="$(bash "$SYNC_SCRIPT" --repo .github --print-payload)"
-if jq -e '.checks | any(.context == "Evidence Architecture PR Gate")' <<<"$payload" >/dev/null; then
-  echo "Unproven Evidence Architecture identity must not enter activation payload" >&2
+if ! jq -e '. == []' <<<"$pending" >/dev/null; then
+  echo "Promoted Evidence Architecture identity must no longer be pending" >&2
   exit 1
 fi
 
@@ -115,7 +115,8 @@ EXPECTED_CONTEXTS_JSON='{
     "Validate PR Title And Body Language",
     "Validate Signed PR Commits",
     "Work-Graph PR Advisory",
-    "Work-Graph PR Gate"
+    "Work-Graph PR Gate",
+    "Evidence Architecture PR Gate"
   ],
   "android": [
     "Check REUSE Compliance / Check REUSE Compliance",
@@ -377,7 +378,9 @@ for expected_repo in "${expected_repositories[@]}"; do
     <<<"${payloads[$expected_repo]}" >"$state_dir/$expected_repo.json"
 done
 
+# Replay the authenticated 13-context live baseline: the promoted gate is absent.
 jq '
+  .checks |= map(select(.context != "Evidence Architecture PR Gate")) |
   .checks |= map(
     if .context == "Validate PR Evidence" or
        .context == "Validate PR Title And Body Language" or
@@ -469,13 +472,13 @@ expected_status_endpoint='repos/SecPal/.github/branches/main/protection/required
 expected_status_payload="$(
   jq -c '{
     strict: true,
-    checks: [
+    checks: ([
       .checks[]
       | {
           context,
           app_id: (if .app_id == null then -1 else .app_id end)
         }
-    ]
+    ] + [{context: "Evidence Architecture PR Gate", app_id: 15368}])
   }' "$state_dir/.github.json"
 )"
 expected_status_log="$(printf 'GET\t%s\t-\nPATCH\t%s\t%s' \
@@ -559,6 +562,61 @@ assert_sync_rejects_state() {
     exit 1
   fi
 }
+
+# The binding policy must reference exact canonical membership. Mutate only the
+# candidate inventory and exercise the same CLI; no live provider is available.
+original_sync_script="$SYNC_SCRIPT"
+for mutation in missing substituted duplicate; do
+  mutated_script="$TMP_DIR/$mutation-sync.sh"
+  case "$mutation" in
+    missing) sed '/^    "Evidence Architecture PR Gate"$/d; s/"Work-Graph PR Gate",/"Work-Graph PR Gate"/' "$original_sync_script" >"$mutated_script" ;;
+    substituted) sed 's/^    "Evidence Architecture PR Gate"$/    "Evidence Architecture Gate"/' "$original_sync_script" >"$mutated_script" ;;
+    duplicate) sed 's/^    "Evidence Architecture PR Gate"$/    "Evidence Architecture PR Gate", "Evidence Architecture PR Gate"/' "$original_sync_script" >"$mutated_script" ;;
+  esac
+  SYNC_SCRIPT="$mutated_script"
+  if "$SHELL_BIN" "$SYNC_SCRIPT" --repo .github --print-payload >/dev/null 2>&1; then
+    echo "Canonical $mutation identity must fail in printed payloads" >&2
+    exit 1
+  fi
+  assert_sync_rejects_state "canonical-$mutation" "$state_dir/.github.json"
+done
+SYNC_SCRIPT="$original_sync_script"
+
+# The existing 13-context baseline must become exactly 14, preserving all old
+# positive and unbound bindings. The already-activated state is idempotent.
+jq -e '.strict == true and (.checks | length) == 14 and
+  ([.checks[].context] | unique | length) == 14 and
+  ([.checks[] | select(.app_id == 15368)] | length) == 4 and
+  ([.checks[] | select(.app_id == -1)] | length) == 10' \
+  <<<"$expected_status_payload" >/dev/null
+activated_state="$TMP_DIR/activated-state.json"
+printf '%s\n' "$expected_status_payload" >"$activated_state"
+activated_log="$TMP_DIR/activated.log"
+GH_CALL_LOG="$activated_log" GH_REQUIRED_STATE_FILE="$activated_state" PATH="$fake_bin" \
+  "$SHELL_BIN" "$SYNC_SCRIPT" --repo .github --apply >/dev/null
+if [[ "$(<"$activated_log")" != "$expected_status_log" ]]; then
+  echo "Already-activated exact identity must preserve the same payload" >&2
+  exit 1
+fi
+
+# Missing/unbound, malformed or substituted producer identity is never silently
+# normalized to the canonical producer for an already-present gate.
+for binding in null -1 777 0 '"15368"' 15368.5; do
+  binding_state="$TMP_DIR/gate-binding.json"
+  jq --argjson binding "$binding" '.checks |= map(
+    if .context == "Evidence Architecture PR Gate" then .app_id = $binding else . end
+  )' "$activated_state" >"$binding_state"
+  assert_sync_rejects_state "gate-binding-$binding" "$binding_state"
+done
+jq '.checks |= map(if .context == "Evidence Architecture PR Gate" then del(.app_id) else . end)' \
+  "$activated_state" >"$TMP_DIR/gate-missing-producer.json"
+assert_sync_rejects_state gate-missing-producer "$TMP_DIR/gate-missing-producer.json"
+jq '.checks |= map(if .context == "Evidence Architecture PR Gate" then .context = "Evidence Architecture Gate" else . end)' \
+  "$activated_state" >"$TMP_DIR/gate-substituted-context.json"
+assert_sync_rejects_state gate-substituted-context "$TMP_DIR/gate-substituted-context.json"
+jq '.checks += [.checks[] | select(.context == "Evidence Architecture PR Gate")]' \
+  "$activated_state" >"$TMP_DIR/gate-duplicate.json"
+assert_sync_rejects_state gate-duplicate "$TMP_DIR/gate-duplicate.json"
 
 missing_state="$TMP_DIR/missing-state.json"
 jq '.checks |= map(select(.context != "CodeQL"))' "$state_dir/.github.json" >"$missing_state"
