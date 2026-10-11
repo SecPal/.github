@@ -187,6 +187,22 @@ class PreflightFixtureTest(unittest.TestCase):
 EOF
   done
 
+# Focused stand-ins: these fixtures test preflight wiring, not architecture semantics.
+  for suite in secpal-evidence-architecture polyscope-evidence-architecture; do
+    cat >"$repository/tests/$suite.py" <<'EOF'
+import os
+from pathlib import Path
+with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
+    log.write(Path(__file__).stem + "\n")
+EOF
+  done
+  cat >"$repository/scripts/secpal-evidence-architecture.py" <<'EOF'
+import os
+with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
+    log.write("evidence-architecture-validator\n")
+raise SystemExit(int(os.environ.get("ARCHITECTURE_FIXTURE_EXIT", "0")))
+EOF
+
   cat >"$repository/tests/evidence-architecture-governance.py" <<'EOF'
 """Fixture stand-in for preflight's required governance-test dependency."""
 EOF

@@ -82,6 +82,14 @@ if [[ ! -x "$SYNC_SCRIPT" ]]; then
   exit 1
 fi
 
+pending="$(bash "$SYNC_SCRIPT" --repo .github --print-pending-checks)"
+jq -e '. == [{context: "Evidence Architecture PR Gate", workflow: ".github/workflows/quality.yml", job: "evidence-architecture", activation: "separately_authorized"}]' <<<"$pending" >/dev/null
+payload="$(bash "$SYNC_SCRIPT" --repo .github --print-payload)"
+if jq -e '.checks | any(.context == "Evidence Architecture PR Gate")' <<<"$payload" >/dev/null; then
+  echo "Unproven Evidence Architecture identity must not enter activation payload" >&2
+  exit 1
+fi
+
 if grep -Fq 'XXXXXX.json' "$SYNC_SCRIPT"; then
   echo "Sync script uses a BSD-incompatible mktemp template with a suffix after the X placeholder." >&2
   exit 1

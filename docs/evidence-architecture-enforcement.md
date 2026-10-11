@@ -50,7 +50,8 @@ Both installers require a successful package/parser smoke test before activation
 - `external_operations`: objects with `id`, boolean `reachable`, `fallible`,
   `trusted`, and `diagnostic_identity`. A diagnostic is null or exactly
   `{ "id": "host.inspect", "kind": "semantic" }`. Reachable, fallible trusted
-  operations require the semantic form. Identities are bounded closed tokens;
+  operations require the semantic form with a unique identity within the
+  declaration. Identities are bounded closed tokens;
   additional output or credential fields are rejected.
 - `pure_surfaces`: objects with `id`, `responsibility` (`normalization` or
   `admission`), `capabilities`, and `source`. The only allowed pure capability is
@@ -60,6 +61,8 @@ Both installers require a successful package/parser smoke test before activation
   and `surface`, or independent objects with those fields, role
   `independent_enforcement`, plus `owner`, `derivation`, and `agreement_proof`.
   The named admission surfaces bind the actual executable implementation.
+  Invariant declaration IDs must be unique across the complete managed scope;
+  otherwise an agreement cannot identify exactly one owner and enforcement.
 
 An absent declaration permits baseline-only validation, but never dispatch
 admission. Applicable declaration completeness remains a review obligation.
@@ -74,7 +77,9 @@ The maintained pure subset consists of a one-argument, single-return Python
 function. It supports bounded constants, comparisons, Boolean expressions,
 conditional expressions, `len`, and closed string operations: `lower`, `upper`,
 `strip`, `removeprefix`, `removesuffix`, `startswith`, and `endswith`. Functions
-are parsed without importing their module. Imports, decorators, arbitrary calls,
+are parsed without importing their module. Builtin namespace shadowing and
+evaluated function metadata are rejected throughout that module.
+Imports, decorators, arbitrary calls,
 attribute access, loops, recursion, mutation and unsupported syntax are rejected.
 This subset makes the executable boundary decidable; it does not assert purity
 of arbitrary Python or other languages. Broader surfaces require a separately

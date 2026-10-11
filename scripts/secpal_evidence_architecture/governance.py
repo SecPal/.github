@@ -356,6 +356,17 @@ def assess_declarations(
     surfaces = [entry for document in parsed for entry in document["pure_surfaces"]]
     invariants = [entry for document in parsed for entry in document["invariant_declarations"]]
 
+    invariant_ids = [entry["id"] for entry in invariants]
+    if len(invariant_ids) != len(set(invariant_ids)):
+        findings.append(
+            _finding(
+                "DUPLICATE_INVARIANT_IDENTITY",
+                "evidence architecture section 2",
+                "Declared invariant identities are ambiguous across the managed scope",
+                "Use unique identities so agreement paths bind exactly one declared owner and enforcement.",
+            )
+        )
+
     if dispatch_requested and (not parsed or not operations):
         findings.append(
             _finding(
@@ -366,19 +377,26 @@ def assess_declarations(
             )
         )
 
-    for operation_index, operation in enumerate(operations):
-        if operation["reachable"] and operation["fallible"] and operation["trusted"]:
-            diagnostic = operation["diagnostic_identity"]
-            if diagnostic is None or diagnostic["kind"] != "semantic":
-                findings.append(
-                    _finding(
-                        "OPAQUE_TRUSTED_FAILURE_BOUNDARY",
-                        "evidence architecture section 4",
-                        "Declared operation lacks a closed semantic diagnostic identity",
-                        "Define a bounded semantic identity without raw output or secret material.",
-                        item_index=operation_index,
+    operation_index = 0
+    for document in parsed:
+        diagnostic_ids = set()
+        for operation in document["external_operations"]:
+            if operation["reachable"] and operation["fallible"] and operation["trusted"]:
+                diagnostic = operation["diagnostic_identity"]
+                if (diagnostic is None or diagnostic["kind"] != "semantic"
+                        or diagnostic["id"] in diagnostic_ids):
+                    findings.append(
+                        _finding(
+                            "OPAQUE_TRUSTED_FAILURE_BOUNDARY",
+                            "evidence architecture section 4",
+                            "Declared operation lacks a unique closed semantic diagnostic identity",
+                            "Define a bounded unique identity without raw output or secret material.",
+                            item_index=operation_index,
+                        )
                     )
-                )
+                if diagnostic is not None:
+                    diagnostic_ids.add(diagnostic["id"])
+            operation_index += 1
 
     for surface_index, surface in enumerate(surfaces):
         forbidden = sorted(set(surface["capabilities"]) - _PURE_CAPABILITIES)

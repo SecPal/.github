@@ -195,6 +195,7 @@ for repo_dir in workspace_root.iterdir():
         "-->\n\n"
         f"# {repo_dir.name} Agent Instructions\n\n"
         "This file is the authoritative, provider-neutral runtime baseline for this repository.\n"
+        "Generic governance delegates to `docs/work-graph-contract.md`.\n"
         "Edit this file first. Keep the focused overlay files below aligned when a rule also needs path-specific or stack-specific enforcement.\n\n"
         "## Focused Overlays\n\n"
         f"{overlays}\n\n"
@@ -340,6 +341,9 @@ write_valid_worktree_instructions() {
         '## Scope and Safety' \
         '' \
         '- Preserve existing work.' \
+        '' \
+        'Delegate to `docs/work-graph-contract.md`.' \
+        '' \
         '- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`' \
         '- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`' \
         '- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`' \
@@ -380,6 +384,8 @@ assert_rollout_rejects_invalid_local_config() {
     cp "$source_script" "$script_copy"
     cp "$REPO_ROOT/scripts/validate-ai-instructions.sh" \
         "$script_root/scripts/validate-ai-instructions.sh"
+    cp "$REPO_ROOT/scripts/secpal-evidence-architecture.py" "$script_root/scripts/"
+    cp -R "$REPO_ROOT/scripts/secpal_evidence_architecture" "$script_root/scripts/"
     if [ ! -e "$script_root/node_modules" ]; then
         ln -s "$REPO_ROOT/node_modules" "$script_root/node_modules"
     fi
@@ -1069,7 +1075,8 @@ def write_valid_instruction_root(root: pathlib.Path) -> None:
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
         "## Scope and Safety\n\n"
-        "- Preserve existing work.\n"
+        "- Preserve existing work.\n\n"
+        "`docs/work-graph-contract.md` is canonical.\n\n"
         "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
         "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
         "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
@@ -1335,7 +1342,8 @@ def write_valid_instruction_root(root: pathlib.Path) -> None:
         "SPDX-License" "-Identifier: CC0-1.0\n"
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
-        "- Preserve existing work.\n"
+        "- Preserve existing work.\n\n"
+        "`docs/work-graph-contract.md` is canonical.\n\n"
         "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
         "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
         "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
@@ -1858,6 +1866,7 @@ fixture = workspace / "instruction-contract-worktree"
     "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Runtime Instructions\n\n"
+    "`docs/work-graph-contract.md` is canonical.\n\n"
     "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
     "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
     "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
@@ -1948,6 +1957,7 @@ fixture = workspace / "instruction root with shell $ characters"
     "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Runtime Instructions\n\n"
+    "`docs/work-graph-contract.md` is canonical.\n\n"
     "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
     "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
     "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
@@ -2174,7 +2184,8 @@ for instruction_root in (source_api, api_worktree):
         "SPDX-License" "-Identifier: CC0-1.0\n"
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
-        "- Preserve existing work.\n"
+        "- Preserve existing work.\n\n"
+        "`docs/work-graph-contract.md` is canonical.\n\n"
         "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
         "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
         "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
@@ -3304,6 +3315,7 @@ repo_spec_frontend = workspace / "repo-spec-root" / "frontend"
     "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Frontend Runtime Instructions\n\n"
+    "`docs/work-graph-contract.md` is canonical.\n\n"
     "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
     "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
     "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
@@ -7066,6 +7078,8 @@ cp "$REPO_ROOT/scripts/validate-ai-instructions.sh" \
     "$missing_toolchain_source_dir/validate-ai-instructions.sh"
 cp "$REPO_ROOT/scripts/verify-js-yaml-package.cjs" \
     "$missing_toolchain_source_dir/verify-js-yaml-package.cjs"
+cp "$REPO_ROOT/scripts/secpal-evidence-architecture.py" "$missing_toolchain_source_dir/"
+cp -R "$REPO_ROOT/scripts/secpal_evidence_architecture" "$missing_toolchain_source_dir/"
 cp "$REPO_ROOT/scripts/polyscope_nginx.py" \
     "$missing_toolchain_source_dir/polyscope_nginx.py"
 cp "$REPO_ROOT/scripts/secpal-polyscope-nginx-apply.py" \
@@ -7553,6 +7567,13 @@ fi
 grep -q '/templates/polyscope-codex-AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope-rollout\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/validate-ai-instructions\.sh$' "$fake_unit_dir/polyscope-rollout-sync.path"
+for managed_repository in api frontend contracts android secpal.app guardguide.de GuardGuide .github deployment operations; do
+    for evidence_file in evidence-architecture.json evidence-agreement-results.json; do
+        grep -qF "PathChanged=$workspace_root/$managed_repository/.secpal/$evidence_file" \
+            "$fake_unit_dir/polyscope-rollout-sync.path"
+    done
+done
+grep -qE '^PathChanged=.*/scripts/secpal_evidence_architecture/execution\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/package-lock\.json$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/node_modules/\.package-lock\.json$' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -qE '^PathChanged=.*/scripts/polyscope_nginx\.py$' "$fake_unit_dir/polyscope-rollout-sync.path"

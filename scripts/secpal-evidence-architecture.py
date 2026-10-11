@@ -191,6 +191,11 @@ def execute_agreements(root, document, governance, execution, scope=None, prepar
             or proof_document["schema"] != "secpal-evidence-agreement-execution/v1"
             or not isinstance(proof_document["proofs"], list) or len(proof_document["proofs"]) > 100):
         raise Unavailable()
+    identity_admission = governance.assess_declarations([declared for _, declared in scope])
+    if any(item["code"] == "DUPLICATE_INVARIANT_IDENTITY" for item in identity_admission["findings"]):
+        # Consume the declaration owner's decision before constructing any
+        # source binding. The final assessment reports that exact hard finding.
+        return [], [], findings
     results, provenance, seen = [], [], set()
     bindings = {(entry.get("agreement_proof"), entry.get("owner"), entry["id"])
                 for _, declared in scope for entry in declared["invariant_declarations"] if entry["role"] == "independent_enforcement"}

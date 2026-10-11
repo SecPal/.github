@@ -36,6 +36,7 @@ ROLLOUT_SCRIPT_PATH = pathlib.Path(__file__).resolve()
 POLYSCOPE_LOCAL_CONFIG_NAME = "polyscope.local.json"
 PROVISION_MARKER_FILENAME = ".polyscope-secpal-provisioned.json"
 CANONICAL_AI_INSTRUCTIONS_VALIDATOR = ROLLOUT_SCRIPT_PATH.with_name("validate-ai-instructions.sh")
+CANONICAL_EVIDENCE_ARCHITECTURE_VALIDATOR = ROLLOUT_SCRIPT_PATH.with_name("secpal-evidence-architecture.py")
 DEFAULT_NGINX_MANIFEST_PATH = pathlib.Path("/home/secpal/.local/state/polyscope/nginx-manifest.json")
 DEFAULT_NGINX_HELPER_PATH = pathlib.Path("/usr/local/libexec/secpal-polyscope-nginx-apply")
 CANONICAL_CLONE_ROOT = pathlib.Path("/home/secpal/.polyscope/clones")
@@ -45,6 +46,7 @@ API_RUNTIME_UNIT_PREFIX = "polyscope-api-worktree-"
 FIXED_SETFACL_BIN = "/usr/bin/setfacl"
 NGINX_MANIFEST_USER = "secpal"
 CANONICAL_VALIDATION_SPEC_KEY = "_canonical_ai_instruction_root"
+EVIDENCE_VALIDATION_ARGUMENTS_SPEC_KEY = "_evidence_architecture_arguments"
 NATIVE_SETUP_COMMANDS_KEY = "_native_setup_commands"
 WORKSPACE_ALIAS_REGISTRY_FILENAME = ".polyscope-secpal-workspace-aliases.json"
 REGISTRATION_ONLY_SPEC_KEY = "registration_only"
@@ -3162,8 +3164,21 @@ def validate_instruction_root(
     root: pathlib.Path,
     validated_instruction_roots: set[tuple[pathlib.Path, str]],
     repository_name: str,
+    *,
+    architecture_arguments: list[str] | None = None,
 ) -> pathlib.Path:
     """Validate instructions with an explicit trusted repository identity."""
+    resolved_root = _validate_ai_instruction_root(root, validated_instruction_roots, repository_name)
+    validate_evidence_architecture_root(resolved_root, repository_name, architecture_arguments)
+    return resolved_root
+
+
+def _validate_ai_instruction_root(
+    root: pathlib.Path,
+    validated_instruction_roots: set[tuple[pathlib.Path, str]],
+    repository_name: str,
+) -> pathlib.Path:
+    """Preserve the existing instruction validator's diagnostic ownership."""
     resolved_root = root.resolve()
     validation_key = (resolved_root, repository_name)
     if validation_key in validated_instruction_roots:
@@ -3210,6 +3225,52 @@ def validate_instruction_root(
 
     validated_instruction_roots.add(validation_key)
     return resolved_root
+
+
+def validate_evidence_architecture_root(
+    root: pathlib.Path, repository_name: str, architecture_arguments: list[str] | None = None,
+) -> None:
+    """Re-read architecture declarations independently of instruction caches."""
+    # Current Polyscope aliases select the same physical worktree. Always pass
+    # that actual root to the owner; declarations and source paths cannot link.
+    root = root.resolve()
+    try:
+        if architecture_arguments is not None:
+            # A cached managed scope must still include this exact source root.
+            # It cannot substitute another repository or a package smoke test.
+            if (not isinstance(architecture_arguments, list) or len(architecture_arguments) < 4
+                    or architecture_arguments[0] != "--managed-workspace-root"
+                    or len(architecture_arguments) % 2
+                    or any(architecture_arguments[index] != "--managed-repository"
+                           for index in range(2, len(architecture_arguments), 2))):
+                raise CanonicalInstructionValidationError("Evidence Architecture managed scope is invalid")
+            workspace = pathlib.Path(architecture_arguments[1])
+            names = architecture_arguments[3::2]
+            if repository_name not in names or root != (workspace / repository_name).resolve():
+                raise CanonicalInstructionValidationError("Evidence Architecture managed scope does not bind this root")
+        validate_evidence_architecture(architecture_arguments if architecture_arguments is not None else [
+            "--repository-root", str(root), "--repository", f"SecPal/{repository_name}",
+        ])
+    except CanonicalInstructionValidationError as error:
+        raise CanonicalInstructionValidationError(
+            f"canonical AI-instruction validation failed for {root}: {error}"
+        ) from error
+
+
+def validate_evidence_architecture(arguments: list[str]) -> None:
+    validator = CANONICAL_EVIDENCE_ARCHITECTURE_VALIDATOR
+    if not validator.is_file() or validator.is_symlink():
+        raise CanonicalInstructionValidationError("canonical Evidence Architecture validator is unavailable")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-I", str(validator), *arguments],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=120, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise CanonicalInstructionValidationError("canonical Evidence Architecture validation is unavailable") from error
+    if result.returncode:
+        raise CanonicalInstructionValidationError("canonical Evidence Architecture admission failed; run the bounded validator for diagnostics")
 
 
 def resolve_registered_instruction_repository_name(
@@ -3356,12 +3417,16 @@ def require_repo_instruction_files(
 ) -> str:
     repo_path = pathlib.Path(spec["path"])
     resolved_repo_path = repo_path.resolve()
-    if spec.get(CANONICAL_VALIDATION_SPEC_KEY) != resolved_repo_path:
+    architecture_arguments = spec.get(EVIDENCE_VALIDATION_ARGUMENTS_SPEC_KEY)
+    if spec.get(CANONICAL_VALIDATION_SPEC_KEY) == resolved_repo_path:
+        validate_evidence_architecture_root(repo_path, str(spec["repository_name"]), architecture_arguments)
+    else:
         validation_cache = validated_instruction_roots if validated_instruction_roots is not None else set()
         spec[CANONICAL_VALIDATION_SPEC_KEY] = validate_instruction_root(
             repo_path,
             validation_cache,
             str(spec["repository_name"]),
+            architecture_arguments=architecture_arguments,
         )
 
     try:
@@ -3377,15 +3442,35 @@ def validate_repo_instruction_files(
     repo_specs: dict[str, dict[str, Any]],
     validated_instruction_roots: set[tuple[pathlib.Path, str]],
 ) -> None:
+    managed_names = [name for name, spec in repo_specs.items() if is_workspace_automation_enabled(spec)]
+    arguments = None
+    if managed_names:
+        roots = {pathlib.Path(repo_specs[name]["path"]).parent for name in managed_names}
+        if len(roots) != 1:
+            raise CanonicalInstructionValidationError("managed Evidence Architecture scope has inconsistent roots")
+        arguments = ["--managed-workspace-root", str(roots.pop())]
+        for name in managed_names:
+            arguments.extend(["--managed-repository", name])
     for repo_name, spec in repo_specs.items():
         repo_path = pathlib.Path(spec["path"])
         if not is_workspace_automation_enabled(spec):
             continue
-        spec[CANONICAL_VALIDATION_SPEC_KEY] = validate_instruction_root(
+        spec[CANONICAL_VALIDATION_SPEC_KEY] = _validate_ai_instruction_root(
             repo_path,
             validated_instruction_roots,
             repo_name,
         )
+    if arguments is not None:
+        # Validate the bundle once after every existing instruction boundary;
+        # later per-root consumption freshly revalidates this exact scope.
+        for name in managed_names:
+            spec = repo_specs[name]
+            validate_root = pathlib.Path(spec["path"])
+            if validate_root.name != name:
+                raise CanonicalInstructionValidationError("managed Evidence Architecture repository path is inconsistent")
+        validate_evidence_architecture(arguments)
+        for name in managed_names:
+            repo_specs[name][EVIDENCE_VALIDATION_ARGUMENTS_SPEC_KEY] = arguments
 
 
 def instruction_reference(spec: dict[str, Any]) -> str:

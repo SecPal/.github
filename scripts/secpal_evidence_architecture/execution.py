@@ -79,10 +79,14 @@ def pure_expression(source: str, function: str):
             raise PureSourceError()
         if any(not isinstance(item, ast.FunctionDef) for item in module.body):
             raise PureSourceError()
-        if any(item.decorator_list or item.returns or item.args.defaults
-               or any(item.args.kw_defaults) or any(argument.annotation for argument in item.args.args)
-               for item in module.body):
-            raise PureSourceError()
+        for item in module.body:
+            arguments = item.args.posonlyargs + item.args.args + item.args.kwonlyargs
+            arguments += [argument for argument in (item.args.vararg, item.args.kwarg) if argument]
+            if (item.name in {"len", "__builtins__"}
+                    or item.decorator_list or item.returns or getattr(item, "type_params", [])
+                    or item.args.defaults or any(item.args.kw_defaults)
+                    or any(argument.annotation for argument in arguments)):
+                raise PureSourceError()
         functions = [item for item in module.body if item.name == function]
         if len(functions) != 1:
             raise PureSourceError()

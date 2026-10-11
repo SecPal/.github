@@ -385,6 +385,13 @@ python3 tests/evidence-architecture-governance.py || {
   exit 1
 }
 
+python3 -I scripts/secpal-evidence-architecture.py --repository-root . --repository SecPal/.github || {
+  echo "❌ Evidence Architecture declaration validation failed!" >&2
+  exit 1
+}
+python3 tests/secpal-evidence-architecture.py || exit 1
+python3 tests/polyscope-evidence-architecture.py || exit 1
+
 python3 tests/delivery-lifecycle-governance.py || {
   echo "" >&2
   echo "❌ Delivery lifecycle governance regression test failed!" >&2

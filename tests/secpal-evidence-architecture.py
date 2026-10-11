@@ -259,6 +259,54 @@ class ArchitectureTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("attacker-loaded", result.stderr)
 
+    def test_shared_diagnostic_identity_cannot_hide_two_trusted_operations(self):
+        duplicate = json.loads(json.dumps(self.document["external_operations"][0]))
+        duplicate["id"] = "collect-host"
+        self.document["external_operations"].append(duplicate)
+        self.blocked("OPAQUE_TRUSTED_FAILURE_BOUNDARY", "--dispatch")
+        duplicate["reachable"] = False
+        self.assertEqual(self.run_gate("--dispatch").returncode, 0)
+
+    def test_builtin_shadowing_cannot_hide_a_reachable_filesystem_capability(self):
+        marker = self.root / "side-effect"
+        source = self.source + f"\ndef len(value):\n    __import__('pathlib').Path({str(marker)!r}).write_text('invoked')\n    return 64\n"
+        (self.root / "pure.py").write_text(source)
+        result = self.run_gate()
+        namespace = {}
+        exec(compile(source, "reviewed-pure-fixture", "exec", dont_inherit=True), namespace)
+        self.assertTrue(namespace["admit"]("bad"))
+        self.assertTrue(marker.exists())
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("PURE_SOURCE_UNPROVEN", result.stdout)
+
+    def test_evaluated_function_metadata_cannot_change_the_execution_namespace(self):
+        marker = self.root / "annotation-effect"
+        for argument in ("*args", "**kwargs", "value, /", "*, value"):
+            with self.subTest(argument=argument):
+                parameter = argument.replace("value", f"value: __import__('pathlib').Path({str(marker)!r}).write_text('invoked')")
+                if argument in ("*args", "**kwargs"):
+                    parameter += f": __import__('pathlib').Path({str(marker)!r}).write_text('invoked')"
+                source = self.source + f"\ndef helper({parameter}):\n    return None\n"
+                (self.root / "pure.py").write_text(source)
+                result = self.run_gate()
+                namespace = {}
+                exec(compile(source, "reviewed-pure-fixture", "exec", dont_inherit=True), namespace)
+                self.assertTrue(marker.exists())
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("PURE_SOURCE_UNPROVEN", result.stdout)
+                marker.unlink()
+
+    def test_builtin_namespace_rebinding_cannot_forge_python_semantics(self):
+        source = "def __builtins__(value):\n    return value\n\n" + self.source
+        (self.root / "pure.py").write_text(source)
+        result = self.run_gate()
+        namespace = {}
+        exec(compile(source, "reviewed-pure-fixture", "exec", dont_inherit=True), namespace)
+        with self.assertRaises(TypeError):
+            namespace["admit"]("a" * 64)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("PURE_SOURCE_UNPROVEN", result.stdout)
+
     def test_executable_is_isolated_before_python_startup_hooks(self):
         attack = self.root / "startup"
         attack.mkdir()
