@@ -360,6 +360,10 @@ class GovernanceAmendmentTests(TestCase):
                     output = "https://github.com/SecPal/.github.git\n"
                 elif argv[:2] == ["cat-file", "commit"]:
                     output = self._ready_integration_commits[argv[2]]
+                elif argv[:4] == ["rev-list", "--parents", "-n", "1"]:
+                    parents = [line[7:] for line in self._ready_integration_commits[argv[4]].splitlines()
+                               if line.startswith("parent ")]
+                    output = " ".join([argv[4], *parents]) + "\n"
                 elif argv[0] == "verify-commit":
                     output = f'Good "git" signature for {SOURCE} with ED25519 key SHA256:fixture\n'
                 elif argv[0] == "merge-tree":
@@ -2548,6 +2552,99 @@ class GovernanceAmendmentTests(TestCase):
                 amendment.GovernanceAmendmentError
             ):
                 observe(changed)
+
+    def test_promoted_required_check_policy_consumes_source_binding(self) -> None:
+        source = (Path(__file__).resolve().parents[1]
+                  / "scripts/sync-required-checks.sh").read_bytes()
+        printed = json.loads(subprocess.check_output([
+            "bash", "scripts/sync-required-checks.sh", "--repo", ".github",
+            "--print-payload",
+        ]))
+        gate = "Evidence Architecture PR Gate"
+        checks = [
+            {**item, "app_id": None if item["app_id"] == -1 else item["app_id"]}
+            for item in printed["checks"]
+        ]
+        existing_bound = {
+            "Validate PR Evidence", "Validate PR Title And Body Language",
+            "Validate Signed PR Commits",
+        }
+        checks = [
+            {**item, "app_id": 15368} if item["context"] in existing_bound else item
+            for item in checks
+        ]
+
+        def observe(candidate: list[dict[str, object]], policy: bytes = source):
+            with mock.patch.object(
+                amendment, "_accepted_main_bytes", return_value=policy,
+            ), mock.patch.object(
+                amendment.publication, "_run_gh", return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps({"strict": True, "checks": candidate}).encode(), b"",
+                ),
+            ):
+                return amendment._live_required_check_policy("SecPal/.github", PARENT)
+
+        self.assertEqual(len(checks), 14)
+        self.assertEqual(observe(checks), {
+            "strict": True, "checks": sorted(checks, key=lambda item: item["context"]),
+        })
+        for app_id in (None, -1, 777, True, "15368", 15368.5):
+            changed = [
+                {**item, "app_id": app_id} if item["context"] == gate else item
+                for item in checks
+            ]
+            with self.subTest(app_id=app_id), self.assertRaises(
+                amendment.GovernanceAmendmentError
+            ):
+                observe(changed)
+        for label, changed in {
+            "missing": [item for item in checks if item["context"] != gate],
+            "substituted": [
+                {**item, "context": "substituted gate"} if item["context"] == gate else item
+                for item in checks
+            ],
+            "duplicate": checks + [{"context": gate, "app_id": 15368}],
+            "missing app": [
+                {"context": gate} if item["context"] == gate else item for item in checks
+            ],
+        }.items():
+            with self.subTest(label=label), self.assertRaises(
+                amendment.GovernanceAmendmentError
+            ):
+                observe(changed)
+        binding = b'REQUIRED_APP_BINDINGS_JSON=\'{ ".github": {"Evidence Architecture PR Gate": 15368} }\''
+        for label, replacement in {
+            "missing declaration": b"",
+            "missing binding": b"REQUIRED_APP_BINDINGS_JSON='{ \".github\": {} }'",
+            "substituted binding": binding.replace(b"Evidence Architecture PR Gate", b"other gate"),
+            "unbound source": binding.replace(b"15368", b"-1"),
+            "boolean source": binding.replace(b"15368", b"true"),
+            "duplicate source binding": binding.replace(b"15368}", b'15368, "Evidence Architecture PR Gate": 15368}'),
+            "malformed source": b"REQUIRED_APP_BINDINGS_JSON='{'",
+        }.items():
+            with self.subTest(label=label), self.assertRaises(
+                amendment.GovernanceAmendmentError
+            ):
+                observe(checks, source.replace(binding, replacement))
+
+    def test_source_binding_is_enforced_independently_of_inventory_size(self) -> None:
+        gate = "Evidence Architecture PR Gate"
+        contexts = [f"required-{index}" for index in range(12)] + [gate]
+        source = (
+            "REQUIRED_CONTEXTS_JSON=\"$(cat <<'EOF'\n"
+            + json.dumps({".github": contexts}) + "\nEOF\n)\"\n"
+            + "REQUIRED_APP_BINDINGS_JSON='"
+            + json.dumps({".github": {gate: 15368}}) + "'\n"
+        ).encode()
+        checks = [{"context": item, "app_id": None} for item in contexts]
+        with mock.patch.object(
+            amendment, "_accepted_main_bytes", return_value=source,
+        ), mock.patch.object(
+            amendment.publication, "_run_gh", return_value=subprocess.CompletedProcess(
+                [], 0, json.dumps({"strict": True, "checks": checks}).encode(), b"",
+            ),
+        ), self.assertRaises(amendment.GovernanceAmendmentError):
+            amendment._live_required_check_policy("SecPal/.github", PARENT)
 
     def test_historical_absence_comes_from_protected_authority(self) -> None:
         trust = SimpleNamespace(

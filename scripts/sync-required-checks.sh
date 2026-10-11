@@ -9,7 +9,7 @@ REQUIRED_APPROVING_REVIEW_COUNT=0
 # Publication inventory only. Successful hosted execution, exact check/source
 # authentication and separately authorized activation are still prerequisites.
 # This list is intentionally never consumed by an apply payload.
-PENDING_CONTEXTS_JSON='{".github":[{"context":"Evidence Architecture PR Gate","workflow":".github/workflows/quality.yml","job":"evidence-architecture","activation":"separately_authorized"}]}'
+PENDING_CONTEXTS_JSON='{}'
 
 REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
 {
@@ -26,7 +26,8 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Validate PR Title And Body Language",
     "Validate Signed PR Commits",
     "Work-Graph PR Advisory",
-    "Work-Graph PR Gate"
+    "Work-Graph PR Gate",
+    "Evidence Architecture PR Gate"
   ],
   "android": [
     "Check REUSE Compliance / Check REUSE Compliance",
@@ -98,6 +99,12 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
 EOF
 )"
 
+# Exact binding policy in the existing required-check owner, not another
+# membership inventory. GitHub Actions (github-actions, owner github) was
+# independently authenticated through App metadata and successful
+# quality.yml/evidence-architecture jobs. Membership does not imply activation.
+REQUIRED_APP_BINDINGS_JSON='{ ".github": {"Evidence Architecture PR Gate": 15368} }'
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -151,13 +158,20 @@ build_payload() {
     --arg repo "$repo" \
     --argjson config "$REQUIRED_CONTEXTS_JSON" \
     --argjson strict "$strict" \
-    '{strict: $strict, checks: ($config[$repo] | map({context: ., app_id: -1}))}'
+    --argjson bindings "$REQUIRED_APP_BINDINGS_JSON" '
+    ($config[$repo]) as $contexts
+    | ($bindings[$repo] // {}) as $apps
+    | if ($contexts | length) != ($contexts | unique | length) or
+         any($apps | keys[]; . as $context | $contexts | index($context) == null)
+      then error("Canonical required-check inventory for SecPal/\($repo) has duplicate or missing bound contexts")
+      else {strict: $strict, checks: ($contexts | map({context: ., app_id: ($apps[.] // -1)}))}
+      end'
 }
 
 build_live_preserving_payload() {
   local repo="$1"
   local live_state_file="$2"
-  local canonical_contexts live_contexts strict unexpected_contexts
+  local canonical_checks canonical_contexts live_contexts strict unexpected_contexts
 
   strict="$(required_checks_strict "$repo")"
 
@@ -190,12 +204,8 @@ build_live_preserving_payload() {
     exit 1
   fi
 
-  canonical_contexts="$(jq -c --arg repo "$repo" '.[$repo]' <<<"$REQUIRED_CONTEXTS_JSON")"
-  if ! jq -e 'length == (unique | length)' >/dev/null <<<"$canonical_contexts"; then
-    echo "Canonical required-status-check inventory for SecPal/$repo contains duplicate contexts." >&2
-    exit 1
-  fi
-
+  canonical_checks="$(build_payload "$repo" | jq -c '.checks')"
+  canonical_contexts="$(jq -c 'map(.context)' <<<"$canonical_checks")"
   unexpected_contexts="$(jq -cn --argjson canonical "$canonical_contexts" --argjson live "$live_contexts" \
     '$live - $canonical')"
   if [[ "$unexpected_contexts" != "[]" ]]; then
@@ -204,14 +214,24 @@ build_live_preserving_payload() {
     exit 1
   fi
 
-  jq --argjson canonical "$canonical_contexts" --argjson strict "$strict" '{
+  # A bound canonical entry owns its producer identity. An absent entry can be
+  # introduced; an already-present conflicting identity must fail before PATCH.
+  if ! jq -e --argjson canonical "$canonical_checks" '
+    all(.checks[];
+      . as $live
+      | ($canonical | map(select(.context == $live.context)) | first) as $policy
+      | $policy.app_id == -1 or $live.app_id == $policy.app_id
+    )
+  ' "$live_state_file" >/dev/null; then
+    echo "Live required-status-check producer binding for SecPal/$repo conflicts with the canonical app identity." >&2
+    exit 1
+  fi
+
+  jq --argjson canonical "$canonical_checks" --argjson strict "$strict" '{
       strict: $strict,
       checks: [
-        $canonical[] as $context
-        | ((.checks | map(select(.context == $context)) | first) // {
-            context: $context,
-            app_id: -1
-          })
+        $canonical[] as $policy
+        | ((.checks | map(select(.context == $policy.context)) | first) // $policy)
         | {
             context,
             app_id: (if .app_id == null then -1 else .app_id end)

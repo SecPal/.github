@@ -123,13 +123,21 @@ the repository and executes the positive, adversarial and integration suites.
 It consumes the canonical Node baseline, independently checked by the maintained
 Node baseline validator. Complete Registered Validation includes the same suites.
 
-`sync-required-checks.sh --repo .github --print-pending-checks` reports this
-publication identity. The gate is excluded from all activation payloads. Before
-a separately authorized operator activates it, that operator must authenticate
-the signed hosted candidate, successful actual job execution, and the exact
-check identity and producing source. Workflow publication and source acceptance
-do not establish live required-check enforcement. Existing protection and
-lifecycle gates retain their own authority.
+The canonical `.github` required-check inventory in `sync-required-checks.sh`
+includes this exact context with GitHub Actions app `15368`. Both printed and
+live-preserving payloads derive that binding from the same source policy;
+`--print-pending-checks` no longer reports the promoted identity. Existing live
+bindings are preserved, and a conflicting producer for this gate fails before
+PATCH.
+
+Source policy does not establish live required-check enforcement. Before the
+separately authorized `bash scripts/sync-required-checks.sh --repo .github --apply`,
+the operator must authenticate accepted protected-main source, current protection,
+successful hosted execution, the exact check and producer identity, and the
+single-context protection delta. Independent read-back must confirm 14 unique
+contexts, this app binding, all prior bindings, `strict=true`, and unchanged
+surrounding protection. Existing protection and lifecycle gates retain their own
+authority.
 
 User/system installer activation and live managed-system rollout remain separate
 operations. Source tests use temporary repositories and service fixtures; they
