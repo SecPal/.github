@@ -5129,6 +5129,7 @@ def build_parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--capture-provider-summary")
     batch_parser.add_argument("--ready-remediation-provider-binding")
     batch_parser.add_argument("--ready-source-recovery-publication")
+    batch_parser.add_argument("--ready-integration-chain")
     batch_parser.add_argument("--delivery-issue", type=_positive_integer)
     batch_parser.add_argument("--request")
     batch_parser.add_argument("--reviewed-state")
@@ -8473,7 +8474,16 @@ def _canonical_ready_prior_authority_tag_ref(authority: dict[str, Any]) -> str:
     )
 
 
-def _verify_ready_integration_prior_chain(
+def _load_ready_integration_packages(path: str) -> Any:
+    transport = _read_json(path, "Ready integration chain")
+    if (set(transport) != {"schema_version", "kind", "packages"}
+        or transport["schema_version"] != "1.0"
+        or transport["kind"] != "READY_INTEGRATION_PREDECESSOR_PACKAGES"):
+        raise fast_path.SecurityBlocker("Ready integration chain transport is malformed")
+    return transport["packages"]
+
+
+def _authenticate_ready_integration_packages(
     *, repository_root: Path, published: Any, publication: Any, packages: Any,
 ) -> Any:
     """Observe immutable packages; delegate integration and chain admission."""
@@ -8516,9 +8526,22 @@ def _verify_ready_integration_prior_chain(
                 repository_root=repository_root, signature_policy=binding["signature_policy"],
             )
             verified.append((validation, package["prior_authority"]))
-        return publication.verify_ready_integration_prior_authority(published, tuple(verified))
+        return tuple(verified)
     except (publication.LifecyclePublicationError, verifier.SecurityBlocker,
             KeyError, TypeError, ValueError) as exc:
+        raise fast_path.SecurityBlocker("prior Ready integration chain authentication failed") from exc
+
+
+def _verify_ready_integration_prior_chain(
+    *, repository_root: Path, published: Any, publication: Any, packages: Any,
+) -> Any:
+    verified = _authenticate_ready_integration_packages(
+        repository_root=repository_root, published=published,
+        publication=publication, packages=packages,
+    )
+    try:
+        return publication.verify_ready_integration_prior_authority(published, verified)
+    except publication.LifecyclePublicationError as exc:
         raise fast_path.SecurityBlocker("prior Ready integration chain authentication failed") from exc
 
 
@@ -8702,12 +8725,7 @@ def _verify_ready_integration_prior_authority(
         )
     chain_path = getattr(arguments, "prior_integration_chain", None)
     if chain_path is not None:
-        transport = _read_json(chain_path, "prior Ready integration chain")
-        if (set(transport) != {"schema_version", "kind", "packages"}
-            or transport["schema_version"] != "1.0"
-            or transport["kind"] != "READY_INTEGRATION_PREDECESSOR_PACKAGES"):
-            raise fast_path.SecurityBlocker("prior Ready integration chain transport is malformed")
-        packages = transport["packages"]
+        packages = _load_ready_integration_packages(chain_path)
         published, publication = _authenticated_ready_integration_publication_context(authority, integration_evidence)
         projection = _verify_ready_integration_prior_chain(
             repository_root=repository_root, published=published, publication=publication, packages=packages,
@@ -10329,6 +10347,17 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
     entry = select_repository(registry, arguments.repo)
     binding = _fast_registry_binding(entry)
     ready_source_provider_binding = None
+    integration_chain = arguments.ready_integration_chain
+    if integration_chain is not None:
+        if (not arguments.capture_reviewed_state or arguments.apply
+            or any((arguments.request, arguments.reviewed_state,
+                    arguments.attestation, arguments.output))):
+            raise fast_path.RecoverableLocalError("Ready integration feedback is capture-only")
+        if arguments.delivery_issue is None:
+            raise fast_path.RecoverableLocalError("Ready integration feedback requires its delivery issue")
+        if (arguments.ready_remediation_provider_binding is not None
+            or arguments.ready_source_recovery_publication is not None):
+            raise fast_path.RecoverableLocalError("feedback capture provider authority modes are mutually exclusive")
     if arguments.ready_remediation_provider_binding is not None and (
         arguments.ready_source_recovery_publication is not None
         or arguments.delivery_issue is not None
@@ -10368,6 +10397,25 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
                 ),
             )
         )
+    elif integration_chain is not None:
+        try:
+            _, publication = _load_lifecycle_publication_helpers()
+            current = publication.verify_current_lifecycle_authority(
+                arguments.repo, arguments.delivery_issue,
+            )
+            if (current.lifecycle.repository != arguments.repo
+                or current.lifecycle.delivery_issue != arguments.delivery_issue
+                or current.lifecycle.pull_request != arguments.pr):
+                raise fast_path.SecurityBlocker("Ready integration feedback CURRENT identity differs")
+            packages = _authenticate_ready_integration_packages(
+                repository_root=repository_root, published=current, publication=publication,
+                packages=_load_ready_integration_packages(integration_chain),
+            )
+            ready_source_provider_binding = publication.derive_ready_source_recovery_provider_binding(
+                current, ready_integrations=packages,
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise fast_path.SecurityBlocker(str(exc)) from exc
     elif arguments.delivery_issue is not None:
         raise fast_path.RecoverableLocalError(
             "delivery issue requires Ready-source recovery provider binding"
@@ -10405,7 +10453,7 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
                 observation.get("provider_review_database_ids"),
             )
 
-        if arguments.capture_provider_summary:
+        if arguments.capture_provider_summary or integration_chain is not None:
             try:
                 reviewed, provider_summary_body, review_database_ids = capture()
             except fast_path.TransientReadFailure:
@@ -10417,6 +10465,26 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
                 reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
             provider_summary_body = None
             review_database_ids = None
+        if integration_chain is not None:
+            # Reauthenticate live CURRENT after the complete read. Historical
+            # terminality belongs only to H0; the immutable feedback stays at H2.
+            try:
+                provider_head = ready_source_provider_binding.provider_head(
+                    repository=arguments.repo, pull_request=arguments.pr,
+                    current_head_sha=reviewed.head_sha,
+                )
+                if _provider_binding_uses_historical_summary(ready_source_provider_binding):
+                    ready_source_provider_binding.verify_historical_provider_summary(
+                        body=provider_summary_body, repository=arguments.repo,
+                        pull_request=arguments.pr, current_head_sha=reviewed.head_sha,
+                    )
+                else:
+                    fast_path.verify_codex_provider_summary(
+                        provider_summary_body, head_sha=provider_head,
+                        repository=arguments.repo, pull_request_number=arguments.pr,
+                    )
+            except (ValueError, RuntimeError) as exc:
+                raise fast_path.SecurityBlocker(str(exc)) from exc
         fast_path.atomic_write_json(
             Path(arguments.capture_reviewed_state), reviewed.to_dict()
         )

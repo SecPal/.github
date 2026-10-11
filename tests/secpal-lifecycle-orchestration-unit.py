@@ -13701,6 +13701,287 @@ class ReadyIntegrationRemediationTests(TestCase):
         with mock.patch.object(publication, "_authenticate_provider_integration_verifier"):
             return publication.derive_ready_source_recovery_provider_binding(self.current, **arguments)
 
+    def ordinary_capture_transport(self, packages=None):
+        pairs = packages if packages is not None else ((self.predecessor, self.prior_authority),)
+        documents = []
+        for validation, prior in pairs:
+            provenance = json.loads(validation._verification_seal.provenance_json)
+            documents.append({
+                key: provenance[source] for key, source in (
+                    ("integration_evidence", "integration_evidence"),
+                    ("reviewed_state", "reviewed_state"),
+                    ("validation_receipt", "validation_receipt"),
+                    ("final_attestation", "attestation"),
+                )
+            } | {"prior_authority": prior})
+        return {"schema_version": "1.0", "kind": "READY_INTEGRATION_PREDECESSOR_PACKAGES",
+                "packages": documents}
+
+    def ordinary_capture_arguments(self, transport=None):
+        path = self.root / "capture-integrations.json"
+        fast_path.atomic_write_json(path, transport if transport is not None else self.ordinary_capture_transport())
+        return self.actions_fixture.actions.build_parser().parse_args([
+            "resolve-batch", "--repo", REPOSITORY,
+            "--pr", str(self.reviewed.pull_request_number),
+            "--repo-root", str(self.root), "--delivery-issue", "1070",
+            "--ready-integration-chain", str(path),
+            "--capture-reviewed-state", str(self.root / "current-feedback.json"),
+        ])
+
+    def current_capture_pull(self):
+        pull = self.actions_fixture.FastPathTests._codex_provider_state(
+            metadata_head=self.reviewed.head_sha,
+            metadata_pull_request=self.reviewed.pull_request_number,
+        )
+        empty = {"nodes": [], "pageInfo": {"hasNextPage": False}}
+        pull.update(
+            id="PR_GENERIC", headRefOid=self.current.lifecycle.head_sha,
+            state="OPEN", baseRefName="main", baseRefOid=self.resulting.base_sha,
+            reviewDecision=None, reactions=copy.deepcopy(empty),
+            reviews=copy.deepcopy(empty), reviewThreads=copy.deepcopy(empty),
+        )
+        pull["comments"]["nodes"][0].update(
+            id="SUMMARY_GENERIC", databaseId=90, updatedAt="2026-09-01T12:00:00Z",
+            reactions=copy.deepcopy(empty),
+        )
+        pull["comments"]["nodes"][0]["author"].update(
+            id="CODEX_GENERIC", databaseId=91, __typename="Bot")
+        return pull
+
+    @contextmanager
+    def ordinary_capture_observation(self, pull):
+        actions = self.actions_fixture.actions
+        runner = SimpleNamespace(run=mock.Mock(return_value={
+            "data": {"repository": {"pullRequest": pull}},
+        }))
+        github = actions.LiveGitHub(runner)
+        # Substitute external registry/protection/main transport only. Real
+        # signatures, typed package verification, journal history, provider
+        # terminality, pagination and Stable Feedback normalization run below.
+        # Module/callable ownership is exercised unmocked by VerifierOwnershipTests.
+        with (
+            mock.patch.object(actions, "_load_lifecycle_publication_helpers",
+                              return_value=(authority, publication)),
+            mock.patch.object(actions, "_prior_delivery_registry_binding", return_value=self.registry),
+            mock.patch.object(publication, "_authenticate_provider_integration_verifier"),
+            mock.patch.object(actions, "_provider_binding_uses_historical_summary", return_value=False),
+            mock.patch.object(actions, "LiveGitHub", return_value=github),
+        ):
+            yield runner
+
+    def test_ordinary_capture_consumes_authenticated_typed_lineage(self):
+        binding = self.derive_provider_lineage()
+        self.assertNotEqual(binding.provider_head_sha, binding.current_head_sha)
+        self.assertEqual(binding.provider_head_sha, self.reviewed.head_sha)
+        self.assertEqual(self.current.lifecycle.state["unrestricted_review_count"], 1)
+        self.assertEqual(self.current.lifecycle.state["ready_transition_count"], 1)
+        # Fail first at the missing ordinary consumer input, after the accepted
+        # verifier has authenticated the complete signed H0 -> remediation -> H2.
+        arguments = self.ordinary_capture_arguments()
+        pull = self.current_capture_pull()
+        with self.ordinary_capture_observation(pull) as runner:
+            self.assertEqual(self.actions_fixture.actions._command_resolve_batch(arguments), 0)
+        captured = fast_path.StableFeedbackState.from_payload(json.loads(
+            (self.root / "current-feedback.json").read_text()))
+        self.assertEqual(captured.head_sha, self.current.lifecycle.head_sha)
+        self.assertEqual(captured.feedback["conversation_comments"][0]["body_digest"],
+                         fast_path.digest_text(pull["comments"]["nodes"][0]["body"]))
+        self.assertGreater(runner.run.call_count, 0)
+        for call in runner.run.call_args_list:
+            self.assertIn("query=" + actions_owner.CURRENT_REVIEW_FEEDBACK_QUERY, call.args[0])
+            self.assertNotIn("mutation", actions_owner.CURRENT_REVIEW_FEEDBACK_QUERY)
+
+    def test_ordinary_capture_rejects_substituted_raw_packages(self):
+        mutations = {
+            "repository": lambda p: p["integration_evidence"].update(repository="Other/repository"),
+            "issue": lambda p: p["integration_evidence"].update(delivery_issue_number=9),
+            "PR": lambda p: p["integration_evidence"].update(pull_request_number=9),
+            "lifecycle": lambda p: p["integration_evidence"]["eligibility"].update(lifecycle_identity="other"),
+            "head": lambda p: p["final_attestation"].update(head_sha="a" * 40),
+            "tree": lambda p: p["integration_evidence"].update(validated_tree_sha="a" * 40),
+            "parents": lambda p: p["integration_evidence"]["ordered_parent_shas"].reverse(),
+            "main": lambda p: p["integration_evidence"]["target_base"].update(authorized_sha="a" * 40),
+            "receipt": lambda p: p["validation_receipt"].update(receipt_digest="a" * 64),
+            "attestation": lambda p: p["final_attestation"].update(attestation_digest="a" * 64),
+            "signer": lambda p: p["integration_evidence"]["expected_signer"].update(identity="other"),
+            "publication": lambda p: p["prior_authority"]["publication"].update(object_oid="a" * 40),
+            "review context": lambda p: p["reviewed_state"].update(head_sha="a" * 40),
+            "seal": lambda p: p.update(verification_seal={"verified": True}),
+        }
+        with self.ordinary_capture_observation(self.current_capture_pull()) as runner:
+            for label, mutate in mutations.items():
+                transport = self.ordinary_capture_transport()
+                mutate(transport["packages"][0])
+                with self.subTest(label=label), self.assertRaises((ValueError, RuntimeError)):
+                    actions_owner._command_resolve_batch(self.ordinary_capture_arguments(transport))
+                self.assertFalse((self.root / "current-feedback.json").exists())
+            runner.run.assert_not_called()
+
+    def test_ordinary_capture_mixed_chain_and_exact_package_order(self):
+        self.publish_provider_remediation(self.candidate)
+        validation, prior, _ = self.publish_next_provider_integration()
+        pairs = ((self.predecessor, self.prior_authority), (validation, prior))
+        transport = self.ordinary_capture_transport(pairs)
+        with self.ordinary_capture_observation(self.current_capture_pull()) as runner:
+            documents = transport["packages"]
+            for wrong in ([], documents[:1], documents[1:], list(reversed(documents)),
+                          documents + documents[:1], [documents[0], documents[0]]):
+                invalid = {**transport, "packages": wrong}
+                with self.subTest(packages=len(wrong)), self.assertRaises((ValueError, RuntimeError)):
+                    actions_owner._command_resolve_batch(self.ordinary_capture_arguments(invalid))
+                self.assertFalse((self.root / "current-feedback.json").exists())
+            runner.run.assert_not_called()
+            self.assertEqual(actions_owner._command_resolve_batch(self.ordinary_capture_arguments(transport)), 0)
+        captured = json.loads((self.root / "current-feedback.json").read_text())
+        self.assertEqual(captured["head_sha"], self.current.lifecycle.head_sha)
+        self.assertNotEqual(captured["head_sha"], self.reviewed.head_sha)
+
+    def test_ordinary_capture_requires_historical_provider_and_current_feedback(self):
+        arguments = self.ordinary_capture_arguments()
+        mutations = {
+            "historical feedback": lambda p: p.update(headRefOid=self.reviewed.head_sha),
+            "other feedback": lambda p: p.update(headRefOid="a" * 40),
+            "provider at H2": lambda p: p["comments"]["nodes"][0].update(body=p["comments"]["nodes"][0]["body"].replace(self.reviewed.head_sha, self.current.lifecycle.head_sha)),
+            "wrong repository": lambda p: p["comments"]["nodes"][0].update(body=p["comments"]["nodes"][0]["body"].replace(REPOSITORY, "Other/repository")),
+            "wrong PR": lambda p: p["comments"]["nodes"][0].update(body=p["comments"]["nodes"][0]["body"].replace('"pullRequestNumber":' + str(self.reviewed.pull_request_number), '"pullRequestNumber":9')),
+            "forged provider": lambda p: p["comments"]["nodes"][0]["author"].update(login="other"),
+            "missing terminality": lambda p: p["comments"]["nodes"].clear(),
+            "Code running": lambda p: p["comments"]["nodes"][0].update(body=p["comments"]["nodes"][0]["body"].replace("| **Code Review** | **Completed**", "| **Code Review** | **Running**")),
+            "Security running": lambda p: p["comments"]["nodes"][0].update(body=p["comments"]["nodes"][0]["body"].replace('"status":"completed"', '"status":"running"')),
+            "duplicate summary": lambda p: p["comments"]["nodes"].append(copy.deepcopy(p["comments"]["nodes"][0])),
+            "incomplete feedback": lambda p: p["reviewThreads"].update(pageInfo={"hasNextPage": True}),
+        }
+        for label, mutate in mutations.items():
+            pull = self.current_capture_pull()
+            mutate(pull)
+            with self.subTest(label=label), self.ordinary_capture_observation(pull), self.assertRaises((ValueError, RuntimeError)):
+                actions_owner._command_resolve_batch(arguments)
+            self.assertFalse((self.root / "current-feedback.json").exists())
+
+    def test_ordinary_capture_preserves_undispositioned_current_findings(self):
+        pull = self.current_capture_pull()
+        finding = copy.deepcopy(pull["comments"]["nodes"][0])
+        finding.update(id="FINDING_GENERIC", body="Authentication defect requires correction")
+        pull["comments"]["nodes"].append(finding)
+        pull["reviewThreads"]["nodes"] = [{
+            "id": "PRRT_GENERIC", "isResolved": False, "isOutdated": False,
+            "comments": {"nodes": [dict(finding, id="INLINE_GENERIC")],
+                         "pageInfo": {"hasNextPage": False}},
+        }]
+        with self.ordinary_capture_observation(pull) as runner:
+            self.assertEqual(actions_owner._command_resolve_batch(self.ordinary_capture_arguments()), 0)
+        captured = fast_path.StableFeedbackState.from_payload(json.loads(
+            (self.root / "current-feedback.json").read_text()))
+        self.assertEqual(len(captured.feedback["conversation_comments"]), 2)
+        self.assertFalse(captured.feedback["threads"][0]["is_resolved"])
+        self.assertEqual(captured.feedback["threads"][0]["comments"][0]["body_digest"],
+                         fast_path.digest_text(finding["body"]))
+        with self.assertRaises(fast_path.SecurityBlocker):
+            fast_path.verify_clean_feedback_gate(captured, None)
+        for call in runner.run.call_args_list:
+            self.assertIn("query=" + actions_owner.CURRENT_REVIEW_FEEDBACK_QUERY, call.args[0])
+
+    def test_ordinary_capture_does_not_grant_mutation_authority(self):
+        arguments = self.ordinary_capture_arguments()
+        for updates in (
+            {"apply": True}, {"capture_reviewed_state": None},
+            {"request": "request.json"}, {"reviewed_state": "reviewed.json"},
+            {"attestation": "attestation.json"}, {"output": "report.json"},
+            {"delivery_issue": None}, {"ready_remediation_provider_binding": "binding.json"},
+            {"ready_source_recovery_publication": "a" * 40},
+        ):
+            with self.subTest(updates=updates), mock.patch.object(
+                actions_owner, "_load_lifecycle_publication_helpers",
+                side_effect=AssertionError("invalid scope must precede authority reads"),
+            ), self.assertRaises(fast_path.RecoverableLocalError):
+                actions_owner._command_resolve_batch(SimpleNamespace(**(vars(arguments) | updates)))
+
+    def test_ordinary_capture_reports_canonical_authority_blocker(self):
+        arguments = self.ordinary_capture_arguments()
+        with self.ordinary_capture_observation(self.current_capture_pull()), \
+             mock.patch.object(publication, "derive_ready_source_recovery_provider_binding",
+                               side_effect=publication.LifecyclePublicationError("invalid CURRENT")), \
+             mock.patch("sys.stderr") as error:
+            self.assertEqual(actions_owner.main([
+                "resolve-batch", "--repo", arguments.repo, "--pr", str(arguments.pr),
+                "--repo-root", arguments.repo_root, "--delivery-issue", str(arguments.delivery_issue),
+                "--ready-integration-chain", arguments.ready_integration_chain,
+                "--capture-reviewed-state", arguments.capture_reviewed_state,
+            ]), 3)
+        self.assertIn('"status":"BLOCKED_SECURITY"', "".join(call.args[0] for call in error.write.call_args_list))
+        self.assertFalse((self.root / "current-feedback.json").exists())
+
+    def test_ordinary_capture_reauthenticates_current_after_feedback(self):
+        arguments = self.ordinary_capture_arguments()
+        pull = self.current_capture_pull()
+        github_type = actions_owner.LiveGitHub
+        real_read = github_type._read_current_feedback_once
+        real_verify = publication.verify_current_lifecycle_authority
+        with self.ordinary_capture_observation(pull):
+            observed = False
+            def observe(github, *args, **kwargs):
+                nonlocal observed
+                result = real_read(github, *args, **kwargs)
+                self.current = replace(self.current, publication_oid="a" * 40)
+                observed = True
+                return result
+            with mock.patch.object(github_type, "_read_current_feedback_once", observe), \
+                 mock.patch.object(publication, "verify_current_lifecycle_authority",
+                                   side_effect=lambda *a, **k: self.current if observed else real_verify(*a, **k)), \
+                 self.assertRaises(fast_path.SecurityBlocker):
+                actions_owner._command_resolve_batch(arguments)
+        self.assertFalse((self.root / "current-feedback.json").exists())
+
+    def test_ordinary_capture_rejects_malformed_package_transport(self):
+        original = self.ordinary_capture_transport()
+        for transport in ({}, {**original, "schema_version": "2.0"},
+                          {**original, "kind": "OTHER"}, {**original, "extra": True},
+                          {**original, "packages": None}):
+            with self.subTest(transport=transport), self.ordinary_capture_observation(self.current_capture_pull()) as runner, \
+                 self.assertRaises(fast_path.SecurityBlocker):
+                actions_owner._command_resolve_batch(self.ordinary_capture_arguments(transport))
+            runner.run.assert_not_called()
+        arguments = self.ordinary_capture_arguments()
+        Path(arguments.ready_integration_chain).write_text(
+            '{"schema_version":"1.0","schema_version":"1.0",'
+            '"kind":"READY_INTEGRATION_PREDECESSOR_PACKAGES","packages":[]}'
+        )
+        with self.ordinary_capture_observation(self.current_capture_pull()) as runner, \
+             self.assertRaises(fast_path.SecurityBlocker):
+            actions_owner._command_resolve_batch(arguments)
+        runner.run.assert_not_called()
+
+    def test_ordinary_capture_rejects_invalid_current_and_verifier_authority(self):
+        arguments = self.ordinary_capture_arguments()
+        invalid = []
+        for field, value in (("repository", "Other/repository"), ("delivery_issue", 9),
+                             ("pull_request", 9), ("lifecycle_id", "other"),
+                             ("head_sha", "a" * 40), ("tree_sha", "a" * 40)):
+            invalid.append(replace(self.current, lifecycle=replace(self.current.lifecycle, **{field: value})))
+        for field, value in (("unrestricted_review_count", 2), ("remediation_cycle_count", 3),
+                             ("ready_transition_count", 2), ("cycle_3_absent", False),
+                             ("exceptional_recovery_count", 1), ("exceptional_continuation_count", 1)):
+            state = copy.deepcopy(self.current.lifecycle.state)
+            state[field] = value
+            invalid.append(replace(self.current, lifecycle=replace(self.current.lifecycle, state=state)))
+        with self.ordinary_capture_observation(self.current_capture_pull()) as runner:
+            for current in invalid:
+                with self.subTest(current=current.lifecycle), mock.patch.object(
+                    publication, "verify_current_lifecycle_authority", return_value=current,
+                ), self.assertRaises((ValueError, RuntimeError)):
+                    actions_owner._command_resolve_batch(arguments)
+            runner.run.assert_not_called()
+            with mock.patch.object(fast_path, "authenticate_integration_commit",
+                                   side_effect=fast_path.SecurityBlocker("invalid signature")), \
+                 self.assertRaises(fast_path.SecurityBlocker):
+                actions_owner._command_resolve_batch(arguments)
+            with mock.patch.object(publication, "_authenticate_provider_integration_verifier",
+                                   side_effect=publication.LifecyclePublicationError("candidate-local verifier")), \
+                 self.assertRaises(fast_path.SecurityBlocker):
+                actions_owner._command_resolve_batch(arguments)
+            runner.run.assert_not_called()
+        self.assertFalse((self.root / "current-feedback.json").exists())
+
     def test_provider_lineage_reauthenticates_historical_head_and_current(self):
         binding = self.derive_provider_lineage()
         with mock.patch.object(publication, "_authenticate_provider_integration_verifier"):
