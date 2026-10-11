@@ -115,10 +115,10 @@ def references(text):
     if len(request.encode()) > 1_048_576:
         raise Unavailable()
     result = subprocess.run(
-        ["node", str(PACKAGE / "markdown_references.mjs")],
+        [trusted_node(), str(PACKAGE / "markdown_references.mjs")],
         input=request, text=True, stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL, timeout=30, check=False,
-        env={"PATH": os.environ.get("PATH", os.defpath)},
+        env={"PATH": os.defpath},
     )
     if result.returncode or len(result.stdout.encode()) > 1_048_576:
         raise Unavailable()
@@ -132,6 +132,27 @@ def references(text):
                    for group in groups)):
         raise Unavailable()
     return value["references"]
+
+
+def trusted_node():
+    """Consume installed system tooling or the maintained hosted Node cache."""
+    # setup-node publishes its selected installation in the hosted tool cache.
+    # Other caller PATH entries never supply a parser executable.
+    hosted = re.compile(r"/(?:opt|Users/runner)/hostedtoolcache/node/[0-9]+\.[0-9]+\.[0-9]+/(?:x64|arm64)/bin")
+    directories = [Path(value) for value in os.environ.get("PATH", "").split(os.pathsep)
+                   if hosted.fullmatch(value)]
+    directories += [Path(value) for value in ("/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin", "/opt/local/bin")]
+    for directory in directories:
+        candidate = directory / "node"
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if hosted.fullmatch(str(directory)) and resolved != candidate:
+            continue
+        if resolved.is_file() and os.access(resolved, os.X_OK):
+            return str(resolved)
+    raise Unavailable()
 
 
 def finding(code, item_index=None):
@@ -273,7 +294,8 @@ def assess_root(root, repository, governance, execution, dispatch=False, defer_e
     if any(item["code"] == "MALFORMED_DECLARATION" for item in initial["findings"]):
         return initial, [], [], []
     if defer_execution:
-        initial["findings"] = runtime["findings"]
+        initial["findings"] = runtime["findings"] + [item for item in initial["findings"]
+                                                     if item["code"] == "DISPATCH_DECLARATION_MISSING"]
         return initial, [] if document is None else [document], [], []
     proofs, provenance, findings = execute_agreements(root, document, governance, execution) if document else ([], [], [])
     report = governance.assess_declarations([] if document is None else [document], proof_results=proofs,
@@ -292,13 +314,14 @@ def main():
     parser.add_argument("--repository")
     parser.add_argument("--managed-workspace-root", type=Path)
     parser.add_argument("--managed-repository", action="append", default=[])
+    parser.add_argument("--managed-worktree", help="Replace exactly one declared managed repository with NAME=ROOT")
     parser.add_argument("--dispatch", action="store_true", help="Validate dispatch admission; performs no dispatch")
     parser.add_argument("--self-check", action="store_true")
     args = parser.parse_args()
     try:
         governance, execution = owned_package()
         if args.self_check:
-            if args.repository_root or args.repository or args.managed_workspace_root or args.managed_repository or args.dispatch:
+            if args.repository_root or args.repository or args.managed_workspace_root or args.managed_repository or args.managed_worktree or args.dispatch:
                 raise Unavailable()
             references("`docs/work-graph-contract.md`")
             return 0
@@ -306,19 +329,32 @@ def main():
             if any(path.is_symlink() for path in (args.managed_workspace_root, *args.managed_workspace_root.parents)):
                 raise Unavailable()
             names = args.managed_repository
-            if (args.repository_root or args.repository or args.dispatch or not names
+            if (args.repository_root or args.repository or not names
                     or len(names) > 100 or len(set(names)) != len(names)
                     or any(not re.fullmatch(r"[A-Za-z0-9_.-]+", name) or name in {".", ".."} for name in names)):
                 raise Unavailable()
             documents, proofs, findings, provenance, scope, snapshots = [], [], [], [], [], []
             roots = [args.managed_workspace_root / name for name in names]
+            worktree_name = None
+            if args.managed_worktree:
+                worktree_name, separator, worktree_path = args.managed_worktree.partition("=")
+                if not separator or worktree_name not in names or not Path(worktree_path).is_absolute():
+                    raise Unavailable()
+                worktree = Path(worktree_path)
+                if any(path.is_symlink() for path in (worktree, *worktree.parents)):
+                    raise Unavailable()
+                roots[names.index(worktree_name)] = worktree
+            if args.dispatch and worktree_name is None:
+                raise Unavailable()
             baselines = [read(root, "AGENTS.md") for root in roots]
             reference_groups = references(baselines)
             for name, root, baseline, baseline_references in zip(names, roots, baselines, reference_groups):
                 if root.is_symlink():
                     raise Unavailable()
                 declaration = read(root, DECLARATION, optional=True)
-                report, declared, verified, executed = assess_root(root, "SecPal/" + name, governance, execution, defer_execution=True, baseline_observation=(baseline, baseline_references, declaration))
+                report, declared, verified, executed = assess_root(root, "SecPal/" + name, governance, execution,
+                    dispatch=args.dispatch and name == worktree_name, defer_execution=True,
+                    baseline_observation=(baseline, baseline_references, declaration))
                 documents.extend(declared)
                 scope.extend((root, document) for document in declared)
                 snapshots.extend([(root, "AGENTS.md", baseline), (root, DECLARATION, declaration)])
@@ -342,7 +378,7 @@ def main():
             report["findings"] = findings + report["findings"]
             report["agreement_execution"] = provenance
         else:
-            if not args.repository_root or not args.repository or args.managed_repository:
+            if not args.repository_root or not args.repository or args.managed_repository or args.managed_worktree:
                 raise Unavailable()
             if any(path.is_symlink() for path in (args.repository_root, *args.repository_root.parents)):
                 raise Unavailable()

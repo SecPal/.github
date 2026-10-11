@@ -367,6 +367,49 @@ class ArchitectureTests(unittest.TestCase):
             (Path(bundle) / "node_modules").unlink()
             self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
 
+    def test_malformed_surface_reference_fails_before_source_loading(self):
+        for source in (None, [], {}, 123, "../outside.py#admit", "pure.py", "pure.py#admit#extra"):
+            with self.subTest(source=source):
+                self.document["pure_surfaces"][0]["source"] = source
+                self.blocked("DECLARATION_EVIDENCE_UNAVAILABLE")
+
+    def test_caller_path_cannot_replace_the_parser_executable(self):
+        attack = self.root / "bin"
+        attack.mkdir()
+        marker = self.root / "fake-node-used"
+        binary = attack / "node"
+        binary.write_text("#!/bin/sh\nprintf invoked > " + str(marker) + "\nprintf '%s' '{\"references\":[\"docs/work-graph-contract.md\"]}'\n")
+        binary.chmod(0o755)
+        (self.root / "AGENTS.md").write_text("Missing canonical delegation\n")
+        result = self.run_gate(env={**os.environ, "PATH": str(attack) + os.pathsep + os.defpath})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertFalse(marker.exists())
+        self.assertIn("MISSING_RUNTIME_BASELINE_DELEGATION", result.stdout)
+
+    def test_nested_module_metadata_cannot_hide_declared_dependency_closure(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            bundle = Path(directory)
+            shutil.copytree(ROOT / "scripts/secpal_evidence_architecture", bundle / "scripts/secpal_evidence_architecture")
+            shutil.copy2(CLI, bundle / "scripts" / CLI.name)
+            for name in ("markdown-it", "argparse", "entities", "linkify-it", "mdurl", "punycode.js", "uc.micro"):
+                shutil.copytree(ROOT / "node_modules" / name, bundle / "node_modules" / name)
+            metadata_path = bundle / "node_modules/linkify-it/package.json"
+            metadata = json.loads(metadata_path.read_text())
+            metadata["dependencies"]["missing-transitive-only-dependency"] = "1.0.0"
+            metadata_path.write_text(json.dumps(metadata))
+            (bundle / "node_modules/linkify-it/build/package.json").write_text('{"type":"commonjs"}')
+            result = subprocess.run([sys.executable, "-I", str(bundle / "scripts" / CLI.name), "--self-check"], capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_transitive_parser_dependencies_cannot_fall_back_to_parent_installations(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            bundle = Path(directory)
+            shutil.copytree(ROOT / "scripts/secpal_evidence_architecture", bundle / "scripts/secpal_evidence_architecture")
+            shutil.copy2(CLI, bundle / "scripts" / CLI.name)
+            shutil.copytree(ROOT / "node_modules/markdown-it", bundle / "node_modules/markdown-it")
+            result = subprocess.run([sys.executable, "-I", str(bundle / "scripts" / CLI.name), "--self-check"], capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+
     def test_parser_cannot_fall_back_to_an_ancestor_dependency_installation(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             scripts = Path(directory) / "scripts"

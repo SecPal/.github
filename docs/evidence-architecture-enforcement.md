@@ -31,13 +31,25 @@ Managed bundle mode uses `--managed-workspace-root` and repeated
 `--managed-repository` names. It additionally rejects duplicate invariant owners
 across the supplied managed scope. Registration-only repositories without an
 active runtime instruction surface are outside automation admission.
+`--managed-worktree NAME=ROOT` replaces exactly one named source with its actual
+active worktree, retaining the other declared owners and agreement paths.
+Managed dispatch admission requires that exact worktree selection. Generated
+Polyscope setup and API runtime guards carry the maintained managed scope;
+direct API operations require dispatch admission before invoking their operation.
 
-Each input and output is bounded to 64 KiB. Lists have explicit limits. Duplicate
+Each repository input and final report is bounded to 64 KiB. The internal bulk
+Markdown transport and pooled pure source material are bounded to 1 MiB.
+Lists have explicit limits. Duplicate
 JSON keys, nonfinite numbers, unknown fields, symlinks, nonregular files and path
 traversal fail closed. Findings retain closed diagnostic codes and fixed facts;
 they do not retain source code, case inputs, stdout, stderr or environment values.
 Python executes in isolated mode with a regular, explicitly owned package.
 Both installers require a successful package/parser smoke test before activation.
+The parser consumes an absolute Node executable from installed system tooling
+or the maintained GitHub hosted Node cache, ignoring other caller PATH entries.
+Its complete declared dependency closure must resolve inside the owning
+installation before third-party parser code executes; ancestors cannot repair
+a missing dependency.
 
 ## Declaration Interface
 

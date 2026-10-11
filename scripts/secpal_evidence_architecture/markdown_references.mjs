@@ -3,11 +3,45 @@
 
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import path from "node:path";
 
 // Resolve only the owning checkout's dependency installation, never an
 // ancestor checkout or a process-global module search path.
 const require = createRequire(import.meta.url);
 const packagePath = fileURLToPath(new URL("../../node_modules/markdown-it", import.meta.url));
+const installation = fs.realpathSync(fileURLToPath(new URL("../../node_modules", import.meta.url)));
+const visited = new Set();
+function verifyDependencyClosure(entry, name) {
+  let directory = path.dirname(fs.realpathSync(entry));
+  let metadata;
+  while (directory.startsWith(installation + path.sep)) {
+    const metadataPath = path.join(directory, "package.json");
+    if (fs.existsSync(metadataPath)) {
+      const metadataStat = fs.lstatSync(metadataPath);
+      if (!metadataStat.isFile() || metadataStat.size > 65536)
+        throw new Error("parser dependency metadata is unavailable");
+      const candidate = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+      if (candidate.name === name) {
+        metadata = candidate;
+        break;
+      }
+    }
+    directory = path.dirname(directory);
+  }
+  if (!metadata) throw new Error("parser dependency escaped installation");
+  if (visited.has(directory)) return;
+  if (visited.size >= 100) throw new Error("parser dependency closure is unbounded");
+  visited.add(directory);
+  const metadataPath = path.join(directory, "package.json");
+  const dependencyRequire = createRequire(metadataPath);
+  for (const dependency of Object.keys(metadata.dependencies ?? {})) {
+    verifyDependencyClosure(dependencyRequire.resolve(dependency), dependency);
+  }
+}
+// Resolve the complete declared closure before any third-party code executes.
+// Node's normal ancestor lookup must not repair an incomplete installation.
+verifyDependencyClosure(require.resolve(packagePath), "markdown-it");
 const MarkdownIt = require(packagePath);
 
 const chunks = [];

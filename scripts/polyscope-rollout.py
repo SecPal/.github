@@ -672,14 +672,36 @@ def build_preview_url_template(preview_prefix: str | None) -> str:
     return "https://{{worktree}}.preview.secpal.dev"
 
 
-def build_workspace_instruction_validation_command(repo_name: str) -> str:
+def architecture_scope_command(workspace_root: pathlib.Path) -> str:
+    arguments = ["--architecture-workspace-root", str(workspace_root)]
+    for name, spec in REPO_SETTINGS.items():
+        if is_workspace_automation_enabled(spec):
+            arguments.extend(["--architecture-repository", name])
+    return " ".join(shlex.quote(argument) for argument in arguments)
+
+
+def architecture_scope_from_args(args: argparse.Namespace) -> list[str] | None:
+    root = getattr(args, "architecture_workspace_root", None)
+    names = getattr(args, "architecture_repository", [])
+    if root is None:
+        if names:
+            raise CanonicalInstructionValidationError("Evidence Architecture managed scope is incomplete")
+        return None
+    arguments = ["--managed-workspace-root", str(root)]
+    for name in names:
+        arguments.extend(["--managed-repository", name])
+    return arguments
+
+
+def build_workspace_instruction_validation_command(repo_name: str, workspace_root: pathlib.Path | None = None) -> str:
     """Return the synchronous guard used by Polyscope's native setup runner."""
     rollout_script = shlex.quote(str(ROLLOUT_SCRIPT_PATH))
     repository_name = shlex.quote(repo_name)
-    return (
+    command = (
         f"python3 {rollout_script} --instruction-repository-name {repository_name} "
         '--validate-instruction-worktree "$PWD"'
     )
+    return command + (" " + architecture_scope_command(workspace_root) if workspace_root is not None else "")
 
 
 def build_fail_closed_setup_command(commands: list[str]) -> str:
@@ -705,7 +727,8 @@ def build_api_preview_runtime_shell_command(command: str, source_repo_path: path
     shell_command = shlex.quote(command)
     return (
         f"python3 {rollout_script} --run-api-worktree \"$PWD\" "
-        f"--source-repo-path {source_repo} --shell-command {shell_command}"
+        f"--source-repo-path {source_repo} --shell-command {shell_command} "
+        f"{architecture_scope_command(source_repo_path.parent)}"
     )
 
 
@@ -2460,7 +2483,7 @@ def build_api_preview_bootstrap_command(source_repo_path: pathlib.Path) -> str:
     source_repo = shlex.quote(str(source_repo_path))
     return (
         f"python3 {rollout_script} --bootstrap-api-worktree \"$PWD\" "
-        f"--source-repo-path {source_repo}"
+        f"--source-repo-path {source_repo} {architecture_scope_command(source_repo_path.parent)}"
     )
 
 
@@ -2469,7 +2492,7 @@ def build_api_preview_refresh_command(source_repo_path: pathlib.Path) -> str:
     source_repo = shlex.quote(str(source_repo_path))
     return (
         f"python3 {rollout_script} --refresh-api-worktree \"$PWD\" "
-        f"--source-repo-path {source_repo}"
+        f"--source-repo-path {source_repo} {architecture_scope_command(source_repo_path.parent)}"
     )
 
 
@@ -3153,7 +3176,7 @@ def build_repo_specs(workspace_root: pathlib.Path) -> dict[str, dict[str, Any]]:
         spec[NATIVE_SETUP_COMMANDS_KEY] = native_setup_commands
         spec["local_config"]["scripts"]["setup"] = [
             build_fail_closed_setup_command(
-                [build_workspace_instruction_validation_command(repo_name), *native_setup_commands]
+                [build_workspace_instruction_validation_command(repo_name, workspace_root), *native_setup_commands]
             )
         ]
         repo_specs[repo_name] = spec
@@ -3166,10 +3189,13 @@ def validate_instruction_root(
     repository_name: str,
     *,
     architecture_arguments: list[str] | None = None,
+    active_worktree: bool = False,
+    dispatch: bool = False,
 ) -> pathlib.Path:
     """Validate instructions with an explicit trusted repository identity."""
     resolved_root = _validate_ai_instruction_root(root, validated_instruction_roots, repository_name)
-    validate_evidence_architecture_root(resolved_root, repository_name, architecture_arguments)
+    validate_evidence_architecture_root(resolved_root, repository_name, architecture_arguments,
+                                      active_worktree=active_worktree, dispatch=dispatch)
     return resolved_root
 
 
@@ -3229,6 +3255,7 @@ def _validate_ai_instruction_root(
 
 def validate_evidence_architecture_root(
     root: pathlib.Path, repository_name: str, architecture_arguments: list[str] | None = None,
+    *, active_worktree: bool = False, dispatch: bool = False,
 ) -> None:
     """Re-read architecture declarations independently of instruction caches."""
     # Current Polyscope aliases select the same physical worktree. Always pass
@@ -3246,14 +3273,19 @@ def validate_evidence_architecture_root(
                 raise CanonicalInstructionValidationError("Evidence Architecture managed scope is invalid")
             workspace = pathlib.Path(architecture_arguments[1])
             names = architecture_arguments[3::2]
-            if repository_name not in names or root != (workspace / repository_name).resolve():
+            if repository_name not in names or not active_worktree and root != (workspace / repository_name).resolve():
                 raise CanonicalInstructionValidationError("Evidence Architecture managed scope does not bind this root")
-        validate_evidence_architecture(architecture_arguments if architecture_arguments is not None else [
+        arguments = list(architecture_arguments) if architecture_arguments is not None else [
             "--repository-root", str(root), "--repository", f"SecPal/{repository_name}",
-        ])
+        ]
+        if architecture_arguments is not None and active_worktree:
+            arguments.extend(["--managed-worktree", f"{repository_name}={root}"])
+        if dispatch:
+            arguments.append("--dispatch")
+        validate_evidence_architecture(arguments)
     except CanonicalInstructionValidationError as error:
         raise CanonicalInstructionValidationError(
-            f"canonical AI-instruction validation failed for {root}: {error}"
+            f"canonical Evidence Architecture validation failed for {root}: {error}"
         ) from error
 
 
@@ -3821,6 +3853,7 @@ def is_provisionable_worktree(
     *,
     validated_instruction_roots: set[tuple[pathlib.Path, str]],
     log_skip_reason: bool = True,
+    architecture_arguments: list[str] | None = None,
 ) -> bool:
     def skip(reason: str) -> bool:
         if log_skip_reason:
@@ -3841,7 +3874,8 @@ def is_provisionable_worktree(
         if not (android_project_dir / "settings.gradle").is_file():
             return skip("missing committed native Android Gradle project")
 
-    validate_instruction_root(worktree_path, validated_instruction_roots, repo_name)
+    validate_instruction_root(worktree_path, validated_instruction_roots, repo_name,
+                              architecture_arguments=architecture_arguments, active_worktree=True)
 
     package_scripts = load_package_scripts(worktree_path)
     composer_scripts = load_composer_scripts(worktree_path)
@@ -5319,6 +5353,7 @@ def provision_worktrees(
                     worktree_path,
                     validation_commands,
                     validated_instruction_roots=validation_cache,
+                    architecture_arguments=spec.get(EVIDENCE_VALIDATION_ARGUMENTS_SPEC_KEY),
                 ):
                     continue
             except CanonicalInstructionValidationError as error:
@@ -6307,6 +6342,7 @@ def write_compatible_nginx_manifest(
 def validate_direct_api_worktree_roots(
     source_repo_path: pathlib.Path,
     worktree_path: pathlib.Path,
+    architecture_arguments: list[str] | None = None,
 ) -> tuple[pathlib.Path, pathlib.Path]:
     """Validate and resolve the exact source and target roots consumed by a direct mode."""
     validated_instruction_roots: set[tuple[pathlib.Path, str]] = set()
@@ -6314,11 +6350,13 @@ def validate_direct_api_worktree_roots(
         source_repo_path,
         validated_instruction_roots,
         "api",
+        architecture_arguments=architecture_arguments,
     )
     resolved_worktree = validate_instruction_root(
         worktree_path,
         validated_instruction_roots,
         "api",
+        architecture_arguments=architecture_arguments, active_worktree=True, dispatch=True,
     )
     return resolved_source_repo, resolved_worktree
 
@@ -6345,6 +6383,7 @@ def dispatch_instruction_dependent_direct_api_mode(args: argparse.Namespace) -> 
     source_repo_path, worktree_path = validate_direct_api_worktree_roots(
         args.source_repo_path,
         requested_worktree,
+        architecture_scope_from_args(args),
     )
 
     if mode == "prepare_api_worktree":
@@ -6400,6 +6439,7 @@ def dispatch_validation_only_direct_mode(args: argparse.Namespace) -> int | None
         requested_root,
         set(),
         repository_name,
+        architecture_arguments=architecture_scope_from_args(args), active_worktree=True,
     )
     print(f"Canonical AI-instruction validation passed for {resolved_root}")
     return 0
@@ -6425,6 +6465,8 @@ def parse_args() -> argparse.Namespace:
         )
     parser.add_argument("--source-repo-path", type=pathlib.Path)
     parser.add_argument("--instruction-repository-name")
+    parser.add_argument("--architecture-workspace-root", type=pathlib.Path)
+    parser.add_argument("--architecture-repository", action="append", default=[])
     parser.add_argument("--shell-command")
     parser.add_argument(
         "--workspace-root",

@@ -7,6 +7,8 @@
 import importlib.util
 import json
 import subprocess
+import shutil
+from argparse import Namespace
 import tempfile
 import unittest
 from pathlib import Path
@@ -104,6 +106,49 @@ class PolyscopeArchitectureTests(unittest.TestCase):
                     marker.write_text("invoked")
             self.assertFalse(marker.exists())
 
+    def test_direct_api_operation_requires_dispatch_admission_before_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "AGENTS.md").write_text("`docs/work-graph-contract.md`\n")
+            validator = root / "ai-validator.sh"
+            validator.write_text("#!/bin/sh\nexit 0\n")
+            validator.chmod(0o755)
+            for mode, operation in (("prepare_api_worktree", "prepare_api_worktree"),
+                                    ("bootstrap_api_worktree", "bootstrap_api_worktree"),
+                                    ("refresh_api_worktree", "refresh_api_worktree"),
+                                    ("run_api_worktree", "run_api_worktree_shell_command")):
+                arguments = {name: None for name in rollout.INSTRUCTION_DEPENDENT_DIRECT_API_MODES}
+                arguments.update({mode: root, "source_repo_path": root, "shell_command": "true", "db_path": root / "db"})
+                with self.subTest(mode=mode), mock.patch.object(rollout, "CANONICAL_AI_INSTRUCTIONS_VALIDATOR", validator), mock.patch.object(rollout, operation, return_value=(True, None)) as external:
+                    with self.assertRaises(rollout.CanonicalInstructionValidationError):
+                        rollout.dispatch_instruction_dependent_direct_api_mode(Namespace(**arguments))
+                    external.assert_not_called()
+            (root / ".secpal").mkdir()
+            declaration = {
+                "schema": "secpal-evidence-architecture/v1", "repository": "SecPal/api",
+                "runtime_baseline": {"delegation": "transitive_work_graph", "generic_authorities": ["docs/work-graph-contract.md"]},
+                "external_operations": [{"id": "runtime", "reachable": True, "fallible": True, "trusted": True,
+                                         "diagnostic_identity": {"id": "runtime.admission", "kind": "semantic"}}],
+                "pure_surfaces": [], "invariant_declarations": [],
+            }
+            (root / ".secpal/evidence-architecture.json").write_text(json.dumps(declaration))
+            with mock.patch.object(rollout, "CANONICAL_AI_INSTRUCTIONS_VALIDATOR", validator), mock.patch.object(rollout, "run_api_worktree_shell_command") as external:
+                self.assertEqual(rollout.dispatch_instruction_dependent_direct_api_mode(Namespace(**arguments)), 0)
+                external.assert_called_once()
+            declaration["external_operations"][0]["diagnostic_identity"] = None
+            (root / ".secpal/evidence-architecture.json").write_text(json.dumps(declaration))
+            with mock.patch.object(rollout, "CANONICAL_AI_INSTRUCTIONS_VALIDATOR", validator), mock.patch.object(rollout, "run_api_worktree_shell_command") as external:
+                with self.assertRaises(rollout.CanonicalInstructionValidationError):
+                    rollout.dispatch_instruction_dependent_direct_api_mode(Namespace(**arguments))
+                external.assert_not_called()
+
+    def test_architecture_failure_names_the_correct_diagnostic_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "AGENTS.md").write_text("Missing delegation\n")
+            with self.assertRaisesRegex(rollout.CanonicalInstructionValidationError, "Evidence Architecture validation failed"):
+                rollout.validate_evidence_architecture_root(root, "example")
+
     def test_managed_cross_repository_agreement_executes_both_actual_sources(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -145,6 +190,34 @@ class PolyscopeArchitectureTests(unittest.TestCase):
             specs = {name: {"path": workspace / name, "repository_name": name} for name in ("owner", "edge")}
             with mock.patch.object(rollout, "CANONICAL_AI_INSTRUCTIONS_VALIDATOR", validator):
                 rollout.validate_repo_instruction_files(specs, set())
+            active = workspace / "active-edge"
+            shutil.copytree(workspace / "edge", active)
+            with mock.patch.object(rollout, "CANONICAL_AI_INSTRUCTIONS_VALIDATOR", validator):
+                rollout.validate_instruction_root(active, set(), "edge",
+                    architecture_arguments=specs["edge"][rollout.EVIDENCE_VALIDATION_ARGUMENTS_SPEC_KEY], active_worktree=True)
+                args = Namespace(validate_instruction_worktree=active, instruction_repository_name="edge",
+                                 architecture_workspace_root=workspace, architecture_repository=["owner", "edge"])
+                self.assertEqual(rollout.dispatch_validation_only_direct_mode(args), 0)
+                with mock.patch.object(rollout, "REPO_SETTINGS", {"owner": {}, "edge": {}}):
+                    generated = rollout.build_workspace_instruction_validation_command("edge", workspace)
+                    self.assertIn("--architecture-workspace-root " + str(workspace), generated)
+                    self.assertIn("--architecture-repository owner --architecture-repository edge", generated)
+                dispatched = command + ["--managed-worktree", "edge=" + str(active), "--dispatch"]
+                result = subprocess.run(dispatched, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("DISPATCH_DECLARATION_MISSING", result.stdout)
+                declaration_path = active / ".secpal/evidence-architecture.json"
+                declaration = json.loads(declaration_path.read_text())
+                declaration["external_operations"] = [{"id": "runtime", "reachable": True, "fallible": True, "trusted": True,
+                                                       "diagnostic_identity": {"id": "runtime.admission", "kind": "semantic"}}]
+                declaration_path.write_text(json.dumps(declaration))
+                self.assertEqual(subprocess.run(dispatched, capture_output=True, text=True, timeout=30).returncode, 0)
+                substituted = command + ["--managed-worktree", "unknown=" + str(active)]
+                self.assertEqual(subprocess.run(substituted, capture_output=True, text=True, timeout=30).returncode, 1)
+                (active / "pure.py").write_text("def normalize(value):\n    return value\ndef admit(value):\n    return True\n")
+                with self.assertRaises(rollout.CanonicalInstructionValidationError):
+                    rollout.validate_instruction_root(active, set(), "edge",
+                        architecture_arguments=specs["edge"][rollout.EVIDENCE_VALIDATION_ARGUMENTS_SPEC_KEY], active_worktree=True)
             (workspace / "owner/pure.py").write_text("def normalize(value):\n    return value\ndef admit(value):\n    return True\n")
             result = subprocess.run(command, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 1)

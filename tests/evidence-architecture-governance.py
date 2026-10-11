@@ -99,7 +99,7 @@ class EvidenceArchitectureGovernanceTests(unittest.TestCase):
     def gate_workflow(self) -> dict:
         result = subprocess.run(
             ["node", "--input-type=module", "-e",
-             "import fs from 'node:fs'; import * as yaml from 'js-yaml'; "
+             "import fs from 'node:fs'; import * as yaml from 'js-yaml'; " +
              "process.stdout.write(JSON.stringify(yaml.load(fs.readFileSync('.github/workflows/quality.yml','utf8'))));"],
             cwd=ROOT, capture_output=True, text=True, check=True,
         )

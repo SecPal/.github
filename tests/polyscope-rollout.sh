@@ -207,6 +207,15 @@ for repo_dir in workspace_root.iterdir():
     )
     (repo_dir / "AGENTS.md").write_text(agents_text.rstrip() + "\n")
 
+(workspace_root / "api" / ".secpal").mkdir()
+(workspace_root / "api" / ".secpal/evidence-architecture.json").write_text(json.dumps({
+    "schema": "secpal-evidence-architecture/v1", "repository": "SecPal/api",
+    "runtime_baseline": {"delegation": "transitive_work_graph", "generic_authorities": ["docs/work-graph-contract.md"]},
+    "external_operations": [{"id": operation, "reachable": True, "fallible": True, "trusted": True,
+                             "diagnostic_identity": {"id": "api." + operation, "kind": "semantic"}}
+                            for operation in ("prepare", "bootstrap", "refresh", "run")],
+    "pure_surfaces": [], "invariant_declarations": [],
+}))
 (workspace_root / "api" / "composer.json").write_text('{"name":"secpal/api"}\n')
 (workspace_root / "api" / "artisan").write_text("#!/usr/bin/env php\n")
 (workspace_root / "api" / "scripts").mkdir(parents=True, exist_ok=True)
@@ -308,6 +317,16 @@ seed_api_worktree_files() {
     local worktree_dir="$1"
 
     write_valid_worktree_instructions "$worktree_dir" CC0-1.0
+    python3 -B - "$worktree_dir" "$workspace_root/api/.secpal/evidence-architecture.json" "${2:-api}" <<'PYDECLARATION'
+import json
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+(root / ".secpal").mkdir(exist_ok=True)
+declaration = json.loads(Path(sys.argv[2]).read_text())
+declaration["repository"] = "SecPal/" + sys.argv[3]
+(root / ".secpal/evidence-architecture.json").write_text(json.dumps(declaration))
+PYDECLARATION
     printf '{"name":"secpal/api"}\n' > "$worktree_dir/composer.json"
     printf '#!/usr/bin/env php\n' > "$worktree_dir/artisan"
     chmod +x "$worktree_dir/artisan"
@@ -1066,6 +1085,16 @@ for executable in ("composer", "php", "psql"):
 
 def write_valid_instruction_root(root: pathlib.Path) -> None:
     (root / ".github").mkdir(parents=True)
+    import json
+    (root / ".secpal").mkdir()
+    (root / ".secpal/evidence-architecture.json").write_text(json.dumps({
+        "schema": "secpal-evidence-architecture/v1", "repository": "SecPal/api",
+        "runtime_baseline": {"delegation": "transitive_work_graph", "generic_authorities": ["docs/work-graph-contract.md"]},
+        "external_operations": [{"id": operation, "reachable": True, "fallible": True, "trusted": True,
+                                 "diagnostic_identity": {"id": "api." + operation, "kind": "semantic"}}
+                                for operation in ("prepare", "bootstrap", "refresh", "run")],
+        "pure_surfaces": [], "invariant_declarations": [],
+    }))
     shutil.copy2(repo_root / ".markdownlint.json", root / ".markdownlint.json")
     (root / "composer.json").write_text('{"name":"secpal/api"}\n')
     (root / "AGENTS.md").write_text(
@@ -1334,6 +1363,16 @@ release_first = fixture / "release-first"
 
 def write_valid_instruction_root(root: pathlib.Path) -> None:
     (root / ".github").mkdir(parents=True)
+    import json
+    (root / ".secpal").mkdir()
+    (root / ".secpal/evidence-architecture.json").write_text(json.dumps({
+        "schema": "secpal-evidence-architecture/v1", "repository": "SecPal/api",
+        "runtime_baseline": {"delegation": "transitive_work_graph", "generic_authorities": ["docs/work-graph-contract.md"]},
+        "external_operations": [{"id": operation, "reachable": True, "fallible": True, "trusted": True,
+                                 "diagnostic_identity": {"id": "api." + operation, "kind": "semantic"}}
+                                for operation in ("prepare", "bootstrap", "refresh", "run")],
+        "pure_surfaces": [], "invariant_declarations": [],
+    }))
     shutil.copy2(repo_root / ".markdownlint.json", root / ".markdownlint.json")
     (root / "composer.json").write_text('{"name":"secpal/api"}\n')
     (root / "AGENTS.md").write_text(
@@ -2176,6 +2215,7 @@ fake_bin.mkdir()
 
 for instruction_root in (source_api, api_worktree):
     instruction_root.joinpath(".github").mkdir(exist_ok=True)
+    shutil.copytree(workspace / "SecPal/api/.secpal", instruction_root / ".secpal")
     shutil.copy2(repo_root / ".markdownlint.json", instruction_root / ".markdownlint.json")
     instruction_root.joinpath("composer.json").write_text('{"name":"secpal/api"}\n')
     instruction_root.joinpath("AGENTS.md").write_text(
@@ -6429,7 +6469,7 @@ seed_api_worktree_files "$failing_api_cleanup_clone"
 seed_api_worktree_files "$failing_api_alias_clone"
 seed_node_worktree_files "$failing_frontend_manifest_clone" "frontend-broken-ibis"
 seed_node_worktree_files "$failing_frontend_io_clone" "frontend-locked-oryx"
-seed_api_worktree_files "$guardguide_clone"
+seed_api_worktree_files "$guardguide_clone" GuardGuide
 seed_node_worktree_files "$guardguide_clone" "guardguide"
 cp "$workspace_root/api/.env" "$failing_api_clone/.env"
 mkdir -p "$home_dir/.polyscope/clones/api12345/$failing_api_alias_workspace"

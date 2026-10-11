@@ -194,7 +194,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
                     rollout.dispatch_validation_only_direct_mode(args),
                     0,
                 )
-            validate.assert_called_once_with(worktree, set(), "api")
+            validate.assert_called_once_with(worktree, set(), "api", architecture_arguments=None, active_worktree=True)
 
     def test_registered_instruction_identity_rejects_relative_worktree_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
