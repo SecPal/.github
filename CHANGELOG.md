@@ -55,6 +55,15 @@ Log of notable changes to SecPal organization defaults (newest first).
   across chained integrations while requiring fresh protected main for each new
   integration.
 
+## 2026-09-29 - Authenticate Native Enrolled Ready Package Loss
+
+**Fixed:**
+
+- Admit signed native Ready lifecycle provenance into the existing enrolled
+  package-loss prior-authority path when a bounded source survey proves historical
+  companion bytes unavailable. Bind the provider head and complete current
+  feedback independently while granting no thread-resolution authority.
+
 ## 2026-09-29 - Unify Exact Parent-2 Ready Integration
 
 **Fixed:**

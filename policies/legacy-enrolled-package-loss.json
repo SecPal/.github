@@ -59,6 +59,166 @@
       "historical_bytes_reconstructed": false,
       "package_store_survey_digest": "38d8502ee302be37a1cb6a070eadec758f43b54df4d2019870602960b69f12cd",
       "record_digest": "15fc86dbe7ed71241dcbbf1480e142207c9e4c32b0ae0dc40ebfe551098b6138"
+    },
+    {
+      "schema_version": "1.0",
+      "kind": "SECPAL_LEGACY_ENROLLED_PACKAGE_LOSS_AUTHENTICATION",
+      "repository": "SecPal/.github",
+      "delivery_issue": 736,
+      "pull_request": 760,
+      "lifecycle_id": "lifecycle:6477407a86182f6bc9964089382f288e13dbb2e0b096edb2bf4e1c228452e628",
+      "historical_proof_mode": "native_lifecycle",
+      "proof_version": "1.0",
+      "current_publication_oid": "fb03e32e8b97018c5aa8f626109de8481b03079f",
+      "current_publication_digest": "8835ea041c38f4f2cc21431c7ece7b9d37614108dcb81bc8a3d1e122860b9ea7",
+      "current_authority_digest": "f12d56d856fcac1f1d38e445a1b7676aec80ba60739184b4d3db42f194cfb8d1",
+      "initialization_digest": "6477407a86182f6bc9964089382f288e13dbb2e0b096edb2bf4e1c228452e628",
+      "initial_head_sha": "9cce12e839e5f998137cc58fea90d0a5a0a45f63",
+      "initial_validation_receipt_digest": "ae9cf6c0480aae0effa72bc8128e569db82f84b86351642c14c37ecabdccecc4",
+      "initial_final_attestation_digest": "dad96cfa78d2a2c4d09818b761ec88d9385569e24a8e5117bab16be2351cbd25",
+      "head_sha": "40e218ade8b4f6c9121cebbfe286dfc077d185e3",
+      "tree_sha": "d24fd8ab2ad4bcce149b8c828bd608e2bc946835",
+      "parent_sha": "1df17873ecbeee5bc4dc39b9aa75ba3157ac7cde",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "commit_signature_evidence_digest": "2ff99b811b11714e480266a2d1efe825fe7f0290d5919d7a9a7db5778686c46b",
+      "historical_provider_summary_digest": "83168f73673fa98f1e9b8f71d95952681fe3c7b88f419aa4521dd1cec1ea6bdb",
+      "evidence_time_registry_digest": "38629c17e2397bfc1df44e5fa65fc176326f47fdf9dbfee98d1de52ecd093340",
+      "historical_command_set_digest": "15d370f613fb13d39bcf5136ffb4ebae298eb78e0acfaf18635253571f9ff12a",
+      "historical_validation_receipt_digest": "47205f2a903bfdcec2fb97bf7941e089d7d148b111b4fdbc79ea8274fca77ae2",
+      "source_history": [
+        {
+          "head_sha": "6c2df4cda88a7a71b097cc5de18f24276b22ceb5",
+          "tree_sha": "a387b4ec757223f101fc1d4c527b94850e607670",
+          "parent_sha": "266bdcf8d385a0570f96b9fc4618476c8fa2d025"
+        },
+        {
+          "head_sha": "9cce12e839e5f998137cc58fea90d0a5a0a45f63",
+          "tree_sha": "397114d4736b1870515f77fce60ec819ed19ac94",
+          "parent_sha": "6c2df4cda88a7a71b097cc5de18f24276b22ceb5"
+        },
+        {
+          "head_sha": "1df17873ecbeee5bc4dc39b9aa75ba3157ac7cde",
+          "tree_sha": "b16744472654b3acf57690eea71e0f492fcb00ad",
+          "parent_sha": "9cce12e839e5f998137cc58fea90d0a5a0a45f63"
+        },
+        {
+          "head_sha": "40e218ade8b4f6c9121cebbfe286dfc077d185e3",
+          "tree_sha": "d24fd8ab2ad4bcce149b8c828bd608e2bc946835",
+          "parent_sha": "1df17873ecbeee5bc4dc39b9aa75ba3157ac7cde"
+        }
+      ],
+      "persistence_contract": {
+        "historical_output_scope": "CALLER_SELECTED_GITIGNORED_LOCAL_SESSION",
+        "local_package_directory": ".context/",
+        "artifact_basenames": [
+          "final-attestation.json",
+          "reviewed-feedback.json",
+          "reviewed-state.json",
+          "thread-eligibility.json",
+          "validation-attestation.json",
+          "validation-receipt.json"
+        ],
+        "maintained_durable_stores": ["DELIVERY_SOURCE_HISTORY", "PROTECTED_LIFECYCLE_PUBLICATION"],
+        "unsurveyed_maintained_stores": [],
+        "retained_local_store": "NO_MAINTAINED_RETAINED_STORE"
+      },
+      "historical_package_status": "UNAVAILABLE",
+      "historical_bytes_reconstructed": false,
+      "package_store_survey_digest": "1138a3470254bb3da794d86dd1a60b92f6090c4dcdf004c4dde96e2f7a0e0728",
+      "record_digest": "f5252087518b505e540591d509910187f91fe5c7e88131cc64bda7acd67b025d",
+      "feedback_digest": "d42893ef0734625f57f96b5ed341352ea6d5d54bef325e77a06038de1f112870",
+      "technical_decisions": [
+        {
+          "source_id": "REVIEW:PRR_kwDOQFR1MM8AAAABLY6wOQ",
+          "source_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "3585d3f8aef6cbd783f490d66a49334192308911b223ed5d978ad1ea0e30bc73"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOQFR1MM8AAAABLYrvBQ",
+          "source_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "a9bc53b35b720f37c22b921cc1b9b53839e95b83a7168221ac4eb8a74ab8b19b"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOQFR1MM8AAAABLYt7-g",
+          "source_digest": "bd23cfdf0e1a4201dae7398a880c923344295a5864e70c3cbcd39d50dda7333c",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "34e201d31794d57dc804df441cb7b530ce6e4d8b831361979c76fb06507f379a"
+        },
+        {
+          "source_id": "REVIEW:PRR_kwDOQFR1MM8AAAABLYtPzQ",
+          "source_digest": "5a7778578692119b2bf3b48b0e74e94e421b8cf9fe69e7323e77ebdfe1e512fa",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "a80365bfa133452ba133602cbd41c10c94e922243df99a6a2242fd5a2689da94"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDOQFR1MM8AAAABRbcgRg",
+          "source_digest": "aa7261d99fb97e8993034535fd5f9343218bf01aefc342e6a01c02571aae6cfd",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "e6c0b32e0c5d218d52f573c3d205ddfcfa1e7f1b1c1302796cbb932c83e0a8e2"
+        },
+        {
+          "source_id": "CONVERSATION_COMMENT:IC_kwDOQFR1MM8AAAABRbcilg",
+          "source_digest": "83168f73673fa98f1e9b8f71d95952681fe3c7b88f419aa4521dd1cec1ea6bdb",
+          "disposition": "NON_ACTIONABLE",
+          "evidence_digest": "200755d1d1f3295f537ea4e44481a85805a617b4563a9a7002726e3c0ec65fce"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7nuwFJ",
+          "source_digest": "a542f93132cda9626b10b658a2ce4e4f3d02d562a9852b280745a61537efe36e",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "d8bdec5d6c504ebb9a863ded2cf0e327db0ef47c5cdad9d66a578ac4e5dc34e3"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7ntvEC",
+          "source_digest": "a542f93132cda9626b10b658a2ce4e4f3d02d562a9852b280745a61537efe36e",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "8300455843d9a11fbf2f328b244a8a5f71b98958a19107004a2d4550037abebb"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7nt14r",
+          "source_digest": "3e89d8f428e5b54a68920cdef550287fe93965e1c24070b826396e8ab11000e2",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "7fda0010ce1cb96173cf64aad80abdecc4ac8f85cb8b0096154520dbaf673c23"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7nt15K",
+          "source_digest": "537f53e34495ff303b3f1fefb2311d88b4aeca97ab5e668b36ab47cf8b27f2e1",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "1124b904d53d3adfddf9200367e3f28ee9ba6d6c7fd2a0d52f826ade1ba199af"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7nt4aj",
+          "source_digest": "6f98118faf9233c2264c8569340a3eca5d008b78598b2fad76b02f5d4f1f1bee",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "e4b9b3ecdec37e50022178e919ab2525a68cbcec1684c64abb7b147d91174062"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7nt4ak",
+          "source_digest": "f44b8d024f3132628b8b0cfe95e6aa31d46e0ceff40b6d95f1c86b768aca96d5",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "66bc4f8682e1231d1d777e0b6232e390182dc6d02de42118716f195ac3dffc6e"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7nt4an",
+          "source_digest": "3dd8ea2516f28b1cefe33f1176a377825f69da9df9c31f2ae6937c02947ccb68",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "3622a069c76ac2a8605164bc54757b0a6ca1431309e4aa968b448f097af7bc40"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7nt4ar",
+          "source_digest": "76d00d2d84b00f2517e8b762b8a9ff60f3306f1ac81e69a313f680d650b6db76",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "254a845c3bd6c9f28f4d17d17bbe5cbc96593a6b1360b28c9b901876eefd47b9"
+        },
+        {
+          "source_id": "THREAD_COMMENT:PRRC_kwDOQFR1MM7nt4au",
+          "source_digest": "0d743b629731de9cceb32c0bc7a4bd55c14ba1d290033b72bc8baf2a374b5839",
+          "disposition": "CORRECTED_AND_VERIFIED",
+          "evidence_digest": "f8eb33164d47a9b9609edeec9c422b81ffd2820d3278b95d449399d3ccf1df7b"
+        }
+      ]
     }
   ]
 }
