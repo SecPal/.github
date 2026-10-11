@@ -38,6 +38,27 @@ rollout = load_rollout_module()
 
 
 class PolyscopeRolloutFollowupTests(TestCase):
+    def test_active_repository_state_does_not_require_retired_sources(self) -> None:
+        active_names = {".github", "api", "frontend", "contracts", "android",
+                        "secpal.app", "deployment", "operations"}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            state_path = Path(temporary_directory) / "repositories.json"
+            active_state = {
+                name: {"id": name.replace(".", "-"), "path": str(Path(temporary_directory) / name)}
+                for name in active_names
+            }
+            state_path.write_text(json.dumps(active_state))
+            self.assertEqual(rollout.load_repo_state(state_path), active_state)
+            # Historical saved registrations must not re-enroll retired sources.
+            historical_state = dict(active_state)
+            historical_state["GuardGuide"] = {"id": "retired"}
+            historical_state["guardguide.de"] = {"id": "retired-site"}
+            state_path.write_text(json.dumps(historical_state))
+            self.assertEqual(rollout.load_repo_state(state_path), active_state)
+            self.assertEqual(set(rollout.REPO_SETTINGS), active_names)
+            for name in ("GuardGuide", "guardguide.de", "Assure", "Visit", "unknown"):
+                self.assertIsNone(rollout.build_repo_all_checks_command(name))
+
     def test_metadata_sync_preserves_links_outside_automation_authority(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             db_path = Path(temporary_directory) / "polyscope.db"
@@ -1339,9 +1360,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
         repo_state = {
             "api": {"id": "api-id"},
             "frontend": {"id": "frontend-id"},
-            "GuardGuide": {"id": "guardguide-id"},
             "secpal.app": {"id": "secpal-app-id"},
-            "guardguide.de": {"id": "guardguide-de-id"},
         }
 
         rendered = rollout.render_nginx_config(repo_state)
