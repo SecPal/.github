@@ -386,6 +386,66 @@ class ArchitectureTests(unittest.TestCase):
         self.assertFalse(marker.exists())
         self.assertIn("MISSING_RUNTIME_BASELINE_DELEGATION", result.stdout)
 
+    def test_parser_metadata_rejects_symlink_nonregular_and_oversized_files(self):
+        for kind in ("symlink", "fifo", "oversized"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory(dir=ROOT) as directory:
+                bundle = Path(directory)
+                shutil.copytree(ROOT / "scripts/secpal_evidence_architecture", bundle / "scripts/secpal_evidence_architecture")
+                for name in ("markdown-it", "argparse", "entities", "linkify-it", "mdurl", "punycode.js", "uc.micro"):
+                    shutil.copytree(ROOT / "node_modules" / name, bundle / "node_modules" / name)
+                metadata = bundle / "node_modules/linkify-it/package.json"
+                if kind == "symlink":
+                    replacement = bundle / "replacement.json"
+                    metadata.rename(replacement)
+                    metadata.symlink_to(replacement)
+                elif kind == "fifo":
+                    # A nested metadata scope is inspected by our closure
+                    # reader before Node loads the explicit .cjs entry.
+                    metadata = bundle / "node_modules/linkify-it/build/package.json"
+                    metadata.unlink(missing_ok=True)
+                    os.mkfifo(metadata)
+                else:
+                    with metadata.open("a") as stream:
+                        stream.write(" " * 65537)
+                result = subprocess.run(["node", str(bundle / "scripts/secpal_evidence_architecture/markdown_references.mjs")],
+                                        input='{"markdown":"`docs/work-graph-contract.md`"}',
+                                        capture_output=True, text=True, timeout=30)
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_parser_metadata_replacement_cannot_hide_missing_dependency(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            bundle = Path(directory)
+            shutil.copytree(ROOT / "scripts/secpal_evidence_architecture", bundle / "scripts/secpal_evidence_architecture")
+            for name in ("markdown-it", "argparse", "entities", "linkify-it", "mdurl", "punycode.js", "uc.micro"):
+                shutil.copytree(ROOT / "node_modules" / name, bundle / "node_modules" / name)
+            target = bundle / "node_modules/linkify-it/package.json"
+            metadata = json.loads(target.read_text())
+            replacement = bundle / "replacement.json"
+            replacement.write_text(json.dumps(metadata))
+            metadata["dependencies"]["missing-transitive-only-dependency"] = "1.0.0"
+            target.write_text(json.dumps(metadata))
+            marker = bundle / "race-executed"
+            wrapper = bundle / "race.mjs"
+            # Interleave a real rename/symlink attack immediately after the real
+            # inspection. Reads and dependency resolution use the actual FS.
+            wrapper.write_text(
+                "import fs from 'node:fs';\n" +
+                "const target = " + json.dumps(str(target)) + ";\n" +
+                "const replacement = " + json.dumps(str(replacement)) + ";\n" +
+                "const marker = " + json.dumps(str(marker)) + ";\n" +
+                "let attacked = false, descriptor;\n" +
+                "function replace() { if (attacked) return; attacked = true; fs.unlinkSync(target); fs.symlinkSync(replacement, target); fs.writeFileSync(marker, 'replaced'); }\n" +
+                "const lstat = fs.lstatSync, open = fs.openSync, fstat = fs.fstatSync;\n" +
+                "fs.lstatSync = (file, ...args) => { const result = lstat(file, ...args); if (file === target) replace(); return result; };\n" +
+                "fs.openSync = (file, ...args) => { const result = open(file, ...args); if (file === target) descriptor = result; return result; };\n" +
+                "fs.fstatSync = (file, ...args) => { const result = fstat(file, ...args); if (file === descriptor) replace(); return result; };\n" +
+                "await import('./scripts/secpal_evidence_architecture/markdown_references.mjs');\n"
+            )
+            result = subprocess.run(["node", str(wrapper)], input='{"markdown":"`docs/work-graph-contract.md`"}',
+                                    capture_output=True, text=True, timeout=30)
+            self.assertTrue(marker.exists(), "the real metadata replacement must occur")
+            self.assertNotEqual(result.returncode, 0, "replacement must not conceal the original missing dependency")
+
     def test_nested_module_metadata_cannot_hide_declared_dependency_closure(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             bundle = Path(directory)

@@ -12,20 +12,44 @@ const require = createRequire(import.meta.url);
 const packagePath = fileURLToPath(new URL("../../node_modules/markdown-it", import.meta.url));
 const installation = fs.realpathSync(fileURLToPath(new URL("../../node_modules", import.meta.url)));
 const visited = new Set();
+function readPackageMetadata(metadataPath) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(
+      metadataPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
+    );
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    const metadataStat = fs.fstatSync(descriptor);
+    if (!metadataStat.isFile() || metadataStat.size > 65536)
+      throw new Error("parser dependency metadata is unavailable");
+    const buffer = Buffer.alloc(65537);
+    let length = 0;
+    while (length < buffer.length) {
+      const count = fs.readSync(descriptor, buffer, length, buffer.length - length, null);
+      if (count === 0) break;
+      length += count;
+    }
+    if (length > 65536) throw new Error("parser dependency metadata is unbounded");
+    return JSON.parse(buffer.subarray(0, length).toString("utf8"));
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 function verifyDependencyClosure(entry, name) {
   let directory = path.dirname(fs.realpathSync(entry));
   let metadata;
   while (directory.startsWith(installation + path.sep)) {
     const metadataPath = path.join(directory, "package.json");
-    if (fs.existsSync(metadataPath)) {
-      const metadataStat = fs.lstatSync(metadataPath);
-      if (!metadataStat.isFile() || metadataStat.size > 65536)
-        throw new Error("parser dependency metadata is unavailable");
-      const candidate = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
-      if (candidate.name === name) {
-        metadata = candidate;
-        break;
-      }
+    const candidate = readPackageMetadata(metadataPath);
+    if (candidate?.name === name) {
+      metadata = candidate;
+      break;
     }
     directory = path.dirname(directory);
   }
