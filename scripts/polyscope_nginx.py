@@ -23,9 +23,7 @@ EXPECTED_CLONE_ROOT = "/home/secpal/.polyscope/clones"
 EXPECTED_REPOSITORIES = (
     "api",
     "frontend",
-    "GuardGuide",
     "secpal.app",
-    "guardguide.de",
 )
 EXPECTED_UNIX_UPSTREAM = "/run/php/php8.4-fpm-secpal-preview.sock"
 SUPPORTED_MANIFEST_VERSIONS = (1, 2)

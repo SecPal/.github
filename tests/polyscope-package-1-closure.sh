@@ -32,13 +32,11 @@ spec.loader.exec_module(module)
 
 expected_repository_names = {
     ".github",
-    "GuardGuide",
     "android",
     "api",
     "contracts",
     "deployment",
     "frontend",
-    "guardguide.de",
     "operations",
     "secpal.app",
 }
@@ -402,7 +400,7 @@ for repo_name, generated_spec in generated_specs.items():
         )
         + "\n"
     )
-    if repo_name in {"api", "GuardGuide"}:
+    if repo_name == "api":
         valid_root.joinpath("composer.json").write_text(
             json.dumps({"name": f"secpal/{repo_name.lower().replace('.', '-')}", "scripts": {}}) + "\n"
         )
@@ -499,6 +497,12 @@ unregistered_sentinel.write_bytes(b"unchanged")
 
 fake_bin = workspace / "fake bin"
 fake_bin.mkdir()
+# This harness proves registration/provisioning admission, using fake runtime
+# collaborators. ACL command behavior is qualified by the rollout ACL tests;
+# do not require a host www-data account for these temporary repository roots.
+fake_setfacl = fake_bin / "setfacl"
+fake_setfacl.write_text("#!/usr/bin/env bash\nexit 0\n")
+fake_setfacl.chmod(0o755)
 setup_log = workspace / "setup.log"
 fake_npm = fake_bin / "npm"
 fake_npm.write_text(
@@ -510,7 +514,9 @@ fake_npm.chmod(0o755)
 test_env = os.environ.copy()
 test_env["PATH"] = f"{fake_bin}:{test_env['PATH']}"
 test_env["SETUP_LOG"] = str(setup_log)
-os.environ.update({"PATH": test_env["PATH"], "SETUP_LOG": str(setup_log)})
+os.environ.update({"PATH": test_env["PATH"], "SETUP_LOG": str(setup_log),
+                   "POLYSCOPE_TEST_ALLOW_SETFACL_OVERRIDE": "1",
+                   "POLYSCOPE_TEST_SETFACL_BIN": str(fake_setfacl)})
 
 db_path = workspace / "polyscope.db"
 with sqlite3.connect(db_path) as connection:
@@ -749,7 +755,7 @@ chain_target.rmdir()
 
 # Registry records cannot escape the repository clone root or turn another
 # user-owned path into an alias-cleanup target.
-unsafe_registry_root = clone_root / repo_state["GuardGuide"]["id"]
+unsafe_registry_root = clone_root / repo_state["contracts"]["id"]
 unsafe_registry_root.mkdir(parents=True)
 outside_sentinel = workspace / "outside-alias-sentinel"
 outside_sentinel.write_text("unchanged")

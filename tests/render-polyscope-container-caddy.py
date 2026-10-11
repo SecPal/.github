@@ -38,10 +38,12 @@ def main() -> None:
         root = pathlib.Path(temporary)
         repository_root = root / "repos/SecPal"
         clone_root = root / "clones"
-        for repository_name in ("api", "frontend", "GuardGuide", "guardguide.de"):
+        for repository_name in ("api", "frontend", "secpal.app", "GuardGuide", "guardguide.de"):
             (repository_root / repository_name).mkdir(parents=True)
 
+        # Retained retired registrations prove historical worktrees cannot create routes.
         worktrees = {
+            "secpal.app": ("website-5", "calm-otter", "calm-otter-12345678", "dist"),
             "api": ("api-repo_1", "calm-otter", "calm-otter-a1b2c3d4", "public"),
             "frontend": ("Frontend_2", "calm-otter", "calm-otter-e5f6a7b8", "dist"),
             "GuardGuide": ("guardguide-3", "patient-fox", "patient-fox-11223344", "public"),
@@ -109,8 +111,9 @@ def main() -> None:
         )
         assert "api-calm-otter.preview.secpal.dev" in rendered
         assert "frontend-calm-otter.preview.secpal.dev" in rendered
-        assert "guardguide-patient-fox.preview.secpal.dev" in rendered
-        assert "guardguide-de-patient-fox.preview.secpal.dev" in rendered
+        assert "guardguide-patient-fox.preview.secpal.dev" not in rendered
+        assert "guardguide-de-patient-fox.preview.secpal.dev" not in rendered
+        assert "secpal-app-calm-otter.preview.secpal.dev" in rendered
         assert "inactive-wolf" not in rendered
         assert "{re." not in rendered
         assert "api-calm-otter-a1b2c3d4.preview.secpal.dev" not in rendered

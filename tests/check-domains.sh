@@ -6,8 +6,8 @@
 # plus the PR #488 Copilot review findings.
 #
 # The script is intentionally scoped to enforcing the secpal.* namespace
-# split. SecPal-external hosts (e.g. guardguide.de) are governed by their
-# own repository policy guards and must NOT be flagged here. This test
+# split. Historical non-secpal fixtures (e.g. guardguide.de) must NOT be
+# flagged here and supply no live repository membership. This test
 # locks in the following guarantees so neither the banner nor any of the
 # surrounding documentation can drift back to claiming the gate covers
 # "any other" domain:
@@ -96,7 +96,7 @@ if ! grep -Fq 'scope: secpal.* namespace split only' "$SCRIPT"; then
   exit 1
 fi
 
-if ! grep -Fq 'Non-secpal SecPal hosts' "$SCRIPT"; then
+if ! grep -Fq 'Non-secpal domains' "$SCRIPT"; then
   echo "scripts/check-domains.sh Policy block must point readers at owning-repo guards" >&2
   exit 1
 fi
@@ -120,7 +120,7 @@ if ! grep -Fq 'Scope (intentional limit)' "$README"; then
 fi
 
 if ! grep -Fq 'guardguide.de' "$README"; then
-  echo "scripts/README.md must mention guardguide.de as the canonical out-of-scope example" >&2
+  echo "scripts/README.md must mention guardguide.de as the historical out-of-scope example" >&2
   exit 1
 fi
 

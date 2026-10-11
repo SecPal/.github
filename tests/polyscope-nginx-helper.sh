@@ -91,18 +91,14 @@ manifest = {
     "repositories": {
         "api": "d35c0cdc",
         "frontend": "b6624c93",
-        "GuardGuide": "8fadd2fb",
         "secpal.app": "c46a8454",
-        "guardguide.de": "3d0fcf01",
     },
     "workspace_redirects": {
         "api": {},
         "frontend": {
             "gilded-dingo-ebf3bca4": "gilded-dingo",
         },
-        "GuardGuide": {},
         "secpal.app": {},
-        "guardguide.de": {},
     },
     "php_upstream": {
         "kind": "unix",
@@ -163,9 +159,7 @@ assert "set $preview_entrypoint /home/secpal/.polyscope/__missing_preview_entryp
 assert "if (-f $preview_entrypoint) {" in rendered
 for repository, entrypoint in {
     "secpal-app": "$secpal_app_dist/index.html",
-    "guardguide-de": "$guardguide_de_dist/index.html",
     "frontend": "$frontend_dist/index.html",
-    "guardguide": "$guardguide_public/index.php",
     "api": "$api_public/index.php",
 }.items():
     route_start = rendered.index(f"if ($repo = {repository}) {{")
@@ -178,6 +172,12 @@ assert (
 assert "return 308 https://$preview_canonical_host$request_uri;" in rendered
 
 invalid_payloads = []
+# Retired and substituted identities cannot enter the privileged live manifest.
+for repository in ("GuardGuide", "guardguide.de", "Assure", "Visit", "unknown"):
+    payload = copy.deepcopy(manifest)
+    payload["repositories"][repository] = "unexpected-id"
+    payload["workspace_redirects"][repository] = {}
+    invalid_payloads.append(payload)
 for key, value in (
     ("unexpected", True),
     ("raw_nginx", "load_module /tmp/evil.so;"),

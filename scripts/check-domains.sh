@@ -1,12 +1,11 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: 2025-2026 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
 # Domain Policy Enforcement Script
 # Scope: enforces the secpal.* namespace split only (match regex:
-#   secpal\.[A-Za-z0-9.-]+). Non-secpal SecPal-owned hosts (e.g.
-#   guardguide.de) are intentionally out of scope here and are governed by
-#   their owning repository's policy guard.
+#   secpal\.[A-Za-z0-9.-]+). Non-secpal domains (e.g. the historical
+#   guardguide.de fixture) are intentionally out of scope here.
 # ZERO TOLERANCE for unapproved secpal.* values or deprecated .app web hosts.
 
 set -euo pipefail
@@ -20,8 +19,8 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}=== Domain Policy Check ===${NC}"
 echo "Scope: enforces the secpal.* namespace split only (match regex: secpal\\.[A-Za-z0-9.-]+)."
-echo "Out of scope: non-secpal SecPal-owned hosts such as guardguide.de are governed by"
-echo "their own repository policy guards and are intentionally not inspected here."
+echo "Out of scope: non-secpal domains, including the historical guardguide.de fixture,"
+echo "are intentionally not inspected here; current hosts need their own policy guards."
 echo "Public hosts: secpal.app, apk.secpal.app, secpal.io"
 echo "Development/preview hosts: secpal.dev, api.secpal.dev, app.secpal.dev, preview.secpal.dev, and approved *.preview.secpal.dev identities"
 echo "Private internal service identities: db.secpal.internal (exact only)"
@@ -248,7 +247,7 @@ else
     echo "  - Exact inline-code identifiers: app.secpal.libre, io.secpal.dpc, secpal.lifecycleSigningCredential, and secpal.pre-enrollment-current-safety"
     echo "  - Deprecated web host: api.secpal.app"
     echo "  - FORBIDDEN secpal.* variants include every other secpal.internal name and unknown values"
-    echo "  - Non-secpal SecPal hosts (e.g. guardguide.de) are out of scope; enforce them in the owning repository."
+    echo "  - Non-secpal domains (e.g. the historical guardguide.de fixture) are out of scope; current hosts need their own policy guards."
     echo ""
     echo "Fix these violations before committing."
     exit 1

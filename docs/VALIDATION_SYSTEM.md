@@ -121,7 +121,7 @@ Copilot review profile fails through the same canonical contract.
 - the migrated `SecPal/deployment` identity accepts plain-AGPL runtime and
   review instructions, is reported explicitly, and rejects the obsolete
   attribution expression;
-- API, frontend-with-Composer, GuardGuide, and `guardguide.de` fixtures exercise
+- API, frontend-with-Composer, historical GuardGuide, and `guardguide.de` fixtures exercise
   trusted repository identity, path-local fallback detection, and legacy type
   hints so ambient identity and misleading manifest values cannot select
   another repository's licensing policy;

@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-11 - Retire GuardGuide Operational Registries
+
+**Removed:**
+
+- Retired GuardGuide repository membership from Polyscope provisioning,
+  generated preview routes, installer watches, required-check synchronization,
+  setup hooks, and repository/work-graph inventories.
+- Obsolete positive configuration tests, preserving shared behavior coverage
+  for supported repositories, historical evidence, and generic classifier
+  fixtures. See [the reference audit](docs/retired-guardguide-references.md).
+
 ## 2026-10-11 - Enforce Declared Evidence Architecture
 
 **Added:**

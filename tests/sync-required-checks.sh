@@ -117,26 +117,6 @@ EXPECTED_CONTEXTS_JSON='{
     "Work-Graph PR Advisory",
     "Work-Graph PR Gate"
   ],
-  "GuardGuide": [
-    "check-conflicts / Detect Git Conflict Markers",
-    "Check PR Size / Check PR Size",
-    "Detect repository manifests",
-    "AI Instructions / Validate AI Instructions",
-    "Check REUSE Compliance / Check REUSE Compliance",
-    "Detect JavaScript manifest",
-    "Detect PHP manifest",
-    "Check License Compatibility / Check License Compatibility",
-    "Formatting Check / Check Code Formatting",
-    "Markdown Lint / Lint Markdown Files",
-    "ESLint / Run Linter",
-    "TypeScript Check / Build Project",
-    "Vitest Tests / Build Project",
-    "Laravel Pint / Check Code Style",
-    "PHPStan / Static Analysis",
-    "Pest Tests (PostgreSQL)",
-    "Pest Tests (MariaDB)",
-    "Analyze with CodeQL (javascript-typescript)"
-  ],
   "android": [
     "Check REUSE Compliance / Check REUSE Compliance",
     "Check License Compatibility / Check License Compatibility",
@@ -162,20 +142,6 @@ EXPECTED_CONTEXTS_JSON='{
     "PEST Tests",
     "check-conflicts / Detect Git Conflict Markers",
     "AI Instructions / Validate AI Instructions"
-  ],
-  "guardguide.de": [
-    "Check REUSE Compliance / Check REUSE Compliance",
-    "Check License Compatibility / Check License Compatibility",
-    "Formatting Check / Check Code Formatting",
-    "Markdown Lint / Lint Markdown Files",
-    "ESLint / Run Linter",
-    "Astro TypeScript Check / Build Project",
-    "Astro Build / Build Project",
-    "Check PR Size / Check PR Size",
-    "check-conflicts / Detect Git Conflict Markers",
-    "Analyze Code (javascript-typescript)",
-    "AI Instructions / Validate AI Instructions",
-    "Node Tests / Run Tests"
   ],
   "contracts": [
     "REUSE Compliance / Check REUSE Compliance",
@@ -220,7 +186,7 @@ EXPECTED_CONTEXTS_JSON='{
 }'
 
 mapfile -t expected_repositories < <(jq -r 'keys[]' <<<"$EXPECTED_CONTEXTS_JSON")
-if [[ "${expected_repositories[*]}" != ".github GuardGuide android api contracts frontend guardguide.de secpal.app" ]]; then
+if [[ "${expected_repositories[*]}" != ".github android api contracts frontend secpal.app" ]]; then
   echo "Expected exact canonical required-check repository inventory" >&2
   exit 1
 fi
@@ -238,7 +204,7 @@ done
 # Guardrail workflow names its job exactly 'CodeQL'). For every other repo the
 # CodeQL workflow names a different job (e.g. 'Analyze with CodeQL' / 'Analyze
 # Code'), so requiring bare 'CodeQL' there would block PRs forever.
-for non_github_repo in GuardGuide android api contracts frontend guardguide.de secpal.app; do
+for non_github_repo in android api contracts frontend secpal.app; do
   non_github_payload="${payloads[$non_github_repo]}"
   if jq -e '.checks | any(.context == "CodeQL")' >/dev/null <<<"$non_github_payload"; then
     echo "Only the '.github' manifest entry may require the bare 'CodeQL' context; other repos must require their actual CodeQL job context (e.g. 'Analyze with CodeQL (<language>)' or 'Analyze Code (<language>)')." >&2
@@ -254,7 +220,7 @@ assert_payload_has_context "$github_payload" "Validate Signed PR Commits"
 assert_payload_has_context "$github_payload" "Work-Graph PR Advisory"
 assert_payload_has_context "$github_payload" "Work-Graph PR Gate"
 
-for non_github_repo in GuardGuide android api contracts frontend guardguide.de secpal.app; do
+for non_github_repo in android api contracts frontend secpal.app; do
   if jq -e '.checks | any(.context == "Work-Graph PR Advisory")' >/dev/null \
     <<<"${payloads[$non_github_repo]}"; then
     echo "The repository-local work-graph gate context must not be invented for unmanaged caller workflows" >&2
@@ -267,7 +233,7 @@ for non_github_repo in GuardGuide android api contracts frontend guardguide.de s
   fi
 done
 
-for review_repo in .github GuardGuide android; do
+for review_repo in .github android; do
   review_payload="$(bash "$SYNC_SCRIPT" --repo "$review_repo" --print-review-payload)"
   assert_review_payload_exact "$review_payload"
 done
@@ -457,30 +423,31 @@ assert_mode_conflict conflicting-live --apply --apply-review-baseline
 assert_mode_conflict conflicting-print --repo api --print-payload --print-review-payload
 assert_mode_conflict repeated-mode --apply --apply
 
-unknown_review_apply_log="$TMP_DIR/unknown-review-apply.log"
-set +e
-unknown_review_apply_output="$(GH_CALL_LOG="$unknown_review_apply_log" PATH="$fake_bin" \
-  "$SHELL_BIN" "$SYNC_SCRIPT" --repo does-not-exist --apply-review-baseline 2>&1)"
-unknown_review_apply_status=$?
-set -e
-
-if [[ $unknown_review_apply_status -eq 0 || "$unknown_review_apply_output" != *"Unknown repository"* ]]; then
-  echo "Expected unknown review apply repository to fail clearly" >&2
-  echo "$unknown_review_apply_output" >&2
-  exit 1
-fi
-
-if [[ -e "$unknown_review_apply_log" ]]; then
-  echo "Unknown review repository must fail before invoking gh" >&2
-  cat "$unknown_review_apply_log" >&2
-  exit 1
-fi
+# Retired and substituted repositories must fail before any provider call.
+for unsupported_repository in GuardGuide guardguide.de Assure Visit does-not-exist; do
+  for operation in --print-payload --print-review-payload --apply --apply-review-baseline; do
+    unsupported_log="$TMP_DIR/$unsupported_repository-${operation#--}.log"
+    set +e
+    unsupported_output="$(GH_CALL_LOG="$unsupported_log" PATH="$fake_bin" \
+      "$SHELL_BIN" "$SYNC_SCRIPT" --repo "$unsupported_repository" "$operation" 2>&1)"
+    unsupported_status=$?
+    set -e
+    if [[ $unsupported_status -eq 0 || "$unsupported_output" != *"Unknown repository"* ]]; then
+      echo "Unsupported repository $unsupported_repository must fail clearly for $operation" >&2
+      exit 1
+    fi
+    if [[ -e "$unsupported_log" ]]; then
+      echo "Unsupported repository must fail before invoking gh" >&2
+      exit 1
+    fi
+  done
+done
 
 review_log="$TMP_DIR/review.log"
 GH_CALL_LOG="$review_log" PATH="$fake_bin" "$SHELL_BIN" "$SYNC_SCRIPT" \
-  --repo GuardGuide --apply-review-baseline >/dev/null
+  --repo android --apply-review-baseline >/dev/null
 
-expected_review_call=$'PATCH\trepos/SecPal/GuardGuide/branches/main/protection/required_pull_request_reviews\t{"required_approving_review_count":0}'
+expected_review_call=$'PATCH\trepos/SecPal/android/branches/main/protection/required_pull_request_reviews\t{"required_approving_review_count":0}'
 if [[ "$(<"$review_log")" != "$expected_review_call" ]]; then
   echo "Review apply did not use the dedicated PATCH endpoint and exact payload" >&2
   cat "$review_log" >&2

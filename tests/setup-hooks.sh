@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-ALL_REPOS=(api frontend contracts android secpal.app guardguide.de .github)
+ALL_REPOS=(api frontend contracts android secpal.app .github)
 
 # Single portable mktemp invocation (matches the regression guard in
 # tests/mktemp-portability.sh); each scenario gets its own subdirectory below.
@@ -122,7 +122,7 @@ fi
 # must surface as a warning so workspaces that have not synced the latest REPOS
 # list (for example after a fresh repo is added) still install hooks for the
 # repos they do have, instead of failing the whole script.
-warning_present_repos=(api frontend contracts android secpal.app .github)
+warning_present_repos=(api frontend contracts secpal.app .github)
 setup_workspace "$warning_workspace" "${warning_present_repos[@]}"
 
 warning_output="$warning_workspace/output.txt"
@@ -132,7 +132,7 @@ if ! run_setup_hooks "$warning_workspace" "$warning_output"; then
   exit 1
 fi
 
-grep -Fq 'Directory not found: guardguide.de' "$warning_output"
+grep -Fq 'Directory not found: android' "$warning_output"
 grep -Fq 'Skipped (missing directory): 1 repositories' "$warning_output"
 grep -Fq '.github/scripts/install-polyscope-rollout.sh' "$warning_output"
 grep -Fq 'All Git hooks have been successfully installed' "$warning_output"
@@ -149,9 +149,9 @@ fi
 # ─── Corrupt path: managed repo path exists but is not a directory ───────────
 # Only a truly missing repo should soft-warn. If the path exists as a regular
 # file, the workspace is corrupted and setup-hooks.sh must fail loudly.
-corrupt_present_repos=(api frontend contracts android secpal.app .github)
+corrupt_present_repos=(api frontend contracts secpal.app .github)
 setup_workspace "$corrupt_workspace" "${corrupt_present_repos[@]}"
-printf 'not a directory\n' >"$corrupt_workspace/guardguide.de"
+printf 'not a directory\n' >"$corrupt_workspace/android"
 
 corrupt_output="$corrupt_workspace/output.txt"
 if run_setup_hooks "$corrupt_workspace" "$corrupt_output"; then
@@ -161,7 +161,7 @@ if run_setup_hooks "$corrupt_workspace" "$corrupt_output"; then
 fi
 
 grep -q '^Failed: 1 repositories' "$corrupt_output"
-grep -Fq 'guardguide.de (path is not a directory)' "$corrupt_output"
+grep -Fq 'android (path is not a directory)' "$corrupt_output"
 if grep -q '^Skipped (missing directory): ' "$corrupt_output"; then
   cat "$corrupt_output"
   echo "corrupt-path output must not treat a regular file as a missing directory" >&2

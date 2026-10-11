@@ -84,13 +84,11 @@ However, this requires manual configuration for each new repository.
 The organization-wide link is expected to cover every active SecPal repository:
 
 - `SecPal/.github` - Organization-wide governance and configuration
-- `SecPal/GuardGuide` - GuardGuide operations platform
 - `SecPal/android` - SecPal Android application
 - `SecPal/api` - SecPal API
 - `SecPal/contracts` - OpenAPI contracts repository
 - `SecPal/deployment` - Deployment and public governance
 - `SecPal/frontend` - SecPal frontend application
-- `SecPal/guardguide.de` - GuardGuide public website
 - `SecPal/secpal.app` - SecPal public website
 - All future SecPal repositories
 

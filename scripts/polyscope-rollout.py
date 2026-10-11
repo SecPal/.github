@@ -2358,49 +2358,6 @@ def build_preview_full_rebuild_watch_command(
     return f"python3 -c {shlex.quote(script)}"
 
 
-def build_guardguide_preview_build_watch_command() -> str:
-    return build_preview_full_rebuild_watch_command(
-        label="Watching GuardGuide preview sources for changes...",
-        watch_directories=["app", "config", "public", "resources", "routes"],
-        ignored_directories=["public/build"],
-        watch_files=[
-            "components.json",
-            "lingui.config.cjs",
-            "package.json",
-            "package-lock.json",
-            "postcss.config.mjs",
-            "tailwind.config.js",
-            "tailwind.config.cjs",
-            "tailwind.config.mjs",
-            "tailwind.config.ts",
-            "tsconfig.json",
-            "vite.config.ts",
-        ],
-        watch_suffixes=[
-            ".avif",
-            ".css",
-            ".gif",
-            ".html",
-            ".jpeg",
-            ".jpg",
-            ".js",
-            ".json",
-            ".mjs",
-            ".otf",
-            ".php",
-            ".po",
-            ".png",
-            ".svg",
-            ".ts",
-            ".tsx",
-            ".vue",
-            ".webp",
-            ".woff",
-            ".woff2",
-        ],
-    )
-
-
 def build_static_preview_build_watch_command(
     site_name: str,
     watch_directories: list[str],
@@ -2451,33 +2408,6 @@ def build_static_preview_build_watch_command(
     )
 
 
-def build_guardguide_preview_env_setup_command() -> str:
-    script = "\n".join(
-        [
-            "from pathlib import Path",
-            "import re",
-            "",
-            build_linked_workspace_resolver_source(),
-            'workspace = resolve_current_workspace(Path.cwd())',
-            'env_path = Path(".env")',
-            'text = env_path.read_text() if env_path.exists() else ""',
-            'pattern = re.compile(r"^APP_URL=.*$", re.MULTILINE)',
-            'replacement = f"APP_URL=https://guardguide-{workspace}.preview.secpal.dev"',
-            "",
-            "if pattern.search(text):",
-            "    text = pattern.sub(replacement, text)",
-            "else:",
-            '    if text and not text.endswith("\\n"):',
-            '        text += "\\n"',
-            '    text += replacement + "\\n"',
-            "",
-            "env_path.write_text(text)",
-        ]
-    )
-
-    return f"python3 -c {shlex.quote(script)}"
-
-
 def build_api_preview_bootstrap_command(source_repo_path: pathlib.Path) -> str:
     rollout_script = shlex.quote(str(ROLLOUT_SCRIPT_PATH))
     source_repo = shlex.quote(str(source_repo_path))
@@ -2496,44 +2426,13 @@ def build_api_preview_refresh_command(source_repo_path: pathlib.Path) -> str:
     )
 
 
-def build_guardguide_preview_seed_command() -> str:
-    tinker_script = textwrap.dedent(
-        r"""
-        $role = \Spatie\Permission\Models\Role::findByName(
-            \App\Auth\GuardGuideAccessCatalog::ROLE_PLATFORM_ADMINISTRATOR,
-            \App\Auth\GuardGuideAccessCatalog::GUARD,
-        );
-
-        $user = \App\Models\User::firstOrNew([
-            'email' => 'test@example.com',
-        ]);
-
-        $user->forceFill([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
-            'password' => bcrypt('password'),
-            'email_verified_at' => now(),
-        ])->save();
-
-        $user->assignRole($role);
-        """
-    ).strip()
-
-    return (
-        "php artisan db:seed --class=Database\\\\Seeders\\\\GuardGuideAccessSeeder --force && "
-        f"php artisan tinker --execute={shlex.quote(tinker_script)}"
-    )
-
-
 def build_repo_all_checks_command(repo_name: str) -> str | None:
     commands = {
         "api": "php artisan test && vendor/bin/pint --dirty && vendor/bin/phpstan analyse --no-progress",
         "frontend": "npm run lint && npm run typecheck && npm run test:run:all && npm run build",
-        "GuardGuide": "npm run format:check && npm run lint:check && npm run typecheck && npm run test && composer run lint:check && composer run analyse && composer run test",
         "contracts": "npm run validate",
         "android": "npm run lint && npm run typecheck && npm run test:run && npm run native:verify",
         "secpal.app": "npm run check && npm run lint && npm run test && npm run build",
-        "guardguide.de": "npm run check && npm run lint && npm run test && npm run build",
         ".github": "./scripts/preflight.sh",
     }
     return commands.get(repo_name)
@@ -2704,58 +2603,6 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             ],
         },
     },
-    "GuardGuide": {
-        "display_name": "SecPal/GuardGuide",
-        "base_branch": "main",
-        "copilot_instructions": ".github/copilot-instructions.md",
-        "focus_instruction_paths": [
-            ".github/instructions/org-shared.instructions.md",
-            ".github/instructions/php-laravel.instructions.md",
-            ".github/instructions/react-shadcn.instructions.md",
-        ],
-        "preview_prefix": "guardguide",
-        "review_focus": "Laravel 13 monolith boundaries, Pest coverage plus frontend build and typecheck validation, shadcn/ui-aligned UI patterns, Lingui localization, application-layer encryption for person-related data, and standalone-first acknowledgement flows.",
-        "link_names": ["api", "frontend", "contracts", "android"],
-        "local_config": {
-            "copyGitignored": True,
-            "runMode": "replace",
-            "preview": {"url": build_preview_url_template("guardguide")},
-            "scripts": {
-                "setup": [
-                    "composer install",
-                    "npm ci",
-                    "test -f .env || cp .env.example .env",
-                    build_guardguide_preview_env_setup_command(),
-                    "test -f database/database.sqlite || touch database/database.sqlite",
-                    "grep -Eq '^APP_KEY=.+$' .env || php artisan key:generate --force",
-                    "php artisan migrate --force",
-                    build_guardguide_preview_seed_command(),
-                    "npm run build",
-                ],
-                "run": [
-                    {"label": "Pest", "command": "php artisan test", "runMode": "preserve"},
-                    {"label": "Typecheck", "command": "npm run typecheck", "runMode": "preserve"},
-                    {"label": "Build", "command": "npm run build", "runMode": "preserve"},
-                    {
-                        "label": "Build Watch",
-                        "command": build_guardguide_preview_build_watch_command(),
-                        "autostart": True,
-                        "runMode": "replace",
-                    },
-                ],
-            },
-            "tasks": [
-                {
-                    "label": "Review monolith boundary",
-                    "prompt": "Review the changed GuardGuide flow for Laravel monolith boundary drift, shadcn/ui regressions, localization gaps, encryption-at-rest constraints, and missing Pest coverage or frontend validation. Keep the change scoped to one GuardGuide issue.",
-                },
-                {
-                    "label": "Triage GuardGuide validation",
-                    "prompt": "Reproduce the failing GuardGuide behavior, add or update the smallest relevant Pest coverage first when possible, then implement the minimal fix and rerun the touched validation. Use typecheck or build validation when the touched slice is frontend-only. Keep the change scoped to one issue.",
-                },
-            ],
-        },
-    },
     "contracts": {
         "display_name": "SecPal/contracts",
         "base_branch": "main",
@@ -2848,56 +2695,6 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                         "command": build_static_preview_build_watch_command(
                             "secpal.app",
                             ["public", "scripts", "secpal.app", "src"],
-                            ignored_paths=[
-                                "public/og-default.svg",
-                                "public/og-default.png",
-                                "public/og-de.svg",
-                                "public/og-de.png",
-                            ],
-                        ),
-                        "autostart": True,
-                        "runMode": "replace",
-                    },
-                    {"label": "Astro Check", "command": "npm run check", "runMode": "preserve"},
-                    {"label": "Lint", "command": "npm run lint", "runMode": "preserve"},
-                    {"label": "Tests", "command": "npm run test", "runMode": "preserve"},
-                ],
-            },
-            "tasks": [
-                {
-                    "label": "Review site semantics",
-                    "prompt": "Review the marketing-site change for static-build regressions, accessibility drift, semantic HTML changes, and missing test or Astro-check coverage. Keep the work scoped to the touched page or component.",
-                },
-                {
-                    "label": "Triage failing Astro",
-                    "prompt": "Reproduce the failing static-site behavior or Astro check, add or update the smallest relevant validation first, then implement the minimal fix and rerun the touched commands. Keep the change scoped to one issue.",
-                },
-            ],
-        },
-    },
-    "guardguide.de": {
-        "display_name": "SecPal/guardguide.de",
-        "base_branch": "main",
-        "copilot_instructions": ".github/copilot-instructions.md",
-        "focus_instruction_paths": [
-            ".github/instructions/org-shared.instructions.md",
-            ".github/instructions/astro-static.instructions.md",
-        ],
-        "preview_prefix": "guardguide-de",
-        "review_focus": "Astro static rendering, minimal client-side JavaScript, semantic HTML, accessible landmarks, and strict TypeScript on the public site.",
-        "link_names": [],
-        "local_config": {
-            "copyGitignored": True,
-            "runMode": "replace",
-            "preview": {"url": build_preview_url_template("guardguide-de")},
-            "scripts": {
-                "setup": [build_verified_npm_ci_command(), "npm run build"],
-                "run": [
-                    {
-                        "label": "Build Watch",
-                        "command": build_static_preview_build_watch_command(
-                            "guardguide.de",
-                            ["public", "scripts", "src"],
                             ignored_paths=[
                                 "public/og-default.svg",
                                 "public/og-default.png",
@@ -5771,17 +5568,13 @@ def render_nginx_config(
         raise ValueError(f"unsupported nginx HTTP/2 syntax: {nginx_http2_syntax}")
     api_id = repo_state["api"]["id"]
     frontend_id = repo_state["frontend"]["id"]
-    guardguide_id = repo_state["GuardGuide"]["id"]
     secpal_app_id = repo_state["secpal.app"]["id"]
-    guardguide_de_id = repo_state["guardguide.de"]["id"]
     http2_listen_suffix = "" if nginx_http2_syntax == "modern" else " http2"
     http2_directive = "\n            http2 on;" if nginx_http2_syntax == "modern" else ""
     preview_prefixes = {
         "api": "api",
         "frontend": "frontend",
-        "GuardGuide": "guardguide",
         "secpal.app": "secpal-app",
-        "guardguide.de": "guardguide-de",
     }
     redirect_lines = ["    default \"\";"]
     for repo_name, prefix in preview_prefixes.items():
@@ -5796,7 +5589,7 @@ def render_nginx_config(
                 f"    {prefix}-{physical_workspace}.preview.secpal.dev {prefix}-{canonical_workspace}.preview.secpal.dev;"
             )
     preview_redirect_map = "\n".join(redirect_lines)
-    # NOTE: workspace names starting with api-, frontend-, guardguide-, guardguide-de-,
+    # NOTE: workspace names starting with api-, frontend-,
     # or secpal-app- are reserved for per-repository routing (for example,
     # api-WORKSPACE.preview.secpal.dev). Generic workspaces must not use these prefixes
     # because the regex routes them to a repository-specific backend.
@@ -5812,7 +5605,7 @@ def render_nginx_config(
         server {{
             listen 80;
             listen [::]:80;
-            server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
+            server_name ~^(?:(?<repo>api|frontend|secpal-app)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;
 
             if ($preview_canonical_host) {{
                 return 308 https://$preview_canonical_host$request_uri;
@@ -5828,7 +5621,7 @@ def render_nginx_config(
         server {{
             listen 443 ssl{http2_listen_suffix};
             listen [::]:443 ssl{http2_listen_suffix};{http2_directive}
-            server_name ~^(?:(?<repo>api|frontend|guardguide-de|guardguide|secpal-app)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
+            server_name ~^(?:(?<repo>api|frontend|secpal-app)-)?(?<workspace>[a-z0-9][a-z0-9-]*)\\.preview\\.secpal\\.dev$;  # same reserved-prefix rule
 
             if ($preview_canonical_host) {{
                 return 308 https://$preview_canonical_host$request_uri;
@@ -5854,12 +5647,8 @@ def render_nginx_config(
             set $api_public $api_root/public;
             set $frontend_root /home/secpal/.polyscope/clones/{frontend_id}/$workspace;
             set $frontend_dist $frontend_root/dist;
-            set $guardguide_root /home/secpal/.polyscope/clones/{guardguide_id}/$workspace;
-            set $guardguide_public $guardguide_root/public;
             set $secpal_app_root /home/secpal/.polyscope/clones/{secpal_app_id}/$workspace;
             set $secpal_app_dist $secpal_app_root/dist;
-            set $guardguide_de_root /home/secpal/.polyscope/clones/{guardguide_de_id}/$workspace;
-            set $guardguide_de_dist $guardguide_de_root/dist;
             set $preview_worktree /home/secpal/.polyscope/__missing_preview_worktree__;
             set $preview_docroot /home/secpal/.polyscope/__missing_preview_docroot__;
             set $preview_entrypoint /home/secpal/.polyscope/__missing_preview_entrypoint__;
@@ -5894,26 +5683,10 @@ def render_nginx_config(
                 set $secpal_csp $preview_relaxed_csp;
             }}
 
-            if (-f $guardguide_de_dist/index.html) {{
-                set $preview_worktree $guardguide_de_root;
-                set $preview_docroot $guardguide_de_dist;
-                set $preview_entrypoint $guardguide_de_dist/index.html;
-                set $route_mode static;
-                set $secpal_csp $preview_relaxed_csp;
-            }}
-
             if ($repo = secpal-app) {{
                 set $preview_worktree $secpal_app_root;
                 set $preview_docroot $secpal_app_dist;
                 set $preview_entrypoint $secpal_app_dist/index.html;
-                set $route_mode static;
-                set $secpal_csp $preview_relaxed_csp;
-            }}
-
-            if ($repo = guardguide-de) {{
-                set $preview_worktree $guardguide_de_root;
-                set $preview_docroot $guardguide_de_dist;
-                set $preview_entrypoint $guardguide_de_dist/index.html;
                 set $route_mode static;
                 set $secpal_csp $preview_relaxed_csp;
             }}
@@ -5924,15 +5697,6 @@ def render_nginx_config(
                 set $preview_entrypoint $frontend_dist/index.html;
                 set $route_mode static;
                 set $secpal_csp $preview_frontend_csp;
-            }}
-
-            if ($repo = guardguide) {{
-                set $preview_worktree $guardguide_root;
-                set $preview_docroot $guardguide_public;
-                set $preview_entrypoint $guardguide_public/index.php;
-                set $php_root $guardguide_public;
-                set $route_mode api;
-                set $secpal_csp $preview_relaxed_csp;
             }}
 
             if ($repo = api) {{
