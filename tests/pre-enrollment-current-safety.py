@@ -22,8 +22,13 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(ROOT / "scripts"))
-from secpal_pr_review import fast_path, lifecycle_authority as authority, lifecycle_publication
+spec = importlib.util.spec_from_file_location("secpal_pr_review_actions", ROOT / "scripts/secpal-pr-review-actions.py")
+actions = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = actions
+spec.loader.exec_module(actions)
+fast_path = actions._load_fast_path_helper()
+authority, lifecycle_publication = actions._load_lifecycle_publication_helpers()
+
 
 REPOSITORY = "example/project"
 SIGNER = "fixture@example.invalid"
@@ -136,7 +141,8 @@ class CurrentSafety(unittest.TestCase):
         fields.update(changes)
         return fast_path.derive_ready_source_recovery_safety_facts(**fields)
 
-    def authorization(self):
+    def authorization(self, historical_receipt="5" * 64,
+                      historical_attestation="6" * 64, **root_scope):
         return authority._sign_ready_source_recovery_authorization(
             current_lifecycle=self.current, current_publication_oid="3" * 40,
             current_publication_digest="4" * 64, recovery_safety_facts=self.safety(),
@@ -145,12 +151,12 @@ class CurrentSafety(unittest.TestCase):
                 "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
                 "github_verification": {"verified": True, "reason": "valid"},
             },
-            historical_validation_receipt_digest="5" * 64,
-            historical_final_attestation_digest="6" * 64,
+            historical_validation_receipt_digest=historical_receipt,
+            historical_final_attestation_digest=historical_attestation,
             historical_evidence_loss_proof_digest="7" * 64,
             authorization_id="fixture-recovery", bounded_uses=1,
             expected_commit_signer={"kind": "SSH_PRINCIPAL", "identity": SIGNER},
-            signer_identity=SIGNER, signer=sign,
+            signer_identity=SIGNER, signer=sign, **root_scope,
         )
 
     def verify(self, document, **changes):
@@ -181,6 +187,30 @@ class CurrentSafety(unittest.TestCase):
         document["historical_bytes_reconstructed"] = True
         with self.assertRaises(authority.LifecycleAuthorityError):
             self.verify(self.resign(document))
+
+    def test_null_historical_receipt_requires_exact_recovered_root(self):
+        root_scope = dict(current_lifecycle_evidence={"root": True},
+                          predecessor_publication_oid=None)
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            self.authorization(None, None, **root_scope)
+        with patch.object(
+            authority, "recovered_adoption_root_historical_evidence",
+            return_value={"state": "ABSENT_NEVER_ISSUED"},
+        ) as authenticated_root:
+            document = self.authorization(None, None, **root_scope)
+            self.verify(document, **root_scope)
+            self.assertIsNone(document["historical_validation_receipt_digest"])
+            self.assertIsNone(document["historical_final_attestation_digest"])
+            self.assertEqual(authenticated_root.call_count, 2)
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            self.verify(document, **root_scope)
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            self.authorization(None, "6" * 64, **root_scope)
+        root_scope = {"current_lifecycle_evidence": {"exact_state_adoption_proof": {
+            "validation_evidence_loss_admission": {"schema_version": "1.2"}}},
+            "predecessor_publication_oid": None}
+        with self.assertRaisesRegex(authority.LifecycleAuthorityError, "zero-receipt recovery cannot claim historical"):
+            self.authorization("5" * 64, "6" * 64, **root_scope)
 
     def test_signed_authority_required(self):
         with self.assertRaises(authority.LifecycleAuthorityError):
@@ -266,11 +296,6 @@ class CurrentSafety(unittest.TestCase):
                 self.verify(self.resign(document))
 
     def test_candidate_local_issuer_rejected(self):
-        spec = importlib.util.spec_from_file_location(
-            "current_safety_actions", ROOT / "scripts/secpal-pr-review-actions.py")
-        actions = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = actions
-        spec.loader.exec_module(actions)
         parameters = inspect.signature(actions.issue_ready_source_recovery_authorization).parameters
         for forbidden in ("registry", "command_set", "safety_facts", "current_lifecycle",
                           "_validation_runner", "_issuer_source_verifier"):

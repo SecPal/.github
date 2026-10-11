@@ -10,7 +10,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/preflight-markdownlint-scope.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 
-mkdir -p "$workspace/scripts" "$workspace/bin" "$workspace/.context"
+mkdir -p "$workspace/scripts" "$workspace/bin" "$workspace/.context" "$workspace/node_modules/.bin"
 cp "$REPO_ROOT/scripts/preflight.sh" "$workspace/scripts/preflight.sh"
 mkdir -p "$workspace/tests"
 
@@ -19,8 +19,11 @@ test_log="$workspace/test.log"
 
 cat >"$workspace/bin/npx" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "$LOG_FILE"
+printf '%s\n' "${0##*/} $*" >> "$LOG_FILE"
 markdownlint_call=0
+if [ "${0##*/}" = markdownlint ]; then
+  markdownlint_call=1
+fi
 tracked_bad=0
 for argument in "$@"; do
   case "$argument" in
@@ -43,12 +46,17 @@ fi
 exit 0
 EOF
 chmod +x "$workspace/bin/npx"
+cp "$workspace/bin/npx" "$workspace/node_modules/.bin/markdownlint"
 
 cat >"$workspace/bin/reuse" <<'EOF'
 #!/usr/bin/env bash
 if [ -e .context/pr-body.md ]; then
   echo "Ignored scratch file reached REUSE" >&2
   exit 7
+fi
+if [ -e .git ]; then
+  echo "Git metadata reached REUSE" >&2
+  exit 10
 fi
 if [ ! -e README.md ]; then
   echo "Tracked files did not reach REUSE" >&2
@@ -74,69 +82,45 @@ printf '%s\n' "validate-copilot-instructions" >> "$TEST_LOG"
 EOF
 chmod +x "$workspace/tests/validate-copilot-instructions.sh"
 
-cat >"$workspace/tests/polyscope-work-graph-advisory.py" <<'EOF'
-"""Fixture stand-in that proves preflight invokes its required test path."""
+# Stand-ins for the unconditional unittest commands in scripts/preflight.sh.
+unit_suites=(
+  polyscope-work-graph-advisory
+  secpal-pr-advisory-unit
+  secpal-work-graph-replan-unit
+  secpal-trivy-repository-scan-unit
+  secpal-trivy-action-archive
+  polyscope-work-graph-replanning
+)
+for suite in "${unit_suites[@]}"; do
+  cat >"$workspace/tests/$suite.py" <<'EOF'
+"""Hermetic stand-in proving the maintained unittest command executed."""
 
 import os
+from pathlib import Path
 import unittest
 
 
 class PreflightFixtureTest(unittest.TestCase):
     def test_fixture_runs(self):
         with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
-            log.write("polyscope-work-graph-advisory\n")
+            log.write(Path(__file__).stem + "\n")
 
 
 if __name__ == "__main__":
     unittest.main()
 EOF
+done
 
-cat >"$workspace/tests/secpal-pr-advisory-unit.py" <<'EOF'
-"""Fixture stand-in that proves preflight invokes the advisory PR gate tests."""
-
-import os
-import unittest
-
-
-class PreflightFixtureTest(unittest.TestCase):
-    def test_fixture_runs(self):
-        with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
-            log.write("secpal-pr-advisory\n")
-
-
-if __name__ == "__main__":
-    unittest.main()
-EOF
-
-cat >"$workspace/tests/secpal-work-graph-replan-unit.py" <<'EOF'
-"""Fixture stand-in for preflight's replanning operation tests."""
-
-import unittest
-
-
-class PreflightFixtureTest(unittest.TestCase):
-    def test_fixture_runs(self):
-        pass
-
-
-if __name__ == "__main__":
-    unittest.main()
-EOF
-
-cat >"$workspace/tests/polyscope-work-graph-replanning.py" <<'EOF'
-"""Fixture stand-in for preflight's managed replanning contract tests."""
-
-import unittest
-
-
-class PreflightFixtureTest(unittest.TestCase):
-    def test_fixture_runs(self):
-        pass
-
-
-if __name__ == "__main__":
-    unittest.main()
-EOF
+assert_unit_suites_ran() {
+  local suite
+  for suite in "${unit_suites[@]}"; do
+    if [ "$(grep -Fxc "$suite" "$test_log")" -ne 1 ]; then
+      echo "Expected preflight to execute required suite exactly once: $suite" >&2
+      cat "$test_log" >&2
+      exit 1
+    fi
+  done
+}
 
 cat >"$workspace/tests/evidence-architecture-governance.py" <<'EOF'
 """Fixture stand-in proving preflight requires the governance suite."""
@@ -225,12 +209,79 @@ EOF
   LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/bin:$PATH" bash scripts/preflight.sh >/dev/null
 )
 
+assert_unit_suites_ran
+
+# Exercise a real PATH without Node tooling, retaining only fixture prerequisites.
+mkdir -p "$workspace/no-node-bin"
+for tool in bash git mktemp xargs python3 mkdir cp rm grep sed awk cat find; do
+  ln -s "$(command -v "$tool")" "$workspace/no-node-bin/$tool"
+done
+: >"$log_file"
+: >"$test_log"
+(
+  cd "$workspace"
+  LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/no-node-bin" \
+    bash scripts/preflight.sh >"$workspace/no-npx.log" 2>&1
+)
+if ! grep -Fq 'markdownlint --config .markdownlint.json --' "$log_file"; then
+  echo "Expected locked Markdown linting to run without npx" >&2
+  exit 1
+fi
+printf '#Invalid tracked heading\n' >"$workspace/docs/tracked-bad.md"
+git -C "$workspace" add docs/tracked-bad.md
+if (
+  cd "$workspace"
+  LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/no-node-bin" \
+    bash scripts/preflight.sh >"$workspace/no-npx-violation.log" 2>&1
+); then
+  echo "Expected tracked Markdown violations to fail without npx" >&2
+  exit 1
+fi
+grep -Fq 'Tracked Markdown violation reached markdownlint' "$workspace/no-npx-violation.log"
+git -C "$workspace" reset --quiet HEAD -- docs/tracked-bad.md
+rm "$workspace/docs/tracked-bad.md"
+mv "$workspace/node_modules/.bin/markdownlint" "$workspace/saved-markdownlint"
+if (
+  cd "$workspace"
+  LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/no-node-bin" \
+    bash scripts/preflight.sh >"$workspace/no-node-tools.log" 2>&1
+); then
+  echo "Expected missing locked markdownlint to fail even without npx" >&2
+  exit 1
+fi
+grep -Fq "run 'npm ci' first" "$workspace/no-node-tools.log"
+mv "$workspace/saved-markdownlint" "$workspace/node_modules/.bin/markdownlint"
+
+# An absent locked CLI must fail instead of downloading a separate toolchain.
+mv "$workspace/node_modules/.bin/markdownlint" "$workspace/saved-markdownlint"
+if (
+  cd "$workspace"
+  LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/bin:$PATH" \
+    bash scripts/preflight.sh >"$workspace/missing-markdownlint.log" 2>&1
+); then
+  echo "Expected missing locked markdownlint to fail preflight" >&2
+  exit 1
+fi
+if ! grep -Fq "run 'npm ci' first" "$workspace/missing-markdownlint.log"; then
+  echo "Expected missing locked markdownlint to explain how to install it" >&2
+  cat "$workspace/missing-markdownlint.log" >&2
+  exit 1
+fi
+if grep -Fq -- '--package markdownlint' "$log_file"; then
+  echo "Expected preflight never to download a fallback markdownlint" >&2
+  exit 1
+fi
+mv "$workspace/saved-markdownlint" "$workspace/node_modules/.bin/markdownlint"
+: >"$test_log"
+
 # Git invokes a pre-push hook with the remote name and location as arguments.
 (
   cd "$workspace"
   LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/bin:$PATH" \
     bash scripts/preflight.sh origin https://github.com/SecPal/.github.git >/dev/null
 )
+
+assert_unit_suites_ran
 
 if ! grep -Eq '(^|[[:space:]])markdownlint-cli($|[[:space:]])|(^|[[:space:]])markdownlint($|[[:space:]])' "$log_file"; then
   echo "Expected preflight to invoke markdownlint" >&2
@@ -243,6 +294,43 @@ if grep -Fq '**/' "$log_file" || grep -Fq '.context/pr-body.md' "$log_file"; the
   cat "$log_file" >&2
   exit 1
 fi
+
+# Missing or failing Trivy stand-ins must fail through the real preflight command.
+for suite in secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
+  stand_in="$workspace/tests/$suite.py"
+  mv "$stand_in" "$workspace/saved-stand-in.py"
+  for failure in missing failed; do
+    if [ "$failure" = failed ]; then
+      cat >"$stand_in" <<'EOF'
+import unittest
+
+
+class PreflightFixtureTest(unittest.TestCase):
+    def test_fixture_fails(self):
+        self.fail("Required fixture stand-in failed")
+EOF
+    fi
+    if (
+      cd "$workspace"
+      LOG_FILE="$log_file" TEST_LOG="$test_log" PATH="$workspace/bin:$PATH" \
+        bash scripts/preflight.sh >"$workspace/failure.log" 2>&1
+    ); then
+      echo "Expected $failure required stand-in to fail preflight: $suite" >&2
+      exit 1
+    fi
+    if [ "$failure" = missing ]; then
+      diagnostic="No module named 'tests/$suite'"
+    else
+      diagnostic="Required fixture stand-in failed"
+    fi
+    if ! grep -Fq "$diagnostic" "$workspace/failure.log"; then
+      echo "Expected $failure stand-in diagnostic for $suite" >&2
+      cat "$workspace/failure.log" >&2
+      exit 1
+    fi
+  done
+  mv "$workspace/saved-stand-in.py" "$stand_in"
+done
 
 cat >"$workspace/docs/tracked-bad.md" <<'EOF'
 #Skipped heading levels are a tracked violation
@@ -271,8 +359,6 @@ fi
 
 if ! grep -Fxq 'validate-ai-instructions' "$test_log" \
   || ! grep -Fxq 'validate-copilot-instructions' "$test_log" \
-  || ! grep -Fxq 'polyscope-work-graph-advisory' "$test_log" \
-  || ! grep -Fxq 'secpal-pr-advisory' "$test_log" \
   || ! grep -Fxq 'evidence-architecture-governance' "$test_log" \
   || ! grep -Fxq 'postgresql-18-baseline-governance' "$test_log"; then
   echo "Expected preflight to execute the selected fixture compatibility and advisory regression tests" >&2

@@ -40,6 +40,18 @@ fail() {
   exit 1
 }
 
+# Complete Validation success belongs to canonical receipt publication.
+for validation_doc in "$SKILL" "$CONTRACT" "$WORKFLOW_DOC" "$SCRIPT_README"; do
+  grep -q 'REGISTERED COMMANDS PASS' "$validation_doc" \
+    || fail 'technical registered-command classification is missing'
+  grep -q 'COMPLETE REGISTERED VALIDATION PASS' "$validation_doc" \
+    || fail 'receipt-owning completion classification is missing'
+  grep -q 'SUCCESS_WITH_RECEIPT' "$validation_doc" \
+    || fail 'unchanged-tree rule is not bound to receipt-bearing success'
+done
+grep -q 'durable publication and authentication' "$WORKFLOW_DOC" \
+  || fail 'canonical durable-publication boundary is missing'
+
 assert_polyscope_template_baseline() {
   local template_path="$1"
   local accepted_baseline
@@ -108,6 +120,35 @@ publication_boundary = """- Before creating or editing a PR body, materialize th
   canonical lifecycle-aware `scripts/validate-pull-request-evidence.sh` validator.
 """
 
+review_trigger = """### Initial Automated Review
+
+Apply the [canonical review-acquisition rule](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#531-initial-automated-review).
+These runtime assertions consume that owner; they define no separate lifecycle.
+
+- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`
+- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`
+- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`
+
+"""
+if text.count(review_trigger) != 1:
+    raise SystemExit(1)
+text = text.replace(review_trigger, "", 1)
+
+ssh_signing = """- `SECPAL_SIGNING_FORMAT: SSH`; apply the [canonical signing authority](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#532-signing-authority).
+  Preserve existing SSH keys and signing configuration. GitHub-generated
+  signatures are provider evidence, not SecPal OpenPGP signing authority.
+  Every PR commit must have GitHub `verification.verified == true`."""
+if text.count(ssh_signing) != 1:
+    raise SystemExit(1)
+# Read-only comparison with immutable historical prose, not current authority.
+text = text.replace(
+    ssh_signing,
+    """- All commits must be cryptographically signed. SSH and OpenPGP signatures are
+  both valid; use the user's existing Git signing configuration without
+  changing its format.""",
+    1,
+)
+
 if text.count(overlay) != 1 or text.count(copyright_line) != 1:
     raise SystemExit(1)
 if text.count(publication_boundary) != 1:
@@ -140,6 +181,17 @@ for mutation in \
   if sed "$mutation" "$REPO_ROOT/AGENTS.md" \
     | normalize_agents_instruction_overlays >/dev/null; then
     fail 'missing or weakened PR pre-publication instruction overlay was accepted'
+  fi
+done
+
+# SSH-only local signing and GitHub verification must not be weakened.
+for mutation in \
+  's/SECPAL_SIGNING_FORMAT: SSH/SECPAL_SIGNING_FORMAT: OpenPGP/' \
+  's/verification.verified == true/verification.verified == false/' \
+  's/Preserve existing SSH keys/Replace existing SSH keys/'; do
+  if sed "$mutation" "$REPO_ROOT/AGENTS.md" \
+    | normalize_agents_instruction_overlays >/dev/null; then
+    fail 'missing or weakened SSH signing instruction overlay was accepted'
   fi
 done
 
@@ -472,7 +524,7 @@ while index < len(lines):
             block.append(lines[index])
             index += 1
         joined = " ".join(part.strip() for part in block)
-        if WORK_GRAPH in joined and "work-graph" in joined.casefold():
+        if WORK_GRAPH in joined and "work-graph" in joined.replace(WORK_GRAPH, "").casefold():
             rewritten.append(f"- Licensing policy follows `{WORK_GRAPH}`.")
             replacements += 1
         else:
@@ -930,8 +982,12 @@ jq -e '
 
 git -C "$REPO_ROOT" cat-file -e "$P21_BASELINE^{commit}" 2>/dev/null \
   || fail "accepted P2.1 baseline commit is unavailable: $P21_BASELINE"
-cmp "$EVIDENCE" <(git -C "$REPO_ROOT" show "$P21_BASELINE:scripts/secpal-pr-review.py") \
-  || fail 'accepted P2.1 evidence helper changed'
+# Preserve the immutable helper byte lock except the explicitly authorized
+# current SSH-only default. PGP parsers/history verification remain unchanged.
+cmp "$EVIDENCE" <(
+  git -C "$REPO_ROOT" show "$P21_BASELINE:scripts/secpal-pr-review.py" \
+    | sed 's/"accepted_formats": \["ssh", "openpgp"\]/"accepted_formats": ["ssh"]/'
+) || fail 'accepted P2.1 helper changed beyond the current SSH-only policy'
 
 test ! -e "$REPO_ROOT/.github/workflows/secpal-pr-review.yml" || fail 'skill must not run automatically'
 test ! -e "$REPO_ROOT/.github/workflows/secpal-pr-review.yaml" || fail 'skill must not run automatically'
@@ -940,6 +996,8 @@ if grep -En '/home/secpal' "$INTEGRATION"; then
 fi
 grep -Fq 'python3 -m unittest tests/secpal-pr-review-actions-unit.py' "$QUALITY_WORKFLOW" \
   || fail 'guarded-action unit tests are not enforced in CI'
+grep -Fq 'python3 -m unittest tests/secpal-provider-fallback-unit.py' "$QUALITY_WORKFLOW" \
+  || fail 'provider fallback replacement tests are not enforced in CI'
 grep -Fq 'python3 -m unittest tests/secpal-resolve-fixed-threads-unit.py' "$QUALITY_WORKFLOW" \
   || fail 'simple resolver unit tests are not enforced in CI'
 grep -Fq 'python3 -m unittest tests/secpal-lifecycle-orchestration-unit.py' "$QUALITY_WORKFLOW" \
@@ -959,10 +1017,16 @@ grep -Fq 'tests/secpal-lifecycle-orchestration-unit.py' "$REGISTRY" \
 grep -Fq 'tests/secpal-lifecycle-execution-contract-unit.py' "$REGISTRY" \
   || fail 'lifecycle execution unit tests are not registered'
 
+# Review-tool behavior is protected by credentialless CLI regressions, not by
+# byte-locking the retired unauthenticated resolution path into its baseline.
+protected_mode_matches 100755 "$REPO_ROOT/scripts/copilot-review-tool.sh" \
+  || fail "review tool file type or mode changed"
+protected_mode_matches 100644 "$REPO_ROOT/docs/copilot-review-automation.md" \
+  || fail "review tool documentation file type or mode changed"
+bash "$REPO_ROOT/tests/copilot-review-memory.sh"
+
 protected_paths=(
   "$REPO_ROOT"/.github/workflows/*-review-memory.yml
-  "$REPO_ROOT"/scripts/*-review-tool.sh
-  "$REPO_ROOT"/docs/*-review-automation.md
   "$REPO_ROOT"/AGENTS.md
 )
 for path in "${protected_paths[@]}"; do
@@ -1015,8 +1079,7 @@ assert fast_schema["$defs"]["operation"]["properties"]["kind"] == {
 
 expected = [
     "SecPal/.github", "SecPal/api", "SecPal/frontend", "SecPal/contracts",
-    "SecPal/android", "SecPal/GuardGuide",
-    "SecPal/guardguide.de", "SecPal/secpal.app",
+    "SecPal/android", "SecPal/secpal.app",
     "SecPal/deployment",
 ]
 assert [item["repository"] for item in registry["repositories"]] == expected
@@ -1262,9 +1325,12 @@ assert [
 ] == [
     ["python3", "-m", "unittest", "tests/secpal-resolve-fixed-threads-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-pr-review-actions-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-provider-fallback-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-adopted-ready-prior-authority-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-pre-enrollment-integration-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-authority-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-app-352-loss-admission-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-contracts-524-loss-admission-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-bootstrap-source-admission-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-publication-unit.py"],
     ["python3", "-m", "unittest", "tests/secpal-lifecycle-orchestration-unit.py"],
@@ -1273,6 +1339,8 @@ assert [
     ["python3", "-m", "unittest", "tests/secpal-exceptional-recovery-authority-unit.py"],
     ["./tests/secpal-pr-review-skill-policy.sh"],
     ["./tests/secpal-pr-review-skill-integration.sh"],
+    ["python3", "-m", "unittest", "tests/secpal-enrolled-draft-integration-unit.py"],
+    ["python3", "-m", "unittest", "tests/secpal-enrolled-draft-source-unit.py"],
 ], "SecPal/.github must register lifecycle and Exceptional Recovery authority regressions unconditionally"
 
 frontend_entries = [
@@ -1450,7 +1518,7 @@ assert not any(
 assert frontend["signature_policy"] == {
     "require_github_verified": True,
     "require_local_verified": True,
-    "accepted_formats": ["ssh", "openpgp"],
+    "accepted_formats": ["ssh"],
 }, "SecPal/frontend signature policy must remain strict"
 assert frontend["check_policy"] == {
     "require_ruleset_evidence": True,
@@ -1548,7 +1616,7 @@ for required_text in (
 assert deployment["signature_policy"] == {
     "require_github_verified": True,
     "require_local_verified": True,
-    "accepted_formats": ["ssh", "openpgp"],
+    "accepted_formats": ["ssh"],
 }, "SecPal/deployment signature policy must remain strict"
 assert deployment["check_policy"] == {
     "require_ruleset_evidence": True,
@@ -1611,6 +1679,48 @@ assert contracts_lifecycle["publication_remote_url"] == (
 assert contracts_lifecycle["publication_ruleset_id"] == 23668089, (
     "SecPal/contracts lifecycle publication must use its exact protected ruleset"
 )
+app = next(
+    item for item in registry["repositories"]
+    if item["repository"] == "SecPal/secpal.app"
+)
+app_lifecycle = app.get("lifecycle_authority_policy")
+assert isinstance(app_lifecycle, dict), (
+    "SecPal/secpal.app must adopt maintained lifecycle authority"
+)
+for shared_field in (
+    "schema_version", "accepted_formats", "signers",
+    "transition_signer_identities", "authority_signer_identities",
+    "publication_signer_identities", "genesis_admission_signer_identities",
+    "legacy_adoption_signer_identities", "publication_branch",
+    "publication_required_rules",
+):
+    assert app_lifecycle[shared_field] == canonical_lifecycle[shared_field], (
+        f"SecPal/secpal.app lifecycle {shared_field} must reuse canonical trust"
+    )
+assert app_lifecycle["publication_remote_url"] == (
+    "https://github.com/SecPal/secpal.app.git"
+), "SecPal/secpal.app lifecycle publication must remain repository-local"
+assert app_lifecycle["publication_ruleset_id"] == 24267563, (
+    "SecPal/secpal.app lifecycle publication must use its exact protected ruleset"
+)
+for repository_specific_field in (
+    "bootstrap_genesis_repairs", "bootstrap_source_admissions",
+    "historical_compatibility_publications", "delivery_initializations",
+):
+    assert app_lifecycle[repository_specific_field] == [], (
+        f"SecPal/secpal.app lifecycle {repository_specific_field} must start empty"
+    )
+assert app.get("pre_enrollment_integration_policy") == {
+    "schema_version": "1.0",
+    "command": "integrate-pre-enrollment-draft",
+    "topology_kind": "PRE_ENROLLMENT_DRAFT_INTEGRATION",
+    "allowed_mutation": "NON_FORCE_PUSH_EXACT_PR_BRANCH",
+    "maximum_candidates": 1,
+    "maximum_pushes": 1,
+    "force_push": False,
+    "automatic_retry": False,
+    "merge_pull_request": False,
+}, "SecPal/secpal.app must retain the exact closed Draft integration capability"
 for repository_specific_field in (
     "bootstrap_genesis_repairs", "bootstrap_source_admissions",
     "historical_compatibility_publications", "delivery_initializations",
@@ -1653,6 +1763,21 @@ for item in registry["repositories"]:
             assert isinstance(command["argv"], list)
             assert command["argv"]
             assert all(isinstance(value, str) and value for value in command["argv"])
+PY
+
+python3 - "$SKILL" "$CONTRACT" <<'PY'
+from pathlib import Path
+import sys
+
+skill = Path(sys.argv[1]).read_text()
+contract = Path(sys.argv[2]).read_text()
+step = skill.split("## Run the finite invocation", 1)[1]
+assert step.index("Capture stable feedback") < step.index(
+    "publish and read back `UNRESTRICTED_REVIEW_CONSUMED`"
+) < step.index("before proceeding to remediation")
+assert "scripts/secpal-publish-review-consumption.py --repository" in skill
+assert "Review 1/1 before ordinary" in skill
+assert "one explicit `UNRESTRICTED_REVIEW_CONSUMED` successor before remediation" in contract
 PY
 
 printf '✓ finite secpal-pr-review skill policy checks passed\n'

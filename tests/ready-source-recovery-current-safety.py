@@ -36,7 +36,13 @@ if (
     is None
 ):
     raise RuntimeError("current-safety provenance roots are invalid")
-from secpal_pr_review import fast_path, lifecycle_authority as authority
+import importlib.util
+spec = importlib.util.spec_from_file_location("secpal_pr_review_actions", ROOT / "scripts/secpal-pr-review-actions.py")
+actions_owner = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = actions_owner
+spec.loader.exec_module(actions_owner)
+fast_path = actions_owner.fast_path
+authority = actions_owner._owned_verifier_module("lifecycle_authority")
 
 REPOSITORY = "example/project"
 HEAD = "a" * 40

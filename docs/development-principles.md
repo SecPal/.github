@@ -13,7 +13,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 > [work-graph-contract.md](work-graph-contract.md); this document explains the
 > engineering principles behind them.
 
-This document explains the design principles and best practices that guide all actively maintained SecPal repositories, including `api`, `frontend`, `contracts`, `android`, `secpal.app`, `GuardGuide`, and `guardguide.de`.
+This document explains the design principles and best practices that guide all actively maintained SecPal repositories, including `.github`, `api`, `frontend`, `contracts`, `android`, `secpal.app`, `deployment`, and `operations`.
 
 ## Quick Navigation
 

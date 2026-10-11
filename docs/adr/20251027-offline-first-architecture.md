@@ -5,18 +5,26 @@ SPDX-License-Identifier: CC0-1.0
 
 # ADR-003: Offline-First Architecture
 
-**Status:** Proposed
+**Status:** Superseded by [ADR-026](20261002-client-trust-offline-recovery-adr026.md)
+
+**Previous status:** Proposed (never accepted)
 
 **Date:** 2025-10-27
 
 **Deciders:** @kevalyq
 
-> **Current-architecture revalidation notice (2026-08-24):** This remains a
-> Proposed, non-binding response to the offline-connectivity problem. PWA-first
-> sequencing, “native apps later if needed”, IndexedDB/Dexie/Workbox examples,
-> and conflict details such as LWW are historical examples rather than current
-> architecture. SecPal now has web/PWA and native-shell client surfaces; that is
-> current evidence only, not acceptance of an offline synchronization design.
+> **Supersession notice (2026-10-02):**
+>
+> [ADR-026](20261002-client-trust-offline-recovery-adr026.md) is the Accepted current offline
+> architecture authority. This ADR's original Proposed body and date are preserved
+> as historical evidence; it was never binding. PWA-first sequencing, “native apps
+> later if needed”, IndexedDB/Dexie/Workbox, local-first CRUD, background sync and
+> LWW/conflict examples remain historical implementation proposals. They are not
+> accepted by ADR-026. The successor accepts offline-first with authenticated,
+> versioned authority, truthful offline revocation limits, and reauthorization
+> before synchronization; implementation details remain separately owned. Status
+> statements in the historical body describe the original proposal, not current
+> architecture authority.
 
 ## Context
 

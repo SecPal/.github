@@ -107,7 +107,7 @@ create_preflight_fixture() {
   local seed_renames="${3-false}"
 
   create_git_fixture "$repository" "$exclude_patterns" "$seed_renames"
-  mkdir -p "$repository/scripts" "$repository/bin" "$repository/tests"
+  mkdir -p "$repository/scripts" "$repository/bin" "$repository/tests" "$repository/node_modules/.bin"
   cp "$PREFLIGHT_SCRIPT" "$repository/scripts/preflight.sh"
 
   cat >"$repository/tests/polyscope-work-graph-advisory.py" <<'EOF'
@@ -170,6 +170,23 @@ if __name__ == "__main__":
     unittest.main()
 EOF
 
+  # Hermetic stand-ins for the maintained preflight's required Trivy suites.
+  for suite in secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
+    cat >"$repository/tests/$suite.py" <<'EOF'
+"""Prove the required Trivy unittest command ran without a real scanner."""
+
+import os
+from pathlib import Path
+import unittest
+
+
+class PreflightFixtureTest(unittest.TestCase):
+    def test_fixture_runs(self):
+        with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
+            log.write(Path(__file__).stem + "\n")
+EOF
+  done
+
   cat >"$repository/tests/evidence-architecture-governance.py" <<'EOF'
 """Fixture stand-in for preflight's required governance-test dependency."""
 EOF
@@ -189,20 +206,30 @@ EOF
 exit 0
 EOF
   chmod +x "$repository/bin/npx" "$repository/bin/reuse"
+  cp "$repository/bin/npx" "$repository/node_modules/.bin/markdownlint"
 }
 
 run_preflight_fixture() {
   local repository="$1"
   local stdout="$2"
   local stderr="$3"
+  local test_log="$repository/test.log" suite
 
+  : >"$test_log"
   set +e
   (
     cd "$repository"
-    PATH="$repository/bin:/usr/bin:/bin" bash scripts/preflight.sh
+    TEST_LOG="$test_log" PATH="$repository/bin:/usr/bin:/bin" bash scripts/preflight.sh
   ) >"$stdout" 2>"$stderr"
   fixture_status=$?
   set -e
+  if [ "$fixture_status" -eq 0 ]; then
+    for suite in secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
+      if [ "$(grep -Fxc "$suite" "$test_log")" -ne 1 ]; then
+        record_failure "successful preflight must execute required suite exactly once: $suite"
+      fi
+    done
+  fi
 }
 
 large_local_repo="$workspace/local-large"
@@ -231,6 +258,35 @@ assert_contains \
 if [ -e "$large_local_repo/.preflight-allow-large-pr" ]; then
   record_failure "local advisory reporting must not require an override file"
 fi
+
+# Required Trivy dependencies must fail closed before PR-size reporting.
+for suite in secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
+  stand_in="$large_local_repo/tests/$suite.py"
+  mv "$stand_in" "$workspace/saved-stand-in.py"
+  for failure in missing failed; do
+    if [ "$failure" = failed ]; then
+      cat >"$stand_in" <<'EOF'
+import unittest
+
+
+class PreflightFixtureTest(unittest.TestCase):
+    def test_fixture_fails(self):
+        self.fail("Required fixture stand-in failed")
+EOF
+    fi
+    run_preflight_fixture "$large_local_repo" "$workspace/failure.stdout" "$workspace/failure.stderr"
+    if [ "$fixture_status" -eq 0 ]; then
+      record_failure "$failure required stand-in must fail preflight: $suite"
+    fi
+    if [ "$failure" = missing ]; then
+      diagnostic="No module named 'tests/$suite'"
+    else
+      diagnostic="Required fixture stand-in failed"
+    fi
+    assert_contains "$workspace/failure.stderr" "$diagnostic" "$failure stand-in must report its failure: $suite"
+  done
+  mv "$workspace/saved-stand-in.py" "$stand_in"
+done
 
 threshold_local_repo="$workspace/local-threshold"
 threshold_local_stdout="$workspace/local-threshold.stdout"

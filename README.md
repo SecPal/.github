@@ -10,6 +10,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 This repository contains general project documentation, settings, and community health files for the [SecPal organization](https://github.com/SecPal).
 
+Find current architecture authority and technical contract owners in the [architecture navigation](docs/architecture.md).
+
 ## About SecPal
 
 SecPal is the operations software for German private security services. Everything the day-to-day operation needs — in one system that just works.
@@ -128,6 +130,9 @@ See [docs/project-board-integration.md](docs/project-board-integration.md) for b
 We use pre-commit hooks to ensure code quality before commits are made. This catches issues locally before CI/CD runs.
 
 **Installation:**
+
+Install Node.js 26 (Current) first. The setup script runs `npm ci` to install
+the locked Markdown toolchain before installing and running the hooks.
 
 ```bash
 # Install pre-commit (if not already installed)

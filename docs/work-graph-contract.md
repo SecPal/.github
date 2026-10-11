@@ -568,6 +568,87 @@ effective boundary. When a caller uses a command whose default creates a Ready
 pull request, it MUST explicitly select Draft creation; command syntax is an
 enforcement detail, not a second source of lifecycle authority.
 
+### 5.3.1 Initial Automated Review
+
+The following declarations govern ordinary delivery PR review acquisition;
+they do not grant readiness or review authority beyond the maintained lifecycle.
+
+- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`
+- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`
+- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`
+
+Create every ordinary delivery PR as Draft. When the maintained lifecycle and
+current authority permit external review, perform the authenticated
+`Draft -> Ready for Review` transition. That transition is the canonical primary
+trigger for configured automatic Code and Security reviews. After Ready, observe
+automatic provider startup and terminality.
+
+Agents MUST NOT use `@codex review` or `@codex security review` as the primary
+initial review trigger, post either command while an ordinary delivery PR is
+still Draft merely because review is needed, or substitute a review-request
+comment for the required Ready transition. The ordinary delivery lifecycle MUST
+NOT require a human review-request comment.
+
+Either command is permitted only as a bounded post-Ready fallback when ALL are
+true: the PR is already authentically Ready; automatic startup for that exact
+review type has not appeared within the maintained observation window; current
+lifecycle authority permits the fallback; and no fallback for that review type
+has already been consumed. Allow at most one Code fallback request and one
+Security fallback request. A fallback creates neither another review cycle nor
+new authority.
+
+When that first fallback is authoritatively persisted but remains unacknowledged
+and without an exact-head result after the same bounded provider observation
+window, one replacement dispatch for the same repository, PR, authorized
+assessment, head, and review type may be admitted. Derive eligibility only from
+authenticated current lifecycle and complete GitHub request, reaction, provider,
+and chronology evidence; recheck immediately before writing. A provider reaction,
+processing acknowledgement, review object, status for the exact head/type, or
+terminal result prevents replacement. The maintained protected
+`SECPAL_PROVIDER_DISPATCH_CLAIM` CAS serializes at most one winning invocation
+per exact assessment/head/type/first-fallback dispatch key. Complete request
+history authenticates and reconciles requests; it does not serialize writes.
+An ambiguous replacement write is reconciled by reading that history and is
+never blindly retried. A stranded claim or definite POST rejection consumes
+the opportunity. This is neither a review retry loop nor a
+new lifecycle review. A known persisted request with no provider acknowledgement
+is distinct from an unknown mutation result.
+
+Fresh provider reacquisition is a distinct reconciliation case, not a second
+first fallback. The maintained bounded survey must independently prove
+`REQUIRED_HISTORICAL_ACQUISITION_EVIDENCE_UNAVAILABLE`; that finding leaves the
+original acquisition validity unprovable, without declaring it valid or invalid.
+Only the same authenticated unchanged Ready head at Review 1/1, Remediation
+1/2, one Ready transition, Cycle 3 absent, and no Recovery or Continuation may
+receive one signed, exact, one-use reacquisition authorization. The maintained
+verifier derives every required provider type. Protected per-type dispatch CAS
+claims serialize at most one fresh canonical Code request and one fresh
+canonical Security request; conflicting ordinary claims and duplicate requests
+fail closed. Each fresh request and result retains its own chronology and
+identity. Completion requires all fresh exact-head terminal results and complete
+Stable Feedback, with no caller-selected findings or providers. This
+reconciliation consumes no review, remediation, Ready, Recovery, or Continuation
+counter and does not validate or rewrite historical first-fallback chronology.
+The implementation and bounded observations are maintained in the existing
+provider acquisition and dispatch architecture.
+
+### 5.3.2 Signing Authority
+
+`SECPAL_SIGNING_FORMAT: SSH`. SSH is the sole SecPal-controlled signing
+method for commits, lifecycle artifacts, attestations, publications, local/user
+authority and maintained role-specific signing credentials. Agents MUST NOT
+require, recommend, provision or select GPG/OpenPGP for those operations.
+Preserve existing SSH keys and signing configuration; keep maintained signer
+roles distinct and never bypass signing.
+
+Provider-generated signatures are a different authority. Where the existing
+contract requires authenticated GitHub `verification.verified == true`
+evidence, a GitHub-generated PGP signature remains acceptable provider evidence,
+not a SecPal OpenPGP signing method. Compatibility necessary to verify immutable
+historical or provider evidence may remain, but MUST NOT authorize new
+SecPal-controlled OpenPGP signing. Do not rewrite historical signatures or
+provision a new signing method to process them.
+
 ### 5.4 After The Primary Pull Request Merges
 
 Once the primary pull request merges, the leaf is `DONE` and stops being a

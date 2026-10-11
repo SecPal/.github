@@ -13,6 +13,15 @@ as `@main` into consumer repositories.
 
 ## Available Workflows
 
+### Pre-build repository scanning
+
+`.github/actions/trivy-repository-scan` scans an exact clean caller checkout
+with pinned Trivy and explicit vulnerability, secret, and misconfiguration
+scanners. It emits deterministic, secret-safe evidence under the central policy
+and fails closed on unavailable, stale, or malformed scanner evidence. See
+[`trivy-repository-scanning.md`](../../docs/trivy-repository-scanning.md) for the
+closed caller interface and immutable invocation example.
+
 ### Dependabot manifest coverage
 
 `reusable-dependabot-manifest-coverage.yml` runs the shared, deterministic

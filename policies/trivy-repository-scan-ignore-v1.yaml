@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: CC0-1.0
+
+# Trivy-native ignores are intentionally empty. Reviewed, expiring exceptions
+# are admitted only through trivy-repository-scan-v1.json so callers cannot add
+# ad hoc suppressions to a scan run.

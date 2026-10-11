@@ -5,7 +5,7 @@ SPDX-License-Identifier: CC0-1.0
 
 # ADR-014: Tenant, Identity, Employee, and Access Model
 
-**Status:** Accepted
+**Status:** Partially Superseded by [ADR-025](20261002-employment-time-absence-compensation-adr025.md)
 
 **Date:** 2026-07-20
 
@@ -29,6 +29,26 @@ SPDX-License-Identifier: CC0-1.0
 - [ADR-011](20251227-simplify-management-level-to-integer-field-adr011.md)
 
 This ADR was accepted after functional and architectural review by the SecPal Product and Domain Owner.
+
+**Supersession notice (2026-10-02):** [ADR-025](20261002-employment-time-absence-compensation-adr025.md) replaces this
+ADR's single authoritative Employee contract projection, transactional amendment
+application to that projection, projection-derived employment membership bases
+and lifecycle triggers, rejection of a separate employment-period concept, and
+open rehire/multiple-period decision. This applies throughout the historical
+text below, including the binding table, diagrams, rejected alternatives,
+cross-repository implementation/test inventory, and open detail decision 8.
+Employee → EmploymentPeriod → EmploymentTermsVersion is now the accepted
+employment authority. Non-overlapping periods permit rehire history, not
+simultaneous employment contracts for one Employee. ADR-025 also establishes the
+working-time, absence, leave, and compensation boundaries.
+
+All other decisions remain binding, including Tenant/TenantKey separation,
+global User, TenantMembership, explicit permission/scope/validity assignments,
+tenant integrity, membership-state priority and identity lifecycle locking,
+establishment history, encryption, retention, and identity-deletion boundaries.
+ADR-015 remains the unchanged Global Identity Key security authority. The
+original date and body below preserve the July 2026 decision as history; the
+superseded projection statements are not current implementation instructions.
 
 ## Context and problem statement
 

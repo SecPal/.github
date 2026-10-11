@@ -1,5 +1,5 @@
 {
-  "$comment": "SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
+  "$comment": "Current SecPal signing authority is SSH-only; historical/provider PGP vectors are separate. SPDX-FileCopyrightText: 2026 SecPal Contributors; SPDX-License-Identifier: CC0-1.0",
   "schema_version": "1.0",
   "repository": "SecPal/.github",
   "default_branch": "main",
@@ -25,7 +25,7 @@
   "signature_policy": {
     "require_github_verified": true,
     "require_local_verified": true,
-    "accepted_formats": ["ssh", "openpgp"]
+    "accepted_formats": ["ssh"]
   },
   "check_policy": {
     "require_ruleset_evidence": true,

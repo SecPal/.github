@@ -8,6 +8,9 @@ import copy
 import json
 import unittest
 
+from tests.secpal_actions_fixture import load_actions
+actions_owner = load_actions()
+
 from scripts.secpal_pr_review import qualified_remediation_successor_loss as loss
 
 

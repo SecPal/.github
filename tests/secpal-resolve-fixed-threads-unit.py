@@ -31,17 +31,14 @@ OPENPGP_FIXTURE_SIGNATURE = OPENPGP_FIXTURE_ROOT / "openpgp-signature.asc"
 OPENPGP_FIXTURE_FINGERPRINT = "00DC685679E00C93940505E3778A78CD1F7BF5FE"
 sys.path.insert(0, str(ROOT / "scripts"))
 SCRIPT = ROOT / "scripts/secpal-resolve-fixed-threads.py"
-SPEC = importlib.util.spec_from_file_location("secpal_resolve_fixed_threads", SCRIPT)
-if SPEC is None or SPEC.loader is None:
-    raise RuntimeError(f"Cannot load {SCRIPT}")
-MODULE = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = MODULE
-SPEC.loader.exec_module(MODULE)
+from tests.secpal_actions_fixture import load_actions
+MODULE = load_actions()._owned_verifier_module("fixed_thread_resolution")
+from scripts.secpal_pr_review import late_classification_cli, late_disposition_cli
 REAL_SUBPROCESS_RUN = subprocess.run
 
-from secpal_work_graph import acceptance_criteria as work_graph_acceptance_criteria  # noqa: E402
-from secpal_work_graph import github as work_graph_github  # noqa: E402
-from secpal_work_graph import model as work_graph_model  # noqa: E402
+from scripts.secpal_work_graph import acceptance_criteria as work_graph_acceptance_criteria  # noqa: E402
+from scripts.secpal_work_graph import github as work_graph_github  # noqa: E402
+from scripts.secpal_work_graph import model as work_graph_model  # noqa: E402
 
 
 class FakeGh:
@@ -1824,7 +1821,7 @@ class ResolveFixedThreadsTests(TestCase):
     def test_qualified_remediation_late_disposition_accepts_only_exact_boundary(
         self,
     ) -> None:
-        from secpal_pr_review import qualified_remediation_successor_loss as loss
+        from scripts.secpal_pr_review import qualified_remediation_successor_loss as loss
 
         record = loss.load_accepted_admission("SecPal/.github", 956)
         reviewed_payload = {"reviewed": "exact qualified successor"}
@@ -2569,6 +2566,40 @@ class ResolveFixedThreadsTests(TestCase):
         )
 
     def setUp(self) -> None:
+        # Unit history must describe the tested candidate policy, not the
+        # unrelated live checkout's pre-commit HEAD. Production still reads
+        # authenticated immutable central history; no candidate fallback exists.
+        fixture_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(fixture_directory.cleanup)
+        fixture_root = Path(fixture_directory.name)
+        for path, source in (
+            (MODULE.fast_path.DELIVERY_REGISTRY_PATH, MODULE.REGISTRY_PATH),
+            (MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_RELATIVE_PATH,
+             MODULE.fast_path.DELIVERY_REGISTRY_SCHEMA_PATH),
+        ):
+            target = fixture_root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+        for arguments in (
+            ["init", "-q"], ["remote", "add", "origin", "https://github.com/SecPal/.github.git"],
+            ["add", "."],
+            ["-c", "commit.gpgsign=false", "-c", "user.name=Fixture",
+             "-c", "user.email=fixture@example.test", "commit", "-qm", "Unit registry history"],
+        ):
+            REAL_SUBPROCESS_RUN(["git", *arguments], cwd=fixture_root, check=True,
+                                capture_output=True, text=True)
+        def fixture_git(repository_root, arguments, *, allow_failure=False):
+            if repository_root != ROOT:
+                raise AssertionError("unexpected central registry fixture root")
+            return REAL_SUBPROCESS_RUN(
+                ["git", *arguments], cwd=fixture_root, check=not allow_failure,
+                capture_output=True, text=True,
+            )
+        fixture_patch = mock.patch.object(
+            sys.modules[__name__], "_current_registry_git", side_effect=fixture_git,
+        )
+        fixture_patch.start()
+        self.addCleanup(fixture_patch.stop)
         self._central_registry_patch = mock.patch.object(
             MODULE.fast_path,
             "_central_git_result",
@@ -3890,52 +3921,6 @@ class ResolveFixedThreadsTests(TestCase):
             self.assertFalse(
                 any("mutation" in " ".join(call).lower() for call in github.calls)
             )
-
-    def test_lifecycle_helper_import_ignores_repository_root_shadow(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            canonical_package = root / "scripts/secpal_pr_review"
-            shadow_package = root / "secpal_pr_review"
-            canonical_package.mkdir(parents=True)
-            shadow_package.mkdir()
-            (canonical_package / "__init__.py").write_text("", encoding="utf-8")
-            (canonical_package / "lifecycle_orchestration.py").write_text(
-                'ORIGIN = "canonical"\n', encoding="utf-8"
-            )
-            marker = root / "shadow-executed"
-            (shadow_package / "__init__.py").write_text("", encoding="utf-8")
-            (shadow_package / "lifecycle_orchestration.py").write_text(
-                "from pathlib import Path\n"
-                f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
-                encoding="utf-8",
-            )
-            module_names = (
-                "secpal_pr_review",
-                "secpal_pr_review.lifecycle_orchestration",
-            )
-            loaded_modules = {
-                name: sys.modules.get(name) for name in module_names
-            }
-            original_path = list(sys.path)
-            try:
-                for name in module_names:
-                    sys.modules.pop(name, None)
-                with mock.patch.object(MODULE, "REPOSITORY_ROOT", root):
-                    loaded = MODULE._load_lifecycle_orchestration_helper()
-                self.assertEqual(loaded.ORIGIN, "canonical")
-                self.assertEqual(
-                    Path(loaded.__file__).resolve(),
-                    (canonical_package / "lifecycle_orchestration.py").resolve(),
-                )
-                self.assertFalse(marker.exists())
-                self.assertEqual(sys.path, original_path)
-            finally:
-                for name in module_names:
-                    sys.modules.pop(name, None)
-                for name, loaded in loaded_modules.items():
-                    if loaded is not None:
-                        sys.modules[name] = loaded
-                sys.path[:] = original_path
 
     def test_recovery_bound_source_requires_independent_recovery_authority(
         self,
@@ -10431,16 +10416,8 @@ class ResolveFixedThreadsTests(TestCase):
         )
 
         for index, (script, arguments) in enumerate(producer_arguments):
-            spec = importlib.util.spec_from_file_location(
-                f"late_producer_cli_{index}", script
-            )
-            self.assertIsNotNone(spec)
-            self.assertIsNotNone(spec.loader if spec is not None else None)
-            producer = importlib.util.module_from_spec(spec)
-            assert spec is not None and spec.loader is not None
-            sys.modules[spec.name] = producer
+            producer = (late_classification_cli, late_disposition_cli)[index]
             try:
-                spec.loader.exec_module(producer)
                 with redirect_stderr(StringIO()) as error, self.assertRaises(
                     SystemExit
                 ):
@@ -10475,7 +10452,7 @@ class ResolveFixedThreadsTests(TestCase):
                 )
                 self.assertEqual(historical.final_validation_receipt, "receipt.json")
             finally:
-                sys.modules.pop(spec.name, None)
+                pass
 
     def test_cli_partitions_commit_bound_manifest_and_absence_modes(self) -> None:
         base = [
@@ -11035,6 +11012,116 @@ class ResolveFixedThreadsTests(TestCase):
                     "0" * 64,
                     (thread_id,),
                 )
+
+    def test_api_governance_resolver_reconstructs_executed_commands(self) -> None:
+        payload = reviewed_state_payload("PRRT_GOVERNANCE_COMMANDS", [])
+        stable = MODULE.fast_path.StableFeedbackState.from_payload(payload)
+        reviewed = mock.Mock(
+            head_sha=stable.head_sha,
+            state_digest=stable.state_digest,
+            feedback_digest=stable.feedback_digest,
+            base_sha=stable.base_sha,
+            payload=payload,
+        )
+        binding = MODULE._validation_registry_binding(
+            MODULE._load_repository_entry("SecPal/api")
+        )
+        governance = list(MODULE.fast_path.governance_validation_commands())
+        self.assertNotEqual(governance, binding["validation"])
+        self.assertFalse(any("composer" in item["argv"] for item in governance))
+        gates = [
+            {"gate": gate, "satisfied": True,
+             "evidence": "Governance commands executed; no application PASS claim"}
+            for gate in binding["manual_gates"]
+        ]
+        registry_reader = _current_registry_git
+        scope_path = ["AGENTS.md"]
+        def scoped_git(root, arguments, *, allow_failure=False):
+            if tuple(arguments) == ("cat-file", "-t", stable.base_sha):
+                return subprocess.CompletedProcess(arguments, 0, "commit\n", "")
+            if tuple(arguments) == ("cat-file", "-t", "f" * 40):
+                return subprocess.CompletedProcess(arguments, 0, "tree\n", "")
+            if tuple(arguments) == (
+                "diff", "--no-ext-diff", "--no-renames", "--raw", "-z",
+                stable.base_sha, "f" * 40,
+            ):
+                return subprocess.CompletedProcess(
+                    arguments, 0,
+                    ":100644 100644 0000000 0000000 M\0" + scope_path[0] + "\0",
+                    "",
+                )
+            return registry_reader(root, arguments, allow_failure=allow_failure)
+        scope_patch = mock.patch.object(
+            sys.modules[__name__], "_current_registry_git", side_effect=scoped_git,
+        )
+        scope_patch.start()
+        self.addCleanup(scope_patch.stop)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "attestation.json"
+            for commands in (governance, binding["validation"]):
+                with self.subTest(commands=commands):
+                    receipt = MODULE.fast_path.create_validation_receipt(
+                        repository="SecPal/api", head_sha=stable.head_sha,
+                        validated_tree_sha="f" * 40, registry=binding,
+                        command_set=commands, successful_result=True,
+                        reviewed_state=stable, manual_gate_evidence=gates,
+                        eligibility_evidence_digest="e" * 64,
+                    )
+                    attestation = MODULE.fast_path.create_validation_attestation(
+                        repository="SecPal/api", head_sha="c" * 40,
+                        registry=binding, command_set=commands,
+                        successful_result=True, reviewed_state=stable,
+                        validation_receipt=receipt,
+                    )
+                    path.write_text(json.dumps(attestation), encoding="utf-8")
+                    loaded = load_validation_evidence(
+                        path, "SecPal/api", "c" * 40, reviewed,
+                    )
+                    if commands == governance:
+                        def application_tree(root, arguments, *, allow_failure=False):
+                            if tuple(arguments) == (
+                                "cat-file", "-t", stable.base_sha,
+                            ):
+                                return subprocess.CompletedProcess(arguments, 0, "commit\n", "")
+                            if tuple(arguments) == (
+                                "cat-file", "-t", receipt["validated_tree_sha"],
+                            ):
+                                return subprocess.CompletedProcess(arguments, 0, "tree\n", "")
+                            if tuple(arguments[:5]) == (
+                                "diff", "--no-ext-diff", "--no-renames", "--raw", "-z",
+                            ):
+                                return subprocess.CompletedProcess(
+                                    arguments, 0, ":100644 100644 0000000 0000000 M\0app.php\0", "",
+                                )
+                            return _current_registry_git(root, arguments, allow_failure=allow_failure)
+                        with mock.patch.object(MODULE, "_run_git", side_effect=application_tree):
+                            with self.assertRaisesRegex(MODULE.ResolutionError, "governance.*scope"):
+                                MODULE.load_validation_evidence(
+                                    path, "SecPal/api", "c" * 40, reviewed, repository_root=ROOT,
+                                )
+                    self.assertEqual(loaded.validation_receipt, receipt)
+                    self.assertEqual(loaded.attestation, attestation)
+                    git = FakeGit(
+                        expected_head="c" * 40, reviewed_head=stable.head_sha,
+                        tree=receipt["validated_tree_sha"],
+                        receipt_digest=receipt["receipt_digest"],
+                    )
+                    MODULE.verify_local_fix_commit(
+                        Path(directory), "SecPal/api", "c" * 40,
+                        reviewed, loaded, runner=git,
+                    )
+                    # Replacing the executed commands with the other validation
+                    # class cannot preserve the signed receipt's authority.
+                    substituted = copy.deepcopy(attestation)
+                    other = binding["validation"] if commands == governance else governance
+                    substituted["command_set_digest"] = MODULE._digest_json(other)
+                    substituted["attestation_digest"] = MODULE._digest_json({
+                        key: value for key, value in substituted.items()
+                        if key != "attestation_digest"
+                    })
+                    path.write_text(json.dumps(substituted), encoding="utf-8")
+                    with self.assertRaises(MODULE.ResolutionError):
+                        load_validation_evidence(path, "SecPal/api", "c" * 40, reviewed)
 
     def test_validation_attestation_binds_fix_head_and_reviewed_state(self) -> None:
         thread_id = "PRRT_exampleOne"

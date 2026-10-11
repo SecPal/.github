@@ -13,7 +13,6 @@ Usage:
   scripts/copilot-review-tool.sh lessons --repo OWNER/REPO --pr NUMBER [--state unresolved|resolved|all] [--output FILE]
     scripts/copilot-review-tool.sh scan --repo OWNER/REPO [--repo OWNER/REPO ...] [--state unresolved|resolved|all] [--max-prs NUMBER] [--output-dir DIR]
     scripts/copilot-review-tool.sh track --repo OWNER/REPO --input-dir DIR [--threshold NUMBER] [--label LABEL ...] [--run-url URL] [--output FILE] [--dry-run]
-  scripts/copilot-review-tool.sh resolve --thread-id ID [--thread-id ID ...]
 EOF
 }
 
@@ -657,22 +656,6 @@ scan_repo() {
     printf '%s\n' "$summary"
 }
 
-resolve_thread() {
-    local query
-
-    query=$(cat <<'EOF'
-mutation($threadId:ID!) {
-  resolveReviewThread(input:{threadId:$threadId}) {
-    thread { id isResolved }
-  }
-}
-EOF
-)
-
-    PAGER=cat GH_PAGER=cat gh api graphql -f query="$query" -F threadId="$1" >/dev/null
-    echo "Resolved review thread: $1"
-}
-
 command_threads() {
     local repo="" pr_number="" state="unresolved" format="markdown" output_file="" threads_json rendered
 
@@ -791,20 +774,6 @@ command_track() {
     write_output "$summary" "$output_file"
 }
 
-command_resolve() {
-    local thread_ids=()
-
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --thread-id) require_value "$1" "${2:-}"; thread_ids+=("$2"); shift 2 ;;
-            *) echo "Unknown option for resolve: $1" >&2; usage; exit 1 ;;
-        esac
-    done
-
-    [[ ${#thread_ids[@]} -gt 0 ]] || { echo "resolve requires at least one --thread-id" >&2; usage; exit 1; }
-    for thread_id in "${thread_ids[@]}"; do resolve_thread "$thread_id"; done
-}
-
 main() {
     local subcommand="${1:-}"
 
@@ -819,7 +788,6 @@ main() {
         lessons) command_lessons "$@" ;;
         scan) command_scan "$@" ;;
         track) command_track "$@" ;;
-        resolve) command_resolve "$@" ;;
         --help|-h|help) usage ;;
         *) echo "Unknown subcommand: $subcommand" >&2; usage; exit 1 ;;
     esac

@@ -46,6 +46,109 @@
         "exceptional_continuation_count": 0,
         "exceptional_continuation_history": []
       }
+    },
+    {
+      "repository": "SecPal/.github",
+      "delivery_issue": 1053,
+      "pull_request": 1055,
+      "qualified_source": {
+        "head_sha": "42cb0f979cc32c6edff3edbbdbe46b0e98325d5f",
+        "tree_sha": "91fbaf3f11e8d4a8f70ff5f13cdcf36b227c8720",
+        "ordered_parent_shas": ["9e7836450c2f9711d4ff1efcbd2f4e60d26a67d6"],
+        "verifier_conversation_id": "b3d2ae5f-e6c5-424e-8fec-0133ad205606",
+        "verifier_workspace": "admit-1053-v4",
+        "result": "PASS",
+        "material_finding_ids": [
+          "PRRT_kwDOQFR1MM6oT9w9",
+          "PRRT_kwDOQFR1MM6oT9wp",
+          "PRRT_kwDOQFR1MM6oUAbC",
+          "PRRT_kwDOQFR1MM6oUAbE",
+          "PRRT_kwDOQFR1MM6oUAbG",
+          "PRRT_kwDOQFR1MM6oUAbH",
+          "PRRT_kwDOQFR1MM6oUAbJ",
+          "PRRT_kwDOQFR1MM6oUAbK",
+          "PRRT_kwDOQFR1MM6oUAbO"
+        ],
+        "qualification_digest": "5c273ef47df9a04d64629e1ad1f357ac546cfbb8927c097f2a5f928b30fa9188"
+      },
+      "accepted_main_sha": "9e7836450c2f9711d4ff1efcbd2f4e60d26a67d6",
+      "source_signer_identity": "aroviqen@secpal.app",
+      "allowed_path_prefixes": [
+        ".agents/skills/secpal-pr-review/references",
+        "CHANGELOG.md",
+        "docs",
+        "policies",
+        "scripts/README.md",
+        "scripts/secpal-pr-review-actions.py",
+        "scripts/secpal-resolve-fixed-threads.py",
+        "scripts/sync-required-checks.sh",
+        "scripts/secpal_pr_review",
+        "tests",
+        ".github/workflows/quality.yml",
+        "scripts/secpal-provider-fallback.py"
+      ],
+      "concepts": ["GOVERNANCE_AMENDMENT", "ABSENT_NEVER_ISSUED", "EXACT_STATE_ADOPTION"],
+      "human_authority_identity": "SecPal human architecture authority for issue 1059",
+      "authorization_id": "governance-amendment:SecPal/.github:1053:1055",
+      "intended_state": {
+        "unrestricted_review_count": 1,
+        "remediation_cycle_count": 0,
+        "cycle_3_absent": true,
+        "draft": false,
+        "ready": true,
+        "ready_transition_count": 1,
+        "ready_history": [
+          {
+            "sequence": 1,
+            "transition_kind": "DRAFT_TO_READY",
+            "observation_digest": "ce410952cf66c946fb6cb11cdc8ea39e8a99863580c8360143c1f1852fd3c26d"
+          }
+        ],
+        "exceptional_recovery_count": 0,
+        "exceptional_recovery_history": [],
+        "exceptional_continuation_count": 0,
+        "exceptional_continuation_history": []
+      },
+      "feedback": {
+        "state_digest": "cebdafa8ef7cf2d7ff3b7515501fba1a23d5e419321c502331c0f60fa53fa02a",
+        "feedback_digest": "2758095166a5f400b2e4872773cd06c6d8e20e32b767c6c13da989115214bee7",
+        "thread_inventory_digest": "0da835d46943c8b56dcaf4a04ecb254fcfde52d7d700903108c0f7c63933fae0",
+        "material_finding_ids": [
+          "PRRT_kwDOQFR1MM6oT9w9",
+          "PRRT_kwDOQFR1MM6oT9wp",
+          "PRRT_kwDOQFR1MM6oUAbC",
+          "PRRT_kwDOQFR1MM6oUAbE",
+          "PRRT_kwDOQFR1MM6oUAbG",
+          "PRRT_kwDOQFR1MM6oUAbH",
+          "PRRT_kwDOQFR1MM6oUAbJ",
+          "PRRT_kwDOQFR1MM6oUAbK",
+          "PRRT_kwDOQFR1MM6oUAbO"
+        ]
+      },
+      "observed_pre_enrollment_history": [
+        {
+          "sequence": 1,
+          "kind": "PR_CREATED_DRAFT",
+          "observed_at": "2026-10-02T10:50:21Z",
+          "head_sha": "42cb0f979cc32c6edff3edbbdbe46b0e98325d5f",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 2,
+          "kind": "DRAFT_TO_READY_OBSERVED",
+          "observed_at": "2026-10-02T10:55:08Z",
+          "head_sha": "42cb0f979cc32c6edff3edbbdbe46b0e98325d5f",
+          "reviewed_head_sha": null
+        },
+        {
+          "sequence": 3,
+          "kind": "REVIEW_SUBMITTED",
+          "observed_at": "2026-10-02T10:59:59Z",
+          "head_sha": "42cb0f979cc32c6edff3edbbdbe46b0e98325d5f",
+          "reviewed_head_sha": "42cb0f979cc32c6edff3edbbdbe46b0e98325d5f"
+        }
+      ],
+      "human_authorization_digest": "902fb0430276c62ae4869958fcd2b2aa17e80f4f0cb1d8359cce40d5c4b303d0"
     }
   ]
 }

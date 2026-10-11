@@ -23,12 +23,9 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HELPER = REPO_ROOT / "scripts" / "secpal-pr-review.py"
 FIXTURES = REPO_ROOT / "tests/fixtures/secpal-pr-review"
-SPEC = importlib.util.spec_from_file_location("secpal_pr_review", HELPER)
-if SPEC is None or SPEC.loader is None:
-    raise RuntimeError(f"Cannot load helper at {HELPER}")
-review = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = review
-SPEC.loader.exec_module(review)
+from tests.secpal_actions_fixture import load_actions
+
+review = load_actions().evidence
 
 HEAD = "a" * 40
 BASE = "b" * 40
@@ -112,7 +109,7 @@ def config() -> dict[str, Any]:
         "signature_policy": {
             "require_github_verified": True,
             "require_local_verified": True,
-            "accepted_formats": ["ssh", "openpgp"],
+            "accepted_formats": ["ssh"],
         },
         "check_policy": {
             "require_ruleset_evidence": True,
@@ -1582,7 +1579,7 @@ class SignatureAndCheckTests(unittest.TestCase):
         value = review.interpret_local_signature(0, 'Good "git" signature for user with ED25519 key')
         self.assertEqual((value["state"], value["format"]), ("valid", "ssh"))
 
-    def test_33_valid_openpgp_signature(self) -> None:
+    def test_33_historical_openpgp_signature_parser(self) -> None:
         value = review.interpret_local_signature(0, "gpg: Good signature from user")
         self.assertEqual((value["state"], value["format"]), ("valid", "openpgp"))
 

@@ -67,3 +67,64 @@ else
 fi
 
 echo "✓ copilot review memory workflow privilege-boundary checks passed"
+
+# Exercise the real CLI without credentials or a live GitHub boundary.
+cli_workspace="$(mktemp -d "${TMPDIR:-/tmp}/copilot-review-memory.XXXXXX")"
+trap 'rm -rf -- "$cli_workspace"' EXIT
+mkdir -p "$cli_workspace/bin"
+cat >"$cli_workspace/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$GH_CALL_LOG"
+case "$1 $2" in
+  'api graphql')
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[{"id":"PRRT_fixture","isResolved":false,"path":"fixture.sh","line":1,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[{"author":{"login":"copilot-pull-request-reviewer"},"body":"Fixture finding.","url":"https://github.com/example/repository/pull/1#discussion_fixture"}]}}]}}}}}'
+    ;;
+  'pr list')
+    printf '%s\n' '[{"number":1,"title":"Fixture PR","url":"https://github.com/example/repository/pull/1","isDraft":false}]'
+    ;;
+  *) exit 91 ;;
+esac
+EOF
+chmod +x "$cli_workspace/bin/gh"
+
+run_cli() {
+  env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN \
+    PATH="$cli_workspace/bin:$PATH" GH_CALL_LOG="$cli_workspace/gh.calls" \
+    bash "$REPO_ROOT/scripts/copilot-review-tool.sh" "$@"
+}
+
+if run_cli resolve --thread-id PRRT_fixture >"$cli_workspace/resolve.log" 2>&1; then
+  cat "$cli_workspace/gh.calls" >&2
+  echo "Legacy raw resolution must reject the command before calling GitHub." >&2
+  exit 1
+fi
+if [ -s "$cli_workspace/gh.calls" ]; then
+  cat "$cli_workspace/gh.calls" >&2
+  echo "Rejected legacy resolution must not attempt a GitHub call." >&2
+  exit 1
+fi
+grep -Fq 'Unknown subcommand: resolve' "$cli_workspace/resolve.log" || {
+  cat "$cli_workspace/resolve.log" >&2
+  echo "Resolution rejection must come from command removal, not a tooling failure." >&2
+  exit 1
+}
+run_cli --help >"$cli_workspace/help.log"
+if grep -Fq 'resolve --thread-id' "$cli_workspace/help.log"; then
+  echo "CLI help must not advertise raw thread resolution." >&2
+  exit 1
+fi
+jq -e '.scripts | has("copilot:review:resolve") | not' "$REPO_ROOT/package.json" >/dev/null
+
+run_cli threads --repo example/repository --pr 1 --format json >"$cli_workspace/threads.json"
+jq -e 'length == 1 and .[0].id == "PRRT_fixture"' "$cli_workspace/threads.json" >/dev/null
+run_cli lessons --repo example/repository --pr 1 >"$cli_workspace/lessons.md"
+grep -Fq 'Finding: Fixture finding.' "$cli_workspace/lessons.md"
+run_cli scan --repo example/repository --max-prs 1 \
+  --output-dir "$cli_workspace/scan" >"$cli_workspace/scan.log"
+grep -Fq 'Matching threads: 1' "$cli_workspace/scan/summary.md"
+if grep -Fq 'mutation(' "$cli_workspace/gh.calls"; then
+  echo "Read-only review tooling must not issue a GraphQL mutation." >&2
+  exit 1
+fi
+echo "✓ legacy raw resolution rejected; read-only review CLI preserved"

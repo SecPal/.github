@@ -23,6 +23,9 @@ from unittest.mock import patch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from tests.secpal_actions_fixture import load_actions
+actions_owner = load_actions()
+
 from scripts.secpal_pr_review import fast_path
 from scripts.secpal_pr_review import lifecycle_authority as authority
 from scripts.secpal_pr_review import lifecycle_orchestration as orchestration
@@ -115,16 +118,20 @@ class Chain:
             signer_identity=SIGNER,
             signer=signer_for(),
         )
-        snapshot = authority.issue_lifecycle_authority(
-            predecessor_chain=self.authorities,
-            transition_authorizations=self.events,
-            authorization=event,
-            signer_identity=SIGNER,
-            authority_signer=signer_for(),
-            accepted_event_signers=frozenset({SIGNER}),
-            accepted_authority_signers=frozenset({SIGNER}),
-            signature_verifier=verify_signature,
-        )
+        # Reconstruct the exact signed historical recovery predecessor chain.
+        with patch.object(
+            authority, "require_forward_transition", side_effect=authority.derive_state
+        ):
+            snapshot = authority.issue_lifecycle_authority(
+                predecessor_chain=self.authorities,
+                transition_authorizations=self.events,
+                authorization=event,
+                signer_identity=SIGNER,
+                authority_signer=signer_for(),
+                accepted_event_signers=frozenset({SIGNER}),
+                accepted_authority_signers=frozenset({SIGNER}),
+                signature_verifier=verify_signature,
+            )
         self.events.append(event)
         self.authorities.append(snapshot)
         self.head = resulting_head

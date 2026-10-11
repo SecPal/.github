@@ -62,7 +62,7 @@
     },
     {
       "if": {
-        "properties": { "schema_version": { "enum": ["1.6", "1.7"] } },
+        "properties": { "schema_version": { "enum": ["1.6", "1.7", "1.8"] } },
         "required": ["schema_version"]
       },
       "then": {
@@ -77,6 +77,22 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "1.8" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": ["external_prerequisite_evidence_digest"],
+        "not": {
+          "anyOf": [
+            { "required": ["validation_receipt_digest"] },
+            { "required": ["validation_attestation_digest"] }
+          ]
+        }
+      },
+      "else": { "required": ["validation_receipt_digest", "validation_attestation_digest"] }
     }
   ],
   "required": [
@@ -87,14 +103,12 @@
     "pull_request_number",
     "head_sha",
     "validated_tree_sha",
-    "validation_receipt_digest",
-    "validation_attestation_digest",
     "delivery_signer",
     "authorized_action",
     "threads"
   ],
   "properties": {
-    "schema_version": { "enum": ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] },
+    "schema_version": { "enum": ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"] },
     "kind": { "const": "LATE_FEEDBACK_DISPOSITION" },
     "repository": {
       "type": "string",
@@ -106,6 +120,7 @@
     "validated_tree_sha": { "$ref": "#/$defs/oid" },
     "validation_receipt_digest": { "$ref": "#/$defs/digest" },
     "validation_attestation_digest": { "$ref": "#/$defs/digest" },
+    "external_prerequisite_evidence_digest": { "$ref": "#/$defs/digest" },
     "final_eligibility_evidence_digest": { "$ref": "#/$defs/digest" },
     "final_eligibility_status": {
       "enum": [
@@ -152,6 +167,19 @@
         "anyOf": [
           { "required": ["final_eligibility_evidence_digest"] },
           { "required": ["final_eligibility_absence_recovery_digest"] }
+        ]
+      }
+    },
+    {
+      "properties": { "schema_version": { "const": "1.8" } },
+      "required": ["external_prerequisite_evidence_digest"],
+      "not": {
+        "anyOf": [
+          { "required": ["final_eligibility_evidence_digest"] },
+          { "required": ["final_eligibility_status"] },
+          { "required": ["final_eligibility_absence_recovery_digest"] },
+          { "required": ["validation_receipt_digest"] },
+          { "required": ["validation_attestation_digest"] }
         ]
       }
     }

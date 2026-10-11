@@ -40,6 +40,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 ## Repository Contract
 
 - Keep changes focused on one coherent topic.
+
+- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`
+- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`
+- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`
 EOF
 
     cat >"$target_dir/.github/copilot-instructions.md" <<'EOF'
@@ -125,6 +129,13 @@ assert_fails_with() {
         exit 1
     fi
 
+    if [ "$expected" = 'AGENTS.md declares the canonical review trigger' ] \
+        && ! grep -F "$expected" "$output_file" | grep -qF '✗'; then
+        sed -n '1,240p' "$output_file" >&2
+        echo "review-trigger gate itself did not reject the invalid policy" >&2
+        exit 1
+    fi
+
     if ! grep -qF "$expected" "$output_file"; then
         sed -n '1,240p' "$output_file" >&2
         echo "validator failure did not include expected result: $expected" >&2
@@ -174,6 +185,70 @@ grep -qF 'AGENTS.md has REUSE license' "$valid_output"
 grep -qF 'instruction Markdown passes lint' "$valid_output"
 grep -qF 'instruction overlays include valid frontmatter' "$valid_output"
 grep -qF 'AGENTS.md stays under runtime discovery size limit' "$valid_output"
+
+# The closed declarations are normative policy, not arbitrary prose matching.
+for forbidden_trigger in '@codex review' '@codex security review'; do
+    invalid_trigger_repo="$workspace/invalid-trigger-${forbidden_trigger##* }"
+    copy_valid_repo "$valid_repo" "$invalid_trigger_repo"
+    sed -i "s/PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY/PRIMARY_AUTOMATED_REVIEW_TRIGGER: $forbidden_trigger/" \
+        "$invalid_trigger_repo/AGENTS.md"
+    assert_fails_with "$invalid_trigger_repo" 'AGENTS.md declares the canonical review trigger'
+done
+for declaration in PRIMARY_AUTOMATED_REVIEW_TRIGGER PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED POST_READY_BOUNDED_COMMENT_FALLBACK; do
+    missing_policy_repo="$workspace/missing-$declaration"
+    copy_valid_repo "$valid_repo" "$missing_policy_repo"
+    sed -i "/$declaration:/d" "$missing_policy_repo/AGENTS.md"
+    assert_fails_with "$missing_policy_repo" 'AGENTS.md declares the canonical review trigger'
+done
+for replacement in 'PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: YES' 'POST_READY_BOUNDED_COMMENT_FALLBACK: NO'; do
+    key="${replacement%%:*}"
+    wrong_policy_repo="$workspace/wrong-$key"
+    copy_valid_repo "$valid_repo" "$wrong_policy_repo"
+    sed -i "s/$key: [A-Z_]*/$replacement/" "$wrong_policy_repo/AGENTS.md"
+    assert_fails_with "$wrong_policy_repo" 'AGENTS.md declares the canonical review trigger'
+done
+# A marker in negated/embedded prose or a nested item is not a declaration.
+for context in negated embedded nested; do
+    invalid_context_repo="$workspace/policy-$context"
+    copy_valid_repo "$valid_repo" "$invalid_context_repo"
+    # shellcheck disable=SC2016 # Literal Markdown, never command substitution.
+    case "$context" in
+        negated) sed -i 's/^- `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/- Do not adopt `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/' "$invalid_context_repo/AGENTS.md" ;;
+        embedded) sed -i 's/^- `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/- Example: `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/' "$invalid_context_repo/AGENTS.md" ;;
+        nested) sed -i '/^- `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/s/^/  /; /^  - `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/i\- Examples:' "$invalid_context_repo/AGENTS.md" ;;
+    esac
+    assert_fails_with "$invalid_context_repo" 'AGENTS.md declares the canonical review trigger'
+done
+duplicate_policy_repo="$workspace/duplicate-policy"
+copy_valid_repo "$valid_repo" "$duplicate_policy_repo"
+# shellcheck disable=SC2016 # Literal Markdown backticks, never command substitution.
+printf '\n- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: @codex review`\n' >>"$duplicate_policy_repo/AGENTS.md"
+assert_fails_with "$duplicate_policy_repo" 'AGENTS.md declares the canonical review trigger'
+hidden_policy_repo="$workspace/hidden-policy"
+copy_valid_repo "$valid_repo" "$hidden_policy_repo"
+# shellcheck disable=SC2016 # Literal Markdown backticks in the substitution.
+sed -i 's/^- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`/<!-- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY` -->/' "$hidden_policy_repo/AGENTS.md"
+assert_fails_with "$hidden_policy_repo" 'AGENTS.md declares the canonical review trigger'
+quoted_policy_repo="$workspace/quoted-policy"
+copy_valid_repo "$valid_repo" "$quoted_policy_repo"
+# shellcheck disable=SC2016 # Literal Markdown backticks in the substitution.
+sed -i 's/^- `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/> `PRIMARY_AUTOMATED_REVIEW_TRIGGER:/' "$quoted_policy_repo/AGENTS.md"
+assert_fails_with "$quoted_policy_repo" 'AGENTS.md declares the canonical review trigger'
+fenced_policy_repo="$workspace/fenced-policy"
+copy_valid_repo "$valid_repo" "$fenced_policy_repo"
+sed -i '/PRIMARY_AUTOMATED_REVIEW_TRIGGER:/d' "$fenced_policy_repo/AGENTS.md"
+# shellcheck disable=SC2016 # Emit Markdown source, not shell expressions.
+printf '\n```text\n`PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n```\n' >>"$fenced_policy_repo/AGENTS.md"
+assert_fails_with "$fenced_policy_repo" 'AGENTS.md declares the canonical review trigger'
+
+# Review declarations are independent of an unrelated target package manifest.
+malformed_package_repo="$workspace/review-policy-malformed-package"
+copy_valid_repo "$valid_repo" "$malformed_package_repo"
+mv "$malformed_package_repo/.github/instructions" \
+    "$malformed_package_repo/unused-instructions"
+printf '{"scripts": ' >"$malformed_package_repo/package.json"
+assert_passes "$malformed_package_repo" \
+    "$workspace/review-policy-malformed-package.output" frontend
 
 obsolete_agents_license_repo="$workspace/obsolete-agents-license"
 copy_valid_repo "$valid_repo" "$obsolete_agents_license_repo"
@@ -626,6 +701,7 @@ installed_yaml_validator="$installed_yaml_root/scripts/validate-ai-instructions.
 installed_yaml_repo="$installed_yaml_root/repository"
 mkdir -p "$installed_yaml_root/scripts" "$installed_yaml_root/node_modules"
 cp "$VALIDATOR" "$installed_yaml_validator"
+ln -s "$REPO_ROOT/node_modules/markdown-it" "$installed_yaml_root/node_modules/markdown-it"
 cp -R "$REPO_ROOT/node_modules/js-yaml" "$installed_yaml_root/node_modules/js-yaml"
 cp -R "$REPO_ROOT/node_modules/argparse" "$installed_yaml_root/node_modules/argparse"
 copy_valid_repo "$valid_repo" "$installed_yaml_repo"
@@ -654,6 +730,8 @@ isolated_yaml_validator="$isolated_yaml_root/scripts/validate-ai-instructions.sh
 isolated_yaml_bin="$isolated_yaml_root/bin"
 isolated_yaml_repo="$isolated_yaml_root/repository"
 mkdir -p "$isolated_yaml_root/scripts" "$isolated_yaml_bin"
+mkdir -p "$isolated_yaml_root/node_modules"
+ln -s "$REPO_ROOT/node_modules/markdown-it" "$isolated_yaml_root/node_modules/markdown-it"
 cp "$VALIDATOR" "$isolated_yaml_validator"
 copy_valid_repo "$valid_repo" "$isolated_yaml_repo"
 for required_tool in bash dirname grep head find python3 wc node; do
@@ -727,6 +805,26 @@ grep -qF 'provide it with the committed lockfile dependencies or a compatible gl
     "$missing_markdownlint_output"
 if grep -qF 'All tests passed' "$missing_markdownlint_output"; then
     echo "missing Markdownlint must not report overall validation success" >&2
+    exit 1
+fi
+
+# Operations-style root baselines need no new Copilot files or runtime tooling.
+root_only_repo="$workspace/root-only-governance"
+mkdir -p "$root_only_repo"
+cp "$valid_repo/AGENTS.md" "$root_only_repo/AGENTS.md"
+(
+    cd "$root_only_repo"
+    bash "$VALIDATOR" --review-trigger-only
+) >"$workspace/root-only.output" 2>&1
+if (cd "$root_only_repo" && bash "$VALIDATOR") >"$workspace/root-full.output" 2>&1; then
+    echo "root-only mode must not weaken full baseline requirements" >&2
+    exit 1
+fi
+sed -i 's/PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY/PRIMARY_AUTOMATED_REVIEW_TRIGGER: @codex review/' \
+    "$root_only_repo/AGENTS.md"
+if (cd "$root_only_repo" && bash "$VALIDATOR" --review-trigger-only) \
+    >"$workspace/root-invalid.output" 2>&1; then
+    echo "root-only validation must reject comment-primary policy" >&2
     exit 1
 fi
 

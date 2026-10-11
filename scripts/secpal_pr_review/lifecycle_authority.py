@@ -15,9 +15,7 @@ import binascii
 import copy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from functools import cache
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -37,6 +35,7 @@ from .fast_path import (
     verify_commit_signatures,
     verify_ready_source_recovery_safety_facts,
 )
+from . import fast_path
 from . import pre_enrollment_integration
 
 
@@ -194,6 +193,7 @@ class VerifiedLifecycleAuthority:
     validation_receipt_digest: str | None = None
     source_validation_evidence_digest: str | None = None
     adoption_source_evidence_digest: str | None = None
+    adoption_review_submitted: bool = False
 
 
 _VERIFIED_EXACT_ADOPTION_EVIDENCE = object()
@@ -681,7 +681,6 @@ _TRUST_REGISTRY = (
     Path(__file__).resolve().parents[2]
     / ".agents/skills/secpal-pr-review/references/repositories.json"
 )
-_EVIDENCE_HELPER = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
 
 
 def loads_closed_json(raw: bytes | str) -> Any:
@@ -1826,34 +1825,9 @@ def _load_delivery_signature_policy(repository: str) -> dict[str, Any]:
     return copy.deepcopy(matches[0]["signature_policy"])
 
 
-@cache
 def _load_trusted_command_helper() -> Any:
-    """Load the maintained external-command trust boundary by exact path."""
-
-    module_name = "secpal_lifecycle_trusted_commands"
-    loaded = sys.modules.get(module_name)
-    if loaded is not None:
-        loaded_path = getattr(loaded, "__file__", None)
-        if (
-            not isinstance(loaded_path, str)
-            or Path(loaded_path).absolute() != _EVIDENCE_HELPER.absolute()
-        ):
-            raise LifecycleAuthorityError(
-                "maintained command trust helper has an unexpected path"
-            )
-    spec = importlib.util.spec_from_file_location(module_name, _EVIDENCE_HELPER)
-    if spec is None or spec.loader is None:
-        raise LifecycleAuthorityError("maintained command trust helper is unavailable")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException as exc:
-        sys.modules.pop(module_name, None)
-        raise LifecycleAuthorityError(
-            "maintained command trust helper could not be loaded"
-        ) from exc
-    return module
+    """Reuse module identity; each signature operation still observes live trust."""
+    return fast_path.evidence
 
 
 def _trusted_signature_command(name: str) -> tuple[str, dict[str, str]]:
@@ -2215,7 +2189,7 @@ def _derive_state(
             raise LifecycleAuthorityError("remediation budget is exhausted; Cycle 3 is forbidden")
         state["remediation_cycle_count"] += 1
     elif transition_kind == "DRAFT_TO_READY":
-        if state["ready"] or state["unrestricted_review_count"] != MAX_UNRESTRICTED_REVIEWS:
+        if state["ready"]:
             raise LifecycleAuthorityError("Draft-to-Ready transition is not permitted")
         state["draft"] = False
         state["ready"] = True
@@ -2277,6 +2251,67 @@ def derive_state(
         transition_kind,
         event_authorization_digest,
         allow_adopted_observations=False,
+    )
+
+
+def require_forward_transition(
+    predecessor_state: Mapping[str, Any],
+    transition_kind: str,
+    event_authorization_digest: str,
+    *,
+    allow_adopted_observations: bool = False,
+    adoption_review_submitted: bool = False,
+) -> dict[str, Any]:
+    """Authorize a new transition; signed older chains use derivation only."""
+
+    state = _validate_state(
+        predecessor_state, allow_adopted_observations=allow_adopted_observations
+    )
+    if transition_kind == "DRAFT_TO_READY":
+        if state["ready_transition_count"] == 0:
+            adopted_reviewed_draft = (
+                allow_adopted_observations
+                and adoption_review_submitted
+                and state["unrestricted_review_count"] == MAX_UNRESTRICTED_REVIEWS
+            )
+            if (
+                state["draft"] is not True
+                or state["ready"] is not False
+                or state["ready_history"]
+                or (
+                    state["unrestricted_review_count"] != 0
+                    and not adopted_reviewed_draft
+                )
+                or (
+                    state["remediation_cycle_count"] != 0
+                    and not adopted_reviewed_draft
+                )
+                or state["exceptional_recovery_count"] != 0
+                or state["exceptional_continuation_count"] != 0
+            ):
+                raise LifecycleAuthorityError(
+                    "first Draft-to-Ready requires the unreviewed initial Draft"
+                )
+        elif (
+            state["draft"] is not True
+            or state["ready"] is not False
+            or not state["ready_history"]
+            or state["ready_history"][-1]["transition_kind"] != "READY_TO_DRAFT"
+        ):
+            raise LifecycleAuthorityError("later Draft-to-Ready requires Ready history")
+    elif transition_kind == "UNRESTRICTED_REVIEW_CONSUMED":
+        if (
+            state["draft"] is not False
+            or state["ready"] is not True
+            or state["ready_transition_count"] < 1
+        ):
+            raise LifecycleAuthorityError("new unrestricted review requires Ready")
+    elif transition_kind == "REMEDIATION_COMPLETED":
+        if state["draft"] is not False or state["ready"] is not True:
+            raise LifecycleAuthorityError("new remediation requires Ready")
+    return _derive_state(
+        state, transition_kind, event_authorization_digest,
+        allow_adopted_observations=allow_adopted_observations,
     )
 
 
@@ -2798,7 +2833,7 @@ def issue_lifecycle_authority(
             _require_invalid_review_derived_ready_correction_suffix(
                 transition_authorizations, predecessor_chain, event
             )
-        state = derive_state(
+        state = require_forward_transition(
             verified.state, event["transition_kind"], event["event_digest"]
         )
     fields = _authority_unsigned_fields(event=event, predecessor=predecessor, state=state)
@@ -3693,15 +3728,6 @@ def _exact_adoption_loss_receipt_digest(loss: Mapping[str, Any]) -> str:
     )
 
 
-def normalize_exact_state_adoption_historical_evidence(
-    value: Any,
-) -> dict[str, Any]:
-    """Normalize the closed schema-aware historical receipt identity."""
-
-    try:
-        return normalize_historical_evidence(value)
-    except SecurityBlocker as exc:
-        raise LifecycleAuthorityError(str(exc)) from exc
 def authenticate_governance_amendment_issuance(
     repository: str, delivery_issue: int, inputs: Mapping[str, Any]
 ) -> Any:
@@ -3869,7 +3895,11 @@ def authenticate_exact_state_adoption_external_evidence(
         dict(intended_state), allow_adopted_observations=True
     )
     has_review_budget_admission = (
-        review_budget_consumption_admission is not None or amendment is not None
+        review_budget_consumption_admission is not None
+        or (
+            amendment is not None
+            and governance_amendment.review_budget_admitted(amendment)
+        )
     )
     history = _normalize_observed_pre_enrollment_history(
         list(observed_pre_enrollment_history),
@@ -4005,14 +4035,16 @@ def _sign_ready_source_recovery_authorization(
     current_publication_digest: str,
     recovery_safety_facts: Mapping[str, Any],
     commit_signature_evidence: Mapping[str, Any],
-    historical_validation_receipt_digest: str,
-    historical_final_attestation_digest: str,
+    historical_validation_receipt_digest: str | None,
+    historical_final_attestation_digest: str | None,
     historical_evidence_loss_proof_digest: str,
     authorization_id: str,
     bounded_uses: int,
     expected_commit_signer: Mapping[str, Any],
     signer_identity: str,
     signer: Signer,
+    current_lifecycle_evidence: Mapping[str, Any] | None = None,
+    predecessor_publication_oid: str | None = None,
 ) -> dict[str, Any]:
     """Sign one bounded recovery without claiming historical-byte reconstruction."""
 
@@ -4070,6 +4102,27 @@ def _sign_ready_source_recovery_authorization(
         raise LifecycleAuthorityError(
             "Ready-source recovery commit signature evidence is ambiguous"
         )
+    zero_receipt_root = (
+        historical_validation_receipt_digest is None
+        and historical_final_attestation_digest is None
+    )
+    proof = (
+        current_lifecycle_evidence.get("exact_state_adoption_proof")
+        if isinstance(current_lifecycle_evidence, Mapping) else None
+    )
+    loss = proof.get("validation_evidence_loss_admission") if isinstance(proof, Mapping) else None
+    if isinstance(loss, Mapping) and loss.get("schema_version") == "1.2" and not zero_receipt_root:
+        raise LifecycleAuthorityError("zero-receipt recovery cannot claim historical evidence")
+    if zero_receipt_root:
+        recovered_adoption_root_historical_evidence(
+            current_lifecycle, current_lifecycle_evidence,
+            predecessor_publication_oid,
+        )
+    elif (
+        historical_validation_receipt_digest is None
+        or historical_final_attestation_digest is None
+    ):
+        raise LifecycleAuthorityError("partial historical recovery evidence is invalid")
     fields = {
         "schema_version": SCHEMA_VERSION,
         "kind": READY_SOURCE_RECOVERY_AUTHORIZATION_KIND,
@@ -4112,13 +4165,17 @@ def _sign_ready_source_recovery_authorization(
         "fresh_validation_receipt_digest": (
             safety["fresh_validation_receipt_digest"]
         ),
-        "historical_validation_receipt_digest": _require_digest(
-            historical_validation_receipt_digest,
-            "historical validation-receipt provenance",
+        "historical_validation_receipt_digest": (
+            None if zero_receipt_root else _require_digest(
+                historical_validation_receipt_digest,
+                "historical validation-receipt provenance",
+            )
         ),
-        "historical_final_attestation_digest": _require_digest(
-            historical_final_attestation_digest,
-            "historical final-attestation provenance",
+        "historical_final_attestation_digest": (
+            None if zero_receipt_root else _require_digest(
+                historical_final_attestation_digest,
+                "historical final-attestation provenance",
+            )
         ),
         "historical_evidence_loss_proof_digest": _require_digest(
             historical_evidence_loss_proof_digest,
@@ -4151,6 +4208,8 @@ def verify_ready_source_recovery_authorization(
     current_lifecycle: VerifiedLifecycleAuthority,
     current_publication_oid: str,
     current_publication_digest: str,
+    current_lifecycle_evidence: Mapping[str, Any] | None = None,
+    predecessor_publication_oid: str | None = None,
 ) -> dict[str, Any]:
     """Authenticate a recovery authorization against exact published CURRENT authority."""
 
@@ -4171,6 +4230,20 @@ def verify_ready_source_recovery_authorization(
     )
     signer = item.get("expected_commit_signer")
     parents = item.get("parent_shas")
+    zero_receipt_root = (
+        item["historical_validation_receipt_digest"] is None
+        and item["historical_final_attestation_digest"] is None
+    )
+    if zero_receipt_root:
+        recovered_adoption_root_historical_evidence(
+            current_lifecycle, current_lifecycle_evidence,
+            predecessor_publication_oid,
+        )
+    elif (
+        item["historical_validation_receipt_digest"] is None
+        or item["historical_final_attestation_digest"] is None
+    ):
+        raise LifecycleAuthorityError("partial historical recovery evidence is invalid")
     if (
         item["schema_version"] != SCHEMA_VERSION
         or item["kind"] != READY_SOURCE_RECOVERY_AUTHORIZATION_KIND
@@ -4200,12 +4273,14 @@ def verify_ready_source_recovery_authorization(
         or safety["fresh_validation_receipt_digest"]
         != item["fresh_validation_receipt_digest"]
         or (
-            current_lifecycle.validation_receipt_digest is not None
+            not zero_receipt_root
+            and current_lifecycle.validation_receipt_digest is not None
             and item["historical_validation_receipt_digest"]
             != current_lifecycle.validation_receipt_digest
         )
         or (
-            current_lifecycle.adoption_source_evidence_digest is not None
+            not zero_receipt_root
+            and current_lifecycle.adoption_source_evidence_digest is not None
             and item["historical_final_attestation_digest"]
             != current_lifecycle.adoption_source_evidence_digest
         )
@@ -4240,11 +4315,15 @@ def verify_ready_source_recovery_authorization(
         "current_publication_digest", "reviewed_state_digest",
         "reviewed_feedback_digest", "feedback_assessment_digest",
         "fresh_validation_receipt_digest",
-        "historical_validation_receipt_digest",
-        "historical_final_attestation_digest",
         "historical_evidence_loss_proof_digest", "authorization_digest",
     ):
         _require_digest(item[field], field)
+    if not zero_receipt_root:
+        for field in (
+            "historical_validation_receipt_digest",
+            "historical_final_attestation_digest",
+        ):
+            _require_digest(item[field], field)
     _require_identity(item["authorization_id"], "Ready-source recovery authorization")
     authorization_signer = _require_identity(
         item["signer_identity"], "Ready-source recovery authorization signer"
@@ -4296,13 +4375,21 @@ def _assemble_exact_state_adoption_evidence(
     state = _validate_state(
         dict(intended_state), allow_adopted_observations=True
     )
+    if governance_amendment_authorization is not None:
+        from . import governance_amendment
+
     history = _normalize_observed_pre_enrollment_history(
         list(observed_pre_enrollment_history),
         expected_head=head,
         intended_state=state,
         review_budget_consumption_admitted=(
             review_budget_consumption_admission is not None
-            or governance_amendment_authorization is not None
+            or (
+                governance_amendment_authorization is not None
+                and governance_amendment.review_budget_admitted(
+                    governance_amendment_authorization
+                )
+            )
         ),
     )
     timestamp = _require_adoption_timestamp(adoption_timestamp, "adoption timestamp")
@@ -4607,6 +4694,147 @@ def exact_state_adoption_historical_evidence(value: Any) -> dict[str, Any]:
     return normalize_exact_state_adoption_historical_evidence(result)
 
 
+def exact_state_adoption_ready_root_historical_evidence(
+    current_lifecycle: VerifiedLifecycleAuthority,
+    lifecycle_evidence: Mapping[str, Any] | None,
+    predecessor_publication_oid: str | None,
+) -> dict[str, Any]:
+    """Authenticate direct Ready-root history without issuing new lifecycle authority."""
+
+    if (
+        not isinstance(lifecycle_evidence, Mapping)
+        or predecessor_publication_oid is not None
+        or current_lifecycle.historical_proof_mode != "exact_state_adoption"
+        or lifecycle_evidence.get("transition_authorizations") != []
+        or lifecycle_evidence.get("authority_chain") != []
+    ):
+        raise LifecycleAuthorityError("zero-receipt recovery is not an adoption root")
+    proof = lifecycle_evidence.get("exact_state_adoption_proof")
+    if not isinstance(proof, Mapping):
+        raise LifecycleAuthorityError("zero-receipt adoption proof is missing")
+    verified = verify_exact_state_adoption_proof(proof)
+    state = current_lifecycle.state
+    if (
+        proof.get("historical_proof_mode") != "exact_state_adoption"
+        or proof.get("intended_state") != state
+        or verified.repository != current_lifecycle.repository
+        or verified.delivery_issue != current_lifecycle.delivery_issue
+        or verified.pull_request != current_lifecycle.pull_request
+        or verified.lifecycle_id != current_lifecycle.lifecycle_id
+        or verified.head_sha != current_lifecycle.head_sha
+        or verified.tree_sha != current_lifecycle.tree_sha
+        or proof.get("proof_digest") != current_lifecycle.authority_digest
+        or state.get("draft") is not False
+        or state.get("ready") is not True
+        or state.get("unrestricted_review_count") != 1
+        or isinstance(state.get("remediation_cycle_count"), bool)
+        or not isinstance(state.get("remediation_cycle_count"), int)
+        or not 0 <= state["remediation_cycle_count"] <= 2
+        or state.get("ready_transition_count") != 1
+        or state.get("exceptional_recovery_count") != 0
+        or state.get("exceptional_recovery_history") != []
+        or state.get("exceptional_continuation_count") != 0
+        or state.get("exceptional_continuation_history") != []
+        or state.get("cycle_3_absent") is not True
+        or not isinstance(state.get("ready_history"), list)
+        or len(state["ready_history"]) != 1
+        or not isinstance(state["ready_history"][0], Mapping)
+        or set(state["ready_history"][0])
+        != {"sequence", "transition_kind", "observation_digest"}
+        or state["ready_history"][0].get("sequence") != 1
+        or state["ready_history"][0].get("transition_kind") != "DRAFT_TO_READY"
+    ):
+        raise LifecycleAuthorityError("zero-receipt adoption-root binding changed")
+    if proof["proof_version"] == EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION:
+        # The proof verifier independently authenticates the amendment and its
+        # closed ABSENT_NEVER_ISSUED projection; CURRENT safety is not history.
+        amendment = proof["governance_amendment_authorization"]
+        if any(amendment[field] != expected for field, expected in {
+            "repository": current_lifecycle.repository,
+            "delivery_issue": current_lifecycle.delivery_issue,
+            "pull_request": current_lifecycle.pull_request,
+            "head_sha": current_lifecycle.head_sha,
+            "tree_sha": current_lifecycle.tree_sha,
+        }.items()):
+            raise LifecycleAuthorityError("zero-receipt amendment-root binding changed")
+        bundle = _require_closed(
+            lifecycle_evidence, EXACT_ADOPTION_PUBLICATION_FIELDS,
+            "exact-state adoption lifecycle evidence",
+        )
+        if (
+            bundle["schema_version"] != SCHEMA_VERSION
+            or bundle["kind"] != EXACT_ADOPTION_EVIDENCE_KIND
+            or bundle["domain"] != EXACT_ADOPTION_EVIDENCE_DOMAIN
+            or bundle["enrollment_mode"] != "EXACT_STATE_ADOPTION"
+            or current_lifecycle.validation_receipt_digest is not None
+            or current_lifecycle.source_validation_evidence_digest is not None
+        ):
+            raise LifecycleAuthorityError("zero-receipt adoption-root binding changed")
+        return normalize_exact_state_adoption_historical_evidence(
+            proof["historical_evidence"]
+        )
+
+    loss = proof.get("validation_evidence_loss_admission")
+    if (
+        proof.get("schema_version") != "3.0"
+        or proof.get("proof_version") != "3.0"
+        or not isinstance(loss, Mapping)
+        or loss.get("schema_version") not in {"1.2", "1.3"}
+        or loss.get("historical_package_status") != "UNAVAILABLE"
+        or loss.get("repository") != current_lifecycle.repository
+        or loss.get("delivery_issue") != current_lifecycle.delivery_issue
+        or loss.get("pull_request") != current_lifecycle.pull_request
+        or loss.get("head_sha") != current_lifecycle.head_sha
+        or loss.get("tree_sha") != current_lifecycle.tree_sha
+    ):
+        raise LifecycleAuthorityError("zero-receipt adoption-root binding changed")
+    if loss["schema_version"] == "1.3":
+        if (
+            loss.get("historical_receipt_head_sha") != current_lifecycle.head_sha
+            or loss.get("historical_validation_receipt_digest")
+            != current_lifecycle.validation_receipt_digest
+            or current_lifecycle.validation_receipt_digest
+            != proof.get("validation_receipt_digest")
+            or current_lifecycle.source_validation_evidence_digest
+            != proof.get("source_validation_evidence_digest")
+            or current_lifecycle.adoption_source_evidence_digest
+            != proof.get("adoption_source_evidence_digest")
+            or loss.get("historical_final_attestation_digest") is not None
+            or loss.get("historical_bytes_reconstructed") is not False
+        ):
+            raise LifecycleAuthorityError("issued-receipt adoption-root binding changed")
+        return normalize_exact_state_adoption_historical_evidence({
+            "state": "UNAVAILABLE",
+            "validation_receipt_digest": loss["historical_validation_receipt_digest"],
+            "source_validation_evidence_digest": proof["source_validation_evidence_digest"],
+            "final_attestation_digest": None,
+            "bytes_reconstructed": False,
+        })
+    historical = normalize_exact_state_adoption_historical_evidence({
+        "state": "ABSENT_NEVER_ISSUED",
+        "validation_receipt_digest": loss.get("historical_validation_receipt_digest"),
+        "source_validation_evidence_digest": None,
+        "final_attestation_digest": loss.get("historical_final_attestation_digest"),
+        "bytes_reconstructed": loss.get("historical_bytes_reconstructed"),
+    })
+    return historical
+
+
+def recovered_adoption_root_historical_evidence(
+    current_lifecycle: VerifiedLifecycleAuthority,
+    lifecycle_evidence: Mapping[str, Any] | None,
+    predecessor_publication_oid: str | None,
+) -> dict[str, Any]:
+    """Recovery remains restricted to authenticated never-issued history."""
+
+    historical = exact_state_adoption_ready_root_historical_evidence(
+        current_lifecycle, lifecycle_evidence, predecessor_publication_oid,
+    )
+    if historical["state"] != "ABSENT_NEVER_ISSUED":
+        raise LifecycleAuthorityError("zero-receipt adoption-root binding changed")
+    return historical
+
+
 def create_exact_state_adoption_authorization(
     *, adoption_evidence: Mapping[str, Any], authorization_id: str,
     bounded_uses: int, signer_identity: str, signer: Signer,
@@ -4828,6 +5056,13 @@ def verify_exact_state_adoption_proof(
         adoption_source_evidence_digest=evidence[
             "adoption_source_evidence_digest"
         ],
+        adoption_review_submitted=(
+            evidence.get("review_budget_consumption_admission") is None
+            and sum(
+                item["kind"] == "REVIEW_SUBMITTED"
+                for item in evidence["observed_pre_enrollment_history"]
+            ) == 1
+        ),
     )
     if expected is not None:
         _compare_expected(result, expected)
@@ -5025,11 +5260,12 @@ def issue_exact_state_adoption_successor_authority(
         raise LifecycleAuthorityError(
             "transition authorization does not continue adopted predecessor"
         )
-    state = _derive_state(
+    state = require_forward_transition(
         predecessor.state,
         event["transition_kind"],
         event["event_digest"],
         allow_adopted_observations=True,
+        adoption_review_submitted=predecessor.adoption_review_submitted,
     )
     fields = _authority_unsigned_fields(
         event=event, predecessor={"state_after": predecessor.state}, state=state

@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import importlib
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -19,12 +21,12 @@ import subprocess
 import sys
 import tempfile
 import types
+import weakref
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_HELPER = REPOSITORY_ROOT / "scripts/secpal-pr-review.py"
 PLAN_SCHEMA_PATH = (
     REPOSITORY_ROOT
     / ".agents/skills/secpal-pr-review/references/mutation-plan.schema.json"
@@ -41,163 +43,200 @@ REGISTRY_PATH = (
     REPOSITORY_ROOT
     / ".agents/skills/secpal-pr-review/references/repositories.json"
 )
-FAST_PATH_HELPER = REPOSITORY_ROOT / "scripts/secpal_pr_review/fast_path.py"
-EXACT_SOURCE_SAFETY_HELPER = (
-    REPOSITORY_ROOT / "scripts/secpal_pr_review/exact_source_safety.py"
-)
-PRE_ENROLLMENT_INTEGRATION_HELPER = (
-    REPOSITORY_ROOT / "scripts/secpal_pr_review/pre_enrollment_integration.py"
-)
-LIFECYCLE_AUTHORITY_HELPER = (
-    REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_authority.py"
-)
-LATE_DISPOSITION_HELPER = (
-    REPOSITORY_ROOT / "scripts/secpal_pr_review/late_disposition.py"
-)
-BOOTSTRAP_SOURCE_ADMISSION_HELPER = (
-    REPOSITORY_ROOT / "scripts/secpal_pr_review/bootstrap_source_admission.py"
-)
-LIFECYCLE_PUBLICATION_HELPER = (
-    REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_publication.py"
-)
-LIFECYCLE_ORCHESTRATION_HELPER = (
-    REPOSITORY_ROOT / "scripts/secpal_pr_review/lifecycle_orchestration.py"
-)
 FAST_BATCH_SCHEMA_PATH = (
     REPOSITORY_ROOT
     / ".agents/skills/secpal-pr-review/references/fast-path-batch.schema.json"
 )
 EXTERNAL_COMMAND_TIMEOUT_SECONDS = 30
 LOCAL_VALIDATION_TIMEOUT_SECONDS = 600
-BRIDGE_BYTECODE_CACHE = tempfile.TemporaryDirectory(
-    prefix="secpal-accepted-main-bytecode-"
-)
-sys.pycache_prefix = BRIDGE_BYTECODE_CACHE.name
 
 
-def _load_evidence_helper() -> Any:
-    spec = importlib.util.spec_from_file_location("secpal_pr_review_evidence_shared", EVIDENCE_HELPER)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load accepted evidence helper: {EVIDENCE_HELPER}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        if sys.modules.get(spec.name) is module:
-            sys.modules.pop(spec.name, None)
-        raise
-    return module
+def _construct_verifier_owner() -> tuple[Any, Any, Any]:
+    """Own ordinary imports once; never adopt an existing verifier namespace."""
+    owner = sys.modules.get(__name__)
+    if type(owner) is not types.ModuleType or owner.__dict__ is not globals():
+        raise RuntimeError("Actions owner is not bound to its executing module")
+    prefixes = ("scripts", "secpal_pr_review", "secpal_work_graph",
+                "secpal_ready_integration_lifecycle", "secpal_ready_recovery_policy",
+                "secpal_exact_source_safety")
 
+    def entries() -> dict[str, Any]:
+        return {name: module for name, module in sys.modules.copy().items()
+                if any(name == prefix or name.startswith(prefix + ".")
+                       for prefix in prefixes)}
 
-evidence = _load_evidence_helper()
-
-
-def _load_fast_path_helper() -> Any:
-    loaded = sys.modules.get("secpal_pr_review.fast_path")
-    if loaded is not None:
-        try:
-            loaded_path = loaded.__file__
-        except AttributeError as exc:
-            raise RuntimeError(
-                "Canonical fast-path module has an unexpected path"
-            ) from exc
-        if Path(loaded_path).absolute() != FAST_PATH_HELPER.absolute():
-            raise RuntimeError("Canonical fast-path module has an unexpected path")
-    spec = importlib.util.spec_from_file_location(
-        "secpal_pr_review.fast_path", FAST_PATH_HELPER
+    if entries():
+        raise RuntimeError("Unowned preloaded verifier namespace")
+    importers = (importlib.machinery.BuiltinImporter,
+                 importlib.machinery.FrozenImporter, importlib.machinery.PathFinder)
+    original_importers = tuple(sys.meta_path)
+    global BRIDGE_BYTECODE_CACHE, fast_path, evidence, follow_up, pre_enrollment, exact_source_safety
+    BRIDGE_BYTECODE_CACHE = tempfile.TemporaryDirectory(
+        prefix="secpal-accepted-main-bytecode-"
     )
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load fast-path helper: {FAST_PATH_HELPER}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
+    sys.pycache_prefix = BRIDGE_BYTECODE_CACHE.name
+    original_path = sys.path[:]
+    root = REPOSITORY_ROOT
+    source = Path(__file__)
+    source_digest = hashlib.sha256(source.read_bytes()).digest()
+    owner_spec = owner.__spec__
+    owner_name = owner.__name__
+    sys.path.insert(0, str(root))
+    sys.meta_path[:] = importers
     try:
-        spec.loader.exec_module(module)
+        # The closed, flat graph is constructed before it is exposed. Python
+        # handles dependency ordering and relative imports; no finder or alias
+        # rewrites package identities.
+        core = importlib.import_module("scripts.secpal_pr_review.fast_path")
+        for name in core.VERIFIER_MODULE_NAMES:
+            importlib.import_module("scripts.secpal_pr_review." + name)
+        for name in core.WORK_GRAPH_MODULE_NAMES:
+            importlib.import_module("scripts.secpal_work_graph" + ("" if name == "__init__" else "." + name))
     except BaseException:
-        if sys.modules.get(spec.name) is module:
-            sys.modules.pop(spec.name, None)
+        for name in entries():
+            sys.modules.pop(name, None)
         raise
-    return module
+    finally:
+        sys.path[:] = original_path
+        sys.meta_path[:] = original_importers
+    modules = entries()
+    records = {}
+    metadata = {}
+    for name, module in modules.items():
+        spec = module.__spec__
+        metadata[name] = (module.__loader__, module.__package__, spec.loader,
+                          getattr(module, "__path__", None), spec.submodule_search_locations)
+        path = root.joinpath(*name.split("."))
+        path = path / "__init__.py" if hasattr(module, "__path__") else path.with_suffix(".py")
+        if module.__spec__.origin is None:
+            expected = root.joinpath(*name.split("."))
+            if set(module.__path__) != {str(expected)}:
+                raise RuntimeError("Verifier namespace path changed")
+            records[name] = (module, None, None, module.__spec__,
+                             dict(vars(module)))
+            continue
+        if (module.__file__ != str(path) or module.__spec__.origin != str(path)
+                or type(module.__loader__) is not importlib.machinery.SourceFileLoader
+                or path.resolve(strict=True) != path):
+            raise RuntimeError("Verifier import origin changed")
+        # Retain every construction binding, including callables and policy
+        # paths. This records references, never operation results or live trust.
+        bindings = dict(vars(module))
+        records[name] = (module, path, hashlib.sha256(path.read_bytes()).digest(),
+                         module.__spec__, bindings)
+
+    fast_path = core
+    evidence = modules["scripts.secpal-pr-review"]
+    follow_up = modules["scripts.secpal_pr_review.follow_up"]
+    pre_enrollment = modules["scripts.secpal_pr_review.pre_enrollment_integration"]
+    exact_source_safety = modules["scripts.secpal_pr_review.exact_source_safety"]
+    owner_bindings = None
+
+    def seal_owner() -> None:
+        nonlocal owner_bindings
+        if owner_bindings is not None:
+            raise RuntimeError("Actions owner bindings are already retained")
+        owner_bindings = dict(vars(owner))
+
+    def require_owner() -> Any:
+        if (owner_bindings is None
+                or set(vars(owner)) != set(owner_bindings)
+                or any(owner.__dict__.get(key) is not value for key, value in owner_bindings.items())
+                or sys.modules.get(owner_name) is not owner
+                or owner.__name__ != owner_name
+                or owner.__dict__ is not require_owner.__globals__
+                or owner.__spec__ is not owner_spec or REPOSITORY_ROOT is not root
+                or owner.__file__ != str(source)
+                or hashlib.sha256(source.read_bytes()).digest() != source_digest
+                or set(entries()) != set(modules)
+                or any(sys.modules.get(name) is not module for name, module in modules.items())):
+            raise RuntimeError("Verifier owner or namespace identity changed")
+        for name, (module, path, digest, spec, bindings) in records.items():
+            loader, package, spec_loader, namespace_path, search_locations = metadata[name]
+            if (module.__spec__ is not spec or module.__name__ != name
+                    or spec.name != name or module.__package__ != package
+                    or module.__loader__ is not loader or spec.loader is not spec_loader):
+                raise RuntimeError("Verifier module identity changed")
+            if hasattr(module, "__path__"):
+                if (module.__path__ is not namespace_path
+                        or spec.submodule_search_locations is not search_locations
+                        or set(module.__path__) != {str(root.joinpath(*name.split(".")))}
+                        or any(isinstance(value, types.ModuleType) and key not in bindings
+                               for key, value in vars(module).items())):
+                    raise RuntimeError("Verifier namespace path or children changed")
+            if (set(vars(module)) != set(bindings)
+                    or any(getattr(module, key, None) is not value for key, value in bindings.items())):
+                raise RuntimeError("Verifier binding identity changed")
+            if path is None:
+                if spec.origin is not None:
+                    raise RuntimeError("Verifier namespace origin changed")
+            elif (module.__file__ != str(path) or spec.origin != str(path)
+                  or hashlib.sha256(path.read_bytes()).digest() != digest):
+                raise RuntimeError("Verifier type, token or source identity changed")
+            parent, _, child = name.rpartition(".")
+            if parent in modules and getattr(modules[parent], child, None) is not module:
+                raise RuntimeError("Verifier child binding changed")
+        return owner
+
+    def owned_module(short: str) -> Any:
+        require_owner()
+        return modules["scripts.secpal_pr_review." + short]
+
+    bootstrap = modules["scripts.secpal_pr_review.bootstrap_source_admission"]
+    bootstrap._load_actions_helper = require_owner
+    records[bootstrap.__name__][4]["_load_actions_helper"] = require_owner
+    return require_owner, owned_module, seal_owner
 
 
-fast_path = _load_fast_path_helper()
-follow_up = fast_path.follow_up
+_require_owned_actions_bridge, _owned_verifier_module, _seal_verifier_owner = _construct_verifier_owner()
+del _construct_verifier_owner
 PROHIBITED_OPERATION_KINDS = tuple(fast_path.PROHIBITED_REGISTRY_OPERATIONS)
 
 
-def _load_exact_source_safety_helper() -> Any:
-    package_name = "secpal_exact_source_safety"
-    package = types.ModuleType(package_name)
-    package.__path__ = [str(EXACT_SOURCE_SAFETY_HELPER.parent)]
-    sys.modules[package_name] = package
-    try:
-        spec = importlib.util.spec_from_file_location(
-            f"{package_name}.exact_source_safety", EXACT_SOURCE_SAFETY_HELPER,
-        )
-        if spec is None or spec.loader is None:
-            raise RuntimeError("Cannot load exact-source safety helper")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-    except BaseException:
-        module_name = f"{package_name}.exact_source_safety"
-        sys.modules.pop(module_name, None)
-        if sys.modules.get(package_name) is package:
-            sys.modules.pop(package_name, None)
-        raise
-    return module
-
-
-exact_source_safety = _load_exact_source_safety_helper()
-
-
-READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH = (
-    "tests/ready-source-recovery-current-safety.py"
-)
-READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS = (
-    "candidate_issuer_separation",
-    "lifecycle_history",
-    "ordinary_prior_ready",
-    "prior_authority_scope",
-    "prior_authority_signer",
-    "stable_feedback_integrity",
-)
-READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS = tuple(
-    fast_path.READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS
-)
+def _load_fast_path_helper() -> Any:
+    return _owned_verifier_module("fast_path")
 
 
 def _load_pre_enrollment_integration_helper() -> Any:
-    module_name = "secpal_pr_review.pre_enrollment_integration"
-    loaded = sys.modules.get(module_name)
-    if loaded is not None:
-        try:
-            loaded_path = loaded.__file__
-        except AttributeError as exc:
-            raise RuntimeError(
-                "Canonical pre-enrollment module has an unexpected path"
-            ) from exc
-        if Path(loaded_path).absolute() != PRE_ENROLLMENT_INTEGRATION_HELPER.absolute():
-            raise RuntimeError(
-                "Canonical pre-enrollment module has an unexpected path"
-            )
-    spec = importlib.util.spec_from_file_location(
-        module_name, PRE_ENROLLMENT_INTEGRATION_HELPER
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Cannot load pre-enrollment integration helper")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        if sys.modules.get(module_name) is module:
-            sys.modules.pop(module_name, None)
-        raise
-    return module
+    return _owned_verifier_module("pre_enrollment_integration")
 
 
-pre_enrollment = _load_pre_enrollment_integration_helper()
+def _load_exact_source_safety_helper() -> Any:
+    return _owned_verifier_module("exact_source_safety")
+
+
+def _load_evidence_helper() -> Any:
+    _require_owned_actions_bridge()
+    return evidence
+
+
+def _load_lifecycle_publication_helpers(
+    *, include_orchestration: bool = False, return_collision: bool = False
+) -> tuple[Any, ...]:
+    if return_collision and not include_orchestration:
+        raise RuntimeError("collision helper requires lifecycle orchestration")
+    authority = _owned_verifier_module("lifecycle_authority")
+    publication = _owned_verifier_module("lifecycle_publication")
+    if not include_orchestration:
+        return authority, publication
+    orchestration = _owned_verifier_module("lifecycle_orchestration")
+    if return_collision:
+        return orchestration.version_collision
+    return (authority, publication, orchestration._verify_user_authorization,
+            orchestration._authenticate_diagnostic_recovery_source,
+            orchestration._verify_diagnostic_recovery_admission)
+
+
+def _load_collision_validation_helper() -> Any:
+    return _owned_verifier_module("version_collision")
+
+
+def _load_protected_main_helper() -> Any:
+    return _owned_verifier_module("bootstrap_source_admission")
+
+
+def _load_enrolled_draft_integration_helper() -> Any:
+    return _owned_verifier_module("enrolled_draft_integration")
 
 
 def _read_pre_enrollment_json(path: str, label: str) -> Any:
@@ -207,122 +246,27 @@ def _read_pre_enrollment_json(path: str, label: str) -> Any:
         raise fast_path.RecoverableLocalError(f"cannot read {label}") from exc
 
 
-def _load_lifecycle_publication_helpers(
-    *, include_orchestration: bool = False, return_collision: bool = False
-) -> tuple[Any, ...]:
-    """Load the maintained lifecycle modules from this exact source tree."""
-
-    if return_collision and not include_orchestration:
-        raise RuntimeError("collision helper requires lifecycle orchestration")
-    package_name = "secpal_ready_integration_lifecycle"
-    package = types.ModuleType(package_name)
-    package.__path__ = [str(LIFECYCLE_AUTHORITY_HELPER.parent)]
-    sys.modules[package_name] = package
-    sys.modules[f"{package_name}.fast_path"] = _load_fast_path_helper()
-    sys.modules[f"{package_name}.pre_enrollment_integration"] = (
-        _load_pre_enrollment_integration_helper()
-    )
-
-    def load(name: str, path: Path) -> Any:
-        module_name = f"{package_name}.{name}"
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"Cannot load maintained lifecycle helper: {path}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        return module
-
+def _command_enrolled_draft_integration(arguments: argparse.Namespace) -> int:
+    module = _load_enrolled_draft_integration_helper()
+    action = module.prepare if arguments.command.startswith("prepare-") else module.integrate
+    kind = module.SOURCE_KIND if "source" in arguments.command else module.KIND
     try:
-        lifecycle_authority = load("lifecycle_authority", LIFECYCLE_AUTHORITY_HELPER)
-        lifecycle_publication = load(
-            "lifecycle_publication", LIFECYCLE_PUBLICATION_HELPER
-        )
-        user_authorization_verifier = None
-        diagnostic_authenticator = None
-        diagnostic_verifier = None
-        if include_orchestration:
-            lifecycle_orchestration = load(
-                "lifecycle_orchestration", LIFECYCLE_ORCHESTRATION_HELPER
-            )
-            user_authorization_verifier = (
-                lifecycle_orchestration._verify_user_authorization
-            )
-            diagnostic_authenticator = (
-                lifecycle_orchestration._authenticate_diagnostic_recovery_source
-            )
-            diagnostic_verifier = (
-                lifecycle_orchestration._verify_diagnostic_recovery_admission
-            )
-    except BaseException:
-        for module_name in (
-            f"{package_name}.lifecycle_orchestration",
-            f"{package_name}.lifecycle_publication",
-            f"{package_name}.lifecycle_authority",
-            f"{package_name}.fast_path",
-            package_name,
-        ):
-            sys.modules.pop(module_name, None)
-        raise
-    if user_authorization_verifier is None:
-        return lifecycle_authority, lifecycle_publication
-    if return_collision:
-        return lifecycle_orchestration.version_collision
-    return (
-        lifecycle_authority,
-        lifecycle_publication,
-        user_authorization_verifier,
-        diagnostic_authenticator,
-        diagnostic_verifier,
-    )
+        return action(_require_owned_actions_bridge(), arguments, kind=kind)
+    except (module.authority.LifecycleAuthorityError,
+            module.publication.LifecyclePublicationError,
+            module.execution.LifecycleExecutionError,
+            module.bootstrap_source_admission.BootstrapSourceAdmissionError) as exc:
+        raise fast_path.SecurityBlocker(str(exc)) from exc
 
 
-def _load_collision_validation_helper() -> Any:
-    """Load the collision owner through the maintained lifecycle package."""
-
-    return _load_lifecycle_publication_helpers(
-        include_orchestration=True, return_collision=True,
-    )
-
-
-def _load_protected_main_helper() -> Any:
-    """Load the accepted-main source admission module from this exact tree."""
-
-    package_name = "secpal_ready_recovery_policy"
-    package = types.ModuleType(package_name)
-    package.__path__ = [str(FAST_PATH_HELPER.parent)]
-    sys.modules[package_name] = package
-    sys.modules[f"{package_name}.fast_path"] = _load_fast_path_helper()
-
-    def load(name: str, path: Path) -> Any:
-        module_name = f"{package_name}.{name}"
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"Cannot load maintained policy helper: {path}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        return module
-
-    loaded_names: list[str] = []
-    try:
-        load("late_disposition", LATE_DISPOSITION_HELPER)
-        loaded_names.append("late_disposition")
-        load("lifecycle_authority", LIFECYCLE_AUTHORITY_HELPER)
-        loaded_names.append("lifecycle_authority")
-        load("lifecycle_publication", LIFECYCLE_PUBLICATION_HELPER)
-        loaded_names.append("lifecycle_publication")
-        helper = load(
-            "bootstrap_source_admission", BOOTSTRAP_SOURCE_ADMISSION_HELPER
-        )
-        loaded_names.append("bootstrap_source_admission")
-        return helper
-    except BaseException:
-        for name in reversed(loaded_names):
-            sys.modules.pop(f"{package_name}.{name}", None)
-        sys.modules.pop(f"{package_name}.fast_path", None)
-        sys.modules.pop(package_name, None)
-        raise
+READY_SOURCE_RECOVERY_CURRENT_SAFETY_PATH = "tests/ready-source-recovery-current-safety.py"
+READY_SOURCE_RECOVERY_CURRENT_SAFETY_INVARIANTS = (
+    "candidate_issuer_separation", "lifecycle_history", "ordinary_prior_ready",
+    "prior_authority_scope", "prior_authority_signer", "stable_feedback_integrity",
+)
+READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS = tuple(
+    fast_path.READY_SOURCE_RECOVERY_CURRENT_SAFETY_TOOLING_PATHS
+)
 
 
 def _playwright_browsers_path(account_home: Path) -> Path:
@@ -476,38 +420,82 @@ class RegistryError(ValueError):
     """The production registry is invalid or does not support a repository."""
 
 
-class RegisteredValidationResult:
-    """Secret-safe outcome of one complete registered-validation run."""
+def _own_registered_execution(execute: Any) -> tuple[type, Any]:
+    """Keep result issuance and backing observations inside the runner closure."""
 
-    def __init__(
-        self,
+    results: Any = weakref.WeakKeyDictionary()
+
+    class RegisteredValidationResult:
+        """Verifier-owned process-local execution truth; never completion evidence."""
+
+        __slots__ = ("__weakref__",)
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise TypeError("registered execution results are runner-owned")
+
+        def _facts(self) -> dict[str, Any]:
+            if type(self) is not RegisteredValidationResult or self not in results:
+                raise fast_path.SecurityBlocker("unowned registered command result")
+            return copy.deepcopy(results[self])
+
+        @property
+        def command_set(self) -> list[dict[str, Any]] | None:
+            return self._facts()["command_set"]
+
+        @property
+        def execution_root(self) -> Path | None:
+            return self._facts()["execution_root"]
+
+        def __bool__(self) -> bool:
+            return self._facts()["failure_category"] is None
+
+        def execution_report(self) -> dict[str, str]:
+            return {
+                "REGISTERED_COMMAND_EXECUTION": "PASS" if self else "FAILED",
+                "COMPLETE_REGISTERED_VALIDATION": "INCOMPLETE" if self else "FAILED",
+                "CANONICAL_RECEIPT": "ABSENT",
+                "COMMIT_BINDING_AUTHORITY": "ABSENT",
+            }
+
+        def failure_report(self) -> dict[str, Any] | None:
+            facts = self._facts()
+            if any(facts[key] is None for key in (
+                "failure_index", "failure_purpose", "failure_category"
+            )):
+                return None
+            return {
+                "index": facts["failure_index"],
+                "purpose": facts["failure_purpose"],
+                "category": facts["failure_category"],
+            }
+
+
+    def issue_result(
         failure_index: int | None = None,
         failure_purpose: str | None = None,
         failure_category: str | None = None,
-    ) -> None:
-        self.failure_index = failure_index
-        self.failure_purpose = (
-            evidence.redact_diagnostic(failure_purpose)
-            if failure_purpose is not None
-            else None
-        )
-        self.failure_category = failure_category
-
-    def __bool__(self) -> bool:
-        return self.failure_category is None
-
-    def failure_report(self) -> dict[str, Any] | None:
-        if (
-            self.failure_index is None
-            or self.failure_purpose is None
-            or self.failure_category is None
-        ):
-            return None
-        return {
-            "index": self.failure_index,
-            "purpose": self.failure_purpose,
-            "category": self.failure_category,
+        *,
+        command_set: list[dict[str, Any]] | None = None,
+        execution_root: Path | None = None,
+    ) -> RegisteredValidationResult:
+        result = object.__new__(RegisteredValidationResult)
+        results[result] = {
+            "command_set": copy.deepcopy(command_set),
+            "execution_root": execution_root,
+            "failure_index": failure_index,
+            "failure_purpose": (
+                evidence.redact_diagnostic(failure_purpose)
+                if failure_purpose is not None else None
+            ),
+            "failure_category": failure_category,
         }
+        return result
+
+
+    def run(*args: Any, **kwargs: Any) -> Any:
+        return execute(*args, **kwargs, _result=issue_result)
+
+    return RegisteredValidationResult, run
 
 
 class RegisteredValidationFailure(fast_path.SecurityBlocker):
@@ -1388,16 +1376,6 @@ def _complete_validation_source_state(
     return identities[0], identities[1], status
 
 
-def _preparation_failure(category: str) -> RegisteredValidationResult:
-    """Return one secret-safe dependency-preparation failure identity."""
-
-    return RegisteredValidationResult(
-        0,
-        "Prepare locked Node dependencies",
-        category,
-    )
-
-
 def _validate_locked_node_dependency_authority(
     repository_root: Path,
     preparation: dict[str, Any],
@@ -1442,17 +1420,21 @@ def _prepare_complete_validation_dependencies(
     repository_root: Path,
     environment: dict[str, str],
     *,
+    _result: Any,
     integrity_verifier: Any = None,
     dependency_preparation_satisfied: bool = False,
 ) -> RegisteredValidationResult:
+    def failure(category: str) -> RegisteredValidationResult:
+        return _result(0, "Prepare locked Node dependencies", category)
+
     preparation = repository.get("complete_validation_preparation")
     if preparation is None:
-        return RegisteredValidationResult()
+        return _result()
     if (
         not isinstance(preparation, dict)
         or preparation.get("kind") != "NPM_CI_LOCKED"
     ):
-        return _preparation_failure("dependency preparation authority invalid")
+        return failure("dependency preparation authority invalid")
     try:
         working_directory = (
             repository_root / preparation["working_directory"]
@@ -1464,14 +1446,14 @@ def _prepare_complete_validation_dependencies(
                 and repository_root not in working_directory.parents
             )
         ):
-            return _preparation_failure("dependency preparation directory unsafe")
+            return failure("dependency preparation directory unsafe")
         source_before = _complete_validation_source_state(
             repository_root, preparation
         )
         _validate_locked_node_dependency_authority(repository_root, preparation)
         if dependency_preparation_satisfied:
             if integrity_verifier is None:
-                return _preparation_failure(
+                return failure(
                     "dependency preparation authority invalid"
                 )
             integrity_verifier()
@@ -1479,10 +1461,10 @@ def _prepare_complete_validation_dependencies(
                 repository_root, preparation
             )
             if source_after != source_before:
-                return _preparation_failure(
+                return failure(
                     "dependency installation mutated tracked source"
                 )
-            return RegisteredValidationResult()
+            return _result()
         executable = _validation_executable(
             {
                 "argv": ["npm", "ci", "--ignore-scripts"],
@@ -1499,7 +1481,7 @@ def _prepare_complete_validation_dependencies(
         fast_path.RecoverableLocalError,
         fast_path.SecurityBlocker,
     ):
-        return _preparation_failure("dependency preparation authority invalid")
+        return failure("dependency preparation authority invalid")
     if integrity_verifier is not None:
         integrity_verifier()
     arguments = ["ci", "--ignore-scripts"]
@@ -1515,12 +1497,12 @@ def _prepare_complete_validation_dependencies(
             timeout=LOCAL_VALIDATION_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return _preparation_failure("dependency installation failed")
+        return failure("dependency installation failed")
     finally:
         if integrity_verifier is not None:
             integrity_verifier()
     if completed.returncode != 0:
-        return _preparation_failure("dependency installation failed")
+        return failure("dependency installation failed")
     try:
         source_after = _complete_validation_source_state(
             repository_root, preparation
@@ -1530,33 +1512,74 @@ def _prepare_complete_validation_dependencies(
         fast_path.RecoverableLocalError,
         fast_path.SecurityBlocker,
     ):
-        return _preparation_failure("dependency preparation authority invalid")
+        return failure("dependency preparation authority invalid")
     if source_after != source_before:
-        return _preparation_failure("dependency installation mutated tracked source")
-    return RegisteredValidationResult()
+        return failure("dependency installation mutated tracked source")
+    return _result()
 
+
+def _governance_only_candidate(
+    repository: dict[str, Any], repository_root: Path,
+    base_sha: str | None, tree_sha: str | None,
+) -> bool:
+    """Prove the complete authenticated base-to-candidate delta is prose only."""
+    if (
+        repository.get("repository") != "SecPal/api"
+        or repository.get("governance_only_validation") != "API_RUNTIME_INSTRUCTIONS"
+        or not isinstance(base_sha, str) or not OID_PATTERN.fullmatch(base_sha)
+        or not isinstance(tree_sha, str) or not OID_PATTERN.fullmatch(tree_sha)
+    ):
+        return False
+    try:
+        if _run_attestation_git(repository_root, ["cat-file", "-t", base_sha]).stdout.strip() != "commit":
+            return False
+        if _run_attestation_git(repository_root, ["cat-file", "-t", tree_sha]).stdout.strip() != "tree":
+            return False
+        raw = _run_attestation_git(
+            repository_root,
+            ["diff", "--no-ext-diff", "--no-renames", "--raw", "-z", base_sha, tree_sha],
+        ).stdout
+        return fast_path.governance_tree_delta_allowed(
+            repository, base_sha, tree_sha, raw,
+        )
+    except (fast_path.RecoverableLocalError, OSError, ValueError):
+        return False
+
+
+def _governance_validation_commands() -> tuple[dict[str, Any], ...]:
+    """Use the same portable command identity as receipt consumers."""
+    return tuple(fast_path.governance_validation_commands())
 
 def _run_registered_validations(
     repository: dict[str, Any],
     repository_root: Path,
     *,
+    _result: Any,
     integrity_verifier: Any = None,
     dependency_preparation_satisfied: bool = False,
+    governance_base: str | None = None,
+    governance_tree: str | None = None,
 ) -> RegisteredValidationResult:
-    """Run unconditional validation once without a shell or command output."""
+    """Execute all registered commands; only the owning transaction can complete."""
 
     repository_root = repository_root.resolve()
     if not repository_root.is_dir():
-        return RegisteredValidationResult(
+        return _result(
             failure_category="validation root unavailable"
         )
-    commands = _complete_validation_commands(repository)
+    governance_only = _governance_only_candidate(
+        repository, repository_root, governance_base, governance_tree,
+    )
+    commands = (
+        _governance_validation_commands() if governance_only
+        else _complete_validation_commands(repository)
+    )
     try:
         validation_home = tempfile.TemporaryDirectory(
             prefix="secpal-pr-review-validation-"
         )
     except OSError:
-        return RegisteredValidationResult(
+        return _result(
             failure_category="validation environment unavailable"
         )
     with validation_home:
@@ -1588,6 +1611,8 @@ def _run_registered_validations(
             "XDG_CONFIG_HOME": str(sandbox / ".config"),
             "XDG_DATA_HOME": str(sandbox / ".local/share"),
         }
+        if governance_only:
+            environment["GITHUB_REPOSITORY"] = "SecPal/api"
         if repository.get("complete_validation_preparation") is not None:
             user_npm_config = sandbox / "user.npmrc"
             global_npm_config = sandbox / "global.npmrc"
@@ -1596,7 +1621,7 @@ def _run_registered_validations(
                     npm_config.write_text("", encoding="utf-8")
                     npm_config.chmod(0o600)
             except OSError:
-                return RegisteredValidationResult(
+                return _result(
                     failure_category="validation environment unavailable"
                 )
             environment.update(
@@ -1616,6 +1641,7 @@ def _run_registered_validations(
             repository,
             repository_root,
             environment,
+            _result=_result,
             integrity_verifier=integrity_verifier,
             dependency_preparation_satisfied=dependency_preparation_satisfied,
         )
@@ -1628,7 +1654,7 @@ def _run_registered_validations(
                     repository_root / command["working_directory"]
                 ).resolve()
             except (OSError, RuntimeError):
-                return RegisteredValidationResult(
+                return _result(
                     index,
                     command["purpose"],
                     "unavailable working directory",
@@ -1637,23 +1663,25 @@ def _run_registered_validations(
                 working_directory != repository_root
                 and repository_root not in working_directory.parents
             ):
-                return RegisteredValidationResult(
+                return _result(
                     index,
                     command["purpose"],
                     "unsafe working directory",
                 )
             if not working_directory.is_dir():
-                return RegisteredValidationResult(
+                return _result(
                     index,
                     command["purpose"],
                     "unavailable working directory",
                 )
             try:
                 executable = _validation_executable(
-                    command, working_directory, repository_root
+                    command,
+                    REPOSITORY_ROOT if governance_only else working_directory,
+                    REPOSITORY_ROOT if governance_only else repository_root,
                 )
             except RegistryError:
-                return RegisteredValidationResult(
+                return _result(
                     index,
                     command["purpose"],
                     "unavailable executable",
@@ -1672,13 +1700,13 @@ def _run_registered_validations(
                     timeout=LOCAL_VALIDATION_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired:
-                return RegisteredValidationResult(
+                return _result(
                     index,
                     command["purpose"],
                     "timeout",
                 )
             except OSError:
-                return RegisteredValidationResult(
+                return _result(
                     index,
                     command["purpose"],
                     "execution error",
@@ -1687,12 +1715,21 @@ def _run_registered_validations(
                 if integrity_verifier is not None:
                     integrity_verifier()
             if completed.returncode != 0:
-                return RegisteredValidationResult(
+                return _result(
                     index,
                     command["purpose"],
                     "non-zero exit",
                 )
-    return RegisteredValidationResult()
+    return _result(
+        command_set=list(commands), execution_root=repository_root,
+    )
+
+
+# Install the only callable result owner, then remove the bootstrap constructor.
+RegisteredValidationResult, _run_registered_validations = _own_registered_execution(
+    _run_registered_validations
+)
+del _own_registered_execution
 
 
 FAST_PATH_PREFLIGHT_QUERY = r"""
@@ -1865,8 +1902,9 @@ query CurrentReviewFeedback(
   $reviewsCursor:String, $commentsCursor:String, $threadsCursor:String
 ) {
   repository(owner:$owner, name:$name) {
+    nameWithOwner
     pullRequest(number:$number) {
-      id headRefOid baseRefName baseRefOid state isDraft reviewDecision
+      id number headRefOid baseRefName baseRefOid state isDraft reviewDecision
       reactions(first:100) {
         nodes { id databaseId content user { id databaseId login } }
         pageInfo { hasNextPage }
@@ -1890,7 +1928,7 @@ query CurrentReviewFeedback(
       }
       comments(first:100, after:$commentsCursor) {
         nodes {
-          id databaseId body updatedAt
+          id databaseId body createdAt updatedAt
           author {
             login
             ... on User { id databaseId }
@@ -2145,6 +2183,15 @@ def _validate_action_command(arguments: list[str]) -> None:
         if not rules_endpoint and not protection_endpoint:
             raise MutationBlocked("REST read endpoint is not exactly allowlisted")
         return
+    if (
+        len(arguments) == 9
+        and re.fullmatch(rf"repos/{repository}/issues/[1-9][0-9]*/comments", endpoint)
+        and arguments[5:8] == ["--method", "POST", "-f"]
+        and arguments[8] in {
+            "body=@codex review", "body=@codex security review"
+        }
+    ):
+        return
     if len(arguments) != 11 or arguments[5:7] != ["--method", "POST"]:
         raise MutationBlocked("REST mutation must use the exact POST command shape")
     reaction_endpoint = re.fullmatch(
@@ -2182,15 +2229,80 @@ def _normalized_reviewer_login(value: Any) -> str | None:
     return re.sub(r"\[bot\]$", "", value.strip().lower())
 
 
+def _provider_binding_uses_historical_summary(value: Any) -> bool:
+    """Dispatch only exact owner types loaded by the maintained entry points."""
+
+    if type(value) is _ReadyRemediationProviderBinding:
+        if value.provider_binding_sources != ():
+            raise MutationBlocked("Ready-remediation provider provenance changed")
+        return False
+    for owner in (
+        "validation_evidence_loss", "lifecycle_publication",
+        "legacy_enrolled_package_loss", "qualified_remediation_successor_loss",
+    ):
+        try:
+            module = _owned_verifier_module(owner)
+        except RuntimeError as exc:
+            raise MutationBlocked("review-provider binding is not verifier-owned") from exc
+        if owner == "validation_evidence_loss":
+            owner_type = module.HistoricalProviderBinding
+        elif owner == "lifecycle_publication":
+            owner_type = module.VerifiedReadySourceRecoveryProviderBinding
+        elif owner == "legacy_enrolled_package_loss":
+            owner_type = module.VerifiedLegacyProviderHeadBinding
+        else:
+            owner_type = module.QualifiedProviderBinding
+        if type(value) is not owner_type:
+            continue
+        if owner == "qualified_remediation_successor_loss":
+            return False
+        if owner == "legacy_enrolled_package_loss":
+            return True
+        if owner == "validation_evidence_loss":
+            try:
+                sources = value.provider_binding_sources
+            except module.fast_path.SecurityBlocker as exc:
+                raise MutationBlocked(str(exc)) from exc
+        else:
+            sources = value.provider_binding_sources
+        provider_owner = (
+            module.publication if owner == "validation_evidence_loss" else module
+        )
+        allowed = (
+            provider_owner.ORDINARY_REMEDIATION_SUFFIX,
+            provider_owner.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
+            provider_owner.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION,
+        )
+        if (
+            type(sources) is not tuple or not sources
+            or any(type(source) is not str for source in sources)
+            or len(sources) != len(set(sources))
+            or any(source not in allowed for source in sources)
+        ):
+            raise MutationBlocked("review-provider provenance is invalid")
+        return (
+            provider_owner.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING
+            in sources
+        )
+    raise MutationBlocked("review-provider binding is not verifier-owned")
+
+
 def _require_review_providers_terminal(
     pull_request: dict[str, Any],
     *,
     repository: str | None = None,
     pull_request_number: int | None = None,
     ready_source_provider_binding: Any = None,
+    require_terminal: bool = True,
 ) -> None:
     """Reject visible non-terminal automated review-provider evidence."""
 
+    if not require_terminal and ready_source_provider_binding is not None:
+        raise MutationBlocked("provider observation cannot use historical head authority")
+    historical_summary = (
+        _provider_binding_uses_historical_summary(ready_source_provider_binding)
+        if ready_source_provider_binding is not None else False
+    )
     head_sha = pull_request.get("headRefOid")
     comments = _bounded_nodes(
         pull_request.get("comments"), "review-provider status comments"
@@ -2219,68 +2331,50 @@ def _require_review_providers_terminal(
                 "Codex review provider repository or PR identity changed"
             )
         try:
-            fast_path.verify_codex_provider_summary(
-                body,
-                head_sha=head_sha,
-                repository=(
-                    repository if ready_source_provider_binding is not None else None
-                ),
-                pull_request_number=(
-                    pull_request_number
-                    if ready_source_provider_binding is not None
-                    else None
-                ),
-            )
-        except fast_path.SecurityBlocker as exc:
+            if historical_summary:
+                ready_source_provider_binding.verify_historical_provider_summary(
+                    body=body,
+                    repository=repository,
+                    pull_request=pull_request_number,
+                    current_head_sha=head_sha,
+                )
+            else:
+                fast_path.verify_codex_provider_summary(
+                    body,
+                    head_sha=head_sha,
+                    repository=(
+                        repository if ready_source_provider_binding is not None or not require_terminal else None
+                    ),
+                    pull_request_number=(
+                        pull_request_number
+                        if ready_source_provider_binding is not None or not require_terminal
+                        else None
+                    ),
+                    require_terminal=require_terminal,
+                )
+        except (RuntimeError, AttributeError, TypeError, ValueError) as exc:
             if (
-                str(exc)
-                == "Codex review provider status is indeterminate"
-                and ready_source_provider_binding is not None
-                and repository is not None
-                and pull_request_number is not None
-            ):
-                try:
-                    ready_source_provider_binding.verify_historical_provider_summary(
-                        body=body,
-                        repository=repository,
-                        pull_request=pull_request_number,
-                        current_head_sha=head_sha,
-                    )
-                except (
-                    fast_path.SecurityBlocker,
-                    AttributeError,
-                    TypeError,
-                    ValueError,
-                ) as legacy_exc:
-                    raise MutationBlocked(str(legacy_exc)) from legacy_exc
-            elif (
-                str(exc)
-                != "Codex review provider status is stale for the current head"
+                historical_summary
+                or str(exc) != "Codex review provider status is stale for the current head"
                 or ready_source_provider_binding is None
                 or repository is None
                 or pull_request_number is None
             ):
                 raise MutationBlocked(str(exc)) from exc
-            else:
-                try:
-                    provider_head = ready_source_provider_binding.provider_head(
-                        repository=repository,
-                        pull_request=pull_request_number,
-                        current_head_sha=head_sha,
-                    )
-                    fast_path.verify_codex_provider_summary(
-                        body,
-                        head_sha=provider_head,
-                        repository=repository,
-                        pull_request_number=pull_request_number,
-                    )
-                except (
-                    fast_path.SecurityBlocker,
-                    AttributeError,
-                    TypeError,
-                    ValueError,
-                ) as recovery_exc:
-                    raise MutationBlocked(str(recovery_exc)) from recovery_exc
+            try:
+                provider_head = ready_source_provider_binding.provider_head(
+                    repository=repository,
+                    pull_request=pull_request_number,
+                    current_head_sha=head_sha,
+                )
+                fast_path.verify_codex_provider_summary(
+                    body,
+                    head_sha=provider_head,
+                    repository=repository,
+                    pull_request_number=pull_request_number,
+                )
+            except (RuntimeError, AttributeError, TypeError, ValueError) as recovery_exc:
+                raise MutationBlocked(str(recovery_exc)) from recovery_exc
 
     requests = _bounded_nodes(
         pull_request.get("reviewRequests"), "review-provider requests"
@@ -2535,6 +2629,26 @@ class LiveGitHub:
             )
         return second
 
+    def read_provider_fallback_transport(self, plan: dict[str, Any]) -> dict[str, Any]:
+        """Twice capture complete provider transport without requiring terminality."""
+
+        try:
+            limits = select_repository(load_registry(), plan["repository"])
+        except RegistryError as exc:
+            raise MutationBlocked("provider transport has no validated repository limits") from exc
+        budget = {"calls": 0}
+        first = self._read_current_feedback_once(
+            plan, limits, budget, require_provider_terminal=False,
+            include_provider_transport=True,
+        )
+        second = self._read_current_feedback_once(
+            plan, limits, budget, require_provider_terminal=False,
+            include_provider_transport=True,
+        )
+        if first != second:
+            raise MutationBlocked("provider transport changed between bounded reads")
+        return second
+
     def _read_current_feedback_once(
         self,
         plan: dict[str, Any],
@@ -2542,6 +2656,8 @@ class LiveGitHub:
         budget: dict[str, int],
         *,
         ready_source_provider_binding: Any = None,
+        require_provider_terminal: bool = True,
+        include_provider_transport: bool = False,
     ) -> dict[str, Any]:
         owner, name = plan["repository"].split("/", 1)
         base_variables = {
@@ -2584,9 +2700,14 @@ class LiveGitHub:
                     _graphql_arguments(CURRENT_REVIEW_FEEDBACK_QUERY, variables)
                 )
                 budget["calls"] += 1
-                pull_request = payload["data"]["repository"]["pullRequest"]
+                remote_repository = payload["data"]["repository"]
+                if include_provider_transport and remote_repository.get("nameWithOwner") != plan["repository"]:
+                    raise MutationBlocked("provider transport repository identity changed")
+                pull_request = remote_repository["pullRequest"]
                 if not isinstance(pull_request, dict):
                     raise MutationBlocked("current pull-request feedback is unavailable")
+                if include_provider_transport and pull_request.get("number") != plan["pull_request_number"]:
+                    raise MutationBlocked("provider transport PR identity changed")
                 if initial_pull_request is None:
                     initial_pull_request = pull_request
                 elif (
@@ -2661,7 +2782,13 @@ class LiveGitHub:
             "nodes": comments,
             "pageInfo": {"hasNextPage": False},
         }
-        if ready_source_provider_binding is None:
+        if not require_provider_terminal and include_provider_transport:
+            pass  # Raw fallback evidence is classified by the fallback authority.
+        elif not require_provider_terminal:
+            _require_review_providers_terminal(provider_state, repository=plan["repository"],
+                pull_request_number=plan["pull_request_number"], require_terminal=False,
+                ready_source_provider_binding=ready_source_provider_binding)
+        elif ready_source_provider_binding is None:
             _require_review_providers_terminal(provider_state)
         else:
             _require_review_providers_terminal(
@@ -2727,6 +2854,41 @@ class LiveGitHub:
             "pr_state": pull_request.get("state"),
             "is_draft": pull_request.get("isDraft"),
             "review_decision": pull_request.get("reviewDecision"),
+            "provider_summary_body": next(
+                (
+                    item.get("body")
+                    for item in comments
+                    if fast_path.CODEX_REVIEW_SUMMARY_MARKER
+                    in str(item.get("body") or "")
+                ),
+                None,
+            ),
+            "provider_review_database_ids": sorted(
+                (
+                    {
+                        "node_id": item.get("id"),
+                        "database_id": item.get("databaseId"),
+                    }
+                    for item in reviews
+                ),
+                key=lambda item: str(item["node_id"]),
+            ),
+            **(
+                {
+                    "provider_transport": {
+                        "repository": plan["repository"],
+                        "pull_request": plan["pull_request_number"],
+                        "head_sha": pull_request.get("headRefOid"),
+                        "pr_state": pull_request.get("state"),
+                        "is_draft": pull_request.get("isDraft"),
+                        "comments": comments,
+                        "reviews": reviews,
+                        "threads": threads,
+                    }
+                }
+                if include_provider_transport
+                else {}
+            ),
             "feedback": {
                 "pull_request_reactions": _live_reactions(
                     pull_request.get("reactions"), "pull-request reactions"
@@ -3868,6 +4030,20 @@ class FastPathGateway:
             approval_required = approval_required or required > 0
         return approval_required
 
+    def observe_provider_acquisition_feedback(self, repository: str, pull_request_number: int) -> dict[str, Any]:
+        """Complete bounded read for acquisition reconciliation, without terminal authority."""
+
+        if self.registry_entry.get("repository") != repository or self.ready_source_provider_binding is not None:
+            raise fast_path.SecurityBlocker("provider observation scope or historical authority differs")
+        try:
+            return self.github._read_current_feedback_once(
+                {"repository": repository, "pull_request_number": pull_request_number},
+                self.registry_entry, {"calls": 0}, require_provider_terminal=False)
+        except (ActionCommandFailure, MutationFailure) as exc:
+            raise fast_path.TransientReadFailure(str(exc)) from exc
+        except (MutationBlocked, RegistryError) as exc:
+            raise fast_path.SecurityBlocker(str(exc)) from exc
+
     def capture_stable_feedback(self, repository: str, pull_request_number: int) -> Any:
         result = self.observe_stable_feedback(repository, pull_request_number)
         return fast_path.StableFeedbackState.from_payload(
@@ -4798,7 +4974,6 @@ def build_resolution_evidence(
     final_snapshot: dict[str, Any],
     configuration: dict[str, Any],
     command_runner: Any | None = None,
-    validation_runner: Any | None = None,
     verified_mutation_identities: set[str] | None = None,
 ) -> dict[str, bool]:
     empty = {
@@ -4862,32 +5037,9 @@ def build_resolution_evidence(
         ),
         "registered_validation_verified": False,
     }
-    if all(result[key] for key in result if key != "registered_validation_verified"):
-        try:
-            if registered is None:
-                raise RegistryError("repository has no validated registry entry")
-            runner = validation_runner or _run_registered_validations
-            validation_result = runner(
-                registered, Path(local["repository_root"])
-            )
-            result["registered_validation_verified"] = (
-                bool(validation_result)
-                if isinstance(validation_result, RegisteredValidationResult)
-                else validation_result is True
-            )
-        except (OSError, RegistryError):
-            result["registered_validation_verified"] = False
-    if result["registered_validation_verified"]:
-        try:
-            final_local = evidence.verify_local_against_snapshot(
-                final_snapshot,
-                configuration,
-                local_runner,
-                plan["expected_head_sha"],
-            )
-            result["local_verified"] = not final_local["blockers"]
-        except (evidence.BlockedError, evidence.ContractError):
-            result["local_verified"] = False
+    # Legacy forensic snapshots and raw PASS logs cannot authenticate a receipt
+    # bound to a signed commit. Use attest-validation and the receipt-bound
+    # resolve-batch/simple-resolver path for resolution authority.
     return result
 
 
@@ -4966,6 +5118,7 @@ def build_parser() -> argparse.ArgumentParser:
     attestation_parser.add_argument("--prior-reviewed-state")
     attestation_parser.add_argument("--prior-receipt")
     attestation_parser.add_argument("--prior-attestation")
+    attestation_parser.add_argument("--prior-integration-chain")
     attestation_parser.add_argument("--expected-prior-authority-signer")
     batch_parser = subparsers.add_parser("resolve-batch")
     batch_parser.add_argument("--repo", required=True)
@@ -4973,8 +5126,10 @@ def build_parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--repo-root", default=".")
     batch_parser.add_argument("--registry")
     batch_parser.add_argument("--capture-reviewed-state")
+    batch_parser.add_argument("--capture-provider-summary")
     batch_parser.add_argument("--ready-remediation-provider-binding")
     batch_parser.add_argument("--ready-source-recovery-publication")
+    batch_parser.add_argument("--ready-integration-chain")
     batch_parser.add_argument("--delivery-issue", type=_positive_integer)
     batch_parser.add_argument("--request")
     batch_parser.add_argument("--reviewed-state")
@@ -5000,6 +5155,27 @@ def build_parser() -> argparse.ArgumentParser:
     pre_enrollment_parser.add_argument("--receipt-output", required=True)
     pre_enrollment_parser.add_argument("--attestation-output", required=True)
     pre_enrollment_parser.add_argument("--apply", action="store_true")
+
+    for name in ("prepare-enrolled-draft-integration", "integrate-enrolled-draft",
+                 "prepare-enrolled-draft-source", "advance-enrolled-draft-source"):
+        enrolled = subparsers.add_parser(name)
+        enrolled.add_argument("--repo", required=True)
+        enrolled.add_argument("--pr", required=True, type=_positive_integer)
+        enrolled.add_argument("--delivery-issue", required=True, type=_positive_integer)
+        enrolled.add_argument("--repo-root", default=".")
+        enrolled.add_argument("--apply", action="store_true")
+        if name.startswith("prepare-"):
+            enrolled.add_argument("--operation-directory", required=True)
+            enrolled.add_argument("--authorization-id", required=True)
+            enrolled.add_argument("--manual-gate-evidence", required=True)
+            if name == "prepare-enrolled-draft-source":
+                enrolled.add_argument("--expected-predecessor", required=True)
+                enrolled.add_argument("--authorized-tree", required=True)
+                enrolled.add_argument("--expected-signer", required=True)
+                enrolled.add_argument("--expires-at", required=True, type=_positive_integer)
+        else:
+            enrolled.add_argument("--authorization", required=True)
+            enrolled.add_argument("--reconcile", action="store_true")
     qualified_parser = subparsers.add_parser(
         "advance-qualified-remediation-successor-loss"
     )
@@ -5253,7 +5429,7 @@ def _acquire_ready_source_recovery_facts(
         ),
     }
     if qualified_remediation_loss is not None:
-        from secpal_pr_review import qualified_remediation_successor_loss
+        from scripts.secpal_pr_review import qualified_remediation_successor_loss
 
         qualified_remediation_loss = (
             qualified_remediation_successor_loss.verify_admission(
@@ -5410,8 +5586,8 @@ def _issue_ready_source_recovery_authorization(
     *, repository: str, delivery_issue: int, pull_request_number: int,
     expected_head_sha: str, repository_root: Path, feedback_findings: Any,
     manual_gate_evidence: Any,
-    historical_validation_receipt_digest: str,
-    historical_final_attestation_digest: str,
+    historical_validation_receipt_digest: str | None,
+    historical_final_attestation_digest: str | None,
     recovery_user_authorization: Any,
     expected_commit_signer: Any, signer_identity: str, signer: Any,
     _policy_loader: Any, _gateway_factory: Any, _validation_runner: Any,
@@ -5488,6 +5664,24 @@ def _issue_ready_source_recovery_authorization(
     verified_recovery_authorization = _recovery_user_authorization_verifier(
         recovery_user_authorization, final_current, exact_scope
     )
+    root_scope = {}
+    if (
+        historical_validation_receipt_digest is None
+        or historical_final_attestation_digest is None
+    ):
+        lifecycle_authority, _ = _load_lifecycle_publication_helpers()
+        if final_current.serialized_lifecycle_evidence is None:
+            raise fast_path.SecurityBlocker(
+                "zero-receipt recovery lifecycle evidence is unavailable"
+            )
+        root_scope = {
+            "current_lifecycle_evidence": lifecycle_authority.loads_closed_json(
+                final_current.serialized_lifecycle_evidence
+            ),
+            "predecessor_publication_oid": (
+                final_current.predecessor_publication_oid
+            ),
+        }
     return _authorization_factory(
         current_lifecycle=final_current.lifecycle,
         current_publication_oid=final_current.publication_oid,
@@ -5504,6 +5698,7 @@ def _issue_ready_source_recovery_authorization(
         expected_commit_signer=expected_commit_signer,
         signer_identity=signer_identity,
         signer=signer,
+        **root_scope,
     )
 
 
@@ -5511,8 +5706,8 @@ def issue_ready_source_recovery_authorization(
     *, repository: str, delivery_issue: int, pull_request_number: int,
     expected_head_sha: str, repository_root: Path, feedback_findings: Any,
     manual_gate_evidence: Any,
-    historical_validation_receipt_digest: str,
-    historical_final_attestation_digest: str,
+    historical_validation_receipt_digest: str | None,
+    historical_final_attestation_digest: str | None,
     recovery_user_authorization: Any,
     expected_commit_signer: Any, signer_identity: str, signer: Any,
 ) -> dict[str, Any]:
@@ -5588,7 +5783,7 @@ def advance_qualified_remediation_successor_loss(
 ) -> dict[str, Any]:
     """Advance the one accepted #956/#957 loss case through existing authority."""
 
-    from secpal_pr_review import (
+    from scripts.secpal_pr_review import (
         lifecycle_execution,
         qualified_remediation_successor_loss as successor_loss,
     )
@@ -5801,11 +5996,26 @@ def _load_fast_manual_gate_evidence(
     )
 
 
-def _write_fast_report(path: str | None, report: dict[str, Any]) -> None:
+def _write_fast_report(
+    path: str | None, report: dict[str, Any], *, before_publish: Any = None,
+) -> None:
     if path:
-        fast_path.atomic_write_json(Path(path), report)
+        if before_publish is None:
+            fast_path.atomic_write_json(Path(path), report)
+        else:
+            fast_path.atomic_write_json(Path(path), report, before_publish=before_publish)
     else:
         sys.stdout.buffer.write(fast_path.canonical_json_bytes(report))
+
+
+def _durably_remove_fast_report(path: str) -> None:
+    target = Path(path)
+    descriptor = os.open(target.parent.resolve(strict=True), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        target.unlink(missing_ok=True)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _write_batch_report(path: str | None, report: dict[str, Any]) -> bool:
@@ -6267,10 +6477,38 @@ def _verify_pre_enrollment_work_graph_result(
 
 
 def _verify_ready_integration_lifecycle_authority(
-    authority: dict[str, Any], integration_evidence: dict[str, Any]
+    authority: dict[str, Any], integration_evidence: dict[str, Any],
+    *, reviewed_state: Any = None,
 ) -> None:
     lifecycle = authority["lifecycle"]
     eligibility = integration_evidence["eligibility"]
+    if (
+        authority.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V3"
+        and authority["source_authority"]["ready_transition"] is None
+    ):
+        if (
+            reviewed_state is None
+            or reviewed_state.repository != authority["repository"]
+            or reviewed_state.pull_request_number != authority["pull_request_number"]
+            or reviewed_state.pr_state != "OPEN"
+            or reviewed_state.head_sha != integration_evidence.get(
+                "reviewed_head_sha", authority["prior_delivery_head_sha"])
+            or reviewed_state.state_digest != integration_evidence["reviewed_state_digest"]
+            or reviewed_state.feedback_digest != integration_evidence["reviewed_feedback_digest"]
+        ):
+            raise fast_path.SecurityBlocker("direct Ready integration reviewed snapshot changed")
+    if authority.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT":
+        if (
+            reviewed_state is None
+            or reviewed_state.state_digest != integration_evidence["reviewed_state_digest"]
+            or reviewed_state.feedback_digest != integration_evidence["reviewed_feedback_digest"]
+            or reviewed_state.head_sha != authority["prior_delivery_head_sha"]
+            or not set(authority["source_authority"]["feedback"]["material_finding_ids"]).issubset({
+                thread["node_id"] for thread in reviewed_state.feedback["threads"]
+                if not thread["is_resolved"]
+            })
+        ):
+            raise fast_path.SecurityBlocker("Governance-Amendment integration feedback inventory changed")
     if (
         eligibility["lifecycle_identity"] != lifecycle["identity"]
         or eligibility["unrestricted_reviews_before"] != lifecycle["unrestricted_reviews"]
@@ -6295,13 +6533,11 @@ def _verify_ready_integration_lifecycle_authority(
         )
 
 
-def _verify_ready_integration_published_authority(
+def _authenticated_ready_integration_publication_context(
     authority_manifest: dict[str, Any],
     integration_evidence: dict[str, Any],
-    *,
-    verified_source_validation_evidence_digest: str | None = None,
-) -> None:
-    """Bind integration eligibility to the maintained live #750/#752 authority."""
+) -> Any:
+    """Read and bind protected CURRENT before selecting source evidence form."""
 
     try:
         lifecycle_authority, lifecycle_publication = (
@@ -6352,14 +6588,61 @@ def _verify_ready_integration_published_authority(
         raise fast_path.SecurityBlocker(
             "Ready integration lifecycle publication binding changed"
         )
+    return published, lifecycle_publication
+
+
+def _authenticated_ready_integration_publication(
+    authority_manifest: dict[str, Any], integration_evidence: dict[str, Any],
+) -> Any:
+    return _authenticated_ready_integration_publication_context(
+        authority_manifest, integration_evidence,
+    )[0]
+
+
+def _verify_ready_integration_published_authority(
+    authority_manifest: dict[str, Any],
+    integration_evidence: dict[str, Any],
+    *,
+    verified_source_validation_evidence_digest: str | None = None,
+    published: Any = None,
+) -> None:
+    """Bind integration eligibility to the maintained live #750/#752 authority."""
+
+    if published is None:
+        published = _authenticated_ready_integration_publication(
+            authority_manifest, integration_evidence
+        )
+    recovered_root = (
+        authority_manifest.get("source_authority_mode")
+        == "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT"
+    )
+    amendment_root = (
+        authority_manifest.get("source_authority_mode")
+        == "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT"
+    )
+    expected_source = (
+        authority_manifest["source_authority"]["current_safety_digest"]
+        if recovered_root
+        else verified_source_validation_evidence_digest
+    )
     if published.lifecycle.historical_proof_mode == "exact_state_adoption" and (
         published.lifecycle.tree_sha != authority_manifest["prior_delivery_tree_sha"]
-        or published.lifecycle.validation_receipt_digest
-        != authority_manifest["prior_validation_receipt_digest"]
-        or published.lifecycle.adoption_source_evidence_digest
-        != authority_manifest["prior_final_attestation_digest"]
-        or published.lifecycle.source_validation_evidence_digest
-        != verified_source_validation_evidence_digest
+        or (
+            not recovered_root
+            and published.lifecycle.validation_receipt_digest
+            != authority_manifest["prior_validation_receipt_digest"]
+        )
+        or (
+            not recovered_root and not amendment_root
+            and published.lifecycle.adoption_source_evidence_digest
+            != authority_manifest["prior_final_attestation_digest"]
+        )
+        or (
+            amendment_root
+            and published.lifecycle.adoption_source_evidence_digest
+            != authority_manifest["source_authority"]["adoption_source_evidence_digest"]
+        )
+        or published.lifecycle.source_validation_evidence_digest != expected_source
     ):
         raise fast_path.SecurityBlocker(
             "Ready integration exact-adoption source evidence binding changed"
@@ -6507,33 +6790,6 @@ def _verified_prior_delivery_commit(
     }
 
 
-def _require_bridge_import_provenance(
-    observed_paths: dict[str, tuple[str, str]], expected_paths: dict[str, Path]
-) -> None:
-    """Prove that loaded authority modules came from exact source files."""
-
-    if set(observed_paths) != set(expected_paths):
-        raise fast_path.SecurityBlocker("mixed verifier provenance is forbidden")
-    for name, (module_file, origin) in observed_paths.items():
-        expected = expected_paths[name].absolute()
-        if (
-            not isinstance(module_file, str)
-            or not isinstance(origin, str)
-            or Path(module_file).absolute() != expected
-            or Path(origin).absolute() != expected
-        ):
-            raise fast_path.SecurityBlocker("mixed verifier provenance is forbidden")
-        try:
-            if expected.resolve(strict=True) != expected or not expected.is_file():
-                raise fast_path.SecurityBlocker(
-                    "mixed verifier provenance is forbidden"
-                )
-        except OSError as exc:
-            raise fast_path.SecurityBlocker(
-                "mixed verifier provenance is forbidden"
-            ) from exc
-
-
 def _require_exact_accepted_main_blob(
     tooling_root: Path, accepted_main: str, relative_path: str
 ) -> None:
@@ -6615,8 +6871,10 @@ def _require_accepted_main_tooling_blobs(
     )
     package_paths = package_tree.stdout.splitlines()
     required_paths = {
+        *("scripts/secpal_work_graph/" + name + ".py" for name in fast_path.WORK_GRAPH_MODULE_NAMES),
         "scripts/secpal-pr-review-actions.py",
         "scripts/secpal-pr-review.py",
+        "scripts/secpal-provider-reacquisition.py",
         ".agents/skills/secpal-pr-review/references/repositories.json",
         ".agents/skills/secpal-pr-review/references/repositories.schema.json",
         "policies/legacy-enrolled-package-loss.json",
@@ -6654,6 +6912,27 @@ def _require_accepted_main_bridge_source(
     expected_main: str | None = None,
 ) -> str:
     """Authenticate internally derived executing tooling as accepted main."""
+
+    try:
+        _require_owned_actions_bridge()
+    except RuntimeError as exc:
+        raise fast_path.SecurityBlocker("verifier ownership changed") from exc
+    if repository != "SecPal/.github":
+        # The delivery target has its own protected main. Its commit is never
+        # a source for central lifecycle verifier bytes.
+        _authenticate_protected_bridge_main(repository)
+    main = _authenticate_protected_bridge_main("SecPal/.github")
+    if expected_main is not None and main != expected_main:
+        raise fast_path.SecurityBlocker(
+            "accepted main changed during authority composition"
+        )
+    _require_accepted_main_tooling_blobs(REPOSITORY_ROOT, main)
+    _require_owned_actions_bridge()
+    return main
+
+
+def _authenticate_protected_bridge_main(repository: str) -> str:
+    """Authenticate one repository's independent protected target main."""
 
     repository_result = _run_bridge_gh(
         [
@@ -6735,31 +7014,6 @@ def _require_accepted_main_bridge_source(
         raise fast_path.SecurityBlocker(
             "protected-main bridge source is not authenticated"
         )
-    if expected_main is not None and main != expected_main:
-        raise fast_path.SecurityBlocker(
-            "accepted main changed during authority composition"
-        )
-    _require_accepted_main_tooling_blobs(REPOSITORY_ROOT, main)
-    _require_bridge_import_provenance(
-        {
-            "evidence": (evidence.__file__, evidence.__spec__.origin),
-            "fast_path": (fast_path.__file__, fast_path.__spec__.origin),
-            "follow_up": (
-                fast_path.follow_up.__file__,
-                fast_path.follow_up.__spec__.origin,
-            ),
-            "pre_enrollment": (
-                pre_enrollment.__file__,
-                pre_enrollment.__spec__.origin,
-            ),
-        },
-        {
-            "evidence": EVIDENCE_HELPER,
-            "fast_path": FAST_PATH_HELPER,
-            "follow_up": FAST_PATH_HELPER.with_name("follow_up.py"),
-            "pre_enrollment": PRE_ENROLLMENT_INTEGRATION_HELPER,
-        },
-    )
     return main
 
 
@@ -6842,7 +7096,7 @@ def _derive_qualified_loss_rebound_ready_prior_authority(
 ) -> dict[str, Any]:
     """Compose accepted same-head rebound, qualified loss, and Ready authority."""
 
-    from secpal_pr_review import qualified_remediation_successor_loss
+    from scripts.secpal_pr_review import qualified_remediation_successor_loss
 
     if reviewed_state_digest is None or reviewed_feedback_digest is None:
         raise fast_path.SecurityBlocker(
@@ -7082,6 +7336,246 @@ def _derive_qualified_loss_rebound_ready_prior_authority(
 
 
 
+def _derive_recovered_adoption_root_ready_prior_authority(
+    *, repository_root: Path, repository: str, delivery_issue: int,
+    pull_request: int, binding: dict[str, Any], current: Any,
+    proof: dict[str, Any], verified_proof: Any, bundle: dict[str, Any],
+    lifecycle_authority: Any, lifecycle_publication: Any,
+    reviewed_state_digest: str | None,
+    reviewed_feedback_digest: str | None,
+    source_publication_oid: str | None = None,
+) -> dict[str, Any]:
+    """Compose one authenticated zero-receipt enrollment root and recovery."""
+
+    state = current.lifecycle.state
+    ready_history = state.get("ready_history") if isinstance(state, dict) else None
+    loss = proof.get("validation_evidence_loss_admission")
+    budget = proof.get("review_budget_consumption_admission")
+    adoption_authorization = proof.get("authorization")
+    if (
+        proof.get("schema_version") != "3.0"
+        or proof.get("proof_version") != "3.0"
+        or proof.get("historical_proof_mode") != "exact_state_adoption"
+        or verified_proof.historical_proof_mode != "exact_state_adoption"
+        or current.lifecycle.historical_proof_mode != "exact_state_adoption"
+        or current.predecessor_publication_oid is not None
+        or bundle.get("transition_authorizations") != []
+        or bundle.get("authority_chain") != []
+        or not isinstance(loss, dict)
+        or not isinstance(budget, dict)
+        or not isinstance(adoption_authorization, dict)
+        or loss.get("schema_version") != "1.2"
+        or loss.get("historical_package_status") != "UNAVAILABLE"
+        or proof.get("intended_state") != state
+        or state.get("draft") is not False
+        or state.get("ready") is not True
+        or state.get("unrestricted_review_count") != 1
+        or isinstance(state.get("remediation_cycle_count"), bool)
+        or not isinstance(state.get("remediation_cycle_count"), int)
+        or not 0 <= state["remediation_cycle_count"] <= 2
+        or state.get("ready_transition_count") != 1
+        or not isinstance(ready_history, list)
+        or len(ready_history) != 1
+        or not isinstance(ready_history[0], dict)
+        or set(ready_history[0])
+        != {"sequence", "transition_kind", "observation_digest"}
+        or ready_history[0].get("sequence") != 1
+        or ready_history[0].get("transition_kind") != "DRAFT_TO_READY"
+        or state.get("exceptional_recovery_count") != 0
+        or state.get("exceptional_recovery_history") != []
+        or state.get("exceptional_continuation_count") != 0
+        or state.get("exceptional_continuation_history") != []
+        or state.get("cycle_3_absent") is not True
+        or any(
+            (value.repository, value.delivery_issue, value.pull_request)
+            != (repository, delivery_issue, pull_request)
+            for value in (verified_proof, current.lifecycle)
+        )
+        or proof.get("head_sha") != current.lifecycle.head_sha
+        or proof.get("tree_sha") != current.lifecycle.tree_sha
+        or verified_proof.head_sha != current.lifecycle.head_sha
+        or verified_proof.tree_sha != current.lifecycle.tree_sha
+        or current.lifecycle.authority_digest != proof.get("proof_digest")
+        or current.lifecycle.validation_receipt_digest
+        != proof.get("validation_receipt_digest")
+        or current.lifecycle.source_validation_evidence_digest
+        != proof.get("source_validation_evidence_digest")
+        or current.lifecycle.adoption_source_evidence_digest
+        != proof.get("adoption_source_evidence_digest")
+        or loss.get("repository") != repository
+        or loss.get("delivery_issue") != delivery_issue
+        or loss.get("pull_request") != pull_request
+        or loss.get("head_sha") != current.lifecycle.head_sha
+        or loss.get("tree_sha") != current.lifecycle.tree_sha
+        or loss.get("commit_signature_evidence_digest")
+        != proof.get("commit_signature_evidence_digest")
+        or budget.get("admission_digest")
+        not in proof.get("supporting_evidence_digests", [])
+    ):
+        raise fast_path.SecurityBlocker("recovered adoption root authority is invalid")
+    try:
+        historical = lifecycle_authority.recovered_adoption_root_historical_evidence(
+            current.lifecycle, bundle, current.predecessor_publication_oid
+        )
+        if source_publication_oid is None:
+            recovery = lifecycle_publication.verify_current_ready_source_recovery(repository, delivery_issue)
+        else:
+            source_publication, recovery = lifecycle_publication._verify_ready_source_recovery_publication(
+                repository, delivery_issue, source_publication_oid=source_publication_oid,
+            )
+            if source_publication != current:
+                raise lifecycle_publication.LifecyclePublicationError("historical recovery source changed")
+    except (ValueError, lifecycle_authority.LifecycleAuthorityError,
+            lifecycle_publication.LifecyclePublicationError) as exc:
+        raise fast_path.SecurityBlocker(
+            "exact protected recovered adoption-root authority is unavailable"
+        ) from exc
+    current_safety = loss.get("current_safety")
+    if (
+        historical["state"] != "ABSENT_NEVER_ISSUED"
+        or historical["validation_receipt_digest"] is not None
+        or not isinstance(current_safety, dict)
+        or current_safety.get("receipt_digest")
+        != proof.get("validation_receipt_digest")
+        or fast_path.digest_json(current_safety)
+        != proof.get("source_validation_evidence_digest")
+        or (reviewed_state_digest is None) != (reviewed_feedback_digest is None)
+        or (reviewed_state_digest is not None and (
+            recovery.reviewed_state_digest != reviewed_state_digest
+            or recovery.reviewed_feedback_digest != reviewed_feedback_digest
+        ))
+    ):
+        raise fast_path.SecurityBlocker(
+            "recovered adoption root historical or current-safety identity changed"
+        )
+    source = _verified_prior_delivery_commit(
+        repository_root, current.lifecycle.head_sha,
+        loss.get("source_signer_identity"), binding,
+    )
+    expected_signature = (
+        lifecycle_authority.ready_source_recovery_commit_signature_binding_digest(
+            head_sha=current.lifecycle.head_sha,
+            expected_signer=source["signer"],
+            signature_format=(
+                "ssh" if source["signer"]["kind"] == "SSH_PRINCIPAL"
+                else "openpgp"
+            ),
+        )
+    )
+    if (
+        source["parent_shas"] != [loss.get("parent_sha")]
+        or source["tree_sha"] != current.lifecycle.tree_sha
+        or recovery.repository != repository
+        or recovery.delivery_issue != delivery_issue
+        or recovery.pull_request != pull_request
+        or recovery.head_sha != current.lifecycle.head_sha
+        or recovery.tree_sha != current.lifecycle.tree_sha
+        or recovery.parent_shas != (source["parent_sha"],)
+        or recovery.expected_target_base_ref != binding.get("default_branch")
+        or recovery.expected_commit_signer != source["signer"]
+        or recovery.commit_signature_evidence_digest != expected_signature
+        or recovery.lifecycle_id != current.lifecycle.lifecycle_id
+        or recovery.current_authority_digest
+        != current.lifecycle.authority_digest
+        or recovery.current_publication_oid != current.publication_oid
+        or recovery.current_publication_digest != current.publication_digest
+        or recovery.lifecycle_state != state
+        or recovery.historical_validation_receipt_digest is not None
+        or recovery.historical_final_attestation_digest is not None
+    ):
+        raise fast_path.SecurityBlocker(
+            "exact protected recovered adoption-root binding changed"
+        )
+    manifest = {
+        "schema_version": "1.2",
+        "kind": "READY_INTEGRATION_PRIOR_AUTHORITY",
+        "repository": repository,
+        "delivery_issue_number": delivery_issue,
+        "pull_request_number": pull_request,
+        "prior_delivery_head_sha": current.lifecycle.head_sha,
+        "prior_delivery_tree_sha": current.lifecycle.tree_sha,
+        "prior_validation_receipt_digest": None,
+        "prior_final_attestation_digest": None,
+        "expected_signer": source["signer"],
+        "lifecycle": {
+            "identity": current.lifecycle.lifecycle_id,
+            "current_authority_digest": current.lifecycle.authority_digest,
+            "historical_proof_mode": "exact_state_adoption",
+            "draft": False, "ready": True, "ready_transition": False,
+            "unrestricted_reviews": 1,
+            "remediation_cycles": state["remediation_cycle_count"],
+            "exceptional_recoveries": 0,
+            "exceptional_continuations": 0,
+            "cycle_3": False,
+            "ready_transition_count": 1,
+            "ready_history": copy.deepcopy(ready_history),
+            "exceptional_recovery_history": [],
+            "exceptional_continuation_history": [],
+        },
+        "publication": {
+            "object_oid": current.publication_oid,
+            "publication_digest": current.publication_digest,
+        },
+        "recovery_publication": {
+            "object_oid": recovery.publication_oid,
+            "publication_digest": recovery.publication_digest,
+            "authorization_id": recovery.authorization_id,
+            "authorization_digest": recovery.authorization_digest,
+            "fresh_validation_receipt_digest": (
+                recovery.fresh_validation_receipt_digest
+            ),
+            "feedback_assessment_digest": recovery.feedback_assessment_digest,
+            "historical_evidence_loss_proof_digest": (
+                recovery.historical_evidence_loss_proof_digest
+            ),
+            "historical_bytes_reconstructed": False,
+        },
+        "source_authority_mode": "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
+        "source_authority": {
+            "proof_version": "3.0",
+            "source_parent_sha": source["parent_sha"],
+            "source_signer_identity": loss["source_signer_identity"],
+            "commit_signature_evidence_digest": proof[
+                "commit_signature_evidence_digest"
+            ],
+            "historical_receipt_provenance_digest": loss[
+                "historical_receipt_provenance_digest"
+            ],
+            "current_safety_digest": proof["source_validation_evidence_digest"],
+            "observed_history_digest": proof["observed_history_digest"],
+            "intended_state_digest": proof["intended_state_digest"],
+            "head_advanced_count": proof["head_advanced_count"],
+            "head_advanced_history_digest": proof[
+                "head_advanced_history_digest"
+            ],
+            "loss_admission_id": loss["admission_id"],
+            "loss_admission_digest": loss["admission_digest"],
+            "review_budget_admission_id": budget["admission_id"],
+            "review_budget_admission_digest": budget["admission_digest"],
+            "adoption_proof_digest": proof["proof_digest"],
+            "adoption_authorization_id": adoption_authorization[
+                "authorization_id"
+            ],
+            "adoption_authorization_digest": proof[
+                "authorization_digest"
+            ],
+            "enrollment_publication": {
+                "object_oid": current.publication_oid,
+                "publication_digest": current.publication_digest,
+            },
+            "ready_transition": None,
+            "historical_evidence": historical,
+        },
+        "historical_companions": {
+            "reviewed_state_bytes": "UNAVAILABLE",
+            "validation_receipt_bytes": "ABSENT_NEVER_ISSUED",
+            "final_attestation_bytes": "ABSENT_NEVER_ISSUED",
+            "historical_bytes_reconstructed": False,
+        },
+    }
+    return fast_path.normalize_ready_integration_prior_authority(manifest)
+
+
 def _derive_exact_state_adoption_ready_prior_authority(
     *,
     repository_root: Path,
@@ -7091,6 +7585,8 @@ def _derive_exact_state_adoption_ready_prior_authority(
     binding: dict[str, Any],
     reviewed_state_digest: str | None = None,
     reviewed_feedback_digest: str | None = None,
+    source_publication_oid: str | None = None,
+    reviewed_head_sha: str | None = None,
 ) -> dict[str, Any]:
     """Derive a maintained adopted source projection from protected CURRENT."""
 
@@ -7104,27 +7600,14 @@ def _derive_exact_state_adoption_ready_prior_authority(
         raise fast_path.SecurityBlocker(
             "maintained lifecycle publication verifier is unavailable"
         ) from exc
-    _require_bridge_import_provenance(
-        {
-            "lifecycle_authority": (
-                lifecycle_authority.__file__,
-                lifecycle_authority.__spec__.origin,
-            ),
-            "lifecycle_publication": (
-                lifecycle_publication.__file__,
-                lifecycle_publication.__spec__.origin,
-            ),
-        },
-        {
-            "lifecycle_authority": LIFECYCLE_AUTHORITY_HELPER,
-            "lifecycle_publication": LIFECYCLE_PUBLICATION_HELPER,
-        },
-    )
     _require_accepted_main_bridge_source(repository, expected_main=accepted_main)
     try:
-        current = lifecycle_publication.verify_current_lifecycle_authority(
-            repository, delivery_issue
-        )
+        if source_publication_oid is None:
+            current = lifecycle_publication.verify_current_lifecycle_authority(repository, delivery_issue)
+        else:
+            current = lifecycle_publication._verify_historical_lifecycle_transition(
+                repository, delivery_issue, source_publication_oid,
+            ).predecessor
         if (
             current.lifecycle.historical_proof_mode == "native_lifecycle"
             and current.lifecycle.pull_request == pull_request
@@ -7200,7 +7683,7 @@ def _derive_exact_state_adoption_ready_prior_authority(
         lifecycle_publication.LifecyclePublicationError,
     ) as exc:
         raise fast_path.SecurityBlocker(
-            "Exact-State-Adoption v3 source authority is invalid"
+            "Exact-State-Adoption source authority is invalid"
         ) from exc
     if (
         proof.get("schema_version") == "1.0"
@@ -7225,6 +7708,48 @@ def _derive_exact_state_adoption_ready_prior_authority(
             repository, expected_main=accepted_main
         )
         return fast_path.normalize_ready_integration_prior_authority(manifest)
+    if proof.get("proof_version") == lifecycle_authority.EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION:
+        manifest = _derive_governance_amendment_ready_root_prior_authority(
+            repository_root=repository_root, repository=repository,
+            delivery_issue=delivery_issue, pull_request=pull_request,
+            binding=binding, current=current, proof=proof, bundle=bundle,
+            lifecycle_authority=lifecycle_authority,
+        )
+        _require_accepted_main_bridge_source(repository, expected_main=accepted_main)
+        return manifest
+    direct_root = (
+        current.predecessor_publication_oid is None
+        and bundle.get("transition_authorizations") == []
+        and bundle.get("authority_chain") == []
+    )
+    if direct_root and proof.get("validation_evidence_loss_admission", {}).get("schema_version") == "1.2":
+        manifest = _derive_recovered_adoption_root_ready_prior_authority(
+            repository_root=repository_root,
+            repository=repository,
+            delivery_issue=delivery_issue,
+            pull_request=pull_request,
+            binding=binding,
+            current=current,
+            proof=proof,
+            verified_proof=verified_proof,
+            bundle=bundle,
+            lifecycle_authority=lifecycle_authority,
+            lifecycle_publication=lifecycle_publication,
+            reviewed_state_digest=reviewed_state_digest,
+            reviewed_feedback_digest=reviewed_feedback_digest,
+            source_publication_oid=source_publication_oid,
+        )
+        _require_accepted_main_bridge_source(
+            repository, expected_main=accepted_main
+        )
+        return manifest
+    if direct_root:
+        try:
+            lifecycle_authority.exact_state_adoption_ready_root_historical_evidence(
+                current.lifecycle, bundle, current.predecessor_publication_oid,
+            )
+        except lifecycle_authority.LifecycleAuthorityError as exc:
+            raise fast_path.SecurityBlocker("direct Ready adoption root authority is invalid") from exc
     state = current.lifecycle.state
     ready_history = state.get("ready_history") if isinstance(state, dict) else None
     events = bundle.get("transition_authorizations")
@@ -7245,8 +7770,8 @@ def _derive_exact_state_adoption_ready_prior_authority(
         or verified_proof.tree_sha != current.lifecycle.tree_sha
         or not isinstance(events, list)
         or not isinstance(authorities, list)
-        or len(events) != 1
-        or len(authorities) != 1
+        or len(events) != (0 if direct_root else 1)
+        or len(authorities) != (0 if direct_root else 1)
         or state.get("draft") is not False
         or state.get("ready") is not True
         or isinstance(state.get("unrestricted_review_count"), bool)
@@ -7310,7 +7835,7 @@ def _derive_exact_state_adoption_ready_prior_authority(
         raise fast_path.SecurityBlocker(
             "adopted Ready reviewed-state selectors are incomplete"
         )
-    if reviewed_state_digest is not None and (
+    if reviewed_state_digest is not None and not direct_root and (
         not isinstance(current_safety, dict)
         or current_safety.get("reviewed_state_digest") != reviewed_state_digest
         or current_safety.get("reviewed_feedback_digest")
@@ -7319,6 +7844,24 @@ def _derive_exact_state_adoption_ready_prior_authority(
         raise fast_path.SecurityBlocker(
             "integration reviewed predecessor differs from authenticated adopted Ready safety"
         )
+    if direct_root:
+        try:
+            historical_provider = lifecycle_publication._derive_exact_adoption_historical_provider_binding(current, bundle)
+            if historical_provider is None:
+                raise lifecycle_publication.LifecyclePublicationError("direct Ready historical provider binding is missing")
+        except lifecycle_publication.LifecyclePublicationError as exc:
+            raise fast_path.SecurityBlocker("direct Ready historical provider authority is invalid") from exc
+        if reviewed_head_sha is not None and reviewed_head_sha != historical_provider.provider_head(
+            repository=repository, pull_request=pull_request,
+            current_head_sha=current.lifecycle.head_sha,
+        ):
+            raise fast_path.SecurityBlocker("direct Ready reviewed head differs from authenticated provider history")
+        if reviewed_feedback_digest is not None and (
+            current_safety.get("feedback_digest") != reviewed_feedback_digest
+        ):
+            raise fast_path.SecurityBlocker("direct Ready reviewed feedback differs from authenticated safety")
+        if _commit_validation_receipt_digest(repository_root, current.lifecycle.head_sha) != receipt_digest:
+            raise fast_path.SecurityBlocker("direct Ready issued receipt trailer changed")
     source_commit = _verified_prior_delivery_commit(
         repository_root,
         current.lifecycle.head_sha,
@@ -7328,40 +7871,43 @@ def _derive_exact_state_adoption_ready_prior_authority(
     if (
         source_commit["parent_sha"] != loss.get("parent_sha")
         or source_commit["tree_sha"] != current.lifecycle.tree_sha
+        or source_commit["signer"]["identity"] != loss.get("source_signer_identity")
     ):
         raise fast_path.SecurityBlocker(
             "Exact-State-Adoption v3 source commit changed"
         )
-    enrollment_oid = current.predecessor_publication_oid
-    if not isinstance(enrollment_oid, str):
-        raise fast_path.SecurityBlocker(
-            "Exact-State-Adoption v3 enrollment publication is unavailable"
-        )
-    try:
-        transition = lifecycle_publication._verify_historical_lifecycle_transition(
-            repository, delivery_issue, enrollment_oid
-        )
-    except lifecycle_publication.LifecyclePublicationError as exc:
-        raise fast_path.SecurityBlocker(
-            "Exact-State-Adoption v3 Ready transition is invalid"
-        ) from exc
-    event = events[0]
-    if (
-        transition.predecessor.publication_oid != enrollment_oid
-        or transition.successor.publication_oid != current.publication_oid
-        or transition.transition_kind != "DRAFT_TO_READY"
-        or transition.event_id != event.get("event_id")
-        or transition.event_digest != event.get("event_digest")
-        or transition.predecessor_authority_digest != proof.get("proof_digest")
-        or transition.predecessor_head_sha != current.lifecycle.head_sha
-        or transition.resulting_head_sha != current.lifecycle.head_sha
-        or current.predecessor_publication_oid != enrollment_oid
-        or ready_history[0].get("event_authorization_digest")
-        != transition.event_digest
-    ):
-        raise fast_path.SecurityBlocker(
-            "Exact-State-Adoption v3 Ready continuity is invalid"
-        )
+    transition = None
+    if not direct_root:
+        enrollment_oid = current.predecessor_publication_oid
+        if not isinstance(enrollment_oid, str):
+            raise fast_path.SecurityBlocker(
+                "Exact-State-Adoption v3 enrollment publication is unavailable"
+            )
+        try:
+            transition = lifecycle_publication._verify_historical_lifecycle_transition(
+                repository, delivery_issue, enrollment_oid
+            )
+        except lifecycle_publication.LifecyclePublicationError as exc:
+            raise fast_path.SecurityBlocker(
+                "Exact-State-Adoption v3 Ready transition is invalid"
+            ) from exc
+        event = events[0]
+        if (
+            transition.predecessor.publication_oid != enrollment_oid
+            or transition.successor.publication_oid != current.publication_oid
+            or transition.transition_kind != "DRAFT_TO_READY"
+            or transition.event_id != event.get("event_id")
+            or transition.event_digest != event.get("event_digest")
+            or transition.predecessor_authority_digest != proof.get("proof_digest")
+            or transition.predecessor_head_sha != current.lifecycle.head_sha
+            or transition.resulting_head_sha != current.lifecycle.head_sha
+            or current.predecessor_publication_oid != enrollment_oid
+            or ready_history[0].get("event_authorization_digest")
+            != transition.event_digest
+        ):
+            raise fast_path.SecurityBlocker(
+                "Exact-State-Adoption v3 Ready continuity is invalid"
+            )
     manifest = {
         "schema_version": "1.2",
         "kind": "READY_INTEGRATION_PRIOR_AUTHORITY",
@@ -7421,10 +7967,10 @@ def _derive_exact_state_adoption_ready_prior_authority(
             "adoption_authorization_id": authorization["authorization_id"],
             "adoption_authorization_digest": proof["authorization_digest"],
             "enrollment_publication": {
-                "object_oid": transition.predecessor.publication_oid,
-                "publication_digest": transition.predecessor.publication_digest,
+                "object_oid": current.publication_oid if direct_root else transition.predecessor.publication_oid,
+                "publication_digest": current.publication_digest if direct_root else transition.predecessor.publication_digest,
             },
-            "ready_transition": {
+            "ready_transition": None if direct_root else {
                 "event_id": transition.event_id,
                 "event_digest": transition.event_digest,
                 "predecessor_authority_digest": (
@@ -7487,6 +8033,90 @@ def _verified_enrolled_loss_current_safety(
             "enrolled package-loss current safety is invalid"
         )
     return safety
+
+
+def _derive_governance_amendment_ready_root_prior_authority(
+    *, repository_root: Path, repository: str, delivery_issue: int,
+    pull_request: int, binding: dict[str, Any], current: Any,
+    proof: dict[str, Any], bundle: dict[str, Any], lifecycle_authority: Any,
+) -> dict[str, Any]:
+    """Compose accepted v4 root authentication, without a recovery publication."""
+
+    try:
+        historical = lifecycle_authority.recovered_adoption_root_historical_evidence(
+            current.lifecycle, bundle, current.predecessor_publication_oid,
+        )
+    except lifecycle_authority.LifecycleAuthorityError as exc:
+        raise fast_path.SecurityBlocker("Governance-Amendment Ready root authority is invalid") from exc
+    amendment = proof["governance_amendment_authorization"]
+    source = _verified_prior_delivery_commit(
+        repository_root, current.lifecycle.head_sha,
+        amendment["source_signature"]["signer_identity"], binding,
+    )
+    if (
+        (current.lifecycle.repository, current.lifecycle.delivery_issue, current.lifecycle.pull_request)
+        != (repository, delivery_issue, pull_request)
+        or source["parent_shas"] != amendment["ordered_parent_shas"]
+        or source["tree_sha"] != current.lifecycle.tree_sha
+        or source["signer"]["identity"] != amendment["source_signature"]["signer_identity"]
+        or current.lifecycle.adoption_source_evidence_digest != proof["adoption_source_evidence_digest"]
+        or proof["adoption_source_evidence_digest"] != amendment["authorization_digest"]
+    ):
+        raise fast_path.SecurityBlocker("Governance-Amendment Ready root source binding changed")
+    state = current.lifecycle.state
+    publication = {"object_oid": current.publication_oid, "publication_digest": current.publication_digest}
+    manifest = {
+        "schema_version": "1.2", "kind": "READY_INTEGRATION_PRIOR_AUTHORITY",
+        "repository": repository, "delivery_issue_number": delivery_issue,
+        "pull_request_number": pull_request,
+        "prior_delivery_head_sha": current.lifecycle.head_sha,
+        "prior_delivery_tree_sha": current.lifecycle.tree_sha,
+        "prior_validation_receipt_digest": None,
+        "prior_final_attestation_digest": None,
+        "expected_signer": source["signer"],
+        "lifecycle": {
+            "identity": current.lifecycle.lifecycle_id,
+            "current_authority_digest": current.lifecycle.authority_digest,
+            "historical_proof_mode": "exact_state_adoption",
+            "draft": False, "ready": True, "ready_transition": False,
+            "unrestricted_reviews": state["unrestricted_review_count"],
+            "remediation_cycles": state["remediation_cycle_count"],
+            "exceptional_recoveries": 0, "exceptional_continuations": 0,
+            "cycle_3": False, "ready_transition_count": 1,
+            "ready_history": copy.deepcopy(state["ready_history"]),
+            "exceptional_recovery_history": [], "exceptional_continuation_history": [],
+        },
+        "publication": publication,
+        "source_authority_mode": "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
+        "source_authority": {
+            "proof_version": proof["proof_version"],
+            "source_parent_sha": source["parent_sha"],
+            "source_signer_identity": source["signer"]["identity"],
+            "commit_signature_evidence_digest": proof["commit_signature_evidence_digest"],
+            "observed_history_digest": proof["observed_history_digest"],
+            "intended_state_digest": proof["intended_state_digest"],
+            "head_advanced_count": proof["head_advanced_count"],
+            "head_advanced_history_digest": proof["head_advanced_history_digest"],
+            "governance_amendment_authorization_id": amendment["authorization_id"],
+            "governance_amendment_authorization_digest": amendment["authorization_digest"],
+            "registered_source_digest": fast_path.digest_json(amendment["qualified_source"]),
+            "registration_tip_sha": amendment["current_validation"]["accepted_main_sha"],
+            "adoption_source_evidence_digest": proof["adoption_source_evidence_digest"],
+            "adoption_proof_digest": proof["proof_digest"],
+            "adoption_authorization_id": proof["authorization"]["authorization_id"],
+            "adoption_authorization_digest": proof["authorization_digest"],
+            "enrollment_publication": publication,
+            "historical_evidence": historical,
+            "feedback": copy.deepcopy(amendment["feedback"]),
+        },
+        "historical_companions": {
+            "reviewed_state_bytes": "UNAVAILABLE",
+            "validation_receipt_bytes": "ABSENT_NEVER_ISSUED",
+            "final_attestation_bytes": "ABSENT_NEVER_ISSUED",
+            "historical_bytes_reconstructed": False,
+        },
+    }
+    return fast_path.normalize_ready_integration_prior_authority(manifest)
 
 
 def _derive_legacy_enrolled_loss_ready_prior_authority(
@@ -7963,6 +8593,7 @@ def _verify_prior_authority_tag(
     authority: dict[str, Any],
     integration_evidence: dict[str, Any],
     binding: dict[str, Any],
+    source_publication_oid: str | None = None,
 ) -> None:
     if not re.fullmatch(r"refs/tags/[A-Za-z0-9._/-]+", tag_ref) or ".." in tag_ref:
         raise fast_path.SecurityBlocker("prior authority tag ref is unsafe")
@@ -7985,14 +8616,60 @@ def _verify_prior_authority_tag(
     verified_tag = _run_attestation_git(
         repository_root, ["verify-tag", "--raw", tag_object_oid], allow_failure=True
     )
+    marker_digest = _prior_authority_tag_digest(tag_object.stdout)
+    expected_digest = fast_path.digest_json(authority)
+    if marker_digest != expected_digest and (
+        authority.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT"
+    ):
+        # The caller's manifest has already been compared with complete maintained
+        # derivation. The journal owner alone authenticates this preserved tag's
+        # historical marker as a consumption identity for the corrected projection.
+        lifecycle_authority, lifecycle_publication = _load_lifecycle_publication_helpers()
+        try:
+            _require_exact_adopted_ready_manifest(
+                authority,
+                _derive_exact_state_adoption_ready_prior_authority(
+                    repository_root=repository_root, repository=authority["repository"],
+                    delivery_issue=authority["delivery_issue_number"],
+                    pull_request=authority["pull_request_number"], binding=binding,
+                    source_publication_oid=source_publication_oid,
+                ),
+            )
+            if source_publication_oid is None:
+                recovery = lifecycle_publication.verify_current_ready_source_recovery(
+                    authority["repository"], authority["delivery_issue_number"])
+            else:
+                _, recovery = lifecycle_publication._verify_ready_source_recovery_publication(
+                    authority["repository"], authority["delivery_issue_number"],
+                    source_publication_oid=source_publication_oid,
+                )
+            correction = lifecycle_authority.loads_closed_json(recovery.historical_evidence_correction)
+            if (
+                correction["prior_authority_tag_oid"] == tag_object_oid
+                and correction["original_prior_authority_digest"] == marker_digest
+                and recovery.repository == authority["repository"]
+                and recovery.delivery_issue == authority["delivery_issue_number"]
+                and recovery.pull_request == authority["pull_request_number"]
+                and recovery.head_sha == authority["prior_delivery_head_sha"]
+                and recovery.tree_sha == authority["prior_delivery_tree_sha"]
+                and recovery.current_publication_oid == authority["publication"]["object_oid"]
+                and recovery.current_publication_digest == authority["publication"]["publication_digest"]
+                and recovery.publication_oid == authority["recovery_publication"]["object_oid"]
+                and recovery.publication_digest == authority["recovery_publication"]["publication_digest"]
+                and recovery.lifecycle_id == authority["lifecycle"]["identity"]
+                and recovery.current_authority_digest == authority["lifecycle"]["current_authority_digest"]
+            ):
+                marker_digest = expected_digest
+        except (AttributeError, KeyError, TypeError, ValueError,
+                lifecycle_publication.LifecyclePublicationError) as exc:
+            raise fast_path.SecurityBlocker("corrected prior authority tag relationship is unavailable") from exc
     if (
         tag_type.returncode != 0
         or tag_type.stdout.strip() != "tag"
         or tag_object.returncode != 0
         or _prior_authority_tag_target(tag_object.stdout)
         != authority["prior_delivery_head_sha"]
-        or _prior_authority_tag_digest(tag_object.stdout)
-        != fast_path.digest_json(authority)
+        or marker_digest != expected_digest
     ):
         raise fast_path.SecurityBlocker("prior authority tag binding is invalid")
     tag_signature = evidence.interpret_local_signature(
@@ -8013,9 +8690,46 @@ def _verify_prior_authority_tag(
 
 
 def _authenticated_source_validation_delivery_issue(
-    authority: dict[str, Any], attestation: dict[str, Any]
+    authority: dict[str, Any], attestation: dict[str, Any],
+    *,
+    published_source_digest: str | None = None,
+    canonical_digests: dict[int | None, str] | None = None,
 ) -> int | None:
-    """Select the issue-bound form introduced with Continuation evidence."""
+    """Select one existing source form from authenticated protected CURRENT."""
+
+    if canonical_digests is not None:
+        issue = authority["delivery_issue_number"]
+        if (
+            type(issue) is not int or issue <= 0
+            or not isinstance(canonical_digests, dict)
+            or set(canonical_digests) != {None, issue}
+            or not isinstance(published_source_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", published_source_digest) is None
+            or any(
+                not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                for digest in canonical_digests.values()
+            )
+        ):
+            raise fast_path.SecurityBlocker(
+                "source validation form authority is malformed"
+            )
+        matches = [
+            issue for issue, digest in canonical_digests.items()
+            if digest == published_source_digest
+        ]
+        if len(matches) != 1:
+            raise fast_path.SecurityBlocker(
+                "protected CURRENT selects no unique source validation form"
+            )
+        if (
+            "exceptional_continuation_evidence_digest" in attestation
+            and matches[0] is None
+        ):
+            raise fast_path.SecurityBlocker(
+                "Continuation source validation cannot use the historical unbound form"
+            )
+        return matches[0]
 
     if "exceptional_continuation_evidence_digest" in attestation:
         return authority["delivery_issue_number"]
@@ -8031,6 +8745,77 @@ def _canonical_ready_prior_authority_tag_ref(authority: dict[str, Any]) -> str:
     )
 
 
+def _load_ready_integration_packages(path: str) -> Any:
+    transport = _read_json(path, "Ready integration chain")
+    if (set(transport) != {"schema_version", "kind", "packages"}
+        or transport["schema_version"] != "1.0"
+        or transport["kind"] != "READY_INTEGRATION_PREDECESSOR_PACKAGES"):
+        raise fast_path.SecurityBlocker("Ready integration chain transport is malformed")
+    return transport["packages"]
+
+
+def _authenticate_ready_integration_packages(
+    *, repository_root: Path, published: Any, publication: Any, packages: Any,
+) -> Any:
+    """Observe immutable packages; delegate integration and chain admission."""
+
+    if not isinstance(packages, list) or not packages:
+        raise fast_path.SecurityBlocker("prior Ready integration chain evidence is missing")
+    raw = json.loads(published.serialized_lifecycle_evidence)
+    bundle = raw.get("lifecycle_evidence", raw)
+    if len(packages) > len(bundle["transition_authorizations"]):
+        raise fast_path.SecurityBlocker("prior Ready integration chain exceeds lifecycle history")
+    verifier = publication.fast_path
+    try:
+        verified = []
+        keys = {"integration_evidence", "reviewed_state", "validation_receipt", "final_attestation", "prior_authority"}
+        for package in packages:
+            if not isinstance(package, dict) or set(package) != keys:
+                raise fast_path.SecurityBlocker("prior Ready integration package is malformed")
+            attestation = package["final_attestation"]
+            if not isinstance(attestation, dict):
+                raise fast_path.SecurityBlocker("prior Ready integration attestation is malformed")
+            head = attestation.get("head_sha")
+            if not isinstance(head, str) or not OID_PATTERN.fullmatch(head):
+                raise fast_path.SecurityBlocker("prior Ready integration head is malformed")
+            reviewed = verifier.StableFeedbackState.from_payload(package["reviewed_state"])
+            binding = _prior_delivery_registry_binding(
+                head, published.lifecycle.repository,
+                attestation.get("registry_digest", ""), attestation.get("command_set_digest", ""),
+            )
+            tree = _run_attestation_git(repository_root, ["rev-parse", f"{head}^{{tree}}"]).stdout.strip()
+            parents = _run_attestation_git(repository_root, ["rev-list", "--parents", "-n", "1", head]).stdout.split()
+            if not parents or parents[0] != head:
+                raise fast_path.SecurityBlocker("prior Ready integration ancestry is malformed")
+            validation = verifier.verify_ready_integration_attestation(
+                attestation, repository=published.lifecycle.repository, head_sha=head,
+                registry=binding, command_set=binding["validation"], reviewed_state=reviewed,
+                validation_receipt=package["validation_receipt"], integration_evidence=package["integration_evidence"],
+                commit_parent_shas=parents[1:], commit_tree_sha=tree,
+                commit_validation_receipt_digest=_commit_validation_receipt_digest(repository_root, head),
+                commit_integration_evidence_digest=_commit_integration_evidence_digest(repository_root, head),
+                repository_root=repository_root, signature_policy=binding["signature_policy"],
+            )
+            verified.append((validation, package["prior_authority"]))
+        return tuple(verified)
+    except (publication.LifecyclePublicationError, verifier.SecurityBlocker,
+            KeyError, TypeError, ValueError) as exc:
+        raise fast_path.SecurityBlocker("prior Ready integration chain authentication failed") from exc
+
+
+def _verify_ready_integration_prior_chain(
+    *, repository_root: Path, published: Any, publication: Any, packages: Any,
+) -> Any:
+    verified = _authenticate_ready_integration_packages(
+        repository_root=repository_root, published=published,
+        publication=publication, packages=packages,
+    )
+    try:
+        return publication.verify_ready_integration_prior_authority(published, verified)
+    except publication.LifecyclePublicationError as exc:
+        raise fast_path.SecurityBlocker("prior Ready integration chain authentication failed") from exc
+
+
 def _verify_ready_integration_prior_authority(
     *,
     arguments: argparse.Namespace,
@@ -8038,6 +8823,7 @@ def _verify_ready_integration_prior_authority(
     binding: dict[str, Any],
     integration_evidence: dict[str, Any],
     live_observation: dict[str, Any] | None,
+    reviewed_state: Any = None,
 ) -> dict[str, Any]:
     required_paths = (
         getattr(arguments, "prior_authority", None),
@@ -8057,11 +8843,15 @@ def _verify_ready_integration_prior_authority(
     recovered = "recovery_publication" in authority
     adopted = authority.get("source_authority_mode") in {
         "EXACT_STATE_ADOPTION_V3",
+        "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
+        "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
         "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
         "EXISTING_AUTHORITY_COMPOSITION",
         "NATIVE_ENROLLED_LOSS",
     }
     historical_paths = required_paths[1:4]
+    if getattr(arguments, "prior_integration_chain", None) is not None and (recovered or adopted):
+        raise fast_path.SecurityBlocker("prior integration chain cannot substitute recovered or adopted evidence")
     caller_signer = required_paths[5]
     if recovered:
         if any(historical_paths):
@@ -8104,7 +8894,7 @@ def _verify_ready_integration_prior_authority(
             "reviewed_feedback_digest"
         ]
         if authority.get("source_authority_mode") == "EXISTING_AUTHORITY_COMPOSITION":
-            from secpal_pr_review import qualified_remediation_successor_loss
+            from scripts.secpal_pr_review import qualified_remediation_successor_loss
 
             try:
                 qualification = qualified_remediation_successor_loss.load_accepted_admission(
@@ -8122,6 +8912,11 @@ def _verify_ready_integration_prior_authority(
                 raise fast_path.SecurityBlocker(
                     "authenticated qualified-loss review selectors are unavailable"
                 ) from exc
+        reviewed_head_selector = {}
+        if authority.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V3" and authority["source_authority"]["ready_transition"] is None:
+            if reviewed_state is None:
+                raise fast_path.SecurityBlocker("direct Ready integration requires its reviewed snapshot")
+            reviewed_head_selector["reviewed_head_sha"] = reviewed_state.head_sha
         derived = _derive_exact_state_adoption_ready_prior_authority(
             repository_root=repository_root,
             repository=arguments.repo,
@@ -8130,6 +8925,7 @@ def _verify_ready_integration_prior_authority(
             binding=binding,
             reviewed_state_digest=reviewed_state_digest,
             reviewed_feedback_digest=reviewed_feedback_digest,
+            **reviewed_head_selector,
         )
         _require_exact_adopted_ready_manifest(authority, derived)
         if required_paths[4] != _canonical_ready_prior_authority_tag_ref(authority):
@@ -8143,7 +8939,35 @@ def _verify_ready_integration_prior_authority(
             integration_evidence=integration_evidence,
             binding=binding,
         )
-        _verify_ready_integration_lifecycle_authority(authority, integration_evidence)
+        if authority["source_authority_mode"] == "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT":
+            if _commit_validation_receipt_digest(repository_root, authority["prior_delivery_head_sha"]) is not None:
+                raise fast_path.SecurityBlocker("Governance-Amendment root has an unexpected historical trailer")
+        if authority["source_authority_mode"] == "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT":
+            if _commit_validation_receipt_digest(
+                repository_root, authority["prior_delivery_head_sha"]
+            ) is not None:
+                raise fast_path.SecurityBlocker(
+                    "zero-receipt adoption root has an unexpected historical trailer"
+                )
+            lifecycle_authority, _ = _load_lifecycle_publication_helpers()
+            signer = authority["expected_signer"]
+            signature_binding = (
+                lifecycle_authority
+                .ready_source_recovery_commit_signature_binding_digest(
+                    head_sha=authority["prior_delivery_head_sha"],
+                    expected_signer=signer,
+                    signature_format=(
+                        "ssh" if signer["kind"] == "SSH_PRINCIPAL"
+                        else "openpgp"
+                    ),
+                )
+            )
+            _verify_ready_integration_recovered_authority(
+                authority, integration_evidence,
+                parent_sha=authority["source_authority"]["source_parent_sha"],
+                commit_signature_binding_digest=signature_binding,
+            )
+        _verify_ready_integration_lifecycle_authority(authority, integration_evidence, reviewed_state=reviewed_state)
         if live_observation is not None:
             _verify_ready_integration_live_observation(
                 live_observation, integration_evidence, binding
@@ -8171,6 +8995,29 @@ def _verify_ready_integration_prior_authority(
         attestation = _read_json(
             historical_paths[2], "prior validation attestation"
         )
+    chain_path = getattr(arguments, "prior_integration_chain", None)
+    if chain_path is not None:
+        packages = _load_ready_integration_packages(chain_path)
+        published, publication = _authenticated_ready_integration_publication_context(authority, integration_evidence)
+        projection = _verify_ready_integration_prior_chain(
+            repository_root=repository_root, published=published, publication=publication, packages=packages,
+        )
+        if json.loads(projection.manifest_json) != authority:
+            raise fast_path.SecurityBlocker("prior Ready integration authority projection changed")
+        last = packages[-1]
+        if (last["reviewed_state"] != reviewed.to_dict()
+            or last["validation_receipt"] != receipt or last["final_attestation"] != attestation):
+            raise fast_path.SecurityBlocker("prior Ready integration companions changed")
+        if required_paths[4] != _canonical_ready_prior_authority_tag_ref(authority):
+            raise fast_path.SecurityBlocker("prior Ready integration tag identity changed")
+        _verify_prior_authority_tag(
+            repository_root=repository_root, tag_ref=required_paths[4], authority=authority,
+            integration_evidence=integration_evidence, binding=binding,
+        )
+        _verify_ready_integration_lifecycle_authority(authority, integration_evidence)
+        if live_observation is not None:
+            _verify_ready_integration_live_observation(live_observation, integration_evidence, binding)
+        return authority
     parent = _validated_commit_parent(repository_root, head)
     tree = _run_attestation_git(repository_root, ["rev-parse", f"{head}^{{tree}}"]).stdout.strip()
     trailer = _commit_validation_receipt_digest(repository_root, head)
@@ -8227,20 +9074,6 @@ def _verify_ready_integration_prior_authority(
             != attestation.get("validation_receipt_digest")
         ):
             raise fast_path.SecurityBlocker("prior delivery receipt identity changed")
-        verified_validation = fast_path.verify_validation_attestation(
-            attestation,
-            repository=arguments.repo,
-            head_sha=head,
-            registry=prior_binding,
-            command_set=prior_binding["validation"],
-            reviewed_state=reviewed,
-            commit_parent_sha=parent,
-            commit_tree_sha=tree,
-            commit_validation_receipt_digest=trailer,
-            delivery_issue_number=_authenticated_source_validation_delivery_issue(
-                authority, attestation
-            ),
-        )
     commit_object = _run_attestation_git(repository_root, ["cat-file", "commit", head], allow_failure=True)
     verified_commit = _run_attestation_git(repository_root, ["verify-commit", "--raw", head], allow_failure=True)
     local_signature = evidence.interpret_local_signature(
@@ -8292,12 +9125,69 @@ def _verify_ready_integration_prior_authority(
             commit_signature_binding_digest=recovery_signature_binding_digest,
         )
     else:
+        published = _authenticated_ready_integration_publication(
+            authority, integration_evidence
+        )
+        validation_arguments = dict(
+            repository=arguments.repo,
+            head_sha=head,
+            registry=prior_binding,
+            command_set=prior_binding["validation"],
+            reviewed_state=reviewed,
+            commit_parent_sha=parent,
+            commit_tree_sha=tree,
+            commit_validation_receipt_digest=trailer,
+        )
+        if published.lifecycle.historical_proof_mode == "exact_state_adoption":
+            issue = authority["delivery_issue_number"]
+            if "exceptional_continuation_evidence_digest" in attestation:
+                selected = _authenticated_source_validation_delivery_issue(
+                    authority, attestation
+                )
+                verified_validation = fast_path.verify_validation_attestation(
+                    attestation, **validation_arguments,
+                    delivery_issue_number=selected,
+                )
+                if (
+                    verified_validation.source_validation_evidence_digest
+                    != published.lifecycle.source_validation_evidence_digest
+                ):
+                    raise fast_path.SecurityBlocker(
+                        "Continuation source validation cannot use the historical unbound form"
+                    )
+            else:
+                candidates = {
+                    form: fast_path.verify_validation_attestation(
+                        attestation, **validation_arguments,
+                        delivery_issue_number=form,
+                    )
+                    for form in (None, issue)
+                }
+                selected = _authenticated_source_validation_delivery_issue(
+                    authority, attestation,
+                    published_source_digest=(
+                        published.lifecycle.source_validation_evidence_digest
+                    ),
+                    canonical_digests={
+                        form: candidate.source_validation_evidence_digest
+                        for form, candidate in candidates.items()
+                    },
+                )
+                verified_validation = candidates[selected]
+        else:
+            verified_validation = fast_path.verify_validation_attestation(
+                attestation, **validation_arguments,
+                delivery_issue_number=_authenticated_source_validation_delivery_issue(
+                    authority, attestation
+                ),
+            )
         _verify_ready_integration_published_authority(
             authority,
             integration_evidence,
             verified_source_validation_evidence_digest=(
                 verified_validation.source_validation_evidence_digest
             ),
+            published=published,
         )
     _verify_ready_integration_lifecycle_authority(authority, integration_evidence)
     if live_observation is not None:
@@ -8528,6 +9418,10 @@ def _resolution_eligibility_digest(
 
 
 def _command_attest_validation(arguments: argparse.Namespace) -> int:
+    if not arguments.output:
+        raise fast_path.RecoverableLocalError(
+            "attest-validation requires a durable --output path"
+        )
     if not OID_PATTERN.fullmatch(arguments.expected_head):
         raise fast_path.RecoverableLocalError("--expected-head must be a complete commit OID")
     repository_root = Path(arguments.repo_root).resolve(strict=True)
@@ -8628,6 +9522,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
         getattr(arguments, "prior_reviewed_state", None),
         getattr(arguments, "prior_receipt", None),
         getattr(arguments, "prior_attestation", None),
+        getattr(arguments, "prior_integration_chain", None),
         getattr(arguments, "expected_prior_authority_signer", None),
     )
     if not (integration_evidence_path or pre_enrollment_evidence_path) and any(
@@ -8799,6 +9694,22 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             raise fast_path.SecurityBlocker(
                 "receipt head does not match reviewed feedback head"
             )
+        # Re-derive scope from authenticated base and exact receipt tree at bind.
+        # No caller-selected class or receipt digest may skip application tests.
+        ordinary = (
+            pre_enrollment_evidence is None
+            and integration_evidence_path is None
+            and exceptional_recovery_path is None
+            and exceptional_continuation_path is None
+        )
+        expected_commands = (
+            list(_governance_validation_commands())
+            if ordinary and _governance_only_candidate(
+                entry, repository_root, reviewed.base_sha,
+                receipt.get("validated_tree_sha"),
+            )
+            else binding["validation"]
+        )
         receipt_fields = {key: value for key, value in receipt.items() if key != "receipt_digest"}
         expected_receipt = (
             pre_enrollment.create_validation_receipt(
@@ -8815,6 +9726,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 binding=binding,
                 reviewed=reviewed,
                 manual_gate_evidence=receipt.get("manual_gate_evidence"),
+                command_set=expected_commands,
                 eligibility_evidence_digest=receipt.get(
                     "eligibility_evidence_digest"
                 ),
@@ -8861,6 +9773,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 binding=binding,
                 integration_evidence=integration_evidence,
                 live_observation=live_observation,
+                reviewed_state=reviewed,
             )
             parents = _validated_integration_commit_parents(
                 repository_root,
@@ -9134,7 +10047,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 repository=arguments.repo,
                 head_sha=head,
                 registry=binding,
-                command_set=binding["validation"],
+                command_set=expected_commands,
                 successful_result=True,
                 reviewed_state=reviewed,
                 validation_receipt=receipt,
@@ -9186,6 +10099,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             binding=binding,
             integration_evidence=integration_evidence,
             live_observation=None,
+            reviewed_state=reviewed,
         )
         _verify_integration_tree_delta(repository_root, integration_evidence, tree)
     if pre_enrollment_evidence_path:
@@ -9275,6 +10189,14 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 "validated_tree_sha": tree,
             },
         )
+    execution_root = repository_root
+    expected_commands = list(
+        _governance_validation_commands()
+        if not any((pre_enrollment_evidence, integration_evidence,
+                    exceptional_recovery, exceptional_continuation))
+        and _governance_only_candidate(entry, repository_root, reviewed.base_sha, tree)
+        else binding["validation"] if binding is not None else ()
+    )
     if collision_validation:
         try:
             collision_helper = _load_collision_validation_helper()
@@ -9304,6 +10226,8 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 manual_gate_evidence = _load_fast_manual_gate_evidence(
                     getattr(arguments, "manual_gate_evidence", None), binding
                 )
+                execution_root = execution.execution_root.resolve()
+                expected_commands = list(_complete_validation_commands(entry))
                 validation_result = _run_registered_validations(
                     entry,
                     execution.execution_root,
@@ -9315,150 +10239,179 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
                 "collision Complete Validation authority failed"
             ) from exc
     else:
-        validation_result = _run_registered_validations(entry, repository_root)
+        validation_result = _run_registered_validations(
+            entry, repository_root,
+            governance_base=(
+                reviewed.base_sha if not any((
+                    pre_enrollment_evidence, integration_evidence,
+                    exceptional_recovery, exceptional_continuation,
+                )) else None
+            ),
+            governance_tree=tree,
+        )
     if binding is None or manual_gate_evidence is None:
         raise fast_path.SecurityBlocker(
             "complete validation authority is unavailable"
         )
+    if type(validation_result) is not RegisteredValidationResult:
+        raise fast_path.SecurityBlocker(
+            "complete registered validation failed: unowned registered command result"
+        )
     if not validation_result:
-        if (
-            isinstance(validation_result, RegisteredValidationResult)
-            and validation_result.failure_report() is not None
-        ):
+        if validation_result.failure_report() is not None:
             raise RegisteredValidationFailure(validation_result)
         raise fast_path.SecurityBlocker("complete registered validation failed")
-    head_after, status_after = _attestation_local_state(repository_root, arguments.repo)
-    tree_after = _staged_tree(repository_root, status_after)
-    if head_after != head or tree_after != tree or status_after != status:
-        raise fast_path.SecurityBlocker(
-            "local head, staged tree, or worktree changed during complete validation"
-        )
-    if eligibility_evidence and _resolution_eligibility_digest(
-        eligibility_evidence,
-        arguments.repo,
-        reviewed,
-    ) != eligibility_evidence_digest:
-        raise fast_path.SecurityBlocker(
-            "eligibility evidence changed during complete validation"
-        )
-    if integration_evidence_path:
-        integration_after = fast_path.normalize_ready_integration_evidence(
-            _read_json(integration_evidence_path, "Ready integration evidence"),
-            repository=arguments.repo,
-            reviewed_state=reviewed,
-            registry=binding,
-            validated_tree_sha=tree_after,
-        )
-        _verify_integration_selection(integration_after, arguments)
-        if integration_after != integration_evidence:
+    if (
+        validation_result.execution_root != execution_root
+        or validation_result.command_set != expected_commands
+    ):
+        raise fast_path.SecurityBlocker("unowned or mismatched registered command execution")
+    def reauthenticate_post_execution() -> None:
+        head_after, status_after = _attestation_local_state(repository_root, arguments.repo)
+        tree_after = _staged_tree(repository_root, status_after)
+        if head_after != head or tree_after != tree or status_after != status:
             raise fast_path.SecurityBlocker(
-                "Ready integration evidence changed during complete validation"
+                "local head, staged tree, or worktree changed during complete validation"
             )
-        live_observation = _observe_ready_integration_authority_once(
-            arguments.repo, integration_evidence["pull_request_number"]
-        )
-        _verify_ready_integration_live_observation(
-            live_observation, integration_evidence, binding
-        )
-    if pre_enrollment_evidence_path:
-        pre_after = pre_enrollment.normalize_evidence(
-            _read_pre_enrollment_json(
-                pre_enrollment_evidence_path,
-                "pre-enrollment integration evidence",
-            ),
-            registry=binding,
-        )
-        if pre_after != pre_enrollment_evidence:
+        if not collision_validation:
+            binding_after = _fast_registry_binding(select_repository(
+                load_registry(arguments.registry), arguments.repo,
+            ))
+            if binding_after != binding:
+                raise fast_path.SecurityBlocker("registry changed during complete validation")
+        if _load_fast_manual_gate_evidence(
+            getattr(arguments, "manual_gate_evidence", None), binding,
+        ) != manual_gate_evidence:
+            raise fast_path.SecurityBlocker("manual gate evidence changed during complete validation")
+        if _load_fast_state(arguments.reviewed_state).to_dict() != reviewed.to_dict():
+            raise fast_path.SecurityBlocker("reviewed evidence changed during complete validation")
+        if eligibility_evidence and _resolution_eligibility_digest(
+            eligibility_evidence,
+            arguments.repo,
+            reviewed,
+        ) != eligibility_evidence_digest:
             raise fast_path.SecurityBlocker(
-                "pre-enrollment integration evidence changed during validation"
+                "eligibility evidence changed during complete validation"
             )
-        _verify_pre_enrollment_external_authority(pre_after, repository_root)
-        live_observation = LiveGitHub().observe_ready_integration_authority(
-            arguments.repo, pre_after["pull_request"]
-        )
-        if (
-            live_observation["repository"] != pre_after["repository"]
-            or live_observation["base_repository"] != pre_after["repository"]
-            or live_observation["head_repository"] != pre_after["repository"]
-            or live_observation["pull_request_number"] != pre_after["pull_request"]
-            or live_observation["state"] != "OPEN"
-            or live_observation["draft"] is not True
-            or live_observation["head_sha"] != pre_after["draft_pr"]["head_sha"]
-            or live_observation["base_ref"] != pre_after["current_main"]["ref"]
-            or live_observation["base_ref"] != binding["default_branch"]
-            or live_observation["base_sha"] != pre_after["current_main"]["sha"]
-            or live_observation.get("closing_issues_complete") is not True
-            or live_observation.get("closing_issues")
-            != [{
-                "repository": pre_after["repository"],
-                "number": pre_after["delivery_issue"],
-                "state": "OPEN",
-            }]
-        ):
-            raise fast_path.SecurityBlocker(
-                "Draft PR or registered current main drifted during final validation"
+        if integration_evidence_path:
+            integration_after = fast_path.normalize_ready_integration_evidence(
+                _read_json(integration_evidence_path, "Ready integration evidence"),
+                repository=arguments.repo,
+                reviewed_state=reviewed,
+                registry=binding,
+                validated_tree_sha=tree_after,
             )
-    if exceptional_recovery_path:
-        recovery_after = _load_exceptional_recovery_evidence(
-            path=exceptional_recovery_path,
-            eligibility_path=eligibility_evidence,
-            repository=arguments.repo,
-            delivery_issue=arguments.exceptional_recovery_delivery_issue,
-            repository_root=repository_root,
-            reviewed=reviewed,
-            validated_tree=tree_after,
-            eligibility_digest=eligibility_evidence_digest,
-        )
-        _verify_exceptional_recovery_selection(recovery_after, arguments)
-        if recovery_after != exceptional_recovery:
-            raise fast_path.SecurityBlocker(
-                "exceptional recovery evidence changed during complete validation"
+            _verify_integration_selection(integration_after, arguments)
+            if integration_after != integration_evidence:
+                raise fast_path.SecurityBlocker(
+                    "Ready integration evidence changed during complete validation"
+                )
+            live_observation = _observe_ready_integration_authority_once(
+                arguments.repo, integration_evidence["pull_request_number"]
             )
-        recovery_observation = _observe_ready_integration_authority_once(
-            arguments.repo, exceptional_recovery["pull_request_number"]
-        )
-        if (
-            recovery_observation["repository"] != arguments.repo
-            or recovery_observation["pull_request_number"]
-            != exceptional_recovery["pull_request_number"]
-            or recovery_observation["state"] != "OPEN"
-            or recovery_observation["draft"] is not False
-            or recovery_observation["head_sha"]
-            != exceptional_recovery["prior_ready_head_sha"]
-        ):
-            raise fast_path.SecurityBlocker(
-                "exceptional recovery Ready-head authority drifted"
+            _verify_ready_integration_live_observation(
+                live_observation, integration_evidence, binding
             )
-    if exceptional_continuation_path:
-        continuation_after = _load_exceptional_continuation_evidence(
-            path=exceptional_continuation_path,
-            eligibility_path=eligibility_evidence,
-            repository=arguments.repo,
-            reviewed=reviewed,
-            validated_tree=tree_after,
-        )
-        _verify_exceptional_continuation_selection(
-            continuation_after, arguments
-        )
-        if continuation_after != exceptional_continuation:
-            raise fast_path.SecurityBlocker(
-                "exceptional continuation evidence changed during complete validation"
+        if pre_enrollment_evidence_path:
+            pre_after = pre_enrollment.normalize_evidence(
+                _read_pre_enrollment_json(
+                    pre_enrollment_evidence_path,
+                    "pre-enrollment integration evidence",
+                ),
+                registry=binding,
             )
-        continuation_observation = _observe_ready_integration_authority_once(
-            arguments.repo, exceptional_continuation["pull_request_number"]
-        )
-        if (
-            continuation_observation["repository"] != arguments.repo
-            or continuation_observation["pull_request_number"]
-            != exceptional_continuation["pull_request_number"]
-            or continuation_observation["state"] != "OPEN"
-            or continuation_observation["draft"] is not False
-            or continuation_observation["head_sha"]
-            != exceptional_continuation["prior_ready_head_sha"]
-        ):
-            raise fast_path.SecurityBlocker(
-                "exceptional continuation Ready-head authority drifted"
+            if pre_after != pre_enrollment_evidence:
+                raise fast_path.SecurityBlocker(
+                    "pre-enrollment integration evidence changed during validation"
+                )
+            _verify_pre_enrollment_external_authority(pre_after, repository_root)
+            live_observation = LiveGitHub().observe_ready_integration_authority(
+                arguments.repo, pre_after["pull_request"]
             )
+            if (
+                live_observation["repository"] != pre_after["repository"]
+                or live_observation["base_repository"] != pre_after["repository"]
+                or live_observation["head_repository"] != pre_after["repository"]
+                or live_observation["pull_request_number"] != pre_after["pull_request"]
+                or live_observation["state"] != "OPEN"
+                or live_observation["draft"] is not True
+                or live_observation["head_sha"] != pre_after["draft_pr"]["head_sha"]
+                or live_observation["base_ref"] != pre_after["current_main"]["ref"]
+                or live_observation["base_ref"] != binding["default_branch"]
+                or live_observation["base_sha"] != pre_after["current_main"]["sha"]
+                or live_observation.get("closing_issues_complete") is not True
+                or live_observation.get("closing_issues")
+                != [{
+                    "repository": pre_after["repository"],
+                    "number": pre_after["delivery_issue"],
+                    "state": "OPEN",
+                }]
+            ):
+                raise fast_path.SecurityBlocker(
+                    "Draft PR or registered current main drifted during final validation"
+                )
+        if exceptional_recovery_path:
+            recovery_after = _load_exceptional_recovery_evidence(
+                path=exceptional_recovery_path,
+                eligibility_path=eligibility_evidence,
+                repository=arguments.repo,
+                delivery_issue=arguments.exceptional_recovery_delivery_issue,
+                repository_root=repository_root,
+                reviewed=reviewed,
+                validated_tree=tree_after,
+                eligibility_digest=eligibility_evidence_digest,
+            )
+            _verify_exceptional_recovery_selection(recovery_after, arguments)
+            if recovery_after != exceptional_recovery:
+                raise fast_path.SecurityBlocker(
+                    "exceptional recovery evidence changed during complete validation"
+                )
+            recovery_observation = _observe_ready_integration_authority_once(
+                arguments.repo, exceptional_recovery["pull_request_number"]
+            )
+            if (
+                recovery_observation["repository"] != arguments.repo
+                or recovery_observation["pull_request_number"]
+                != exceptional_recovery["pull_request_number"]
+                or recovery_observation["state"] != "OPEN"
+                or recovery_observation["draft"] is not False
+                or recovery_observation["head_sha"]
+                != exceptional_recovery["prior_ready_head_sha"]
+            ):
+                raise fast_path.SecurityBlocker(
+                    "exceptional recovery Ready-head authority drifted"
+                )
+        if exceptional_continuation_path:
+            continuation_after = _load_exceptional_continuation_evidence(
+                path=exceptional_continuation_path,
+                eligibility_path=eligibility_evidence,
+                repository=arguments.repo,
+                reviewed=reviewed,
+                validated_tree=tree_after,
+            )
+            _verify_exceptional_continuation_selection(
+                continuation_after, arguments
+            )
+            if continuation_after != exceptional_continuation:
+                raise fast_path.SecurityBlocker(
+                    "exceptional continuation evidence changed during complete validation"
+                )
+            continuation_observation = _observe_ready_integration_authority_once(
+                arguments.repo, exceptional_continuation["pull_request_number"]
+            )
+            if (
+                continuation_observation["repository"] != arguments.repo
+                or continuation_observation["pull_request_number"]
+                != exceptional_continuation["pull_request_number"]
+                or continuation_observation["state"] != "OPEN"
+                or continuation_observation["draft"] is not False
+                or continuation_observation["head_sha"]
+                != exceptional_continuation["prior_ready_head_sha"]
+            ):
+                raise fast_path.SecurityBlocker(
+                    "exceptional continuation Ready-head authority drifted"
+                )
+    reauthenticate_post_execution()
     receipt = (
         pre_enrollment.create_validation_receipt(
             evidence=pre_enrollment_evidence,
@@ -9474,6 +10427,7 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             binding=binding,
             reviewed=reviewed,
             manual_gate_evidence=manual_gate_evidence,
+            command_set=expected_commands,
             eligibility_evidence_digest=eligibility_evidence_digest,
             integration_evidence_digest=(
                 fast_path.digest_json(integration_evidence)
@@ -9492,12 +10446,58 @@ def _command_attest_validation(arguments: argparse.Namespace) -> int:
             ),
         )
     )
-    _write_fast_report(arguments.output, receipt)
+    invalidated = {
+        "schema_version": "1.0", "status": "VALIDATION_RECEIPT_INVALIDATED",
+        "head_sha": head, "validated_tree_sha": tree,
+    }
+    def authenticate_receipt(path: str, label: str) -> None:
+        written = _read_json(path, label)
+        if written != receipt:
+            raise fast_path.SecurityBlocker("written validation receipt failed authentication")
+        if pre_enrollment_evidence is None:
+            # Pure existing authentication; final attestation remains bind-commit.
+            fast_path._create_validation_attestation(
+                repository=arguments.repo, head_sha=head, receipt_head_sha=head,
+                registry=binding, command_set=expected_commands,
+                successful_result=True, reviewed_state=reviewed,
+                validation_receipt=written,
+            )
+
+    staged_authenticated = False
+    def authenticate_before_publish(path: Path) -> None:
+        nonlocal staged_authenticated
+        authenticate_receipt(str(path), "staged validation receipt")
+        reauthenticate_post_execution()
+        staged_authenticated = True
+
+    try:
+        _write_fast_report(arguments.output, receipt,
+                           before_publish=authenticate_before_publish)
+        if not staged_authenticated:
+            raise fast_path.SecurityBlocker("receipt staging authentication did not complete")
+        authenticate_receipt(arguments.output, "published validation receipt")
+        publication_head, publication_status = _attestation_local_state(
+            repository_root, arguments.repo,
+        )
+        if (
+            (publication_head, publication_status) != (head, status)
+            or _staged_tree(repository_root, publication_status) != tree
+        ):
+            raise fast_path.SecurityBlocker("source changed during receipt publication")
+    except BaseException:
+        # Include interruptions after replacement. Cleanup must itself be durable.
+        try:
+            _write_fast_report(arguments.output, invalidated)
+        except BaseException:
+            _durably_remove_fast_report(arguments.output)
+        raise
     return 0
 
 
 class _ReadyRemediationProviderBinding:
     """Ephemeral read-only projection; the caller reauthenticates its source."""
+
+    provider_binding_sources: tuple[str, ...] = ()
 
     def __init__(self, value: Any, *, repository: str, pull_request: int):
         if (
@@ -9619,6 +10619,17 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
     entry = select_repository(registry, arguments.repo)
     binding = _fast_registry_binding(entry)
     ready_source_provider_binding = None
+    integration_chain = arguments.ready_integration_chain
+    if integration_chain is not None:
+        if (not arguments.capture_reviewed_state or arguments.apply
+            or any((arguments.request, arguments.reviewed_state,
+                    arguments.attestation, arguments.output))):
+            raise fast_path.RecoverableLocalError("Ready integration feedback is capture-only")
+        if arguments.delivery_issue is None:
+            raise fast_path.RecoverableLocalError("Ready integration feedback requires its delivery issue")
+        if (arguments.ready_remediation_provider_binding is not None
+            or arguments.ready_source_recovery_publication is not None):
+            raise fast_path.RecoverableLocalError("feedback capture provider authority modes are mutually exclusive")
     if arguments.ready_remediation_provider_binding is not None and (
         arguments.ready_source_recovery_publication is not None
         or arguments.delivery_issue is not None
@@ -9658,6 +10669,25 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
                 ),
             )
         )
+    elif integration_chain is not None:
+        try:
+            _, publication = _load_lifecycle_publication_helpers()
+            current = publication.verify_current_lifecycle_authority(
+                arguments.repo, arguments.delivery_issue,
+            )
+            if (current.lifecycle.repository != arguments.repo
+                or current.lifecycle.delivery_issue != arguments.delivery_issue
+                or current.lifecycle.pull_request != arguments.pr):
+                raise fast_path.SecurityBlocker("Ready integration feedback CURRENT identity differs")
+            packages = _authenticate_ready_integration_packages(
+                repository_root=repository_root, published=current, publication=publication,
+                packages=_load_ready_integration_packages(integration_chain),
+            )
+            ready_source_provider_binding = publication.derive_ready_source_recovery_provider_binding(
+                current, ready_integrations=packages,
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise fast_path.SecurityBlocker(str(exc)) from exc
     elif arguments.delivery_issue is not None:
         raise fast_path.RecoverableLocalError(
             "delivery issue requires Ready-source recovery provider binding"
@@ -9680,14 +10710,75 @@ def _command_resolve_batch(arguments: argparse.Namespace) -> int:
             raise fast_path.RecoverableLocalError(
                 "feedback capture cannot be combined with batch-application arguments"
             )
-        try:
-            reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
-        except fast_path.TransientReadFailure:
-            reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
+        def capture() -> tuple[fast_path.StableFeedbackState, str | None, Any]:
+            observation = gateway.observe_stable_feedback(arguments.repo, arguments.pr)
+            reviewed = fast_path.StableFeedbackState.from_payload(
+                {
+                    "repository": arguments.repo,
+                    "pull_request_number": arguments.pr,
+                    **observation,
+                }
+            )
+            return (
+                reviewed,
+                observation.get("provider_summary_body"),
+                observation.get("provider_review_database_ids"),
+            )
+
+        if arguments.capture_provider_summary or integration_chain is not None:
+            try:
+                reviewed, provider_summary_body, review_database_ids = capture()
+            except fast_path.TransientReadFailure:
+                reviewed, provider_summary_body, review_database_ids = capture()
+        else:
+            try:
+                reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
+            except fast_path.TransientReadFailure:
+                reviewed = gateway.capture_stable_feedback(arguments.repo, arguments.pr)
+            provider_summary_body = None
+            review_database_ids = None
+        if integration_chain is not None:
+            # Reauthenticate live CURRENT after the complete read. Historical
+            # terminality belongs only to H0; the immutable feedback stays at H2.
+            try:
+                provider_head = ready_source_provider_binding.provider_head(
+                    repository=arguments.repo, pull_request=arguments.pr,
+                    current_head_sha=reviewed.head_sha,
+                )
+                if _provider_binding_uses_historical_summary(ready_source_provider_binding):
+                    ready_source_provider_binding.verify_historical_provider_summary(
+                        body=provider_summary_body, repository=arguments.repo,
+                        pull_request=arguments.pr, current_head_sha=reviewed.head_sha,
+                    )
+                else:
+                    fast_path.verify_codex_provider_summary(
+                        provider_summary_body, head_sha=provider_head,
+                        repository=arguments.repo, pull_request_number=arguments.pr,
+                    )
+            except (ValueError, RuntimeError) as exc:
+                raise fast_path.SecurityBlocker(str(exc)) from exc
         fast_path.atomic_write_json(
             Path(arguments.capture_reviewed_state), reviewed.to_dict()
         )
+        if arguments.capture_provider_summary:
+            if not isinstance(provider_summary_body, str) or not isinstance(
+                review_database_ids, list
+            ):
+                raise fast_path.SecurityBlocker(
+                    "captured provider assessment is unavailable"
+                )
+            fast_path.atomic_write_json(
+                Path(arguments.capture_provider_summary),
+                {
+                    "body": provider_summary_body,
+                    "review_database_ids": review_database_ids,
+                },
+            )
         return 0
+    if arguments.capture_provider_summary:
+        raise fast_path.RecoverableLocalError(
+            "provider summary output requires feedback capture"
+        )
     if not arguments.apply:
         raise fast_path.RecoverableLocalError(
             "resolve-batch requires --apply outside feedback-capture mode"
@@ -10032,6 +11123,8 @@ def main(argv: list[str] | None = None) -> int:
             return _command_attest_validation(arguments)
         if arguments.command == "resolve-batch":
             return _command_resolve_batch(arguments)
+        if arguments.command in {"prepare-enrolled-draft-integration", "integrate-enrolled-draft", "prepare-enrolled-draft-source", "advance-enrolled-draft-source"}:
+            return _command_enrolled_draft_integration(arguments)
         if arguments.command == "integrate-pre-enrollment-draft":
             return _command_integrate_pre_enrollment_draft(arguments)
         if arguments.command == "advance-qualified-remediation-successor-loss":
@@ -10103,6 +11196,8 @@ def main(argv: list[str] | None = None) -> int:
         print(canonical_json_bytes(report).decode("utf-8"), file=sys.stderr, end="")
         return 2
 
+
+_seal_verifier_owner()
 
 if __name__ == "__main__":
     raise SystemExit(main())
