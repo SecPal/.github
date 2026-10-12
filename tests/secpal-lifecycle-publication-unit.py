@@ -4178,6 +4178,91 @@ class LifecyclePublicationTests(TestCase):
             chain.initialization["initialization_digest"],
         )
 
+    def test_native_loss_composes_authenticated_typed_publication_and_provider_lineage(self) -> None:
+        """Historical review-before-Ready enrollment retains its real suffix."""
+        from scripts.secpal_pr_review import legacy_enrolled_package_loss as loss
+
+        chain = Chain()
+        chain.append("INITIALIZED_DRAFT")
+        publication.admit_native_genesis(chain.raw(), signer_identity=SIGNER, signer=signer_for())
+        predecessor = publication.enroll_existing_lifecycle(
+            authority.serialize_publication_lifecycle_evidence(lifecycle_evidence=chain.raw()),
+            signer_identity=SIGNER, signer=signer_for(),
+        )
+        # Construct publications as accepted under historical forward policy.
+        # Current verification below authenticates their immutable signed bytes;
+        # this fixture grants no production permission for pre-Ready review.
+        with patch.object(authority, "require_forward_transition", side_effect=(
+            lambda before, kind, digest, **_: authority.derive_state(before, kind, digest)
+        )):
+            for kind, head in (
+                ("UNRESTRICTED_REVIEW_CONSUMED", HEADS[0]),
+                ("REMEDIATION_COMPLETED", HEADS[1]),
+                ("DRAFT_TO_READY", HEADS[1]),
+                ("REMEDIATION_COMPLETED", HEADS[2]),
+            ):
+                chain.append(kind, head=head)
+                predecessor = publication.advance_current_terminal(
+                    authority.serialize_publication_lifecycle_evidence(lifecycle_evidence=chain.raw()),
+                    signer_identity=SIGNER, signer=signer_for(),
+                )
+        validation = verified_validation_evidence(
+            head=HEADS[3], tree=HEADS[4], parent=HEADS[2],
+            ready_integration=True, integration_version="1.2",
+        )
+        sealed = {
+            "head_sha": HEADS[3], "tree_sha": HEADS[4],
+            "validation_receipt_digest": validation.validation_receipt_digest,
+            "source_validation_evidence_digest": validation.source_validation_evidence_digest,
+            "final_attestation_digest": validation.final_attestation_digest,
+        }
+        # The synthetic integration's external Git observations were verified by
+        # the fixture producer; its invented source objects are not in this repo.
+        with patch.object(authority, "is_verified_validation_evidence", return_value=True):
+            chain.append("HEAD_ADVANCED", head=HEADS[3], current_head_evidence=validation)
+        current = publication.advance_current_terminal(
+            authority.serialize_publication_lifecycle_evidence(lifecycle_evidence=chain.raw()),
+            signer_identity=SIGNER, signer=signer_for(),
+        )
+        state_before = copy.deepcopy(current.lifecycle.state)
+        record = {
+            "schema_version": "1.1", "repository": REPOSITORY,
+            "delivery_issue": ISSUE, "pull_request": PR,
+            "lifecycle_id": chain.lifecycle_id,
+            "current_publication_oid": current.publication_oid,
+            "current_publication_digest": current.publication_digest,
+            "current_authority_digest": current.lifecycle.authority_digest,
+            "initialization_digest": chain.initialization["initialization_digest"],
+            "initial_head_sha": HEADS[0], "initial_validation_receipt_digest": "1" * 64,
+            "initial_final_attestation_digest": "2" * 64,
+            "historical_validation_receipt_digest": sealed["validation_receipt_digest"],
+            "head_sha": HEADS[3], "tree_sha": HEADS[4], "parent_sha": HEADS[2],
+            "historical_proof_mode": "native_lifecycle",
+            "historical_provider_summary_digest": "7" * 64,
+            "source_history": [{"head_sha": head} for head in HEADS[:4]],
+            "ready_integration": {"ordered_parent_shas": [HEADS[2], HEADS[5]],
+                                  "integration_evidence_digest": "8" * 64,
+                                  "source_validation_evidence_digest": sealed["source_validation_evidence_digest"],
+                                  "final_attestation_digest": sealed["final_attestation_digest"]},
+        }
+        loss._admit_native_current(current, record)
+        binding = loss._provider_head_binding(current, record)
+        self.assertEqual(binding.provider_head_sha, HEADS[1])
+        self.assertTrue(binding.requires_complete_provider_summary)
+        self.assertEqual(current.lifecycle.state, state_before)
+        self.assertEqual(publication.verify_current_lifecycle_authority(REPOSITORY, ISSUE), current)
+        self.assertEqual(current.predecessor_publication_oid, predecessor.publication_oid)
+        substituted = replace(current, lifecycle=replace(current.lifecycle, tree_sha=HEADS[6]))
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            loss._provider_head_binding(substituted, record)
+        with self.assertRaises(publication.LifecyclePublicationError):
+            publication._verify_ready_integration_publication_predecessor(
+                current, prior_head_sha=HEADS[6], **{
+                    key: sealed[key] for key in ("head_sha", "tree_sha", "validation_receipt_digest",
+                                                "source_validation_evidence_digest", "final_attestation_digest")
+                },
+            )
+
     def test_static_root_does_not_admit_a_new_enrollment_publication(self) -> None:
         chain = Chain()
         chain.append("INITIALIZED_DRAFT")

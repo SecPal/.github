@@ -4424,18 +4424,19 @@ def _authenticate_provider_integration_verifier() -> None:
         ) from exc
 
 
-def verify_ready_integration_predecessor(
+def _verify_ready_integration_publication_predecessor(
     current: VerifiedLifecyclePublication,
-    validation: fast_path.VerifiedValidationEvidence,
-    prior_authority: Any,
     *,
+    prior_head_sha: str,
+    head_sha: str,
+    tree_sha: str,
+    validation_receipt_digest: str,
+    final_attestation_digest: str,
+    source_validation_evidence_digest: str,
     require_current: bool = True,
-) -> tuple[VerifiedLifecyclePublication, fast_path.StableFeedbackState, str | None]:
-    """Compose the canonical typed verifier with its exact protected publication."""
+) -> VerifiedLifecyclePublication:
+    """Own the typed publication edge separately from companion-byte admission."""
 
-    reviewed, eligibility = fast_path.verified_ready_integration_review_context(validation)
-    provenance = json.loads(validation._verification_seal.provenance_json)
-    integration = provenance["integration_evidence"]
     if current.predecessor_publication_oid is None:
         raise LifecyclePublicationError("Ready integration has no published predecessor")
     transition = _verify_historical_lifecycle_transition(
@@ -4456,16 +4457,43 @@ def verify_ready_integration_predecessor(
         or predecessor.pull_request != current.lifecycle.pull_request
         or predecessor.lifecycle_id != current.lifecycle.lifecycle_id
         or predecessor.state != current.lifecycle.state
-        or predecessor.head_sha != integration["prior_delivery_head_sha"]
-        or predecessor.lifecycle_id != integration["eligibility"]["lifecycle_identity"]
+        or predecessor.head_sha != prior_head_sha
+        or head_sha != current.lifecycle.head_sha
+        or tree_sha != current.lifecycle.tree_sha
+        or validation_receipt_digest != current.lifecycle.validation_receipt_digest
+        or final_attestation_digest != current.lifecycle.adoption_source_evidence_digest
+        or source_validation_evidence_digest != current.lifecycle.source_validation_evidence_digest
+    ):
+        raise LifecyclePublicationError("Ready integration validation differs from the published advancement")
+    return transition.predecessor
+
+
+def verify_ready_integration_predecessor(
+    current: VerifiedLifecyclePublication,
+    validation: fast_path.VerifiedValidationEvidence,
+    prior_authority: Any,
+    *,
+    require_current: bool = True,
+) -> tuple[VerifiedLifecyclePublication, fast_path.StableFeedbackState, str | None]:
+    """Compose the canonical typed verifier with its exact protected publication."""
+
+    reviewed, eligibility = fast_path.verified_ready_integration_review_context(validation)
+    provenance = json.loads(validation._verification_seal.provenance_json)
+    integration = provenance["integration_evidence"]
+    predecessor_publication = _verify_ready_integration_publication_predecessor(
+        current, prior_head_sha=integration["prior_delivery_head_sha"],
+        head_sha=validation.head_sha, tree_sha=validation.tree_sha,
+        validation_receipt_digest=validation.validation_receipt_digest,
+        final_attestation_digest=validation.final_attestation_digest,
+        source_validation_evidence_digest=validation.source_validation_evidence_digest,
+        require_current=require_current,
+    )
+    predecessor = predecessor_publication.lifecycle
+    if (
+        predecessor.lifecycle_id != integration["eligibility"]["lifecycle_identity"]
         or validation.repository != current.lifecycle.repository
         or validation.delivery_issue_number != current.lifecycle.delivery_issue
         or validation.pull_request_number != current.lifecycle.pull_request
-        or validation.head_sha != current.lifecycle.head_sha
-        or validation.tree_sha != current.lifecycle.tree_sha
-        or validation.validation_receipt_digest != current.lifecycle.validation_receipt_digest
-        or validation.final_attestation_digest != current.lifecycle.adoption_source_evidence_digest
-        or validation.source_validation_evidence_digest != current.lifecycle.source_validation_evidence_digest
         or any(
             integration["eligibility"][field] != current.lifecycle.state[state_field]
             for field, state_field in (
@@ -4498,8 +4526,8 @@ def verify_ready_integration_predecessor(
         ))
         or manifest["expected_signer"] != integration["expected_signer"]
         or manifest["publication"] != {
-            "object_oid": transition.predecessor.publication_oid,
-            "publication_digest": transition.predecessor.publication_digest,
+            "object_oid": predecessor_publication.publication_oid,
+            "publication_digest": predecessor_publication.publication_digest,
         }
         or manifest["lifecycle"]["current_authority_digest"] != predecessor.authority_digest
         or manifest["lifecycle"]["historical_proof_mode"] != predecessor.historical_proof_mode
@@ -4522,21 +4550,21 @@ def verify_ready_integration_predecessor(
                     reviewed_state_digest=reviewed.state_digest,
                     reviewed_feedback_digest=reviewed.feedback_digest,
                     reviewed_head_sha=reviewed.head_sha,
-                    source_publication_oid=transition.predecessor.publication_oid,
+                    source_publication_oid=predecessor_publication.publication_oid,
                 ),
             )
         actions._verify_prior_authority_tag(
             repository_root=Path(provenance["repository_root"]),
             tag_ref=actions._canonical_ready_prior_authority_tag_ref(manifest),
             authority=manifest, integration_evidence=integration, binding=provenance["registry"],
-            source_publication_oid=transition.predecessor.publication_oid if independent_root else None,
+            source_publication_oid=predecessor_publication.publication_oid if independent_root else None,
         )
     except actions.fast_path.SecurityBlocker as exc:
         raise SecurityBlocker("Ready integration prior authority authentication failed") from exc
     # Historical target_base is authenticated by the signed receipt/commit and
     # protected authority publication. Re-observing today's main as parent 2
     # would change the meaning of immutable, previously authorized evidence.
-    return transition.predecessor, reviewed, eligibility
+    return predecessor_publication, reviewed, eligibility
 
 
 @dataclass(frozen=True)

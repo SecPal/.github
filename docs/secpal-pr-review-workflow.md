@@ -1014,6 +1014,44 @@ package bytes. The later Ready head's final-attestation field stays null; the
 initialization attestation digest is identified only as enrollment provenance.
 The resulting manifest grants no thread-resolution authority.
 
+The same native loss authority also admits one terminal typed `HEAD_ADVANCED`
+after that genuine Ready transition. Its policy record uses version 1.1:
+the closed version-1.0 record binds only one source parent and cannot represent
+the second parent, original integration identity, or retained failed inventory.
+Version 1.1 extends only that record; existing version-1.0 records, historical
+wire formats and canonical digests remain unchanged. The generic verifier
+contains no delivery-specific head or Issue constants. A separately reviewed
+accepted-main registration must bind the exact delivery, full source history,
+ordered merge parents, integration/receipt/attestation identities, retained
+inventory bytes and digest, and complete maintained-store survey digest.
+
+Protected publication traversal authenticates the typed successor and its
+predecessor; the existing Ready-source lineage verifier derives the historical
+provider head. Historical review-before-Ready ordering is preserved. Both
+terminal provider rows must authenticate that derived head. Raw bounded
+first-parent traversal authenticates evidence-time main against accepted main;
+Git grafts, shallow metadata and merged topic ancestry cannot substitute for
+that historical parent. The existing isolated integration-tree verifier admits
+only the exact conflict-free mechanical merge when original conflict-boundary
+bytes are unavailable. An integration digest alone authorizes no third-tree
+content or reconstructed conflict resolution.
+
+The retained failed inventory and one new bounded survey cover the maintained
+source and protected-journal stores, including packages under nonstandard
+names. Inaccessible bytes or an incomplete survey block admission. This proves
+only unavailable original bytes within maintained persistence boundaries,
+never global destruction. Fresh Stable Feedback, source-complete accepted
+technical decisions, accepted-main current-security tooling and registered
+validation must all pass independently. The new validation observation binds
+its own source and current policy; it issues no historical replacement receipt.
+The authentication binds these observations into the existing
+`READY_INTEGRATION_PRIOR_AUTHORITY` kind while keeping original companions
+`UNAVAILABLE`, the prior final-attestation field null, and thread authority zero.
+Missing historical reviewed-state or eligibility bytes still block every
+actionable late-disposition membership gate. Qualification advances no source,
+publication, lifecycle counter or review budget and grants no subsequent
+operation authorization.
+
 For a later head-changing ordinary successor, the immutable adoption proof
 remains the genesis while the signed successor authority binds verifier-derived
 current-head tree, receipt, final attestation, and source-evidence identity.

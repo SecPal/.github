@@ -2149,6 +2149,23 @@ class _BoundedObjectImporter:
             pending.extend((parent, depth + 1) for parent in reversed(parents))
         return self.commit_trees[head]
 
+    def require_main_ancestor(self, ancestor: str, descendant: str) -> None:
+        """Authenticate protected main's first-parent path with the raw importer."""
+
+        ancestor, head = _oid(ancestor), _oid(descendant)
+        seen: set[str] = set()
+        for _ in range(MAX_COMMIT_DEPTH + 1):
+            if head in seen:
+                raise VersionCollisionError("protected main raw ancestry repeats")
+            seen.add(head)
+            _tree, parents = self.commit(head)
+            if head == ancestor:
+                return
+            if not parents:
+                break
+            head = parents[0]
+        raise VersionCollisionError("historical integration main is outside bounded protected main ancestry")
+
     def import_histories_and_merge_base(self, left: str, right: str) -> str:
         """Import both raw histories and recompute their unique base in isolation."""
 

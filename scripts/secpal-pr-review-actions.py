@@ -7611,7 +7611,6 @@ def _derive_exact_state_adoption_ready_prior_authority(
         if (
             current.lifecycle.historical_proof_mode == "native_lifecycle"
             and current.lifecycle.pull_request == pull_request
-            and current.lifecycle.tree_sha is None
         ):
             native_wrapper = lifecycle_authority.loads_closed_json(
                 current.serialized_lifecycle_evidence
@@ -7621,6 +7620,9 @@ def _derive_exact_state_adoption_ready_prior_authority(
             if (
                 native_wrapper.get("enrollment_mode") == "NATIVE_LIFECYCLE"
                 and isinstance(native_events, list)
+                and (current.lifecycle.tree_sha is None or (
+                    native_events and native_events[-1].get("transition_kind") == "HEAD_ADVANCED"
+                ))
                 and not any(
                     isinstance(event, dict)
                     and event.get("transition_kind") == "PR_REBOUND"
@@ -8032,6 +8034,24 @@ def _verified_enrolled_loss_current_safety(
         raise fast_path.SecurityBlocker(
             "enrolled package-loss current safety is invalid"
         )
+    if "ready_integration" in loss:
+        validation = safety.get("current_validation")
+        expected = {
+            "temporality": "NEW_CURRENT_POLICY_OBSERVATION",
+            "accepted_main_sha": accepted_main,
+            "head_sha": loss.get("head_sha"), "tree_sha": loss.get("tree_sha"),
+            "command_set_digest": safety.get("current_command_set_digest"),
+            "registered_command_execution": "PASS",
+            "historical_receipt_recreated": False, "canonical_receipt": "ABSENT",
+        }
+        if (
+            not isinstance(validation, dict)
+            or set(validation) != set(expected) | {"source_safety_profile_digest"}
+            or any(validation.get(key) != value for key, value in expected.items())
+            or not isinstance(validation.get("source_safety_profile_digest"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", validation["source_safety_profile_digest"])
+        ):
+            raise fast_path.SecurityBlocker("typed enrolled loss current validation is invalid")
     return safety
 
 
@@ -8400,10 +8420,11 @@ def _derive_native_enrolled_loss_ready_prior_authority(
         event for event in events
         if isinstance(event, dict) and event.get("transition_kind") == "DRAFT_TO_READY"
     ]
-    provider_head = (
-        ready_events[0].get("resulting_head_sha")
-        if len(ready_events) == 1 else None
-    )
+    # The loss verifier owns the historical provider projection. A typed merge
+    # must retain the reviewed predecessor, rather than select its current head.
+    provider_head = loss.get("provider_head_sha")
+    typed = current.lifecycle.tree_sha is not None
+    integration = loss.get("ready_integration") if typed else None
     current_safety = _verified_enrolled_loss_current_safety(loss, accepted_main)
     exact_loss_bindings = {
         "repository": repository,
@@ -8423,7 +8444,6 @@ def _derive_native_enrolled_loss_ready_prior_authority(
         "current_publication_oid": current.publication_oid,
         "current_publication_digest": current.publication_digest,
         "head_sha": current.lifecycle.head_sha,
-        "provider_head_sha": provider_head,
         "current_feedback_digest": current_safety.get("reviewed_feedback_digest"),
         "current_feedback_decisions_digest": current_safety.get(
             "current_feedback_decisions_digest"
@@ -8437,7 +8457,16 @@ def _derive_native_enrolled_loss_ready_prior_authority(
         or current.lifecycle.historical_proof_mode != "native_lifecycle"
         or current.lifecycle.initialization_evidence_digest
         != initialization.get("initialization_digest")
-        or current.lifecycle.tree_sha is not None
+        or (typed and (
+            not isinstance(integration, dict)
+            or current.lifecycle.tree_sha != loss.get("tree_sha")
+            or current.lifecycle.validation_receipt_digest != loss.get("historical_validation_receipt_digest")
+            or current.lifecycle.source_validation_evidence_digest != integration.get("source_validation_evidence_digest")
+            or current.lifecycle.adoption_source_evidence_digest != integration.get("final_attestation_digest")
+        ))
+        or (not typed and provider_head != (
+            ready_events[0].get("resulting_head_sha") if len(ready_events) == 1 else None
+        ))
         or state.get("draft") is not False
         or state.get("ready") is not True
         or state.get("unrestricted_review_count") != 1
@@ -8476,9 +8505,11 @@ def _derive_native_enrolled_loss_ready_prior_authority(
         current.lifecycle.head_sha,
         loss.get("source_signer_identity"),
         binding,
+        **({"expected_parent_shas": integration["ordered_parent_shas"]} if typed else {}),
     )
     if (
         source_commit["parent_sha"] != loss.get("parent_sha")
+        or (typed and source_commit["parent_shas"] != integration["ordered_parent_shas"])
         or source_commit["tree_sha"] != loss.get("tree_sha")
         or source_commit["signer"]["identity"]
         != loss.get("source_signer_identity")

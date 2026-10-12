@@ -581,6 +581,7 @@ ALLOWED_IMPORTS = {
         "from . import lifecycle_authority, lifecycle_execution",
         "from . import provider_acquisition",
         "from . import provider_reacquisition",
+        "from . import version_collision",
     },
     "exact_source_safety.py": {
         "from __future__ import annotations",
@@ -2030,6 +2031,11 @@ def inspect_source(
 
 
 def self_test() -> None:
+    raw_main_import = "from . import version_collision\n"
+    if inspect_source(raw_main_import, "fast_path.py", ()):
+        raise SystemExit("static policy maintained raw-object owner import was rejected")
+    if not inspect_source("from . import arbitrary_object_owner\n", "fast_path.py", ()):
+        raise SystemExit("static policy arbitrary raw-object owner import was accepted")
     fresh_import = "from . import provider_reacquisition\n"
     safe_fresh = fresh_import + "provider_reacquisition.require_verified_fresh_acquisitions(value, current, feedback)\n"
     if inspect_source(safe_fresh, "fast_path.py", ()):

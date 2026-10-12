@@ -1506,14 +1506,20 @@ def derive_ready_integration_tree_evidence(
         for parent in ordered_parents:
             _require_oid(parent, "integration parent")
         _require_oid(validated_tree, "integration candidate tree")
-        return _derive_isolated_enrolled_draft_tree_evidence(repository_root, ordered_parents, validated_tree)
+        return derive_isolated_integration_tree_evidence(
+            repository_root, ordered_parents, validated_tree,
+            schema_version=schema_version, kind=kind,
+        )
     return _derive_ready_integration_tree_evidence(
         repository_root, ordered_parents, validated_tree,
         schema_version=schema_version, kind=kind, run_git=run_git,
     )
 
 
-def _derive_isolated_enrolled_draft_tree_evidence(repository_root, parents, tree):
+def derive_isolated_integration_tree_evidence(
+    repository_root: Path, parents: list[str], tree: str,
+    *, schema_version: str, kind: str = READY_INTEGRATION_KIND,
+) -> dict[str, Any]:
     """Import immutable objects; candidate merge config never derives authority."""
     from . import lifecycle_publication as publication
     packed = publication._run_git(repository_root, ["pack-objects", "--stdout", "--revs"],
@@ -1532,8 +1538,32 @@ def _derive_isolated_enrolled_draft_tree_evidence(repository_root, parents, tree
                 result.stdout = result.stdout.decode("utf-8", "replace")
                 result.stderr = result.stderr.decode("utf-8", "replace")
             return result
-        return _derive_ready_integration_tree_evidence(isolated, parents, tree,
-            schema_version="1.0", kind="ENROLLED_DRAFT_CURRENT_MAIN_INTEGRATION", run_git=closed_git)
+        return _derive_ready_integration_tree_evidence(
+            isolated, parents, tree, schema_version=schema_version,
+            kind=kind, run_git=closed_git,
+        )
+
+
+def require_raw_main_ancestor(
+    repository_root: Path, ancestor: str, descendant: str,
+) -> None:
+    """Walk protected main's raw first parents, ignoring grafts and shallow views."""
+
+    from . import lifecycle_publication as publication
+    from . import version_collision
+
+    ancestor = _require_oid(ancestor, "historical integration main")
+    descendant = _require_oid(descendant, "accepted execution main")
+    with tempfile.TemporaryDirectory(prefix="secpal-ready-loss-main-") as directory:
+        isolated = Path(directory)
+        if publication._run_git(isolated, ["init", "--bare", "."]).returncode != 0:
+            raise SecurityBlocker("historical integration main isolation is unavailable")
+        try:
+            version_collision._BoundedObjectImporter(
+                repository_root, isolated,
+            ).require_main_ancestor(ancestor, descendant)
+        except version_collision.VersionCollisionError as exc:
+            raise SecurityBlocker("historical integration main raw ancestry is not authenticated") from exc
 
 
 def _derive_ready_integration_tree_evidence(

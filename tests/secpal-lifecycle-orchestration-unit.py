@@ -4440,6 +4440,42 @@ def historical_v12_fixture():
                     implementation_identity="1.3",
                 )
 
+    def test_ready_loss_main_ancestry_uses_raw_first_parents_despite_overlays(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*arguments, data=None):
+                return subprocess.run(["git", "-C", str(root), *arguments], input=data,
+                                      capture_output=True, check=True).stdout.decode().strip()
+
+            git("init", "--quiet")
+            git("config", "user.name", "Ancestry Fixture")
+            git("config", "user.email", "ancestry@secpal.test")
+            tree = git("mktree", data=b"")
+
+            def commit(message, *parents):
+                args = ["commit-tree", tree, "-m", message]
+                for parent in parents:
+                    args.extend(("-p", parent))
+                return git(*args)
+
+            historical = commit("historical protected main")
+            main = commit("accepted main", historical)
+            unrelated = commit("unrelated main")
+            topic = commit("topic parent")
+            merge = commit("current main merge", main, topic)
+            fast_path.require_raw_main_ancestor(root, historical, merge)
+            with self.assertRaises(fast_path.SecurityBlocker):
+                fast_path.require_raw_main_ancestor(root, topic, merge)
+
+            # Git grafts and shallow metadata must not manufacture an ancestor
+            # or hide the immutable protected-main first-parent history.
+            (root / ".git/info/grafts").write_text(f"{merge} {unrelated}\n")
+            (root / ".git/shallow").write_text(f"{merge}\n")
+            fast_path.require_raw_main_ancestor(root, historical, merge)
+            with self.assertRaises(fast_path.SecurityBlocker):
+                fast_path.require_raw_main_ancestor(root, unrelated, merge)
+
     def test_collision_importer_recomputes_real_non_descendant_merge_side_base(
         self,
     ) -> None:
@@ -15028,6 +15064,21 @@ class ProviderAcquisitionEvidenceLossTests(TestCase):
                     sizes((1, 2)).replace(ids[0].encode(), b"9" * 40)):
             with self.subTest(raw=raw), self.assertRaises(fast_path.SecurityBlocker):
                 r._admit_blob_sizes(ids, raw)
+
+    def test_store_inventory_detects_retained_prior_authority_and_eligibility(self):
+        r, c, _, _, _ = self.fixture()
+        for fields in (
+            {"kind": "READY_INTEGRATION_PRIOR_AUTHORITY", "prior_delivery_head_sha": c.lifecycle.head_sha,
+             "delivery_issue_number": c.lifecycle.delivery_issue, "pull_request_number": c.lifecycle.pull_request},
+            {"reviewed_head_sha": c.lifecycle.head_sha, "pull_request_number": c.lifecycle.pull_request,
+             "reviewed_state_digest": "a" * 64, "eligible_threads": []},
+        ):
+            package = {"schema_version": "1.0", "repository": c.lifecycle.repository, **fields}
+            with self.subTest(fields=fields):
+                self.assertEqual(r._package_identities(fast_path.canonical_json_bytes(package), c),
+                                 (fast_path.digest_json(package),))
+                other = {**package, "pull_request_number": c.lifecycle.pull_request + 1}
+                self.assertEqual(r._package_identities(fast_path.canonical_json_bytes(other), c), ())
 
     def test_source_survey_includes_immutable_symlink_blobs(self):
         r, c, _, o, _ = self.fixture()

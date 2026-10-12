@@ -56,6 +56,14 @@ NATIVE_RECORD_FIELDS = frozenset({
     "record_digest",
 })
 HISTORY_FIELDS = frozenset({"head_sha", "tree_sha", "parent_sha"})
+READY_INTEGRATION_FIELDS = frozenset({
+    "ordered_parent_shas", "integration_evidence_digest",
+    "source_validation_evidence_digest", "final_attestation_digest",
+})
+TYPED_NATIVE_RECORD_FIELDS = NATIVE_RECORD_FIELDS | {
+    "ready_integration", "retained_failed_inventory", "retained_failed_inventory_digest",
+    "maintained_store_survey_digest",
+}
 PERSISTENCE_FIELDS = frozenset({
     "historical_output_scope", "local_package_directory",
     "artifact_basenames", "maintained_durable_stores",
@@ -107,6 +115,7 @@ class VerifiedLegacyProviderHeadBinding:
     current_publication_digest: str
     source_provenance_digest: str
     historical_provider_summary_digest: str
+    requires_complete_provider_summary: bool = False
 
     def _reauthenticate(self) -> None:
         _main, record, _entry = _accepted_policy(
@@ -157,6 +166,13 @@ class VerifiedLegacyProviderHeadBinding:
             raise fast_path.SecurityBlocker(
                 "legacy enrolled provider summary is stale or substituted"
             )
+        if self.requires_complete_provider_summary:
+            fast_path.verify_codex_provider_summary(
+                body, head_sha=self.provider_head_sha,
+                repository=self.repository, pull_request_number=self.pull_request,
+            )
+            self._reauthenticate()
+            return
         code_rows = [
             line for line in body.splitlines() if "**Code Review**" in line
         ]
@@ -317,7 +333,7 @@ def _admit_provider(facts: ProviderFacts, record: Mapping[str, Any]) -> None:
         or str(issue.get("state", "")).upper() != "OPEN"
         or commit.get("sha") != record["head_sha"]
         or commit.get("tree_sha") != record["tree_sha"]
-        or commit.get("parents") != [record["parent_sha"]]
+        or commit.get("parents") != _source_parents(record, record["head_sha"])
         or commit.get("verified") is not True
         or len(ready) != 1
         or draft
@@ -440,11 +456,13 @@ def _validate_record(value: Any) -> dict[str, Any]:
 def _validate_native_record(value: Any) -> dict[str, Any]:
     """Keep native source identities distinct from adoption-only evidence."""
 
+    typed = isinstance(value, Mapping) and value.get("schema_version") == "1.1"
     record = copy.deepcopy(authority._require_closed(
-        value, NATIVE_RECORD_FIELDS, "native enrolled package-loss record"
+        value, TYPED_NATIVE_RECORD_FIELDS if typed else NATIVE_RECORD_FIELDS,
+        "native enrolled package-loss record",
     ))
     if (
-        record["schema_version"] != "1.0"
+        record["schema_version"] not in {"1.0", "1.1"}
         or record["kind"] != KIND
         or record["repository"] != "SecPal/.github"
         or record["historical_proof_mode"] != "native_lifecycle"
@@ -476,6 +494,31 @@ def _validate_native_record(value: Any) -> dict[str, Any]:
     ):
         authority._require_digest(record[field], field)
     authority._require_identity(record["source_signer_identity"], "source signer")
+    if typed:
+        for field in ("retained_failed_inventory_digest", "maintained_store_survey_digest"):
+            authority._require_digest(record[field], field)
+        inventory = record["retained_failed_inventory"]
+        if (
+            not isinstance(inventory, str) or not inventory.strip()
+            or len(inventory.encode("utf-8")) > 64 * 1024
+            or fast_path.digest_text(inventory) != record["retained_failed_inventory_digest"]
+        ):
+            raise authority.LifecycleAuthorityError("retained native loss inventory bytes are unavailable or changed")
+        integration = authority._require_closed(
+            record["ready_integration"], READY_INTEGRATION_FIELDS,
+            "native loss typed Ready integration",
+        )
+        parents = integration["ordered_parent_shas"]
+        if (
+            not isinstance(parents, list) or len(parents) != 2
+            or parents[0] != record["parent_sha"] or parents[0] == parents[1]
+            or record["head_sha"] in parents
+        ):
+            raise authority.LifecycleAuthorityError("native loss typed integration parents changed")
+        for parent in parents:
+            authority._require_oid(parent, "typed Ready parent")
+        for field in READY_INTEGRATION_FIELDS - {"ordered_parent_shas"}:
+            authority._require_digest(integration[field], field)
     validation_evidence_loss._decisions(record["technical_decisions"])
     history = record["source_history"]
     if not isinstance(history, list) or not history:
@@ -501,6 +544,15 @@ def _validate_native_record(value: Any) -> dict[str, Any]:
     if authority.digest_json({k: v for k, v in record.items() if k != "record_digest"}) != record["record_digest"]:
         raise authority.LifecycleAuthorityError("native package-loss policy digest changed")
     return record
+
+
+def _source_parents(record: Mapping[str, Any], head: str) -> list[str]:
+    """The 1.0 first-parent chronology is immutable; 1.1 binds the final merge."""
+
+    if record.get("schema_version") == "1.1" and head == record["head_sha"]:
+        return list(record["ready_integration"]["ordered_parent_shas"])
+    return [next(item["parent_sha"] for item in record["source_history"]
+                 if item["head_sha"] == head)]
 
 
 def _accepted_policy(
@@ -651,9 +703,10 @@ def _admit_native_current(
     if len(kinds) != len(events):
         raise authority.LifecycleAuthorityError("native package-loss history is malformed")
     remediation_count = state.get("remediation_cycle_count")
+    typed = record.get("schema_version") == "1.1"
     source_heads = [record["initial_head_sha"]] + [
         event.get("resulting_head_sha") for event in events
-        if event.get("transition_kind") == "REMEDIATION_COMPLETED"
+        if event.get("transition_kind") in {"REMEDIATION_COMPLETED", "HEAD_ADVANCED"}
     ]
     if (
         current.lifecycle.historical_proof_mode != "native_lifecycle"
@@ -664,7 +717,19 @@ def _admit_native_current(
         or current.lifecycle.initialization_evidence_digest != record["initialization_digest"]
         or current.lifecycle.authority_digest != record["current_authority_digest"]
         or current.lifecycle.head_sha != record["head_sha"]
-        or current.lifecycle.tree_sha is not None
+        or current.lifecycle.tree_sha != (record["tree_sha"] if typed else None)
+        or (typed and (
+            kinds.count("HEAD_ADVANCED") != 1
+            or kinds[-1] != "HEAD_ADVANCED"
+            or kinds.count("DRAFT_TO_READY") != 1
+            or kinds.index("HEAD_ADVANCED") < kinds.index("DRAFT_TO_READY")
+            or events[-1].get("predecessor_head_sha") != record["parent_sha"]
+            or current.lifecycle.validation_receipt_digest != record["historical_validation_receipt_digest"]
+            or current.lifecycle.source_validation_evidence_digest
+            != record["ready_integration"]["source_validation_evidence_digest"]
+            or current.lifecycle.adoption_source_evidence_digest
+            != record["ready_integration"]["final_attestation_digest"]
+        ))
         or current.publication_oid != record["current_publication_oid"]
         or current.publication_digest != record["current_publication_digest"]
         or initialization.get("repository") != record["repository"]
@@ -683,7 +748,7 @@ def _admit_native_current(
         or any(kind not in {
             "INITIALIZED_DRAFT", "UNRESTRICTED_REVIEW_CONSUMED",
             "DRAFT_TO_READY", "REMEDIATION_COMPLETED",
-        } for kind in kinds)
+        } | ({"HEAD_ADVANCED"} if typed else set()) for kind in kinds)
         or kinds.index("UNRESTRICTED_REVIEW_CONSUMED") > kinds.index("DRAFT_TO_READY")
         or [item["head_sha"] for item in record["source_history"]][
             [item["head_sha"] for item in record["source_history"]].index(
@@ -821,11 +886,33 @@ def _provider_head_binding(
 ) -> VerifiedLegacyProviderHeadBinding:
     if record["historical_proof_mode"] == "native_lifecycle":
         bundle, initialization = _admit_native_current(current, record)
-        ready = [
-            event for event in bundle["transition_authorizations"]
-            if event["transition_kind"] == "DRAFT_TO_READY"
-        ]
-        provider_head = ready[0]["resulting_head_sha"]
+        if record.get("schema_version") == "1.1":
+            integration = record["ready_integration"]
+            predecessor = publication._verify_ready_integration_publication_predecessor(
+                current, prior_head_sha=record["parent_sha"],
+                head_sha=record["head_sha"], tree_sha=record["tree_sha"],
+                validation_receipt_digest=record["historical_validation_receipt_digest"],
+                final_attestation_digest=integration["final_attestation_digest"],
+                source_validation_evidence_digest=integration["source_validation_evidence_digest"],
+            )
+            predecessor_bundle, _ = _native_bundle(predecessor)
+            lineage = publication._derive_ordinary_ready_source_provider_binding(
+                predecessor, predecessor_bundle,
+            )
+            provider_head = (
+                lineage[0] if lineage is not None
+                else publication._exact_reviewed_ready_root_head(predecessor, predecessor_bundle)
+            )
+            if provider_head is None:
+                raise authority.LifecycleAuthorityError(
+                    "native loss historical provider lineage is unavailable"
+                )
+        else:
+            ready = [
+                event for event in bundle["transition_authorizations"]
+                if event["transition_kind"] == "DRAFT_TO_READY"
+            ]
+            provider_head = ready[0]["resulting_head_sha"]
         provenance_digest = initialization["initialization_digest"]
     else:
         _bundle, proof = _proof_bundle(current)
@@ -860,6 +947,7 @@ def _provider_head_binding(
         historical_provider_summary_digest=record[
             "historical_provider_summary_digest"
         ],
+        requires_complete_provider_summary=record.get("schema_version") == "1.1",
     )
 
 
@@ -870,6 +958,43 @@ def _git_text(root: Path, arguments: list[str], label: str) -> str:
         raise authority.LifecycleAuthorityError(
             f"legacy package-loss {label} is unavailable"
         ) from exc
+
+
+def _authenticate_typed_source(
+    root: Path, record: Mapping[str, Any], accepted_main: str,
+) -> None:
+    """Authenticate new observations, never reconstruct the integration package."""
+
+    integration = record["ready_integration"]
+    parents = integration["ordered_parent_shas"]
+    raw = _git_text(root, ["cat-file", "commit", record["head_sha"]], "raw typed source")
+    tree, actual_parents = fast_path._commit_topology(raw)
+    if tree != record["tree_sha"] or list(actual_parents) != parents:
+        raise authority.LifecycleAuthorityError("typed native loss raw source topology changed")
+    if validation_evidence_loss._accepted_main_commit_metadata(parents[1]) != {
+        "sha": parents[1], "verified": True,
+    }:
+        raise authority.LifecycleAuthorityError("historical integration main signature changed")
+    try:
+        fast_path.require_raw_main_ancestor(root, parents[1], accepted_main)
+        observed = fast_path.derive_isolated_integration_tree_evidence(
+            root, parents, record["tree_sha"], schema_version="1.2",
+        )
+        helper = transport._load_actions_helper()
+        digest = helper._commit_integration_evidence_digest(root, record["head_sha"])
+    except (fast_path.SecurityBlocker, transport.BootstrapSourceAdmissionError,
+            UnicodeError) as exc:
+        raise authority.LifecycleAuthorityError("typed native loss source is not authenticated") from exc
+    if (
+        digest != integration["integration_evidence_digest"]
+        or observed["mechanical_merge_tree_sha"] != record["tree_sha"]
+        or observed["mechanical_conflict_paths"]
+        or observed["manual_conflict_resolution_delta"]
+    ):
+        # Without original conflict-boundary bytes only the exact conflict-free
+        # mechanical tree is independently representable. No digest authorizes
+        # third-tree content or a replacement historical resolution package.
+        raise authority.LifecycleAuthorityError("typed native loss tree or signed integration identity changed")
 
 
 def _survey_package_stores(
@@ -909,7 +1034,7 @@ def _survey_package_stores(
         ).splitlines()
         if (
             tree != expected["tree_sha"]
-            or parents != [head, expected["parent_sha"]]
+            or parents != [head, *_source_parents(record, head)]
             or ".context/" not in ignored
             or any(
                 path.startswith(".context/")
@@ -921,6 +1046,11 @@ def _survey_package_stores(
                 "historical package bytes exist or a maintained store is unsurveyed"
             )
         if native:
+            if record.get("schema_version") == "1.1":
+                raw = _git_text(root, ["cat-file", "commit", head], "raw historical source")
+                raw_tree, raw_parents = fast_path._commit_topology(raw)
+                if raw_tree != expected["tree_sha"] or list(raw_parents) != _source_parents(record, head):
+                    raise authority.LifecycleAuthorityError("native loss raw historical source changed")
             validation_evidence_loss._commit_signature(
                 root, head, record["source_signer_identity"], trust
             )
@@ -938,27 +1068,42 @@ def _survey_package_stores(
             raise authority.LifecycleAuthorityError(
                 "native historical receipt trailer provenance changed"
             )
-    companion_digests = (
-        {
+    if native:
+        companion_digests = {
             "initial_validation_receipt_digest": record["initial_validation_receipt_digest"],
             "initial_final_attestation_digest": record["initial_final_attestation_digest"],
-            "historical_validation_receipt_digest": record[
-                "historical_validation_receipt_digest"
-            ],
+            "historical_validation_receipt_digest": record["historical_validation_receipt_digest"],
         }
-        if record["historical_proof_mode"] == "native_lifecycle"
-        else {
-            "source_validation_evidence_digest": record[
-                "source_validation_evidence_digest"
-            ],
-            "historical_validation_receipt_digest": record[
-                "historical_validation_receipt_digest"
-            ],
-            "historical_final_attestation_digest": record[
-                "historical_final_attestation_digest"
-            ],
+    else:
+        companion_digests = {
+            "source_validation_evidence_digest": record["source_validation_evidence_digest"],
+            "historical_validation_receipt_digest": record["historical_validation_receipt_digest"],
+            "historical_final_attestation_digest": record["historical_final_attestation_digest"],
         }
-    )
+    if record.get("schema_version") == "1.1":
+        integration = record["ready_integration"]
+        # One maintained byte inventory, including nonstandard artifact names
+        # and the protected journal. No workspace or hosted-artifact discovery.
+        from . import provider_reacquisition
+
+        maintained = provider_reacquisition.observe_enrolled_package_stores(
+            current, tuple(item["head_sha"] for item in record["source_history"]),
+        )
+        if (
+            maintained["source_packages"] or maintained["journal_packages"]
+            or maintained["unsearched_stores"]
+            or maintained["retained_local_store"] != "NO_MAINTAINED_RETAINED_STORE"
+            or maintained["source_history"] != tuple(
+                (item["head_sha"], item["tree_sha"]) for item in record["source_history"]
+            )
+            or authority.digest_json(maintained) != record["maintained_store_survey_digest"]
+        ):
+            raise authority.LifecycleAuthorityError("typed native loss maintained-store survey changed or is incomplete")
+        companion_digests.update({
+            "historical_integration_evidence_digest": integration["integration_evidence_digest"],
+            "historical_final_attestation_digest": integration["final_attestation_digest"],
+            "historical_source_validation_evidence_digest": integration["source_validation_evidence_digest"],
+        })
     survey = {
         "repository": record["repository"],
         "delivery_issue": record["delivery_issue"],
@@ -1037,6 +1182,47 @@ def _current_safety(
         facts["current_feedback_inventory_digest"] = authority.digest_json(expected)
         facts["current_feedback_decisions_digest"] = authority.digest_json(decisions)
     return {**facts, "current_safety_digest": authority.digest_json(facts)}
+
+
+def _observe_typed_current_validation(
+    *, root: Path, accepted_main: str, record: Mapping[str, Any],
+    entry: Mapping[str, Any], helper: Any,
+) -> dict[str, Any]:
+    """New registered execution and source-safety observations, with no receipt."""
+
+    def verify_source() -> None:
+        if (
+            _git_text(root, ["rev-parse", "HEAD"], "validation source head").strip()
+            != record["head_sha"]
+            or _git_text(root, ["rev-parse", "HEAD^{tree}"], "validation source tree").strip()
+            != record["tree_sha"]
+            or _git_text(root, ["status", "--porcelain=v2", "--untracked-files=all"],
+                         "validation source status")
+        ):
+            raise authority.LifecycleAuthorityError("current validation source changed")
+
+    verify_source()
+    profile = helper._ready_source_recovery_current_safety_profile(accepted_main)
+    if helper._run_ready_source_recovery_current_safety(
+        accepted_main, root, profile, record["repository"],
+    ) is not True:
+        raise authority.LifecycleAuthorityError("typed native loss current source safety failed")
+    result = helper._run_registered_validations(
+        entry, root, integrity_verifier=verify_source,
+    )
+    if not result or result.command_set != list(helper._complete_validation_commands(entry)):
+        raise authority.LifecycleAuthorityError("typed native loss current registered validation failed")
+    verify_source()
+    return {
+        "temporality": "NEW_CURRENT_POLICY_OBSERVATION",
+        "accepted_main_sha": accepted_main,
+        "head_sha": record["head_sha"], "tree_sha": record["tree_sha"],
+        "source_safety_profile_digest": authority.digest_json(profile),
+        "command_set_digest": authority.digest_json(result.command_set),
+        "registered_command_execution": "PASS",
+        "historical_receipt_recreated": False,
+        "canonical_receipt": "ABSENT",
+    }
 
 
 def _assemble(
@@ -1161,6 +1347,10 @@ def _assemble_native(
         "thread_resolution_authority": 0,
         "recovery_consumed": False,
     }
+    if record.get("schema_version") == "1.1":
+        fields["ready_integration"] = copy.deepcopy(record["ready_integration"])
+        fields["retained_failed_inventory_digest"] = record["retained_failed_inventory_digest"]
+        fields["maintained_store_survey_digest"] = record["maintained_store_survey_digest"]
     return {**fields, "authentication_digest": authority.digest_json(fields)}
 
 
@@ -1194,6 +1384,8 @@ def authenticate(
             "legacy package-loss source signature evidence changed"
         )
     store_survey = _survey_package_stores(repository_root, record, current)
+    if record.get("schema_version") == "1.1":
+        _authenticate_typed_source(repository_root, record, accepted_main)
     provider_binding = _provider_head_binding(current, record)
     helper = transport._load_actions_helper()
     gateway = helper.FastPathGateway(
@@ -1210,6 +1402,13 @@ def authenticate(
         record=record,
         reviewed=reviewed,
     )
+    if record.get("schema_version") == "1.1":
+        safety.pop("current_safety_digest")
+        safety["current_validation"] = _observe_typed_current_validation(
+            root=repository_root, accepted_main=accepted_main,
+            record=record, entry=entry, helper=helper,
+        )
+        safety["current_safety_digest"] = authority.digest_json(safety)
     final_facts = _normalize_provider(_observe_provider(record), record)
     _admit_provider(final_facts, record)
     final_reviewed = gateway.capture_stable_feedback(

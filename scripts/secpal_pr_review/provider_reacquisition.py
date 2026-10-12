@@ -249,18 +249,55 @@ def _package_identities(raw: bytes, current: publication.VerifiedLifecyclePublic
         value = json.loads(raw, object_pairs_hook=publication._reject_duplicate_pairs)
     except (ValueError, UnicodeDecodeError):
         return ()
+    heads = {current.lifecycle.head_sha}
+    digests = set(_retained_package_digests(current))
+    if current.serialized_lifecycle_evidence is not None:
+        wrapper = authority.loads_closed_json(current.serialized_lifecycle_evidence)
+        bundle = wrapper.get("lifecycle_evidence", wrapper)
+        if current.lifecycle.historical_proof_mode == "native_lifecycle":
+            initialization = bundle["delivery_initialization"]
+            heads.add(initialization["initial_head_sha"])
+            digests.update((initialization["validation_receipt_digest"],
+                            initialization["final_attestation_digest"]))
+            heads.update(event["resulting_head_sha"] for event in bundle["transition_authorizations"])
+            for snapshot in bundle["authority_chain"]:
+                evidence = snapshot.get("current_head_evidence")
+                if evidence is not None:
+                    digests.update(evidence[field] for field in (
+                        "validation_receipt_digest", "final_attestation_digest",
+                        "source_validation_evidence_digest",
+                    ))
     matches = []
     def visit(item: Any) -> None:
         if isinstance(item, dict):
             integration = (item.get("kind") == fast_path.READY_INTEGRATION_KIND
                 and item.get("delivery_issue", item.get("delivery_issue_number")) == current.lifecycle.delivery_issue
                 and (item.get("validated_tree_sha") == current.lifecycle.tree_sha
-                     or item.get("head_sha") == current.lifecycle.head_sha))
-            companion = (item.get("head_sha") == current.lifecycle.head_sha
-                and any(isinstance(item.get(field), str) and item[field] == expected
-                    for field, expected in (("receipt_digest", current.lifecycle.validation_receipt_digest),
-                        ("attestation_digest", current.lifecycle.adoption_source_evidence_digest))))
-            if item.get("repository") == current.lifecycle.repository and (integration or companion):
+                     or isinstance(item.get("head_sha"), str) and item["head_sha"] in heads))
+            companion = (isinstance(item.get("head_sha"), str) and item["head_sha"] in heads
+                and any(isinstance(item.get(field), str) and item[field] in digests
+                        for field in ("receipt_digest", "attestation_digest")))
+            reviewed = (
+                item.get("pull_request_number") == current.lifecycle.pull_request
+                and isinstance(item.get("head_sha"), str) and item["head_sha"] in heads
+                and {"state_digest", "feedback_digest", "reviews", "threads"} <= set(item)
+            )
+            prior = (
+                item.get("kind") == "READY_INTEGRATION_PRIOR_AUTHORITY"
+                and item.get("delivery_issue_number") == current.lifecycle.delivery_issue
+                and item.get("pull_request_number") == current.lifecycle.pull_request
+                and isinstance(item.get("prior_delivery_head_sha"), str)
+                and item["prior_delivery_head_sha"] in heads
+            )
+            eligibility = (
+                item.get("pull_request_number") == current.lifecycle.pull_request
+                and isinstance(item.get("reviewed_head_sha"), str)
+                and item["reviewed_head_sha"] in heads
+                and {"reviewed_state_digest", "eligible_threads"} <= set(item)
+            )
+            if item.get("repository") == current.lifecycle.repository and (
+                integration or companion or reviewed or prior or eligibility
+            ):
                 matches.append(fast_path.digest_json(item))
             for child in item.values():
                 visit(child)
@@ -299,6 +336,16 @@ def _admit_blob_sizes(expected: tuple[str, ...], raw: bytes) -> None:
 def _observe_package_survey(
     current: publication.VerifiedLifecyclePublication, observed: dict[str, Any],
 ) -> dict[str, Any]:
+    source_heads = tuple(e["head"] for e in observed["events"] if e["kind"] == "COMMIT")
+    return {
+        **observe_enrolled_package_stores(current, source_heads),
+        "authoritative_head_publication": _observe_push_survey(observed),
+    }
+
+
+def observe_enrolled_package_stores(
+    current: publication.VerifiedLifecyclePublication, source_heads: tuple[str, ...],
+) -> dict[str, Any]:
     """Reuse the maintained source-history/journal inventory and isolated Git.
 
     Workspace-local .context packages have no maintained retained-session store.
@@ -308,7 +355,6 @@ def _observe_package_survey(
 
     policy = authority._load_lifecycle_trust_policy(current.lifecycle.repository)
     publication._verify_live_protection(policy)
-    source_heads = [e["head"] for e in observed["events"] if e["kind"] == "COMMIT"]
     if not source_heads or len(source_heads) > 100 or len(set(source_heads)) != len(source_heads):
         raise fast_path.SecurityBlocker("reacquisition source history is incomplete")
     history, source_packages, journal_packages = [], [], []
@@ -381,7 +427,6 @@ def _observe_package_survey(
         "historical_digest_identities": _retained_package_digests(current), "maintained_stores": MAINTAINED_STORES,
         "unsearched_stores": (), "retained_local_store": "NO_MAINTAINED_RETAINED_STORE",
         "output_scope": "GITIGNORED_WORKSPACE_LOCAL",
-        "authoritative_head_publication": _observe_push_survey(observed),
     }
 
 
