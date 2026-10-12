@@ -153,9 +153,14 @@ assert_rejected 'validator executed from caller checkout' "$caller_validator_fix
 
 mutable_action_fixture="$workspace/mutable-action.yml"
 cp "$workflow_path" "$mutable_action_fixture"
+# Read the Dependabot-managed pin instead of duplicating its release SHA.
+setup_node_reference="$(
+  list_yaml_action_references "$workflow_path" |
+    awk -F '\t' '$1 ~ /^actions\/setup-node@/ { print $1 }'
+)"
 replace_once "$mutable_action_fixture" \
-  'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020' \
-  'actions/setup-node@v7'
+  "$setup_node_reference" \
+  'actions/setup-node@main'
 assert_rejected 'mutable external action tag' "$mutable_action_fixture"
 
 echo 'Reusable Copilot workflow provenance invariants passed.'
