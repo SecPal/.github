@@ -77,6 +77,28 @@ enabled only by changing the versioned central policy and binding its document
 identity there. The Trivy-native ignore file is intentionally empty so a caller
 cannot suppress findings before policy admission.
 
+`SECRET` exceptions additionally require `source_blob`: the exact lowercase
+40-character Git blob ID of the reviewed file. Admission compares this selector
+with independently observed source identity from the exact checked-out commit.
+An unchanged path, rationale, generated filename, or finding fingerprint does
+not establish source identity. A different committed blob remains actionable,
+even when every other selector and the fingerprint are unchanged. Missing or
+malformed policy bindings fail closed; no caller input or native scanner field
+can provide the source facts used to consume a disposition. Vulnerability and
+misconfiguration exception selectors retain their existing contract.
+
+The observation owner, `observe_secret_sources`, rechecks the exact clean target
+after scanning. For each secret path it requires a regular file in that commit's
+tree, reads the immutable blob with replacement objects disabled, independently
+hashes its raw Git object content, and compares the scanned file's raw bytes.
+Symlinks, missing files, changed bytes and unverifiable identities fail with
+`TARGET_IDENTITY_FAILURE`. Its bounded output contains only the commit and
+path-to-blob identities. `normalize_secret_sources` purely validates the closed
+observation and exact commit/path coverage, then retains `source_blob` on each
+secret finding. Pure policy admission owns the exception comparison; result
+assembly performs no additional source observation. Source bytes and matched
+captures never enter this fact transport.
+
 ## Evidence and redaction
 
 Each action invocation uploads one uniquely named normalized result for 14 days.
@@ -93,9 +115,9 @@ and one of these states:
 - `UNKNOWN_STALE`
 
 Native scanner JSON is temporary and is deleted before upload. Secret
-normalization allowlists only rule ID, severity, repository-relative path, and
-line range; Trivy `Match` and `Code` values never enter retained evidence or the
-job summary. Misconfiguration evidence retains rule, file, line, and resource
+normalization allowlists only rule ID, severity, repository-relative path,
+line range, and independently observed `source_blob`; Trivy `Match` and `Code`
+values never enter retained evidence or the job summary. Misconfiguration evidence retains rule, file, line, and resource
 context. Vulnerability evidence retains advisory, package, installed version,
 and fixed version where available. The action does not create issues or mutate
 source, dependencies, artifacts, releases, deployments, or production.
@@ -120,6 +142,21 @@ pinned scanner and proves all three result classes, database identity capture,
 and removal of the synthetic secret value. Unit fixtures cover stale database,
 malformed output, network/failure envelopes, deterministic normalization, and
 closed exception semantics.
+
+The maintained replay exports the candidate action with the existing immutable
+archive qualification. It also authenticates the reviewed Android asset from
+commit `5d8a5bf357a6315706b25d6b8285a93d2edbad2d` against blob
+`f0bc32de9c027ed0bd3b7842642e5d137510e65c`, and runs that exact file in a
+temporary Git fixture through an archived action with a disposable source-bound
+test policy. The reviewed blob retains one `SECRET` with `IGNORED` metadata and
+becomes `CLEAN`. Replacing it with a runtime-generated synthetic SendGrid value
+at the identical Android selector and line preserves the fingerprint but yields
+one actionable finding and zero exceptions. Both runs require fresh databases,
+successful redaction, and private-material cleanup. Only bounded identities and
+outcomes survive the replay; the fixture source and native captures are deleted.
+This mechanism qualification adds no Android production policy entry. The
+separate policy-review delivery must revalidate classification, exact source
+lineage, and a future bounded expiry before adoption.
 
 The action rejects gitlinks rather than fetching submodules. Development
 packages are explicitly included. Inline scanner suppression directives are

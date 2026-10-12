@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import os
+import runpy
 import secrets
 import shutil
 import subprocess
@@ -17,7 +19,7 @@ import tarfile
 import tempfile
 from textwrap import dedent
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -29,6 +31,9 @@ SECRET_CONFIG = ROOT / "policies" / "trivy-repository-secret-v1.yaml"
 TRIVY_VERSION = "0.74.0"
 TRIVY_ARCHIVE_SHA256 = "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a"
 SYNTHETIC_SECRET = "SECPAL_SYNTHETIC_SECRET_" + "A1B2C3D4E5F6G7H8"
+REVIEWED_ANDROID_COMMIT = "5d8a5bf357a6315706b25d6b8285a93d2edbad2d"
+REVIEWED_ANDROID_BLOB = "f0bc32de9c027ed0bd3b7842642e5d137510e65c"
+ANDROID_ASSET = "android/app/src/main/assets/public/assets/EmployeeAddressFields-D642volM.js"
 
 
 def sha256(path: Path) -> str:
@@ -42,6 +47,146 @@ def load_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def export_candidate_action(destination: Path) -> tuple[Path, str]:
+    """Reuse the maintained archive qualification's isolated candidate capture."""
+    archive_test = runpy.run_path(str(ROOT / "tests/secpal-trivy-action-archive.py"))
+    qualification = archive_test["TrivyActionArchiveTests"]()
+    try:
+        qualification.setUp()
+        qualification.assert_archive_contract(qualification.tree)
+        files = archive_test["archive_files"](qualification.tree, qualification.environment)
+        for path in archive_test["REQUIRED_FILES"]:
+            target = destination / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(files[path])
+        (destination / ".gitattributes").write_bytes(archive_test["git"](
+            "show", qualification.tree + ":.gitattributes", environment=qualification.environment,
+        ))
+        return destination / ".github/actions/trivy-repository-scan/action.yml", qualification.tree
+    finally:
+        qualification.doCleanups()
+
+
+def replay_source_binding(root: Path, action_path: Path, environment: dict) -> dict:
+    """Replay immutable Android bytes and the P1 replacement through the action.
+
+    Only this disposable governance fixture gets a source-bound test disposition;
+    central production policy remains owned by the separate policy-review leaf.
+    """
+    request = urllib.request.Request(
+        f"https://raw.githubusercontent.com/SecPal/android/{REVIEWED_ANDROID_COMMIT}/{ANDROID_ASSET}",
+        headers={"User-Agent": "SecPal immutable source-binding replay"},
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        reviewed = response.read()
+    if (len(reviewed) != 9782 or hashlib.sha1(
+            b"blob " + str(len(reviewed)).encode() + b"\0" + reviewed,
+    ).hexdigest() != REVIEWED_ANDROID_BLOB):
+        raise RuntimeError("reviewed Android source authentication failed")
+
+    governance = root / "binding-governance"
+    shutil.copytree(action_path.parents[3], governance)
+    policy_path = governance / "policies/trivy-repository-scan-v1.json"
+    policy = json.loads(policy_path.read_text())
+    policy["exceptions"].append({
+        "id": "immutable-source-binding-replay", "repository": "SecPal/android",
+        "class": "SECRET", "rule_id": "sendgrid-api-token", "path": ANDROID_ASSET,
+        "source_blob": REVIEWED_ANDROID_BLOB, "disposition": "IGNORED",
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat().replace("+00:00", "Z"),
+        "rationale": "Disposable mechanism qualification; no production policy disposition.",
+    })
+    policy_path.write_text(json.dumps(policy) + "\n")
+    def git(workspace: Path, *arguments: str) -> str:
+        return subprocess.check_output(["git", "-C", str(workspace), *arguments], text=True).strip()
+    def commit(workspace: Path) -> str:
+        git(workspace, "add", ".")
+        git(workspace, "-c", "user.name=SecPal Test", "-c", "user.email=test@secpal.app",
+            "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "qualification fixture")
+        return git(workspace, "rev-parse", "HEAD")
+    git(governance, "init", "--quiet")
+    governance_commit = commit(governance)
+    exported = root / "binding-export"
+    exported.mkdir()
+    # Git archive applies the exact maintained export attributes to immutable
+    # test governance. Extract only the authenticated runtime closure.
+    archive_bytes = subprocess.check_output([
+        "git", "-C", str(governance), "archive", "--format=tar", governance_commit,
+    ])
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes)) as archive:
+        required_files = runpy.run_path(str(ROOT / "tests/secpal-trivy-action-archive.py"))["REQUIRED_FILES"]
+        for path in required_files:
+            member = archive.extractfile(path)
+            if member is None:
+                raise RuntimeError("source-binding action runtime closure is incomplete")
+            content = member.read()
+            if content != (governance / path).read_bytes():
+                raise RuntimeError("source-binding action archive changed runtime bytes")
+            target = exported / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+    bound_action = exported / ".github/actions/trivy-repository-scan/action.yml"
+    script = dedent(bound_action.read_text().split("      run: |\n", 1)[1].split("\n    - name:", 1)[0])
+    workspace = root / "binding-workspace"
+    asset = workspace / ANDROID_ASSET
+    asset.parent.mkdir(parents=True)
+    git(workspace, "init", "--quiet")
+    synthetic = "SG." + secrets.token_urlsafe(16) + "." + secrets.token_urlsafe(32)
+    outcomes = {}
+    fingerprint = None
+    for name, content, expected in (
+        ("reviewed", reviewed, "CLEAN"),
+        ("replacement", ("sendgrid='" + synthetic + "';\n").encode(), "ACTIONABLE"),
+    ):
+        asset.write_bytes(content)
+        target_commit = commit(workspace)
+        runner = root / ("binding-runner-" + name)
+        runner.mkdir(mode=0o700)
+        action_environment = {**environment,
+            "GITHUB_ACTION_PATH": str(bound_action.parent), "GITHUB_WORKSPACE": str(workspace),
+            "GITHUB_SHA": target_commit, "GITHUB_REPOSITORY": "SecPal/android",
+            "RUNNER_TEMP": str(runner), "GITHUB_OUTPUT": str(runner / "output"),
+            "GITHUB_STEP_SUMMARY": str(runner / "summary"),
+        }
+        action = subprocess.run(["bash", "-c", script], env=action_environment, capture_output=True)
+        if action.returncode:
+            raise RuntimeError("source-binding maintained action execution failed")
+        outputs = dict(line.split("=", 1) for line in (runner / "output").read_text().splitlines())
+        evidence = Path(outputs["evidence-path"])
+        result = json.loads((evidence / "result.json").read_text())
+        import jsonschema
+        jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v1.schema.json").read_text()))
+        if (result["gate_state"] != expected or result["operation"]["status"] != "SUCCEEDED"
+                or result["database"]["status"] != "FRESH" or result["summary"]["total"] != 1
+                or result["summary"]["excepted"] != (1 if name == "reviewed" else 0)
+                or result["summary"]["actionable"] != (0 if name == "reviewed" else 1)):
+            raise RuntimeError("source-bound disposition admitted the wrong source")
+        finding = result["findings"][0]
+        blob = git(workspace, "rev-parse", "HEAD:" + ANDROID_ASSET)
+        if (finding["class"] != "SECRET" or finding["rule_id"] != "sendgrid-api-token"
+                or finding["path"] != ANDROID_ASSET or finding["source_blob"] != blob
+                or finding["location"] != {"start_line": 1, "end_line": 1}
+                or result["subject"] != {"repository": "SecPal/android", "commit": target_commit}):
+            raise RuntimeError("source-binding finding identity mismatch")
+        if name == "reviewed":
+            fingerprint = finding["fingerprint"]
+        elif fingerprint != finding["fingerprint"] or blob == REVIEWED_ANDROID_BLOB:
+            raise RuntimeError("P1 replay did not preserve its metadata-only fingerprint")
+        public = action.stdout + action.stderr + (runner / "summary").read_bytes() + (runner / "output").read_bytes()
+        for file in evidence.iterdir():
+            public += file.read_bytes()
+        if (synthetic.encode() in public or b'"Match"' in public or b'"Code"' in public
+                or list(runner.glob("secpal-trivy-tool-*")) or list(runner.glob("secpal-trivy-cache-*"))
+                or {p.name for p in evidence.iterdir()} != {"result.json"}):
+            raise RuntimeError("source-binding replay retained private capture material")
+        outcomes[name] = {
+            "commit": target_commit, "source_blob": blob, "fingerprint": finding["fingerprint"],
+            "gate_state": result["gate_state"], "summary": result["summary"],
+            "database_identity": result["database"]["identity"],
+            "redaction_and_cleanup": "PASS",
+        }
+    return {"governance_fixture_commit": governance_commit, "policy_identity": result["policy"], **outcomes}
 
 
 def main() -> int:
@@ -263,7 +408,7 @@ def main() -> int:
             raise RuntimeError("representative findings were not admitted as actionable")
         # Exercise the maintained action boundary itself, including both DBs,
         # health admission, redaction, public summary, and private-file cleanup.
-        action_path = ROOT / ".github" / "actions" / "trivy-repository-scan" / "action.yml"
+        action_path, candidate_tree = export_candidate_action(root / "candidate-export")
         # Extract the owned literal Bash block; this replay needs only the
         # existing vulnerability-policy dependencies on the CI runner.
         step_script = dedent(action_path.read_text().split("      run: |\n", 1)[1].split("\n    - name:", 1)[0])
@@ -305,6 +450,7 @@ def main() -> int:
             raise RuntimeError("maintained action exposed synthetic capture material")
         if list(runner.glob("secpal-trivy-tool-*")) or list(runner.glob("secpal-trivy-cache-*")):
             raise RuntimeError("maintained action retained private scanner material")
+        source_binding = replay_source_binding(root, action_path, action_environment)
         # Inline source suppression is rejected from immutable source before
         # Trivy can omit ignored IaC findings from its native representation.
         terraform = workspace / "insecure.tf"
@@ -360,6 +506,8 @@ def main() -> int:
                     "crlf_threshold_redaction": "PASS",
                     "cause_representations": representations,
                     "maintained_action_passed": True,
+                    "candidate_tree": candidate_tree,
+                    "immutable_source_binding": source_binding,
                     "unknown_warning_fail_closed": True,
                     "parser_failure_fail_closed": True,
                     "process_failure_fail_closed": True,
