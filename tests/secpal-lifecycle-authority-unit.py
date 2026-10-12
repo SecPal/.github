@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import ast
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 import copy
 from dataclasses import replace
 import hashlib
@@ -6276,6 +6276,299 @@ printf 'Usage: fixture\\n'
                 self.assertEqual(current.lifecycle.state, self.loss._intended_state())
                 with self.assertRaisesRegex(publication.LifecyclePublicationError, "enrolled"):
                     publication.enroll_existing_lifecycle(bundle, signer_identity=SIGNER, signer=signer_for())
+
+
+class UnboundReceiptHistoricalEvidenceTests(TestCase):
+    def historical(self):
+        return {
+            "state": "RAW_RECEIPT_PRESENT_BUT_UNBOUND",
+            "validation_receipt_digest": None,
+            "source_validation_evidence_digest": None,
+            "final_attestation_digest": None,
+            "bytes_reconstructed": False,
+            "raw_receipt_sha256": "a" * 64,
+            "raw_receipt_digest": "b" * 64,
+        }
+
+    def test_raw_receipt_is_distinct_from_commit_bound_and_absent_history(self):
+        historical = self.historical()
+        self.assertEqual(
+            authority.normalize_exact_state_adoption_historical_evidence(historical),
+            historical,
+        )
+        self.assertEqual(authority.EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION, "5.0")
+
+    def test_unbound_history_rejects_attestation_binding_reconstruction_and_downgrade(self):
+        for field, value in (
+            ("validation_receipt_digest", "c" * 64),
+            ("source_validation_evidence_digest", "c" * 64),
+            ("final_attestation_digest", "c" * 64),
+            ("bytes_reconstructed", True),
+            ("state", "ABSENT_NEVER_ISSUED"),
+            ("state", "UNAVAILABLE"),
+            ("raw_receipt_sha256", None),
+            ("raw_receipt_digest", "bad"),
+        ):
+            with self.subTest(field=field, value=value):
+                value_under_test = self.historical()
+                value_under_test[field] = value
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    authority.normalize_exact_state_adoption_historical_evidence(value_under_test)
+
+
+class UnboundReceiptAdmissionTests(TestCase):
+    def setUp(self):
+        self.owner = actions_owner._owned_verifier_module("unbound_receipt_admission")
+        self.binding = {"manual_gates": [], "validation": [{"argv": ["python3", "fixture.py"]}]}
+        self.reviewed = fast_path.StableFeedbackState(
+            repository=REPOSITORY, pull_request_number=1156,
+            head_sha=self.owner.SUBJECT["head_sha"], base_ref="main",
+            base_sha=self.owner.SUBJECT["parent_sha"], pr_state="OPEN", feedback={},
+        )
+        self.receipt = fast_path.create_validation_receipt(
+            repository=REPOSITORY, head_sha=self.reviewed.head_sha,
+            validated_tree_sha=self.owner.SUBJECT["tree_sha"], registry=self.binding,
+            command_set=self.binding["validation"], successful_result=True,
+            reviewed_state=self.reviewed, manual_gate_evidence=[],
+        )
+
+    def record_for(self, raw):
+        return {
+            **self.owner.SUBJECT, "raw_receipt_sha256": hashlib.sha256(raw).hexdigest(),
+            "raw_receipt_digest": self.receipt["receipt_digest"],
+            "receipt_registry_digest": fast_path.digest_json(self.binding),
+            "receipt_command_set_digest": fast_path.digest_json(self.binding["validation"]),
+            "receipt_reviewed_state_digest": self.reviewed.state_digest,
+            "receipt_reviewed_feedback_digest": self.reviewed.feedback_digest,
+        }
+
+    def test_raw_receipt_verifies_bytes_and_canonical_identity_separately(self):
+        raw = json.dumps(self.receipt, indent=2).encode()
+        result = self.owner.normalize_receipt(raw, self.record_for(raw), self.binding, self.reviewed)
+        self.assertEqual(result["raw_receipt_sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(result["raw_receipt_digest"], self.receipt["receipt_digest"])
+        self.assertIsNone(result["validation_receipt_digest"])
+        self.assertIsNone(result["final_attestation_digest"])
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            self.owner.normalize_receipt(raw + b"\n", self.record_for(raw), self.binding, self.reviewed)
+
+    def test_self_consistent_wrong_receipt_subject_and_result_fail_closed(self):
+        for field, value in (("repository", "example/other"), ("head_sha", "f" * 40),
+                             ("validated_tree_sha", "f" * 40), ("successful_result", False),
+                             ("reviewed_state_digest", "f" * 64), ("extra", True)):
+            with self.subTest(field=field):
+                mutated = {**self.receipt, field: value}
+                mutated["receipt_digest"] = fast_path.digest_json({
+                    key: item for key, item in mutated.items() if key != "receipt_digest"
+                })
+                raw = json.dumps(mutated).encode()
+                record = self.record_for(raw)
+                record["raw_receipt_digest"] = mutated["receipt_digest"]
+                with self.assertRaises(authority.LifecycleAuthorityError):
+                    self.owner.normalize_receipt(raw, record, self.binding, self.reviewed)
+
+    def test_duplicate_json_keys_do_not_gain_receipt_authority(self):
+        raw = json.dumps(self.receipt).replace('{', '{"kind":"OTHER",', 1).encode()
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            self.owner.normalize_receipt(raw, self.record_for(raw), self.binding, self.reviewed)
+
+
+class UnboundReceiptProofTests(TestCase):
+    def setUp(self):
+        self.owner = actions_owner._owned_verifier_module("unbound_receipt_admission")
+        self.record = json.loads((REPO_ROOT / self.owner.POLICY_PATH).read_text())
+        self.policy = SimpleNamespace(legacy_adoption_signer_identities=frozenset({SIGNER}))
+        self.stack = self.enterContext(ExitStack())
+        self.stack.enter_context(patch.object(self.owner, "_record", return_value=self.record))
+        self.stack.enter_context(patch.object(authority, "_load_lifecycle_trust_policy", return_value=self.policy))
+        self.stack.enter_context(patch.object(authority, "_policy_signature_verifier", return_value=verify_signature))
+        self.commit = {
+            "oid": self.owner.SUBJECT["head_sha"], "source": "USER", "signer_identity": SIGNER,
+            "local_signature": {"verified": True, "state": "valid", "format": "ssh"},
+            "github_verification": {"verified": True, "reason": "valid"},
+        }
+        self.signature_digest = fast_path.digest_json(fast_path.verify_commit_signatures(
+            [self.commit], authority._load_delivery_signature_policy(REPOSITORY),
+        )[0])
+
+    def signed(self, fields):
+        fields = {key: copy.deepcopy(value) for key, value in fields.items()
+                  if key not in {"signature", "admission_digest"}}
+        fields["signer_identity"] = SIGNER
+        signed = {**fields, "signature": signer_for()(fast_path.canonical_json_bytes(fields), self.owner.DOMAIN)}
+        return {**signed, "admission_digest": fast_path.digest_json(signed)}
+
+    def document(self):
+        historical = {
+            "state": "RAW_RECEIPT_PRESENT_BUT_UNBOUND", "validation_receipt_digest": None,
+            "source_validation_evidence_digest": None, "final_attestation_digest": None,
+            "bytes_reconstructed": False, "raw_receipt_sha256": self.record["raw_receipt_sha256"],
+            "raw_receipt_digest": self.record["raw_receipt_digest"],
+        }
+        return self.signed({
+            **self.owner.SUBJECT, "schema_version": "1.0", "kind": self.owner.KIND,
+            "domain": self.owner.DOMAIN, "pull_request_state": "OPEN",
+            "source_signer_identity": SIGNER, "commit_signature_evidence_digest": self.signature_digest,
+            "accepted_main_sha": HEADS[0], "policy_digest": fast_path.digest_json(self.record),
+            "historical_evidence": historical, "qualification_sha256": self.record["qualification_sha256"],
+            "qualification_authority_sha": self.record["qualification_authority_sha"],
+            "feedback": self.record["feedback"], "observed_pre_enrollment_history": self.owner.history(),
+            "intended_state": self.owner.intended_state(),
+            "current_validation": {"accepted_main_sha": HEADS[0], "policy_digest": "1" * 64,
+                                   "command_set_digest": "2" * 64, "result": "PASS"},
+            "adoption_timestamp": "2026-10-12T19:30:00Z",
+            "admission_id": "exact-unbound-receipt:SecPal/.github:1154:1156",
+            "bounded_uses": 1, "blocking_material_finding_ids": [self.owner.P1_THREAD],
+        })
+
+    def proof(self):
+        doc = self.document()
+        external = authority.authenticate_exact_state_adoption_external_evidence(
+            repository=REPOSITORY, delivery_issue=1154, pull_request=1156,
+            head_sha=doc["head_sha"], tree_sha=doc["tree_sha"], pull_request_state="OPEN",
+            commit_signature_evidence=self.commit, validation_evidence=None,
+            observed_pre_enrollment_history=self.owner.history(), intended_state=self.owner.intended_state(),
+            unbound_receipt_admission=doc,
+        )
+        evidence = authority.create_exact_state_adoption_evidence(
+            verified_external_evidence=external, adoption_timestamp=doc["adoption_timestamp"],
+        )
+        authorization = authority.create_exact_state_adoption_authorization(
+            adoption_evidence=evidence, authorization_id="fixture:unbound", bounded_uses=1,
+            signer_identity=SIGNER, signer=signer_for(),
+        )
+        proof = authority.create_exact_state_adoption_proof(
+            adoption_evidence=evidence, authorization=authorization,
+            signer_identity=SIGNER, signer=signer_for(),
+        )
+        return proof, authority.verify_exact_state_adoption_proof(proof)
+
+    def test_signed_v5_proof_preserves_budget_and_truthful_historical_projection(self):
+        proof, verified = self.proof()
+        self.assertEqual(proof["proof_version"], "5.0")
+        self.assertEqual(verified.state, self.owner.intended_state())
+        self.assertTrue(verified.adoption_review_submitted)
+        self.assertIsNone(verified.validation_receipt_digest)
+        self.assertIsNone(verified.source_validation_evidence_digest)
+        self.assertEqual(verified.adoption_source_evidence_digest, proof["unbound_receipt_admission"]["admission_digest"])
+        self.assertEqual(authority.exact_state_adoption_historical_evidence({
+            **{key: proof[key] for key in authority.EXACT_ADOPTION_UNBOUND_RECEIPT_EVIDENCE_FIELDS},
+            "kind": authority.EXACT_ADOPTION_EVIDENCE_KIND,
+            "domain": authority.EXACT_ADOPTION_UNBOUND_RECEIPT_EVIDENCE_DOMAIN,
+        })["state"], "RAW_RECEIPT_PRESENT_BUT_UNBOUND")
+
+    def test_resigned_scope_receipt_lifecycle_and_p1_changes_are_rejected(self):
+        mutations = [
+            lambda d: d.update(repository="example/other"),
+            lambda d: d.update(delivery_issue=1190), lambda d: d.update(pull_request=1191),
+            lambda d: d.update(head_sha="f" * 40), lambda d: d.update(tree_sha="f" * 40),
+            lambda d: d.update(parent_sha="f" * 40), lambda d: d.update(bounded_uses=2),
+            lambda d: d.update(blocking_material_finding_ids=[]),
+            lambda d: d["intended_state"].update(unrestricted_review_count=0),
+            lambda d: d["intended_state"].update(remediation_cycle_count=1),
+            lambda d: d["intended_state"].update(ready_transition_count=0),
+            lambda d: d["observed_pre_enrollment_history"][2].update(observed_at="2026-10-06T23:24:00Z"),
+            lambda d: d["historical_evidence"].update(raw_receipt_digest="f" * 64),
+            lambda d: d["historical_evidence"].update(final_attestation_digest="f" * 64),
+            lambda d: d["current_validation"].update(result="FAIL"),
+            lambda d: d.update(adoption_timestamp="2026-10-06T23:24:00Z"),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                doc = self.document()
+                mutate(doc)
+                with self.assertRaises((authority.LifecycleAuthorityError, fast_path.SecurityBlocker)):
+                    self.owner._verify_document(self.signed(doc))
+
+    def test_ready_prior_authority_and_provider_chronology_preserve_p1(self):
+        proof, verified = self.proof()
+        bundle = authority.loads_closed_json(authority.serialize_exact_state_adoption_evidence(exact_state_adoption_proof=proof))
+        current = SimpleNamespace(lifecycle=verified, publication_oid=HEADS[3], publication_digest="3" * 64,
+                                  predecessor_publication_oid=None, serialized_lifecycle_evidence=fast_path.canonical_json_bytes(bundle))
+        with patch.object(actions_owner, "_verified_prior_delivery_commit", return_value={
+            "parent_sha": self.owner.SUBJECT["parent_sha"], "parent_shas": [self.owner.SUBJECT["parent_sha"]],
+            "tree_sha": self.owner.SUBJECT["tree_sha"], "signer": {"kind": "SSH_PRINCIPAL", "identity": SIGNER},
+        }):
+            manifest = actions_owner._derive_governance_amendment_ready_root_prior_authority(
+                repository_root=REPO_ROOT, repository=REPOSITORY, delivery_issue=1154,
+                pull_request=1156, binding={}, current=current, proof=proof, bundle=bundle,
+                lifecycle_authority=authority,
+            )
+        self.assertEqual(manifest["source_authority_mode"], "EXACT_STATE_ADOPTION_V5_UNBOUND_RECEIPT_ROOT")
+        self.assertEqual(manifest["source_authority"]["feedback"]["material_finding_ids"], [self.owner.P1_THREAD])
+        self.assertIsNone(manifest["prior_validation_receipt_digest"])
+        self.assertEqual(publication._exact_reviewed_ready_root_head(current, bundle), verified.head_sha)
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            authority.recovered_adoption_root_historical_evidence(verified, bundle, None)
+        changed = copy.deepcopy(manifest)
+        changed["source_authority"]["feedback"]["material_finding_ids"] = []
+        with self.assertRaises(fast_path.SecurityBlocker):
+            fast_path.normalize_ready_integration_prior_authority(changed)
+
+    def test_existing_enrollment_journal_rejects_replay_before_any_cas_write(self):
+        proof, verified = self.proof()
+        raw = authority.serialize_exact_state_adoption_evidence(exact_state_adoption_proof=proof)
+        self.policy.repository = REPOSITORY
+        self.policy.publication_branch = "refs/heads/secpal-lifecycle-publications"
+        self.policy.publication_remote_url = "https://github.com/SecPal/.github.git"
+        with patch.object(self.owner, "reauthenticate_for_publication"), patch.object(publication, "_verify_live_protection"), \
+             patch.object(publication, "_isolated_repository", return_value=nullcontext((REPO_ROOT, {}))), \
+             patch.object(publication, "_observe_remote_current_once", return_value=HEADS[4]), \
+             patch.object(publication, "_walk_journal", return_value=(None, {(REPOSITORY, 1154): object()}, {})), \
+             patch.object(publication, "_cas_remote_ref") as cas:
+            with self.assertRaisesRegex(publication.LifecyclePublicationError, "already enrolled"):
+                publication.enroll_existing_lifecycle(raw, signer_identity=SIGNER, signer=signer_for())
+            cas.assert_not_called()
+
+    def test_review_identity_time_and_commit_are_authenticated_independently(self):
+        reviews = [
+            {"id": 5435617921, "node_id": "PRR_kwDOQFR1MM8AAAABQ_zygQ",
+             "user": {"login": "chatgpt-codex-connector[bot]"}, "state": "COMMENTED",
+             "submitted_at": "2026-10-06T23:26:31Z", "commit_id": self.owner.SUBJECT["head_sha"]},
+            {"id": 5435621189, "node_id": "PRR_kwDOQFR1MM8AAAABQ_z_RQ",
+             "user": {"login": "copilot-pull-request-reviewer[bot]"}, "state": "COMMENTED",
+             "submitted_at": "2026-10-06T23:27:02Z", "commit_id": self.owner.SUBJECT["head_sha"]},
+        ]
+        self.owner._verify_reviews(reviews)
+        for field, replacement in (("id", 1), ("submitted_at", "2026-10-06T23:24:00Z"),
+                                   ("commit_id", "f" * 40), ("state", "DISMISSED")):
+            changed = copy.deepcopy(reviews)
+            changed[0][field] = replacement
+            with self.subTest(field=field), self.assertRaises(authority.LifecycleAuthorityError):
+                self.owner._verify_reviews(changed)
+        with self.assertRaises(authority.LifecycleAuthorityError):
+            self.owner._verify_reviews(reviews + [reviews[0]])
+
+    def test_artifact_reader_rejects_links_escape_and_nonregular_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "original").write_bytes(b"retained original")
+            (root / "link").symlink_to(root / "original")
+            (root / "nested").symlink_to(root, target_is_directory=True)
+            os.mkfifo(root / "pipe")
+            self.assertEqual(self.owner._read_artifact(root, "original"), b"retained original")
+            for relative in ("link", "nested/original", "../outside", "pipe"):
+                with self.subTest(relative=relative), self.assertRaises(authority.LifecycleAuthorityError):
+                    self.owner._read_artifact(root, relative)
+
+    def test_qualification_command_is_read_only_and_has_no_subject_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "qualification.json"
+            with patch.object(self.owner, "acquire", return_value={"fixture": "authenticated"}) as acquire, \
+                 patch.object(self.owner, "issue") as issue, \
+                 patch.object(actions_owner, "_owned_verifier_module", return_value=self.owner):
+                self.assertEqual(actions_owner.main([
+                    "qualify-exact-unbound-receipt", "--artifact-root", directory,
+                    "--output", str(output),
+                ]), 0)
+                acquire.assert_called_once_with(Path(directory))
+                issue.assert_not_called()
+                self.assertEqual(json.loads(output.read_bytes()), {"fixture": "authenticated"})
+        with self.assertRaises(fast_path.RecoverableLocalError):
+            actions_owner.build_parser().parse_args([
+                "qualify-exact-unbound-receipt", "--artifact-root", ".", "--output", "out",
+                "--pr", "1157",
+            ])
 
 
 if __name__ == "__main__":

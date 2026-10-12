@@ -706,6 +706,30 @@ Feedback. Its qualification establishes adoption facts; it does not correct
 findings or grant thread resolution. The registration must be read from accepted
 protected main before issuance, and the target source remains unchanged.
 
+Version 5 admits only the exact issue #1154 / PR #1156 source registered in
+`policies/exact-unbound-receipt-admission.json`, through
+`SECPAL_EXACT_UNBOUND_RECEIPT_ADMISSION`. Its historical state is
+`RAW_RECEIPT_PRESENT_BUT_UNBOUND`: the original file SHA-256 and the canonical
+receipt digest remain distinct identities, while commit-bound receipt,
+source-validation and final-attestation digests remain null. Original retained
+bytes must match the registered identities, source registry and Draft feedback;
+the manifest alone supplies no authority. The retained qualification binds its
+actual authority epoch and source. Live provider chronology, source signatures,
+completed feedback, journal absence and independently executed current safety
+are authenticated before the existing adoption role signs current admission
+facts. Nothing issues, reconstructs or backdates historical evidence.
+
+The exact source retains one completed assessment, zero remediation cycles and
+one Ready transition. Thread `PRRT_kwDOQFR1MM6psaGx` remains open and blocking.
+The existing one-use journal enrollment and CAS publication consume admission;
+ordinary subsequent integration and remediation preserve that baseline. The
+Ready prior-authority mode `EXACT_STATE_ADOPTION_V5_UNBOUND_RECEIPT_ROOT` carries
+the raw provenance and unresolved finding without supplying a historical
+trailer or using zero-receipt recovery. No other delivery can select this path.
+The read-only `qualify-exact-unbound-receipt --artifact-root PATH --output PATH`
+command verifies eligibility from accepted protected main without signing an
+admission, enrolling #1154 or modifying its source or PR.
+
 The amendment authorization contains a one-use exact-scope root authorization
 signed by an authority signer whose identity and key come from the bound
 accepted-main registry. The candidate policy and its proposed registry entry

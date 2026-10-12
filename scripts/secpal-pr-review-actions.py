@@ -5080,6 +5080,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("inspect-actor")
+    qualification_parser = subparsers.add_parser("qualify-exact-unbound-receipt")
+    qualification_parser.add_argument("--artifact-root", required=True)
+    qualification_parser.add_argument("--output", required=True)
     validate_parser = subparsers.add_parser("validate-plan")
     _add_plan_evidence_arguments(validate_parser)
     for name in ("react", "reply", "resolve"):
@@ -6497,7 +6500,7 @@ def _verify_ready_integration_lifecycle_authority(
             or reviewed_state.feedback_digest != integration_evidence["reviewed_feedback_digest"]
         ):
             raise fast_path.SecurityBlocker("direct Ready integration reviewed snapshot changed")
-    if authority.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT":
+    if authority.get("source_authority_mode") in {"EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT", "EXACT_STATE_ADOPTION_V5_UNBOUND_RECEIPT_ROOT"}:
         if (
             reviewed_state is None
             or reviewed_state.state_digest != integration_evidence["reviewed_state_digest"]
@@ -6618,7 +6621,7 @@ def _verify_ready_integration_published_authority(
     )
     amendment_root = (
         authority_manifest.get("source_authority_mode")
-        == "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT"
+        in {"EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT", "EXACT_STATE_ADOPTION_V5_UNBOUND_RECEIPT_ROOT"}
     )
     expected_source = (
         authority_manifest["source_authority"]["current_safety_digest"]
@@ -7708,7 +7711,10 @@ def _derive_exact_state_adoption_ready_prior_authority(
             repository, expected_main=accepted_main
         )
         return fast_path.normalize_ready_integration_prior_authority(manifest)
-    if proof.get("proof_version") == lifecycle_authority.EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION:
+    if proof.get("proof_version") in {
+        lifecycle_authority.EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION,
+        lifecycle_authority.EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION,
+    }:
         manifest = _derive_governance_amendment_ready_root_prior_authority(
             repository_root=repository_root, repository=repository,
             delivery_issue=delivery_issue, pull_request=pull_request,
@@ -8040,27 +8046,37 @@ def _derive_governance_amendment_ready_root_prior_authority(
     pull_request: int, binding: dict[str, Any], current: Any,
     proof: dict[str, Any], bundle: dict[str, Any], lifecycle_authority: Any,
 ) -> dict[str, Any]:
-    """Compose accepted v4 root authentication, without a recovery publication."""
+    """Compose typed accepted adoption roots, without a recovery publication."""
+
+    unbound = proof.get("proof_version") == lifecycle_authority.EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION
+    root_verifier = (
+        lifecycle_authority.exact_state_adoption_ready_root_historical_evidence if unbound
+        else lifecycle_authority.recovered_adoption_root_historical_evidence
+    )
 
     try:
-        historical = lifecycle_authority.recovered_adoption_root_historical_evidence(
+        historical = root_verifier(
             current.lifecycle, bundle, current.predecessor_publication_oid,
         )
     except lifecycle_authority.LifecycleAuthorityError as exc:
         raise fast_path.SecurityBlocker("Governance-Amendment Ready root authority is invalid") from exc
-    amendment = proof["governance_amendment_authorization"]
+    amendment = proof["unbound_receipt_admission" if unbound else "governance_amendment_authorization"]
+    source_signer = amendment["source_signer_identity"] if unbound else amendment["source_signature"]["signer_identity"]
+    source_parents = [amendment["parent_sha"]] if unbound else amendment["ordered_parent_shas"]
+    admission_digest = amendment["admission_digest" if unbound else "authorization_digest"]
+    authorization_prefix = "unbound_receipt_admission" if unbound else "governance_amendment_authorization"
     source = _verified_prior_delivery_commit(
         repository_root, current.lifecycle.head_sha,
-        amendment["source_signature"]["signer_identity"], binding,
+        source_signer, binding,
     )
     if (
         (current.lifecycle.repository, current.lifecycle.delivery_issue, current.lifecycle.pull_request)
         != (repository, delivery_issue, pull_request)
-        or source["parent_shas"] != amendment["ordered_parent_shas"]
+        or source["parent_shas"] != source_parents
         or source["tree_sha"] != current.lifecycle.tree_sha
-        or source["signer"]["identity"] != amendment["source_signature"]["signer_identity"]
+        or source["signer"]["identity"] != source_signer
         or current.lifecycle.adoption_source_evidence_digest != proof["adoption_source_evidence_digest"]
-        or proof["adoption_source_evidence_digest"] != amendment["authorization_digest"]
+        or proof["adoption_source_evidence_digest"] != admission_digest
     ):
         raise fast_path.SecurityBlocker("Governance-Amendment Ready root source binding changed")
     state = current.lifecycle.state
@@ -8087,7 +8103,8 @@ def _derive_governance_amendment_ready_root_prior_authority(
             "exceptional_recovery_history": [], "exceptional_continuation_history": [],
         },
         "publication": publication,
-        "source_authority_mode": "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
+        "source_authority_mode": ("EXACT_STATE_ADOPTION_V5_UNBOUND_RECEIPT_ROOT" if unbound
+                                  else "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT"),
         "source_authority": {
             "proof_version": proof["proof_version"],
             "source_parent_sha": source["parent_sha"],
@@ -8097,9 +8114,10 @@ def _derive_governance_amendment_ready_root_prior_authority(
             "intended_state_digest": proof["intended_state_digest"],
             "head_advanced_count": proof["head_advanced_count"],
             "head_advanced_history_digest": proof["head_advanced_history_digest"],
-            "governance_amendment_authorization_id": amendment["authorization_id"],
-            "governance_amendment_authorization_digest": amendment["authorization_digest"],
-            "registered_source_digest": fast_path.digest_json(amendment["qualified_source"]),
+            authorization_prefix + "_id": amendment["admission_id" if unbound else "authorization_id"],
+            authorization_prefix + "_digest": admission_digest,
+            "registered_source_digest": (amendment["policy_digest"] if unbound
+                                         else fast_path.digest_json(amendment["qualified_source"])),
             "registration_tip_sha": amendment["current_validation"]["accepted_main_sha"],
             "adoption_source_evidence_digest": proof["adoption_source_evidence_digest"],
             "adoption_proof_digest": proof["proof_digest"],
@@ -8110,9 +8128,9 @@ def _derive_governance_amendment_ready_root_prior_authority(
             "feedback": copy.deepcopy(amendment["feedback"]),
         },
         "historical_companions": {
-            "reviewed_state_bytes": "UNAVAILABLE",
-            "validation_receipt_bytes": "ABSENT_NEVER_ISSUED",
-            "final_attestation_bytes": "ABSENT_NEVER_ISSUED",
+            "reviewed_state_bytes": "PRESENT" if unbound else "UNAVAILABLE",
+            "validation_receipt_bytes": "RAW_RECEIPT_PRESENT_BUT_UNBOUND" if unbound else "ABSENT_NEVER_ISSUED",
+            "final_attestation_bytes": "NO_VALID_COMMIT_BOUND_ATTESTATION" if unbound else "ABSENT_NEVER_ISSUED",
             "historical_bytes_reconstructed": False,
         },
     }
@@ -8845,6 +8863,7 @@ def _verify_ready_integration_prior_authority(
         "EXACT_STATE_ADOPTION_V3",
         "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
         "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
+        "EXACT_STATE_ADOPTION_V5_UNBOUND_RECEIPT_ROOT",
         "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
         "EXISTING_AUTHORITY_COMPOSITION",
         "NATIVE_ENROLLED_LOSS",
@@ -8939,7 +8958,7 @@ def _verify_ready_integration_prior_authority(
             integration_evidence=integration_evidence,
             binding=binding,
         )
-        if authority["source_authority_mode"] == "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT":
+        if authority["source_authority_mode"] in {"EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT", "EXACT_STATE_ADOPTION_V5_UNBOUND_RECEIPT_ROOT"}:
             if _commit_validation_receipt_digest(repository_root, authority["prior_delivery_head_sha"]) is not None:
                 raise fast_path.SecurityBlocker("Governance-Amendment root has an unexpected historical trailer")
         if authority["source_authority_mode"] == "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT":
@@ -11117,6 +11136,14 @@ def main(argv: list[str] | None = None) -> int:
         arguments = build_parser().parse_args(argv)
         if arguments.command == "inspect-actor":
             return _command_inspect_actor()
+        if arguments.command == "qualify-exact-unbound-receipt":
+            owner = _owned_verifier_module("unbound_receipt_admission")
+            try:
+                report = owner.acquire(Path(arguments.artifact_root))
+            except (owner.authority.LifecycleAuthorityError, owner.amendment.GovernanceAmendmentError) as exc:
+                raise fast_path.SecurityBlocker(str(exc)) from exc
+            _write_fast_report(arguments.output, report)
+            return 0
         if arguments.command == "validate-plan":
             return _command_validate(arguments)
         if arguments.command == "attest-validation":

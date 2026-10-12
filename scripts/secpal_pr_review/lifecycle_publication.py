@@ -2689,6 +2689,12 @@ def enroll_existing_lifecycle(
         authority.verify_pre_enrollment_validation_evidence_loss_admission(
             canonical_json_bytes(bundle["exact_state_adoption_proof"]["validation_evidence_loss_admission"])
         )
+    if exact_adoption and bundle["exact_state_adoption_proof"].get("proof_version") == authority.EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION:
+        from . import unbound_receipt_admission
+
+        unbound_receipt_admission.reauthenticate_for_publication(
+            bundle["exact_state_adoption_proof"]["unbound_receipt_admission"]
+        )
     policy = authority._load_lifecycle_trust_policy(verified.repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=True) as (root, credential_environment):
@@ -4351,12 +4357,17 @@ def _exact_reviewed_ready_root_head(
     proof = bundle.get("exact_state_adoption_proof")
     if (
         isinstance(proof, Mapping)
-        and proof.get("proof_version") == authority.EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION
+        and proof.get("proof_version") in {authority.EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION, authority.EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION}
         and current.lifecycle.adoption_review_submitted is True
     ):
         # The canonical root verifier authenticates observation-backed review
         # history. Integration neither publishes a Ready event nor loses it.
-        authority.recovered_adoption_root_historical_evidence(
+        root_verifier = (
+            authority.exact_state_adoption_ready_root_historical_evidence
+            if proof.get("proof_version") == authority.EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION
+            else authority.recovered_adoption_root_historical_evidence
+        )
+        root_verifier(
             current.lifecycle, bundle, current.predecessor_publication_oid,
         )
         return current.lifecycle.head_sha
@@ -4481,6 +4492,7 @@ def verify_ready_integration_predecessor(
     independent_root = manifest.get("source_authority_mode") in {
         "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
         "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
+        "EXACT_STATE_ADOPTION_V5_UNBOUND_RECEIPT_ROOT",
     } or (
         manifest.get("source_authority_mode") == "EXACT_STATE_ADOPTION_V3"
         and manifest["source_authority"]["ready_transition"] is None
