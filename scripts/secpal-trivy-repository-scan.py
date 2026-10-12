@@ -19,8 +19,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-SCHEMA_VERSION = "secpal-trivy-repository-scan-v1"
-OBSERVATION_VERSION = "secpal-trivy-repository-observation-v1"
+SCHEMA_VERSION = "secpal-trivy-repository-scan-v2"
+OBSERVATION_VERSION = "secpal-trivy-repository-observation-v2"
 POLICY_ID = "secpal-trivy-repository-policy-v1"
 GATE_STATES = {"CLEAN", "ACTIONABLE", "REVIEW_REQUIRED", "UNKNOWN_STALE"}
 FAILURE_CODES = {
@@ -66,6 +66,7 @@ def _git(workspace: Path, arguments: list[str], *, index: Path | None = None,
         [
             "git",
             "--no-replace-objects",
+            "--literal-pathspecs",
             "-c",
             "core.fsmonitor=false",
             "-c",
@@ -398,6 +399,12 @@ def _string(value: Any, field: str, *, allow_empty: bool = False) -> str:
     return value
 
 
+def _source_blob(value: Any) -> str:
+    if not isinstance(value, str) or not COMMIT_RE.fullmatch(value):
+        raise ContractError("source blob must be an exact lowercase Git SHA")
+    return value
+
+
 def _optional_string(value: Any, field: str) -> str | None:
     if value in (None, ""):
         return None
@@ -663,6 +670,111 @@ def normalize_native(
     }
 
 
+def _observe_blob(workspace: Path, blob: str) -> bytes:
+    """Read and authenticate raw Git object bytes; never emit captures."""
+    _source_blob(blob)
+    source = _git(workspace, ["cat-file", "blob", blob])
+    identity = hashlib.sha1(b"blob " + str(len(source)).encode("ascii") + b"\0" + source).hexdigest()
+    if identity != blob:
+        raise ContractError("scanned source differs from the immutable blob")
+    return source
+
+
+def observe_secret_sources(workspace: Path, commit: str, paths: list[str]) -> dict[str, Any]:
+    """Observe bounded blob identities from the exact clean checked-out commit.
+
+    Never consume scanner/caller source hashes or Git replacement objects. Read
+    raw bytes independently to authenticate both the tree entry and scanned file.
+    No source bytes or policy decisions leave this observation boundary.
+    """
+    verify_target(workspace, commit)
+    root = workspace.resolve(strict=True)
+    blobs: dict[str, str] = {}
+    for path in sorted(set(paths)):
+        if _path(path) != path:
+            raise ContractError("source observation path is not canonical")
+        entries = _git(root, ["ls-tree", "-z", commit, "--", path]).split(b"\0")
+        if len(entries) != 2 or entries[-1] != b"":
+            raise ContractError("source tree entry is unavailable")
+        metadata, name = entries[0].split(b"\t", 1)
+        mode, kind, object_id = metadata.split(b" ")
+        if mode not in {b"100644", b"100755"} or kind != b"blob" or name != path.encode("utf-8"):
+            raise ContractError("source tree entry is not a regular file")
+        blob = _source_blob(object_id.decode("ascii"))
+        source = _observe_blob(root, blob)
+        file = root / path
+        if file.resolve(strict=True) != file or file.read_bytes() != source:
+            raise ContractError("scanned source differs from the immutable blob")
+        blobs[path] = blob
+    return {"commit": commit, "blobs": blobs}
+
+
+def prepare_target_snapshot(workspace: Path, commit: str, destination: Path) -> None:
+    """Copy the exact target into action-owned, read-only scanner storage.
+
+    The caller worktree and index stay untouched; caller repository config and
+    hooks are not copied. Git objects are independent copies, never caller
+    hardlinks or borrowed alternates. Scanner and observer use the same snapshot.
+    """
+    verify_target(workspace, commit)
+    root = workspace.resolve(strict=True)
+    target = destination.resolve(strict=False)
+    if target.is_relative_to(root) or root.is_relative_to(target) or target.exists():
+        raise ContractError("snapshot must be a new private path outside the caller")
+    _git(root, ["clone", "--no-hardlinks", "--dissociate", "--no-checkout", "--", str(root), str(target)])
+    _git(target, ["-c", "core.hooksPath=/dev/null", "update-ref", "--no-deref", "HEAD", commit])
+    _git(target, ["read-tree", commit])
+    # Materialize raw objects rather than running checkout smudge filters or
+    # applying platform line-ending conversions. Export attributes cannot omit
+    # any tracked file. One observation owner authenticates all blob bytes.
+    for record in _git(target, ["ls-tree", "-r", "-z", commit]).split(b"\0"):
+        if not record:
+            continue
+        metadata, raw_name = record.split(b"\t", 1)
+        mode, kind, object_id = metadata.split(b" ")
+        name = raw_name.decode("utf-8")
+        if (_path(name) != name or PurePosixPath(name).parts[0] == ".git"
+                or kind != b"blob" or mode not in {b"100644", b"100755", b"120000"}):
+            raise ContractError("snapshot tree entry is unsupported")
+        source = _observe_blob(target, object_id.decode("ascii"))
+        path = target / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if mode == b"120000":
+            path.symlink_to(os.fsdecode(source))
+        else:
+            path.write_bytes(source)
+            path.chmod(0o755 if mode == b"100755" else 0o644)
+    verify_target(target, commit)
+    # Preserve executable bits and symlinks; never follow a source symlink when
+    # sealing private storage. The private parent is owned by the action.
+    for path in target.rglob("*"):
+        if not path.is_symlink():
+            mode = path.stat().st_mode
+            path.chmod(0o555 if path.is_dir() else 0o444 | (mode & 0o111))
+    target.chmod(0o555)
+
+
+def normalize_secret_sources(observation: dict[str, Any], sources: dict[str, Any]) -> dict[str, Any]:
+    """Purely bind independently observed source facts to normalized secrets.
+
+    This internal seam accepts only observe_secret_sources output. Native JSON
+    and the closed caller interface cannot supply these facts.
+    """
+    if (not isinstance(sources, dict) or set(sources) != {"commit", "blobs"}
+            or sources["commit"] != observation["subject"]["commit"]
+            or not isinstance(sources["blobs"], dict)):
+        raise ContractError("source observation identity is malformed or mismatched")
+    paths = {finding["path"] for finding in observation["findings"] if finding["class"] == "SECRET"}
+    if set(sources["blobs"]) != paths:
+        raise ContractError("source observation coverage differs from secret findings")
+    blobs = {path: _source_blob(blob) for path, blob in sources["blobs"].items()}
+    findings = [
+        {**finding, "source_blob": blobs[finding["path"]]} if finding["class"] == "SECRET"
+        else dict(finding) for finding in observation["findings"]
+    ]
+    return {**observation, "findings": findings}
+
+
 def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any]:
     if not isinstance(policy, dict):
         raise ContractError("policy must be an object")
@@ -688,6 +800,8 @@ def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any
     seen_selectors: set[tuple[str, str, str, str]] = set()
     for exception in exceptions:
         required = {"id", "repository", "class", "rule_id", "path", "disposition", "expires_at", "rationale"}
+        if isinstance(exception, dict) and exception.get("class") == "SECRET":
+            required.add("source_blob")
         if not isinstance(exception, dict) or set(exception) != required:
             raise ContractError("policy exception is malformed")
         exception_id = _string(exception["id"], "exception ID")
@@ -696,6 +810,8 @@ def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any
         seen.add(exception_id)
         if exception["class"] not in FINDING_CLASSES:
             raise ContractError("policy exception class is invalid")
+        if exception["class"] == "SECRET":
+            _source_blob(exception["source_blob"])
         rule_id = _string(exception["rule_id"], "exception rule ID")
         path = _path(exception["path"])
         repository = _string(exception["repository"], "exception repository")
@@ -736,6 +852,9 @@ def _apply_exception(
     if len(matches) > 1:
         raise ContractError("more than one exception matches a finding")
     result = dict(finding)
+    if matches and finding["class"] == "SECRET":
+        blob = _source_blob(finding.get("source_blob"))
+        matches = [exception for exception in matches if exception["source_blob"] == blob]
     if matches:
         result["exception"] = {
             "id": matches[0]["id"],
@@ -752,6 +871,9 @@ def admit(observation: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]
     policy_identity = _validate_policy(policy, observation["completed_at"])
     if observation.get("scanners") != policy["required_scanners"]:
         raise ContractError("required scanners were not explicitly observed")
+    for finding in observation["findings"]:
+        if finding["class"] == "SECRET":
+            _source_blob(finding.get("source_blob"))
     exceptions = [
         {**exception, "path": _path(exception["path"])}
         for exception in policy["exceptions"]
@@ -938,6 +1060,18 @@ def _evaluate(arguments: argparse.Namespace) -> int:
             completed_at=completed_at,
         )
         try:
+            sources = observe_secret_sources(
+                Path(observed_workspace), arguments.commit,
+                [finding["path"] for finding in observation["findings"] if finding["class"] == "SECRET"],
+            )
+            observation = normalize_secret_sources(observation, sources)
+        except (ContractError, OSError, UnicodeError):
+            _write(arguments.output, unknown_result(
+                repository=arguments.repository, commit=arguments.commit,
+                failure_code="TARGET_IDENTITY_FAILURE", completed_at=completed_at,
+            ))
+            return 1
+        try:
             verify_diagnostics(
                 arguments.diagnostics.read_text(encoding="utf-8"), arguments.cache_dir,
                 native=observed_native, scanner=observation["scanner"],
@@ -998,6 +1132,11 @@ def _parser() -> argparse.ArgumentParser:
     target.add_argument("--workspace", type=Path, required=True)
     target.add_argument("--commit", required=True)
 
+    snapshot = commands.add_parser("prepare-snapshot")
+    snapshot.add_argument("--workspace", type=Path, required=True)
+    snapshot.add_argument("--commit", required=True)
+    snapshot.add_argument("--destination", type=Path, required=True)
+
     database = commands.add_parser("database")
     database.add_argument("--metadata", action="append", type=Path, required=True)
     database.add_argument("--database-file", action="append", type=Path, required=True)
@@ -1020,6 +1159,8 @@ def main() -> int:
     try:
         if arguments.command == "verify-target":
             verify_target(arguments.workspace, arguments.commit)
+        elif arguments.command == "prepare-snapshot":
+            prepare_target_snapshot(arguments.workspace, arguments.commit, arguments.destination)
         elif arguments.command == "verify-diagnostics":
             verify_diagnostics(arguments.diagnostics.read_text(encoding="utf-8"), arguments.cache_dir)
         elif arguments.command == "verify-redaction":

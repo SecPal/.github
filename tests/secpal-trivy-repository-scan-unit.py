@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "secpal-trivy-repository-scan.py"
 POLICY = ROOT / "policies" / "trivy-repository-scan-v1.json"
-SCHEMA = ROOT / "docs" / "schemas" / "secpal-trivy-repository-scan-v1.schema.json"
+SCHEMA = ROOT / "docs" / "schemas" / "secpal-trivy-repository-scan-v2.schema.json"
 ACTION = ROOT / ".github" / "actions" / "trivy-repository-scan" / "action.yml"
 FIXTURES = ROOT / "tests" / "fixtures" / "trivy-repository-scan"
 COMMIT = "1" * 40
@@ -52,6 +52,25 @@ def run_evaluate_fixture(
 
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        native = copy.deepcopy(native)
+        if native.get("ArtifactName") == ".":
+            native["ArtifactName"] = str(workspace)
+        for result in native.get("Results", []) if isinstance(native.get("Results"), list) else []:
+            if isinstance(result, dict) and result.get("Secrets") and isinstance(result.get("Target"), str):
+                path = Path(result["Target"])
+                if not path.is_absolute() and ".." not in path.parts:
+                    file = workspace / path
+                    file.parent.mkdir(parents=True, exist_ok=True)
+                    file.write_text("fixture source\n" * 3)
+        def git(*arguments: str) -> str:
+            return subprocess.check_output(["git", "-C", str(workspace), *arguments], text=True).strip()
+        git("init", "--quiet")
+        git("add", ".")
+        git("-c", "user.name=SecPal Test", "-c", "user.email=test@secpal.app",
+            "-c", "commit.gpgsign=false", "commit", "--allow-empty", "--quiet", "-m", "fixture")
+        commit = git("rev-parse", "HEAD")
         native_path = root / "native.json"
         database_path = root / "database.json"
         output = root / "result.json"
@@ -81,9 +100,9 @@ def run_evaluate_fixture(
                 "--repository",
                 "SecPal/example",
                 "--commit",
-                COMMIT,
+                commit,
                 "--workspace",
-                ".",
+                str(workspace),
                 "--scanner-version",
                 "0.74.0",
                 "--scanner-identity",
@@ -106,6 +125,18 @@ def evaluate_fixture(native: dict, database: dict | None = None) -> dict:
     if completed.returncode == 0:
         raise AssertionError("malformed fixture unexpectedly succeeded")
     return result
+
+
+def admit_fixture(module, observation: dict, policy: dict) -> dict:
+    """Provide authored canonical source facts for baseline pure admission tests.
+
+    Source-binding tests below use real Git observation instead of these facts.
+    """
+    observation = module.normalize_secret_sources(observation, {
+        "commit": observation["subject"]["commit"],
+        "blobs": {f["path"]: "1" * 40 for f in observation["findings"] if f["class"] == "SECRET"},
+    })
+    return module.admit(observation, policy)
 
 
 def native_result() -> dict:
@@ -192,7 +223,7 @@ class RepositoryScanContractTests(unittest.TestCase):
         self.assertIn("verify-redaction", source)
         self.assertIn('--output "$candidate"', source)
         self.assertLess(source.index("verify-redaction"), source.index('install -m 0600 "$candidate"'))
-        self.assertIn('--output "$native" "$GITHUB_WORKSPACE" >/dev/null 2>"$tool_root/native.stderr"', source)
+        self.assertIn('--output "$native" "$snapshot" >/dev/null 2>"$tool_root/native.stderr"', source)
         self.assertNotIn("repository:", source)
         self.assertNotIn("ref:", source)
         self.assertNotIn("github-token", source)
@@ -393,7 +424,8 @@ class RepositoryScanContractTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0)
         self.assertEqual(result["gate_state"], "ACTIONABLE")
         self.assertEqual({f["class"] for f in result["findings"]}, {"VULNERABILITY", "MISCONFIGURATION", "SECRET"})
-        self.assertEqual(result["subject"], {"repository": "SecPal/example", "commit": COMMIT})
+        self.assertEqual(result["subject"]["repository"], "SecPal/example")
+        self.assertRegex(result["subject"]["commit"], r"^[0-9a-f]{40}$")
         self.assertEqual(result["scanner"]["configuration_sha256"], self.module.configuration_identity())
         self.assertEqual(result["database"], valid_database())
         self.assertNotIn(SYNTHETIC_SECRET, process.stdout.decode() + process.stderr.decode() + json.dumps(result))
@@ -549,8 +581,8 @@ class RepositoryScanContractTests(unittest.TestCase):
             },
             completed_at="2026-09-16T10:10:00Z",
         )
-        first = self.module.admit(observation, self.policy)
-        second = self.module.admit(observation, self.policy)
+        first = admit_fixture(self.module, observation, self.policy)
+        second = admit_fixture(self.module, observation, self.policy)
         self.assertEqual(first, second)
         self.assertEqual(first["gate_state"], "ACTIONABLE")
         self.assertEqual(first["policy"]["id"], "secpal-trivy-repository-policy-v1")
@@ -592,22 +624,22 @@ class RepositoryScanContractTests(unittest.TestCase):
                 "rationale": "Synthetic bounded policy fixture.",
             }
         ]
-        result = self.module.admit(observation, policy)
+        result = admit_fixture(self.module, observation, policy)
         self.assertEqual(result["gate_state"], "CLEAN")
         self.assertEqual(result["summary"]["excepted"], 1)
         self.assertEqual(result["findings"][0]["exception"]["id"], "SEC-EXAMPLE-1")
 
         other = copy.deepcopy(observation)
         other["subject"]["repository"] = "SecPal/other"
-        self.assertEqual(self.module.admit(other, policy)["gate_state"], "ACTIONABLE")
+        self.assertEqual(admit_fixture(self.module, other, policy)["gate_state"], "ACTIONABLE")
         missing_repository = copy.deepcopy(policy)
         del missing_repository["exceptions"][0]["repository"]
         with self.assertRaises(self.module.ContractError):
-            self.module.admit(observation, missing_repository)
+            admit_fixture(self.module, observation, missing_repository)
 
         policy["exceptions"][0]["expires_at"] = "2026-09-16T10:10:00Z"
         with self.assertRaises(self.module.ContractError):
-            self.module.admit(observation, policy)
+            admit_fixture(self.module, observation, policy)
 
     def test_exception_paths_are_canonical_and_selectors_are_unique(self) -> None:
         native = native_result()
@@ -644,7 +676,7 @@ class RepositoryScanContractTests(unittest.TestCase):
             "rationale": "Synthetic bounded policy fixture.",
         }
         policy["exceptions"] = [exception]
-        result = self.module.admit(observation, policy)
+        result = admit_fixture(self.module, observation, policy)
         self.assertEqual(result["gate_state"], "CLEAN")
 
         duplicate = copy.deepcopy(exception)
@@ -652,7 +684,7 @@ class RepositoryScanContractTests(unittest.TestCase):
         duplicate["path"] = "package-lock.json"
         policy["exceptions"].append(duplicate)
         with self.assertRaisesRegex(self.module.ContractError, "selectors must be unique"):
-            self.module.admit(observation, policy)
+            admit_fixture(self.module, observation, policy)
 
     def test_secret_without_location_is_rejected(self) -> None:
         native = native_result()
@@ -845,7 +877,7 @@ class RepositoryScanContractTests(unittest.TestCase):
             database=json.loads((FIXTURES / "stale-database.json").read_text(encoding="utf-8")),
             completed_at="2026-09-16T10:10:00Z",
         )
-        stale = self.module.admit(observation, self.policy)
+        stale = admit_fixture(self.module, observation, self.policy)
         self.assertEqual(stale["gate_state"], "UNKNOWN_STALE")
         self.assertEqual(stale["operation"], {
             "name": "TRIVY_REPOSITORY_SCAN",
@@ -892,7 +924,7 @@ class RepositoryScanContractTests(unittest.TestCase):
             },
             completed_at="2026-09-16T10:10:00Z",
         )
-        successful = self.module.admit(observation, self.policy)
+        successful = admit_fixture(self.module, observation, self.policy)
         jsonschema.validate(successful, schema)
         stale = copy.deepcopy(successful)
         stale["database"]["status"] = "STALE"
@@ -1240,8 +1272,8 @@ class FrontendBracesDispositionTests(unittest.TestCase):
         self.assertTrue(exception["rationale"].strip())
         without_exception = copy.deepcopy(self.policy)
         without_exception["exceptions"] = []
-        before = self.module.admit(self.observation, without_exception)
-        result = self.module.admit(self.observation, self.policy)
+        before = admit_fixture(self.module, self.observation, without_exception)
+        result = admit_fixture(self.module, self.observation, self.policy)
         import jsonschema
         jsonschema.validate(result, json.loads(SCHEMA.read_text(encoding="utf-8")))
         self.assertEqual(before["gate_state"], "ACTIONABLE")
@@ -1286,7 +1318,7 @@ class FrontendBracesDispositionTests(unittest.TestCase):
                 other = copy.deepcopy(self.observation)
                 target = other["subject"] if field == "repository" else other["findings"][0]
                 target[field] = value
-                result = self.module.admit(other, self.policy)
+                result = admit_fixture(self.module, other, self.policy)
                 self.assertEqual(result["gate_state"], "ACTIONABLE")
                 self.assertEqual(result["summary"]["actionable"], 1)
                 self.assertEqual(result["summary"]["excepted"], 0)
@@ -1297,7 +1329,7 @@ class FrontendBracesDispositionTests(unittest.TestCase):
         other.update(rule_id="CVE-2021-23337", package="lodash", installed_version="4.17.20")
         other["fingerprint"] = "sha256:" + "d" * 64
         self.observation["findings"].append(other)
-        result = self.module.admit(self.observation, self.policy)
+        result = admit_fixture(self.module, self.observation, self.policy)
         self.assertEqual(result["gate_state"], "ACTIONABLE")
         self.assertEqual(result["summary"], {
             "total": 2, "actionable": 1, "review_required": 0, "excepted": 1,
@@ -1310,7 +1342,7 @@ class FrontendBracesDispositionTests(unittest.TestCase):
                 policy = copy.deepcopy(self.policy)
                 policy["exceptions"][0]["expires_at"] = expiry
                 with self.assertRaisesRegex(self.module.ContractError, "expired"):
-                    self.module.admit(self.observation, policy)
+                    admit_fixture(self.module, self.observation, policy)
 
     def test_duplicate_selector_and_id_are_rejected(self) -> None:
         for duplicate_id in (False, True):
@@ -1322,7 +1354,7 @@ class FrontendBracesDispositionTests(unittest.TestCase):
                     duplicate["path"] = "./package-lock.json"
                 policy["exceptions"].append(duplicate)
                 with self.assertRaisesRegex(self.module.ContractError, "unique"):
-                    self.module.admit(self.observation, policy)
+                    admit_fixture(self.module, self.observation, policy)
 
     def test_malformed_or_wrong_class_dispositions_are_rejected(self) -> None:
         for field, value in (
@@ -1334,19 +1366,304 @@ class FrontendBracesDispositionTests(unittest.TestCase):
                 policy = copy.deepcopy(self.policy)
                 policy["exceptions"][0][field] = value
                 with self.assertRaises(self.module.ContractError):
-                    self.module.admit(self.observation, policy)
+                    admit_fixture(self.module, self.observation, policy)
         policy = copy.deepcopy(self.policy)
         del policy["exceptions"][0]["path"]
         with self.assertRaisesRegex(self.module.ContractError, "malformed"):
-            self.module.admit(self.observation, policy)
+            admit_fixture(self.module, self.observation, policy)
 
     def test_exception_cannot_override_stale_database(self) -> None:
         self.observation["completed_at"] = "2026-10-06T10:00:00Z"
         self.observation["database"]["status"] = "STALE"
-        result = self.module.admit(self.observation, self.policy)
+        result = admit_fixture(self.module, self.observation, self.policy)
         self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
         self.assertEqual(result["operation"]["failure_code"], "DATABASE_FAILURE")
         self.assertEqual(result["summary"]["excepted"], 1)
+
+
+class SecretSourceBindingTests(unittest.TestCase):
+    """Source facts come from Git observation, never native scanner metadata."""
+
+    def setUp(self) -> None:
+        self.module = load_module()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.workspace = Path(temporary.name)
+        self.path = "android/app/src/main/assets/public/assets/EmployeeAddressFields-D642volM.js"
+        self.asset = self.workspace / self.path
+        self.asset.parent.mkdir(parents=True)
+        self.git("init", "--quiet")
+        self.commit_source(b"reviewed static reference fixture\n")
+        self.blob = self.git("rev-parse", "HEAD:" + self.path)
+        self.native = {
+            "SchemaVersion": 2, "ArtifactType": "repository",
+            "ArtifactName": str(self.workspace), "Results": [{
+                "Target": self.path, "Secrets": [{
+                    "RuleID": "sendgrid-api-token", "Severity": "MEDIUM",
+                    "StartLine": 1, "EndLine": 1,
+                }],
+            }],
+        }
+        self.policy = json.loads(POLICY.read_text())
+        self.policy["exceptions"].append({
+            "id": "secret-source-fixture", "repository": "SecPal/android",
+            "class": "SECRET", "rule_id": "sendgrid-api-token", "path": self.path,
+            "source_blob": self.blob, "disposition": "IGNORED",
+            "expires_at": "2026-10-13T00:00:00Z", "rationale": "Bounded source fixture.",
+        })
+
+    def git(self, *arguments: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(self.workspace), *arguments],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+
+    def commit_source(self, content: bytes) -> None:
+        self.asset.write_bytes(content)
+        self.git("add", ".")
+        self.git("-c", "user.name=SecPal Test", "-c", "user.email=test@secpal.app",
+                 "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture")
+        self.commit = self.git("rev-parse", "HEAD")
+
+    def observation(self, sources=True) -> dict:
+        observation = self.module.normalize_native(
+            self.native, repository="SecPal/android", commit=self.commit,
+            workspace=str(self.workspace), scanner={
+                "name": "trivy", "version": self.module.TRIVY_VERSION,
+                "immutable_id": self.module.TRIVY_ARCHIVE_ID,
+                "configuration_sha256": self.module.configuration_identity(),
+            }, database=valid_database(), completed_at="2026-09-16T10:10:00Z",
+        )
+        if sources:
+            raw = self.module.observe_secret_sources(self.workspace, self.commit, [self.path])
+            observation = self.module.normalize_secret_sources(observation, raw)
+        return observation
+
+    def test_reviewed_blob_is_retained_and_replacement_at_same_fingerprint_blocks(self) -> None:
+        import jsonschema
+
+        reviewed = self.observation()
+        result = self.module.admit(reviewed, self.policy)
+        self.assertEqual(result["gate_state"], "CLEAN")
+        self.assertEqual(result["summary"], {
+            "total": 1, "actionable": 0, "review_required": 0, "excepted": 1,
+        })
+        self.assertEqual(result["findings"][0]["source_blob"], self.blob)
+        self.assertEqual(result["findings"][0]["exception"], {
+            key: self.policy["exceptions"][-1][key] for key in ("id", "disposition", "expires_at")
+        })
+        jsonschema.validate(result, json.loads(SCHEMA.read_text()))
+        value = "SG." + secrets.token_urlsafe(16) + "." + secrets.token_urlsafe(32)
+        self.commit_source(("sendgrid='" + value + "';\n").encode())
+        replaced = self.observation()
+        self.assertEqual(reviewed["findings"][0]["fingerprint"], replaced["findings"][0]["fingerprint"])
+        blocked = self.module.admit(replaced, self.policy)
+        self.assertEqual(blocked["gate_state"], "ACTIONABLE")
+        self.assertEqual(blocked["summary"]["excepted"], 0)
+        self.assertNotEqual(blocked["findings"][0]["source_blob"], self.blob)
+        self.assertNotIn(value, json.dumps(blocked))
+
+    def test_native_source_claims_cannot_authorize_disposition(self) -> None:
+        for value in (self.native, self.native["Results"][0], self.native["Results"][0]["Secrets"][0]):
+            value["source_blob"] = self.blob
+            value["verified"] = True
+        observation = self.observation(sources=False)
+        self.assertNotIn("source_blob", observation["findings"][0])
+        with self.assertRaises(self.module.ContractError):
+            self.module.admit(observation, self.policy)
+
+    def test_source_fact_normalization_is_closed_and_commit_bound(self) -> None:
+        observation = self.observation(sources=False)
+        valid = {"commit": self.commit, "blobs": {self.path: self.blob}}
+        for raw in (None, {}, {**valid, "commit": "0" * 40},
+                    {**valid, "verified": True}, {**valid, "blobs": {}},
+                    {**valid, "blobs": {self.path: None}},
+                    {**valid, "blobs": {self.path: self.blob.upper()}},
+                    {**valid, "blobs": {self.path: "1" * 39}},
+                    {**valid, "blobs": {"./" + self.path: self.blob}},
+                    {**valid, "blobs": {**valid["blobs"], "extra": self.blob}}):
+            with self.subTest(raw=raw), self.assertRaises(self.module.ContractError):
+                self.module.normalize_secret_sources(observation, raw)
+        from unittest.mock import patch
+        with patch.object(self.module, "_git", side_effect=AssertionError("impure admission")), \
+                patch.object(Path, "read_bytes", side_effect=AssertionError("impure normalization")):
+            normalized = self.module.normalize_secret_sources(observation, valid)
+            self.assertEqual(self.module.admit(normalized, self.policy)["gate_state"], "CLEAN")
+        self.assertNotIn("source_blob", observation["findings"][0])
+
+    def test_missing_and_malformed_secret_policy_binding_fails_closed(self) -> None:
+        observation = self.observation(sources=False)
+        for blob in (None, "", "1" * 39, "1" * 41, "F" * 40, self.blob + "\n", "sha256:" + "a" * 64, True, []):
+            policy = copy.deepcopy(self.policy)
+            policy["exceptions"][-1]["source_blob"] = blob
+            with self.subTest(blob=blob), self.assertRaises(self.module.ContractError):
+                self.module.admit(observation, policy)
+        del self.policy["exceptions"][-1]["source_blob"]
+        with self.assertRaises(self.module.ContractError):
+            self.module.admit(observation, self.policy)
+
+    def test_missing_or_malformed_canonical_facts_cannot_consume_exception(self) -> None:
+        for blob in (None, "", True, "0" * 39, "G" * 40, {}):
+            observation = self.observation(sources=False)
+            observation["findings"][0]["source_blob"] = blob
+            with self.subTest(blob=blob), self.assertRaises(self.module.ContractError):
+                self.module.admit(observation, self.policy)
+
+    def test_selector_isolation_expiry_duplicates_and_disposition_still_fail_closed(self) -> None:
+        observation = self.observation()
+        for field, value in (("repository", "SecPal/other"), ("rule_id", "other"), ("path", "other.js")):
+            changed = copy.deepcopy(observation)
+            target = changed["subject"] if field == "repository" else changed["findings"][0]
+            target[field] = value
+            self.assertEqual(self.module.admit(changed, self.policy)["gate_state"], "ACTIONABLE")
+        for field, value in (("expires_at", observation["completed_at"]),
+                             ("disposition", "NOT_AFFECTED"), ("disposition", "CLEAN")):
+            policy = copy.deepcopy(self.policy)
+            policy["exceptions"][-1][field] = value
+            with self.subTest(field=field), self.assertRaises(self.module.ContractError):
+                self.module.admit(observation, policy)
+        duplicate = copy.deepcopy(self.policy["exceptions"][-1])
+        duplicate.update(id="another", source_blob="0" * 40)
+        self.policy["exceptions"].append(duplicate)
+        with self.assertRaises(self.module.ContractError):
+            self.module.admit(observation, self.policy)
+
+    def test_stale_database_still_blocks_bound_disposition(self) -> None:
+        observation = self.observation()
+        observation["database"]["status"] = "STALE"
+        self.assertEqual(self.module.admit(observation, self.policy)["gate_state"], "UNKNOWN_STALE")
+
+    def test_schema_rejects_excepted_secret_without_source_and_nonsecret_binding(self) -> None:
+        import jsonschema
+
+        schema = json.loads(SCHEMA.read_text())
+        result = self.module.admit(self.observation(), self.policy)
+        result["findings"][0]["source_blob"] += "\n"
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(result, schema)
+        result = self.module.admit(self.observation(), self.policy)
+        del result["findings"][0]["source_blob"]
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(result, schema)
+        frontend = FrontendBracesDispositionTests()
+        frontend.setUp()
+        result = self.module.admit(frontend.observation, frontend.policy)
+        result["findings"][0]["source_blob"] = self.blob
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(result, schema)
+
+    def test_raw_byte_observation_rejects_git_clean_line_ending_conversion(self) -> None:
+        self.git("config", "core.autocrlf", "true")
+        self.asset.write_bytes(b"reviewed static reference fixture\r\n")
+        self.git("add", ".")
+        self.module.verify_target(self.workspace, self.commit)
+        with self.assertRaisesRegex(self.module.ContractError, "scanned source differs"):
+            self.module.observe_secret_sources(self.workspace, self.commit, [self.path])
+
+    def test_blob_bytes_are_hashed_independently_of_git_object_name(self) -> None:
+        from unittest.mock import patch
+
+        original_git = self.module._git
+        def substituted_git(workspace, arguments, **kwargs):
+            if arguments[:2] == ["cat-file", "blob"]:
+                return b"substituted object content\n"
+            return original_git(workspace, arguments, **kwargs)
+        with patch.object(self.module, "_git", side_effect=substituted_git):
+            with self.assertRaisesRegex(self.module.ContractError, "scanned source differs"):
+                self.module.observe_secret_sources(self.workspace, self.commit, [self.path])
+
+    def snapshot_destination(self) -> Path:
+        import stat
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        snapshot = Path(temporary.name) / "snapshot"
+        # Cleanup must restore permissions only on the owned private snapshot.
+        def writable_cleanup():
+            if snapshot.exists():
+                for path in sorted(snapshot.rglob("*"), reverse=True):
+                    if not path.is_symlink():
+                        path.chmod(path.stat().st_mode | stat.S_IWUSR)
+                snapshot.chmod(snapshot.stat().st_mode | stat.S_IWUSR)
+        self.addCleanup(writable_cleanup)
+        return snapshot
+
+    def test_scanner_snapshot_is_isolated_from_caller_bytes_and_git_objects(self) -> None:
+        snapshot = self.snapshot_destination()
+        self.module.prepare_target_snapshot(self.workspace, self.commit, snapshot)
+        original = self.asset.read_bytes()
+        self.asset.write_bytes(b"caller replacement while the scanner runs\n")
+        self.assertEqual((snapshot / self.path).read_bytes(), original)
+        sources = self.module.observe_secret_sources(snapshot, self.commit, [self.path])
+        self.assertEqual(sources["blobs"][self.path], self.blob)
+        self.assertFalse((snapshot / self.path).stat().st_mode & 0o222)
+        self.assertFalse(snapshot.stat().st_mode & 0o222)
+        original_object = self.workspace / ".git/objects" / self.blob[:2] / self.blob[2:]
+        snapshot_object = snapshot / ".git/objects" / self.blob[:2] / self.blob[2:]
+        self.assertNotEqual(original_object.stat().st_ino, snapshot_object.stat().st_ino)
+        self.assertFalse((snapshot / ".git/objects/info/alternates").exists())
+        self.assertIn('--output "$native" "$snapshot"', ACTION.read_text())
+
+    def test_snapshot_materializes_raw_blobs_without_checkout_filters(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        (self.workspace / ".gitattributes").write_text(self.path + " filter=fixture\n")
+        self.commit_source(b"raw reviewed source\n")
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        home = Path(temporary.name)
+        subprocess.run(["git", "config", "--file", str(home / ".gitconfig"),
+                        "filter.fixture.smudge", "printf transformed-source"], check=True)
+        snapshot = self.snapshot_destination()
+        with patch.dict(os.environ, {"HOME": str(home), "XDG_CONFIG_HOME": str(home / "xdg")}):
+            self.module.prepare_target_snapshot(self.workspace, self.commit, snapshot)
+        self.assertEqual((snapshot / self.path).read_bytes(), b"raw reviewed source\n")
+
+    def test_new_result_contract_is_versioned_and_all_secrets_require_source_identity(self) -> None:
+        import jsonschema
+
+        result = self.module.admit(self.observation(), self.policy)
+        self.assertEqual(result["schema_version"], "secpal-trivy-repository-scan-v2")
+        old = json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v1.schema.json").read_text())
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(result, old)
+        result["findings"][0].pop("exception")
+        result["findings"][0].pop("source_blob")
+        schema = json.loads(SCHEMA.read_text())
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(result, schema)
+        with self.assertRaises(self.module.ContractError):
+            self.module.admit(self.observation(sources=False), {**self.policy, "exceptions": []})
+
+    def test_observer_rejects_wrong_commit_missing_path_and_changed_worktree(self) -> None:
+        for commit, paths in (("0" * 40, [self.path]), (self.commit, ["missing.js"]),
+                              (self.commit, ["../outside"]), (self.commit, [":(glob)**"])):
+            with self.subTest(paths=paths), self.assertRaises(self.module.ContractError):
+                self.module.observe_secret_sources(self.workspace, commit, paths)
+        self.asset.write_bytes(b"changed bytes\n")
+        with self.assertRaises(self.module.ContractError):
+            self.module.observe_secret_sources(self.workspace, self.commit, [self.path])
+
+    def test_observer_rejects_symlink_and_git_object_substitution(self) -> None:
+        self.asset.unlink()
+        self.asset.symlink_to("missing")
+        self.git("add", ".")
+        self.git("-c", "user.name=SecPal Test", "-c", "user.email=test@secpal.app",
+                 "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "symlink fixture")
+        with self.assertRaises(self.module.ContractError):
+            self.module.observe_secret_sources(self.workspace, self.git("rev-parse", "HEAD"), [self.path])
+        self.git("reset", "--hard", self.commit)
+        original_commit = self.commit
+        self.commit_source(b"substitute object\n")
+        replacement = self.git("rev-parse", "HEAD:" + self.path)
+        self.git("replace", self.blob, replacement)
+        self.git("reset", "--hard", original_commit)
+        self.commit = original_commit
+        # Replacement refs cannot authenticate substituted worktree bytes.
+        self.asset.write_bytes(b"substitute object\n")
+        with self.assertRaises(self.module.ContractError):
+            self.module.observe_secret_sources(self.workspace, self.commit, [self.path])
 
 
 if __name__ == "__main__":
