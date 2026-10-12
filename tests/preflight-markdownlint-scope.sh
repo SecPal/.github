@@ -86,6 +86,7 @@ chmod +x "$workspace/tests/validate-copilot-instructions.sh"
 unit_suites=(
   polyscope-work-graph-advisory
   secpal-pr-advisory-unit
+  secpal-work-graph-gate-refresh-unit
   secpal-work-graph-replan-unit
   secpal-trivy-repository-scan-unit
   secpal-trivy-action-archive
@@ -321,8 +322,8 @@ if grep -Fq '**/' "$log_file" || grep -Fq '.context/pr-body.md' "$log_file"; the
   exit 1
 fi
 
-# Missing or failing Trivy stand-ins must fail through the real preflight command.
-for suite in secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
+# Missing or failing required stand-ins must fail through the real preflight command.
+for suite in secpal-work-graph-gate-refresh-unit secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
   stand_in="$workspace/tests/$suite.py"
   mv "$stand_in" "$workspace/saved-stand-in.py"
   for failure in missing failed; do
