@@ -150,6 +150,9 @@ jobs:
       - name: Run advisory PR gate behavior tests
         run: python3 -m unittest tests/secpal-pr-advisory-unit.py
 
+      - name: Run bounded status-publication diagnostic tests
+        run: python3 -m unittest tests/secpal-work-graph-gate-refresh-unit.py
+
       - name: Run graph-first replanning operation tests
         run: python3 -m unittest tests/secpal-work-graph-replan-unit.py
 
