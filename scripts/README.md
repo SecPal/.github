@@ -116,6 +116,18 @@ remediation, recovery counter or lifecycle head is changed.
 
 ## Complete Registered Validation ownership
 
+### Exact historical retirement
+
+`secpal-historical-retirement.py` owns only #705 / PR #706 terminal disposition.
+Read-only qualification, separate signed exact human intent, one protected
+reservation, one unmerged close attempt, and observation-only reconciliation
+preserve all historical evidence. It has no successor or review capability.
+The complete maintained contract, accounting blocker and consumption ordering
+are in [Exact historical delivery disposition](../docs/historical-delivery-retirement-706.md).
+Candidate tooling and #1183 implementation authorization permit no consumption.
+
+### Validation ownership
+
 Apply the [canonical validation ownership](../docs/secpal-pr-review-workflow.md#complete-registered-validation-ownership) contract.
 `REGISTERED COMMANDS PASS` is technical execution only.
 `COMPLETE REGISTERED VALIDATION PASS` requires exact post-run authentication

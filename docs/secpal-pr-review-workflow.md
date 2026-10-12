@@ -514,6 +514,12 @@ follow-up identity. Mixed and unknown versions fail closed.
 
 ## Persistent lifecycle authority
 
+The [exact #705 / PR #706 terminal disposition](historical-delivery-retirement-706.md)
+preserves its never-enrolled, directly-Ready violation and complete assessment
+history. Its protected reservation selects no lifecycle CURRENT. It grants no
+successor, review or fresh initialization and leaves ordinary Draft-first
+authority unchanged.
+
 Lifecycle-authority schema 1.0 is an append-only chain rooted in exactly one
 authenticated delivery initialization and its canonical `INITIALIZED_DRAFT`
 event. The initialization binds the ordinary validation receipt and final

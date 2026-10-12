@@ -83,6 +83,8 @@ VERIFIER_MODULE_NAMES = (
     "exact_prerequisite_cli",
     "follow_up",
     "governance_amendment",
+    "historical_retirement",
+    "historical_retirement_cli",
     "late_disposition",
     "legacy_enrolled_package_loss",
     "lifecycle_authority",

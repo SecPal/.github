@@ -108,6 +108,9 @@ jobs:
       - name: Run authenticated Ready/Draft lifecycle execution tests
         run: python3 -m unittest tests/secpal-lifecycle-execution-contract-unit.py
 
+      - name: Run exact historical terminal disposition tests
+        run: python3 -m unittest tests/secpal-historical-retirement-unit.py
+
       - name: Run role-specific lifecycle signing tests
         run: python3 -m unittest tests/secpal-lifecycle-role-signing-unit.py
 

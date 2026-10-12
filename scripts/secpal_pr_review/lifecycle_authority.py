@@ -848,6 +848,8 @@ def create_delivery_initialization(
 ) -> dict[str, Any]:
     """Create signed initialization for an ordinary or verified typed initial head."""
 
+    from . import historical_retirement
+    historical_retirement.require_normal_initialization(repository, delivery_issue)
     fields = {
         "schema_version": "1.1" if initial_head_proof is not None else SCHEMA_VERSION,
         "kind": INITIALIZATION_KIND,
@@ -921,6 +923,8 @@ def _verify_delivery_initialization(
     if repository != policy.repository:
         raise LifecycleAuthorityError("initialization repository is not trusted")
     issue = _require_positive_int(initialization["delivery_issue"], "delivery issue")
+    from . import historical_retirement
+    historical_retirement.require_normal_initialization(repository, issue)
     pull_request = _require_positive_int(initialization["pull_request"], "pull request")
     head = _require_oid(initialization["initial_head_sha"], "initial head")
     _require_digest(initialization["validation_receipt_digest"], "validation receipt")

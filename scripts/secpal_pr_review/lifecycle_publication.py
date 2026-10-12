@@ -61,7 +61,7 @@ PROVIDER_DISPATCH_TRIGGERS = {
 JOURNAL_KINDS = frozenset(
     {PUBLICATION_KIND, GENESIS_ADMISSION_KIND, READY_SOURCE_RECOVERY_KIND,
      PROVIDER_DISPATCH_CLAIM_KIND, ENROLLED_DRAFT_CLAIM_KIND,
-     READY_SOURCE_CORRECTION_KIND}
+     READY_SOURCE_CORRECTION_KIND, "SECPAL_HISTORICAL_RETIREMENT_CLAIM"}
 )
 ORDINARY_REMEDIATION_SUFFIX = "ORDINARY_REMEDIATION_SUFFIX"
 EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION = (
@@ -2284,7 +2284,7 @@ def _ready_source_correction_key(candidate: Mapping[str, Any]) -> tuple[str, int
 def _walk_journal(
     repository_root: Path, tip_oid: str, publication_branch: str,
     *, include_recoveries: bool = False, include_claims: bool = False,
-    include_integrations: bool = False,
+    include_integrations: bool = False, absence_issue: int | None = None,
 ) -> Any:
     """Verify the journal; optionally expose ancillary authorities and claims."""
     reversed_entries: list[tuple[str, bytes, str | None]] = []
@@ -2298,6 +2298,10 @@ def _walk_journal(
         reversed_entries.append((oid, raw, parent))
         oid = parent
     chronological = list(reversed(reversed_entries))
+    from . import historical_retirement
+    retirement_claim = historical_retirement.verify_journal_claims(chronological, publication_branch)
+    if retirement_claim is not None and absence_issue == historical_retirement.ISSUE:
+        raise LifecyclePublicationError("delivery retirement attempt is already consumed")
     admissions: dict[tuple[str, int], VerifiedNativeGenesisAdmission] = {}
     admission_positions: dict[tuple[str, int], int] = {}
     initialization_digests: set[tuple[str, str]] = set()
@@ -2332,7 +2336,7 @@ def _walk_journal(
     seen_bootstrap_targets: set[str] = set()
     for position, (oid, raw, parent) in enumerate(chronological):
         kind, candidate = _classify_journal_document(raw)
-        if kind == GENESIS_ADMISSION_KIND:
+        if kind in {GENESIS_ADMISSION_KIND, "SECPAL_HISTORICAL_RETIREMENT_CLAIM"}:
             continue
         if kind == READY_SOURCE_CORRECTION_KIND:
             key = _ready_source_correction_key(candidate)
@@ -3435,7 +3439,7 @@ def require_unenrolled_delivery(repository: str, delivery_issue: int) -> None:
             credential_environment=credential_environment,
         )
         if tip is not None:
-            _, latest, admissions = _walk_journal(root, tip, policy.publication_branch)
+            _, latest, admissions = _walk_journal(root, tip, policy.publication_branch, absence_issue=issue)
             if (repository, issue) in latest or (repository, issue) in admissions:
                 raise LifecyclePublicationError("delivery is already enrolled or natively admitted")
 
@@ -5151,7 +5155,7 @@ def verify_pre_enrollment_absence(
         admitted: set[tuple[str, int]] = set()
         if tip is not None:
             published, admitted = _walk_journal_identity_projection(
-                root, tip, policy.publication_branch
+                root, tip, policy.publication_branch, absence_issue=issue
             )
     key = (repository, issue)
     if key in published or key in admitted:
@@ -5181,7 +5185,7 @@ def verify_pre_enrollment_absence(
 def _walk_journal_identity_projection(
     repository_root: Path,
     tip_oid: str,
-    publication_branch: str,
+    publication_branch: str, *, absence_issue: int | None = None,
 ) -> tuple[set[tuple[str, int]], set[tuple[str, int]]]:
     """Verify journal integrity and project only identities needed for absence.
 
@@ -5204,6 +5208,10 @@ def _walk_journal_identity_projection(
         oid = parent
 
     chronological = list(reversed(reversed_entries))
+    from . import historical_retirement
+    retirement_claim = historical_retirement.verify_journal_claims(chronological, publication_branch)
+    if retirement_claim is not None and absence_issue == historical_retirement.ISSUE:
+        raise LifecyclePublicationError("delivery retirement attempt is already consumed")
     admissions: dict[tuple[str, int], VerifiedNativeGenesisAdmission] = {}
     admission_positions: dict[tuple[str, int], int] = {}
     initialization_digests: set[tuple[str, str]] = set()
@@ -5240,7 +5248,7 @@ def _walk_journal_identity_projection(
     claims: dict[str, VerifiedProviderDispatchClaim] = {}
     for position, (object_oid, raw, parent) in enumerate(chronological):
         kind, candidate = _classify_journal_document(raw)
-        if kind == GENESIS_ADMISSION_KIND:
+        if kind in {GENESIS_ADMISSION_KIND, "SECPAL_HISTORICAL_RETIREMENT_CLAIM"}:
             continue
         if kind == READY_SOURCE_CORRECTION_KIND:
             key = _ready_source_correction_key(candidate)
