@@ -1465,6 +1465,37 @@ consume this same refresh through the maintained graph-replan mutation
 boundary. Candidate overflow, unreadable graph evidence, authentication
 failure, or publication failure stops fail closed; no polling is used.
 
+The canonical publisher retains a bounded structured observation for each confirmed
+write and the failed operation. It records the exact target, phase, intended
+state, command outcome, observed HTTP status, finite provider codes/messages,
+request ID and numeric retry metadata. Raw bodies, arbitrary stderr and
+unrecognized diagnostic fields are discarded. A received 4xx rejection (except 408) differs from transport loss, server errors and malformed success responses:
+these uncertain writes remain ambiguous, stop the refresh and are never replayed
+automatically. A command exit of zero alone is insufficient; a 201 response must
+identify the exact repository, SHA, context, target and intended state. Partial
+reports preserve confirmed invalidations and completed terminal publications.
+
+Before the first write, a read-only preflight checks each candidate's status
+history, requiring two remaining slots for invalidation and terminal publication.
+The count is case-insensitive for the context and bounded to 20 pages of 100
+statuses. Unreadable, inconsistent or incomplete history and insufficient space
+stop without a write. GitHub's [1,000-status limit per SHA/context](https://docs.github.com/en/rest/commits/statuses#create-a-commit-status)
+is append-only: this preflight reserves no slots, can race with another writer,
+and cannot prevent eventual exhaustion. If invalidation cannot be published,
+the failed refresh cannot itself revoke an existing status; it never claims to
+have invalidated that head.
+
+The existing required Actions job independently runs the canonical gate on PR
+events, including Draft creation. It could be part of a future replacement for
+repetitive commit statuses only if native graph changes also invalidate every
+affected PR head, reassessment uses trusted tooling, incomplete fan-out blocks
+merge, and stale head-bound successes cannot satisfy enforcement. Today the
+issue-triggered Actions run is associated with default-branch source, while the
+commit-status publisher supplies per-PR-head invalidation. Removing it without
+an authenticated replacement would lose that guarantee. Such a redesign needs
+its own authority review; this correction changes neither required-check
+identities nor branch protection.
+
 ## Validation Scripts
 
 ### `check-domains.sh`
