@@ -87,7 +87,17 @@ malformed policy bindings fail closed; no caller input or native scanner field
 can provide the source facts used to consume a disposition. Vulnerability and
 misconfiguration exception selectors retain their existing contract.
 
-The observation owner, `observe_secret_sources`, rechecks the exact clean target
+Before scanning, `prepare_target_snapshot` verifies the exact clean checkout and
+creates an action-owned Git copy without caller hooks/configuration, shared
+objects, hardlinks or borrowed alternates. It materializes authenticated raw Git
+blobs without checkout filters, line-ending conversion or export exclusions and
+seals the private copy read-only, preserving executable bits and symlinks without
+following them during sealing. Trivy, source observation and redaction all read
+that same snapshot. Caller mutations cannot change its scanned bytes. No source
+worktree/index is written; cleanup restores write permissions only inside the
+owned private tool directory before deleting it.
+
+The observation owner, `observe_secret_sources`, rechecks the exact clean snapshot
 after scanning. For each secret path it requires a regular file in that commit's
 tree, reads the immutable blob with replacement objects disabled, independently
 hashes its raw Git object content, and compares the scanned file's raw bytes.
@@ -103,7 +113,12 @@ captures never enter this fact transport.
 
 Each action invocation uploads one uniquely named normalized result for 14 days.
 Its schema is
-[`secpal-trivy-repository-scan-v1.schema.json`](schemas/secpal-trivy-repository-scan-v1.schema.json).
+[`secpal-trivy-repository-scan-v2.schema.json`](schemas/secpal-trivy-repository-scan-v2.schema.json).
+The public result version is `secpal-trivy-repository-scan-v2`; every `SECRET`
+requires `source_blob`. The published closed v1 schema is preserved unchanged.
+Consumers adopting this action revision must select the v2 schema from the same
+reviewed governance revision; strict v1 consumers reject the new version rather
+than silently interpreting an incompatible finding shape.
 It records the exact repository commit, scanner version and archive identity,
 vulnerability database identity and freshness, policy identity, deterministic
 finding fingerprints, the hash of the trusted invocation/helper/policy bundle,

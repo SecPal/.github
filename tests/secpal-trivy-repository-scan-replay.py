@@ -17,6 +17,8 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
+import time
 from textwrap import dedent
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -138,6 +140,7 @@ def replay_source_binding(root: Path, action_path: Path, environment: dict) -> d
     for name, content, expected in (
         ("reviewed", reviewed, "CLEAN"),
         ("replacement", ("sendgrid='" + synthetic + "';\n").encode(), "ACTIONABLE"),
+        ("caller-mutation", reviewed, "CLEAN"),
     ):
         asset.write_bytes(content)
         target_commit = commit(workspace)
@@ -149,18 +152,52 @@ def replay_source_binding(root: Path, action_path: Path, environment: dict) -> d
             "RUNNER_TEMP": str(runner), "GITHUB_OUTPUT": str(runner / "output"),
             "GITHUB_STEP_SUMMARY": str(runner / "summary"),
         }
-        action = subprocess.run(["bash", "-c", script], env=action_environment, capture_output=True)
+        stop, mutated = threading.Event(), threading.Event()
+        failures = []
+        def mutate_caller():
+            deadline = time.monotonic() + 180
+            try:
+                while not stop.wait(0.005):
+                    snapshots = list(runner.glob("secpal-trivy-tool-*/snapshot"))
+                    if snapshots and not snapshots[0].stat().st_mode & 0o222:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("scanner snapshot was not observed")
+                if stop.is_set():
+                    return
+                asset.write_bytes(("sendgrid='" + synthetic + "';\n").encode())
+                mutated.set()
+                while not stop.wait(0.005):
+                    if list(runner.glob("secpal-trivy-tool-*/native.json")):
+                        break
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("scanner output was not observed")
+            except Exception:
+                failures.append("caller mutation fixture failed")
+            finally:
+                asset.write_bytes(content)
+        worker = threading.Thread(target=mutate_caller) if name == "caller-mutation" else None
+        if worker:
+            worker.start()
+        try:
+            action = subprocess.run(["bash", "-c", script], env=action_environment, capture_output=True)
+        finally:
+            stop.set()
+            if worker:
+                worker.join()
+        if worker and (failures or not mutated.is_set()):
+            raise RuntimeError("caller mutation did not exercise snapshot isolation")
         if action.returncode:
             raise RuntimeError("source-binding maintained action execution failed")
         outputs = dict(line.split("=", 1) for line in (runner / "output").read_text().splitlines())
         evidence = Path(outputs["evidence-path"])
         result = json.loads((evidence / "result.json").read_text())
         import jsonschema
-        jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v1.schema.json").read_text()))
+        jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v2.schema.json").read_text()))
         if (result["gate_state"] != expected or result["operation"]["status"] != "SUCCEEDED"
                 or result["database"]["status"] != "FRESH" or result["summary"]["total"] != 1
-                or result["summary"]["excepted"] != (1 if name == "reviewed" else 0)
-                or result["summary"]["actionable"] != (0 if name == "reviewed" else 1)):
+                or result["summary"]["excepted"] != (1 if expected == "CLEAN" else 0)
+                or result["summary"]["actionable"] != (0 if expected == "CLEAN" else 1)):
             raise RuntimeError("source-bound disposition admitted the wrong source")
         finding = result["findings"][0]
         blob = git(workspace, "rev-parse", "HEAD:" + ANDROID_ASSET)
@@ -171,7 +208,7 @@ def replay_source_binding(root: Path, action_path: Path, environment: dict) -> d
             raise RuntimeError("source-binding finding identity mismatch")
         if name == "reviewed":
             fingerprint = finding["fingerprint"]
-        elif fingerprint != finding["fingerprint"] or blob == REVIEWED_ANDROID_BLOB:
+        elif name == "replacement" and (fingerprint != finding["fingerprint"] or blob == REVIEWED_ANDROID_BLOB):
             raise RuntimeError("P1 replay did not preserve its metadata-only fingerprint")
         public = action.stdout + action.stderr + (runner / "summary").read_bytes() + (runner / "output").read_bytes()
         for file in evidence.iterdir():
@@ -185,6 +222,7 @@ def replay_source_binding(root: Path, action_path: Path, environment: dict) -> d
             "gate_state": result["gate_state"], "summary": result["summary"],
             "database_identity": result["database"]["identity"],
             "redaction_and_cleanup": "PASS",
+            "caller_mutated_during_scan": mutated.is_set(),
         }
     return {"governance_fixture_commit": governance_commit, "policy_identity": result["policy"], **outcomes}
 
@@ -298,6 +336,9 @@ def main() -> int:
         module.verify_diagnostics(scanned.stderr.decode("utf-8"), cache)
         generic_native = json.loads(native.read_text(encoding="utf-8"))
         generic_commit = commit
+        generic_sources = module.observe_secret_sources(
+            workspace, generic_commit, [r["Target"] for r in generic_native["Results"] if r.get("Secrets")],
+        )
         # Keep the generic replay and add the downstream Composer development seam.
         (workspace / "composer.lock").write_text(json.dumps({
             "packages": [], "packages-dev": [{
@@ -335,6 +376,9 @@ def main() -> int:
             completed_at=completed_at,
         )
         diagnostics = scanned.stderr.decode("utf-8")
+        observation = module.normalize_secret_sources(observation, module.observe_secret_sources(
+            workspace, commit, [f["path"] for f in observation["findings"] if f["class"] == "SECRET"],
+        ))
         if diagnostics.count("\tWARN\t" + module.SEVERITY_FALLBACK_DIAGNOSTIC) != 1:
             raise RuntimeError("Composer fixture did not exercise the exact advisory")
         module.verify_diagnostics(diagnostics, cache, native=native_value,
@@ -353,6 +397,7 @@ def main() -> int:
             workspace=str(workspace), scanner=observation["scanner"], database=database,
             completed_at=completed_at,
         )
+        generic_observation = module.normalize_secret_sources(generic_observation, generic_sources)
         generic_result = module.admit(generic_observation, json.loads(POLICY.read_text()))
         module.verify_redaction(generic_native, generic_result, workspace,
                                 "SecPal/repository-scan-fixture", generic_commit)
@@ -434,7 +479,7 @@ def main() -> int:
         evidence_root = Path(outputs["evidence-path"])
         action_result = json.loads((evidence_root / "result.json").read_text())
         import jsonschema
-        jsonschema.validate(action_result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v1.schema.json").read_text()))
+        jsonschema.validate(action_result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v2.schema.json").read_text()))
         if (action_result["gate_state"] != "ACTIONABLE"
                 or {f["class"] for f in action_result["findings"]} != classes
                 or action_result["subject"] != {"repository": "SecPal/repository-scan-fixture", "commit": commit}

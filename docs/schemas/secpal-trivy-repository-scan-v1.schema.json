@@ -296,11 +296,6 @@
         "location": {
           "$ref": "#/$defs/location"
         },
-        "source_blob": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$",
-          "maxLength": 40
-        },
         "package": {
           "type": "string",
           "minLength": 1
@@ -361,23 +356,6 @@
                   "required": ["message"]
                 }
               ]
-            }
-          },
-          "else": {
-            "not": { "required": ["source_blob"] }
-          }
-        },
-        {
-          "if": {
-            "properties": { "class": { "const": "SECRET" } },
-            "required": ["exception"]
-          },
-          "then": {
-            "required": ["source_blob"],
-            "properties": {
-              "exception": {
-                "properties": { "disposition": { "const": "IGNORED" } }
-              }
             }
           }
         },

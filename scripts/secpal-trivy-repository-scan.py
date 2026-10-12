@@ -19,8 +19,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-SCHEMA_VERSION = "secpal-trivy-repository-scan-v1"
-OBSERVATION_VERSION = "secpal-trivy-repository-observation-v1"
+SCHEMA_VERSION = "secpal-trivy-repository-scan-v2"
+OBSERVATION_VERSION = "secpal-trivy-repository-observation-v2"
 POLICY_ID = "secpal-trivy-repository-policy-v1"
 GATE_STATES = {"CLEAN", "ACTIONABLE", "REVIEW_REQUIRED", "UNKNOWN_STALE"}
 FAILURE_CODES = {
@@ -670,6 +670,16 @@ def normalize_native(
     }
 
 
+def _observe_blob(workspace: Path, blob: str) -> bytes:
+    """Read and authenticate raw Git object bytes; never emit captures."""
+    _source_blob(blob)
+    source = _git(workspace, ["cat-file", "blob", blob])
+    identity = hashlib.sha1(b"blob " + str(len(source)).encode("ascii") + b"\0" + source).hexdigest()
+    if identity != blob:
+        raise ContractError("scanned source differs from the immutable blob")
+    return source
+
+
 def observe_secret_sources(workspace: Path, commit: str, paths: list[str]) -> dict[str, Any]:
     """Observe bounded blob identities from the exact clean checked-out commit.
 
@@ -691,13 +701,57 @@ def observe_secret_sources(workspace: Path, commit: str, paths: list[str]) -> di
         if mode not in {b"100644", b"100755"} or kind != b"blob" or name != path.encode("utf-8"):
             raise ContractError("source tree entry is not a regular file")
         blob = _source_blob(object_id.decode("ascii"))
-        source = _git(root, ["cat-file", "blob", blob])
-        identity = hashlib.sha1(b"blob " + str(len(source)).encode("ascii") + b"\0" + source).hexdigest()
+        source = _observe_blob(root, blob)
         file = root / path
-        if identity != blob or file.resolve(strict=True) != file or file.read_bytes() != source:
+        if file.resolve(strict=True) != file or file.read_bytes() != source:
             raise ContractError("scanned source differs from the immutable blob")
         blobs[path] = blob
     return {"commit": commit, "blobs": blobs}
+
+
+def prepare_target_snapshot(workspace: Path, commit: str, destination: Path) -> None:
+    """Copy the exact target into action-owned, read-only scanner storage.
+
+    The caller worktree and index stay untouched; caller repository config and
+    hooks are not copied. Git objects are independent copies, never caller
+    hardlinks or borrowed alternates. Scanner and observer use the same snapshot.
+    """
+    verify_target(workspace, commit)
+    root = workspace.resolve(strict=True)
+    target = destination.resolve(strict=False)
+    if target.is_relative_to(root) or root.is_relative_to(target) or target.exists():
+        raise ContractError("snapshot must be a new private path outside the caller")
+    _git(root, ["clone", "--no-hardlinks", "--dissociate", "--no-checkout", "--", str(root), str(target)])
+    _git(target, ["-c", "core.hooksPath=/dev/null", "update-ref", "--no-deref", "HEAD", commit])
+    _git(target, ["read-tree", commit])
+    # Materialize raw objects rather than running checkout smudge filters or
+    # applying platform line-ending conversions. Export attributes cannot omit
+    # any tracked file. One observation owner authenticates all blob bytes.
+    for record in _git(target, ["ls-tree", "-r", "-z", commit]).split(b"\0"):
+        if not record:
+            continue
+        metadata, raw_name = record.split(b"\t", 1)
+        mode, kind, object_id = metadata.split(b" ")
+        name = raw_name.decode("utf-8")
+        if (_path(name) != name or PurePosixPath(name).parts[0] == ".git"
+                or kind != b"blob" or mode not in {b"100644", b"100755", b"120000"}):
+            raise ContractError("snapshot tree entry is unsupported")
+        source = _observe_blob(target, object_id.decode("ascii"))
+        path = target / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if mode == b"120000":
+            path.symlink_to(os.fsdecode(source))
+        else:
+            path.write_bytes(source)
+            path.chmod(0o755 if mode == b"100755" else 0o644)
+    verify_target(target, commit)
+    # Preserve executable bits and symlinks; never follow a source symlink when
+    # sealing private storage. The private parent is owned by the action.
+    for path in target.rglob("*"):
+        if not path.is_symlink():
+            mode = path.stat().st_mode
+            path.chmod(0o555 if path.is_dir() else 0o444 | (mode & 0o111))
+    target.chmod(0o555)
 
 
 def normalize_secret_sources(observation: dict[str, Any], sources: dict[str, Any]) -> dict[str, Any]:
@@ -817,6 +871,9 @@ def admit(observation: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]
     policy_identity = _validate_policy(policy, observation["completed_at"])
     if observation.get("scanners") != policy["required_scanners"]:
         raise ContractError("required scanners were not explicitly observed")
+    for finding in observation["findings"]:
+        if finding["class"] == "SECRET":
+            _source_blob(finding.get("source_blob"))
     exceptions = [
         {**exception, "path": _path(exception["path"])}
         for exception in policy["exceptions"]
@@ -1075,6 +1132,11 @@ def _parser() -> argparse.ArgumentParser:
     target.add_argument("--workspace", type=Path, required=True)
     target.add_argument("--commit", required=True)
 
+    snapshot = commands.add_parser("prepare-snapshot")
+    snapshot.add_argument("--workspace", type=Path, required=True)
+    snapshot.add_argument("--commit", required=True)
+    snapshot.add_argument("--destination", type=Path, required=True)
+
     database = commands.add_parser("database")
     database.add_argument("--metadata", action="append", type=Path, required=True)
     database.add_argument("--database-file", action="append", type=Path, required=True)
@@ -1097,6 +1159,8 @@ def main() -> int:
     try:
         if arguments.command == "verify-target":
             verify_target(arguments.workspace, arguments.commit)
+        elif arguments.command == "prepare-snapshot":
+            prepare_target_snapshot(arguments.workspace, arguments.commit, arguments.destination)
         elif arguments.command == "verify-diagnostics":
             verify_diagnostics(arguments.diagnostics.read_text(encoding="utf-8"), arguments.cache_dir)
         elif arguments.command == "verify-redaction":

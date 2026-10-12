@@ -34,7 +34,11 @@ runs:
         failure_code=""
 
         install -d -m 0700 "$evidence_root" "$tool_root" "$cache_root"
-        trap 'rm -rf -- "$tool_root" "$cache_root"' EXIT
+        cleanup_private() {
+          chmod -R u+w "$tool_root" 2>/dev/null || true
+          rm -rf -- "$tool_root" "$cache_root"
+        }
+        trap cleanup_private EXIT
 
         write_unknown() {
           local failure_completed_at
@@ -84,6 +88,14 @@ runs:
           fi
         fi
 
+        snapshot="$tool_root/snapshot"
+        if [ -z "$failure_code" ]; then
+          if ! python3 -I "$governance_root/scripts/secpal-trivy-repository-scan.py" prepare-snapshot \
+            --workspace "$GITHUB_WORKSPACE" --commit "$GITHUB_SHA" --destination "$snapshot"; then
+            failure_code="TARGET_IDENTITY_FAILURE"
+          fi
+        fi
+
         native="$tool_root/native.json"
         if [ -z "$failure_code" ]; then
           if ! env -i HOME="$tool_root" "$tool_root/trivy" --config "$trusted_config" fs \
@@ -93,7 +105,7 @@ runs:
             --cache-dir "$cache_root" \
             --ignorefile "$governance_root/policies/trivy-repository-scan-ignore-v1.yaml" \
             --secret-config "$governance_root/policies/trivy-repository-secret-v1.yaml" \
-            --output "$native" "$GITHUB_WORKSPACE" >/dev/null 2>"$tool_root/native.stderr"; then
+            --output "$native" "$snapshot" >/dev/null 2>"$tool_root/native.stderr"; then
             failure_code="SCANNER_FAILURE"
           fi
         fi
@@ -117,7 +129,7 @@ runs:
             --diagnostics "$tool_root/native.stderr" --cache-dir "$cache_root" \
             --policy "$governance_root/policies/trivy-repository-scan-v1.json" \
             --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
-            --workspace "$GITHUB_WORKSPACE" \
+            --workspace "$snapshot" \
             --scanner-version "$TRIVY_VERSION" \
             --scanner-identity "sha256:${TRIVY_ARCHIVE_SHA256}" \
             --completed-at "$completed_at" --output "$candidate"; then
@@ -129,7 +141,7 @@ runs:
 
         if [ -z "$failure_code" ]; then
           if python3 -I "$governance_root/scripts/secpal-trivy-repository-scan.py" verify-redaction \
-            --native "$native" --candidate "$candidate" --workspace "$GITHUB_WORKSPACE" \
+            --native "$native" --candidate "$candidate" --workspace "$snapshot" \
             --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA"; then
             install -m 0600 "$candidate" "$result"
           else
@@ -138,7 +150,7 @@ runs:
         fi
 
         rm -f -- "$native"
-        rm -rf -- "$tool_root" "$cache_root"
+        cleanup_private
         if [ -n "$failure_code" ]; then
           write_unknown "$failure_code"
         fi
