@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "repository": "SecPal/.github",
+  "delivery_issue": 1154,
+  "pull_request": 1156,
+  "head_sha": "3d88fdb0f16de82d7367011a990353482bd10556",
+  "tree_sha": "fc1713bbd841cffd18cd160113d8db2c3203c509",
+  "parent_sha": "1e0e05ba7ee20e1598172889e942a55d23b0782d",
+  "source_signer_identity": "aroviqen@secpal.app",
+  "raw_receipt_sha256": "4a2e2309d60fddb6c2436c995a2e06c3023d28679e737f9c6d49d9cf8adb9511",
+  "raw_receipt_digest": "362c90234381e2cb612867b835d122ae5aee14b564ba1359f675ed8a111660fb",
+  "receipt_registry_digest": "00cafdd5a2333c9cec5085210acd272d23f79310526bb64c712483ab91dcbec3",
+  "receipt_command_set_digest": "0765f5ec2db11ff7a2051cc6d788dd493e22e0f4f4590ccc56a49324020200e1",
+  "receipt_reviewed_state_digest": "31a398cabd1744732f74cf408d8585c04f780b79c84f06717649f57150225032",
+  "receipt_reviewed_feedback_digest": "4dd1f26f32a55076fa9e6262c01a9ac54706719539ca0ac507ff0ae3a6b8a038",
+  "qualification_sha256": "ba5742b8d54e2174fabb2417fb262563ceaa9ab3e42950280c2352e11c3d1169",
+  "qualification_authority_sha": "64e2b27a09bff431f47b43ea45de1d6c9e4426b2",
+  "completed_state_digest": "7ff8b73372227ab061d89c9ee2440c20509acdd98a6a1083f5bd6967ddcbdeec",
+  "completed_feedback_digest": "2670e01e2a56e5d8f712d0f0089baa6791b85a261e3fb8892fcca3ef48582f7e",
+  "feedback": {
+    "state_digest": "99262a5e92eeda5a032d5602f9ca354fc659c4bd3a7577afc2cdc7f4d6d12c36",
+    "feedback_digest": "a5eca4420f7773cd993dc720db6be3d01fcb734fc46f82a718c1699d5c8f6562",
+    "thread_inventory_digest": "88db97558def1561a4f09a2f15a2cde5c642bdadcb8dd4ebef38581aed33ecea",
+    "material_finding_ids": ["PRRT_kwDOQFR1MM6psaGx"]
+  }
+}

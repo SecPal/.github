@@ -60,6 +60,10 @@ EXACT_ADOPTION_EVIDENCE_DOMAIN = "secpal.exact-state-adoption-evidence/v1"
 EXACT_ADOPTION_CONSUMPTION_VERSION = "2.0"
 EXACT_ADOPTION_LOSS_VERSION = "3.0"
 EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION = "4.0"
+EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION = "5.0"
+EXACT_ADOPTION_UNBOUND_RECEIPT_EVIDENCE_DOMAIN = "secpal.exact-state-adoption-evidence/v5"
+EXACT_ADOPTION_UNBOUND_RECEIPT_AUTHORIZATION_DOMAIN = "secpal.exact-state-adoption-authorization/v5"
+EXACT_ADOPTION_UNBOUND_RECEIPT_PROOF_DOMAIN = "secpal.exact-state-adoption-proof/v5"
 EXACT_ADOPTION_GOVERNANCE_AMENDMENT_EVIDENCE_DOMAIN = (
     "secpal.exact-state-adoption-evidence/v4"
 )
@@ -241,6 +245,7 @@ class VerifiedExactStateAdoptionExternalEvidence:
     _verification_seal: object
     validation_evidence_loss_admission: dict[str, Any] | None = None
     governance_amendment_authorization: dict[str, Any] | None = None
+    unbound_receipt_admission: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -609,6 +614,9 @@ EXACT_ADOPTION_GOVERNANCE_AMENDMENT_EVIDENCE_FIELDS = frozenset(
     EXACT_ADOPTION_EVIDENCE_FIELDS
     | {"governance_amendment_authorization", "historical_evidence"}
 )
+EXACT_ADOPTION_UNBOUND_RECEIPT_EVIDENCE_FIELDS = frozenset(
+    EXACT_ADOPTION_EVIDENCE_FIELDS | {"unbound_receipt_admission", "historical_evidence"}
+)
 EXACT_ADOPTION_AUTHORIZATION_FIELDS = frozenset(
     {
         "schema_version", "kind", "domain", "proof_version", "repository",
@@ -644,6 +652,11 @@ EXACT_ADOPTION_GOVERNANCE_AMENDMENT_PROOF_FIELDS = frozenset(
         "authorization", "authorization_digest", "signer_identity", "signature",
         "proof_digest",
     }
+)
+EXACT_ADOPTION_UNBOUND_RECEIPT_PROOF_FIELDS = frozenset(
+    (EXACT_ADOPTION_UNBOUND_RECEIPT_EVIDENCE_FIELDS - {"kind", "domain"})
+    | {"kind", "domain", "historical_proof_mode", "lifecycle_id",
+       "authorization", "authorization_digest", "signer_identity", "signature", "proof_digest"}
 )
 PRE_ENROLLMENT_REVIEW_BUDGET_ADMISSION_FIELDS = frozenset(
     {
@@ -3783,6 +3796,7 @@ def authenticate_exact_state_adoption_external_evidence(
     review_budget_consumption_admission: Mapping[str, Any] | None = None,
     validation_evidence_loss_admission: Any = None,
     governance_amendment_authorization: Any = None,
+    unbound_receipt_admission: Any = None,
 ) -> VerifiedExactStateAdoptionExternalEvidence:
     """Authenticate external artifacts before any adoption proof is assembled."""
 
@@ -3795,7 +3809,26 @@ def authenticate_exact_state_adoption_external_evidence(
         raise LifecycleAuthorityError("adoption requires an open delivery")
     loss = None
     amendment = None
-    if governance_amendment_authorization is not None:
+    unbound = None
+    if unbound_receipt_admission is not None:
+        from . import unbound_receipt_admission as raw_owner
+
+        if any(value is not None for value in (
+            validation_evidence, validation_evidence_loss_admission,
+            governance_amendment_authorization, review_budget_consumption_admission,
+        )):
+            raise LifecycleAuthorityError("raw receipt admission cannot replace supplied historical authority")
+        unbound = raw_owner._verify_document(unbound_receipt_admission)
+        if any(unbound[key] != value for key, value in {
+            "repository": repository, "delivery_issue": issue, "pull_request": pr,
+            "head_sha": head, "tree_sha": tree, "pull_request_state": pull_request_state,
+            "observed_pre_enrollment_history": list(observed_pre_enrollment_history),
+            "intended_state": dict(intended_state),
+        }.items()):
+            raise LifecycleAuthorityError("raw receipt admission scope changed")
+        receipt_digest = source_digest = None
+        adoption_digest = unbound["admission_digest"]
+    elif governance_amendment_authorization is not None:
         from . import governance_amendment
 
         if validation_evidence is not None or validation_evidence_loss_admission is not None:
@@ -3891,6 +3924,8 @@ def authenticate_exact_state_adoption_external_evidence(
             )
     if loss is not None and head_signature_evidence_digest != loss["commit_signature_evidence_digest"]:
         raise LifecycleAuthorityError("loss admission source signature changed")
+    if unbound is not None and head_signature_evidence_digest != unbound["commit_signature_evidence_digest"]:
+        raise LifecycleAuthorityError("unbound receipt source signature changed")
     state = _validate_state(
         dict(intended_state), allow_adopted_observations=True
     )
@@ -3965,6 +4000,7 @@ def authenticate_exact_state_adoption_external_evidence(
         governance_amendment_authorization=(
             None if amendment is None else copy.deepcopy(amendment)
         ),
+        unbound_receipt_admission=unbound,
     )
 
 
@@ -4362,6 +4398,7 @@ def _assemble_exact_state_adoption_evidence(
     review_budget_consumption_admission: Mapping[str, Any] | None = None,
     validation_evidence_loss_admission: Mapping[str, Any] | None = None,
     governance_amendment_authorization: Mapping[str, Any] | None = None,
+    unbound_receipt_admission: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble canonical proof fields from already authenticated evidence."""
 
@@ -4491,6 +4528,30 @@ def _assemble_exact_state_adoption_evidence(
         version = EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION
         domain = EXACT_ADOPTION_GOVERNANCE_AMENDMENT_EVIDENCE_DOMAIN
 
+    unbound = None
+    if unbound_receipt_admission is not None:
+        from . import unbound_receipt_admission as raw_owner
+
+        unbound = raw_owner._verify_document(unbound_receipt_admission)
+        if (
+            any(value is not None for value in (
+                review_budget_consumption_admission, validation_evidence_loss_admission,
+                governance_amendment_authorization, validation_receipt_digest,
+                source_validation_evidence_digest,
+            ))
+            or any(unbound[key] != value for key, value in {
+                "repository": repository, "delivery_issue": issue, "pull_request": pr,
+                "head_sha": head, "tree_sha": tree, "pull_request_state": pull_request_state,
+                "commit_signature_evidence_digest": commit_signature_evidence_digest,
+                "intended_state": state, "observed_pre_enrollment_history": history,
+                "adoption_timestamp": timestamp, "admission_digest": adoption_source_evidence_digest,
+            }.items())
+            or unbound["admission_digest"] not in supporting
+        ):
+            raise LifecycleAuthorityError("unbound receipt cannot claim historical validation or reset history")
+        version = EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION
+        domain = EXACT_ADOPTION_UNBOUND_RECEIPT_EVIDENCE_DOMAIN
+
     fields = {
         "schema_version": version,
         "kind": EXACT_ADOPTION_EVIDENCE_KIND,
@@ -4507,12 +4568,12 @@ def _assemble_exact_state_adoption_evidence(
             commit_signature_evidence_digest, "commit signature evidence"
         ),
         "validation_receipt_digest": (
-            None if amendment is not None else _require_digest(
+            None if amendment is not None or unbound is not None else _require_digest(
                 validation_receipt_digest, "adoption validation receipt"
             )
         ),
         "source_validation_evidence_digest": (
-            None if amendment is not None else _require_digest(
+            None if amendment is not None or unbound is not None else _require_digest(
                 source_validation_evidence_digest, "source validation evidence"
             )
         ),
@@ -4544,6 +4605,9 @@ def _assemble_exact_state_adoption_evidence(
     if amendment is not None:
         fields["governance_amendment_authorization"] = copy.deepcopy(amendment)
         fields["historical_evidence"] = copy.deepcopy(amendment["historical_evidence"])
+    if unbound is not None:
+        fields["unbound_receipt_admission"] = copy.deepcopy(unbound)
+        fields["historical_evidence"] = copy.deepcopy(unbound["historical_evidence"])
     return {**fields, "adoption_evidence_digest": digest_json(fields)}
 
 
@@ -4583,6 +4647,7 @@ def create_exact_state_adoption_evidence(
         ),
         validation_evidence_loss_admission=evidence.validation_evidence_loss_admission,
         governance_amendment_authorization=evidence.governance_amendment_authorization,
+        unbound_receipt_admission=evidence.unbound_receipt_admission,
     )
 
 
@@ -4592,6 +4657,7 @@ def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
     fields = frozenset(value)
     loss_admission = None
     governance_amendment_authorization = None
+    unbound_receipt_admission = None
     if fields == EXACT_ADOPTION_EVIDENCE_FIELDS:
         expected_version = SCHEMA_VERSION
         expected_domain = EXACT_ADOPTION_EVIDENCE_DOMAIN
@@ -4612,6 +4678,11 @@ def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
         governance_amendment_authorization = value.get(
             "governance_amendment_authorization"
         )
+    elif fields == EXACT_ADOPTION_UNBOUND_RECEIPT_EVIDENCE_FIELDS:
+        expected_version = EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION
+        expected_domain = EXACT_ADOPTION_UNBOUND_RECEIPT_EVIDENCE_DOMAIN
+        review_budget_admission = None
+        unbound_receipt_admission = value.get("unbound_receipt_admission")
     else:
         raise LifecycleAuthorityError(
             "exact-state adoption evidence contains unknown or missing fields"
@@ -4645,6 +4716,7 @@ def _verify_exact_state_adoption_evidence(value: Any) -> dict[str, Any]:
         review_budget_consumption_admission=review_budget_admission,
         validation_evidence_loss_admission=loss_admission,
         governance_amendment_authorization=governance_amendment_authorization,
+        unbound_receipt_admission=unbound_receipt_admission,
     )
     if rebuilt != evidence:
         raise LifecycleAuthorityError("exact-state adoption evidence binding changed")
@@ -4667,7 +4739,7 @@ def exact_state_adoption_historical_evidence(value: Any) -> dict[str, Any]:
 
     evidence = _verify_exact_state_adoption_evidence(value)
     version = evidence["proof_version"]
-    if version == EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION:
+    if version in {EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION, EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION}:
         result = copy.deepcopy(evidence["historical_evidence"])
     elif version == EXACT_ADOPTION_LOSS_VERSION:
         result = {
@@ -4745,10 +4817,13 @@ def exact_state_adoption_ready_root_historical_evidence(
         or state["ready_history"][0].get("transition_kind") != "DRAFT_TO_READY"
     ):
         raise LifecycleAuthorityError("zero-receipt adoption-root binding changed")
-    if proof["proof_version"] == EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION:
-        # The proof verifier independently authenticates the amendment and its
-        # closed ABSENT_NEVER_ISSUED projection; CURRENT safety is not history.
-        amendment = proof["governance_amendment_authorization"]
+    if proof["proof_version"] in {EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION, EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION}:
+        # The proof verifier authenticates the versioned admission and its
+        # truthful historical projection; CURRENT safety is not history.
+        amendment = proof[
+            "unbound_receipt_admission" if proof["proof_version"] == EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION
+            else "governance_amendment_authorization"
+        ]
         if any(amendment[field] != expected for field, expected in {
             "repository": current_lifecycle.repository,
             "delivery_issue": current_lifecycle.delivery_issue,
@@ -4856,6 +4931,8 @@ def create_exact_state_adoption_authorization(
         authorization_domain = (
             EXACT_ADOPTION_GOVERNANCE_AMENDMENT_AUTHORIZATION_DOMAIN
         )
+    elif evidence["proof_version"] == EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION:
+        authorization_domain = EXACT_ADOPTION_UNBOUND_RECEIPT_AUTHORIZATION_DOMAIN
     fields = {
         "schema_version": evidence["proof_version"],
         "kind": EXACT_ADOPTION_AUTHORIZATION_KIND,
@@ -4899,6 +4976,8 @@ def create_exact_state_adoption_proof(
         proof_domain = EXACT_ADOPTION_LOSS_PROOF_DOMAIN
     elif evidence["proof_version"] == EXACT_ADOPTION_GOVERNANCE_AMENDMENT_VERSION:
         proof_domain = EXACT_ADOPTION_GOVERNANCE_AMENDMENT_PROOF_DOMAIN
+    elif evidence["proof_version"] == EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION:
+        proof_domain = EXACT_ADOPTION_UNBOUND_RECEIPT_PROOF_DOMAIN
     fields = {
         **{key: copy.deepcopy(value) for key, value in evidence.items()
            if key not in {"kind", "domain"}},
@@ -4952,6 +5031,12 @@ def verify_exact_state_adoption_proof(
             EXACT_ADOPTION_GOVERNANCE_AMENDMENT_AUTHORIZATION_DOMAIN
         )
         proof_domain = EXACT_ADOPTION_GOVERNANCE_AMENDMENT_PROOF_DOMAIN
+    elif proof_fields == EXACT_ADOPTION_UNBOUND_RECEIPT_PROOF_FIELDS:
+        expected_version = EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION
+        evidence_fields = EXACT_ADOPTION_UNBOUND_RECEIPT_EVIDENCE_FIELDS
+        evidence_domain = EXACT_ADOPTION_UNBOUND_RECEIPT_EVIDENCE_DOMAIN
+        authorization_domain = EXACT_ADOPTION_UNBOUND_RECEIPT_AUTHORIZATION_DOMAIN
+        proof_domain = EXACT_ADOPTION_UNBOUND_RECEIPT_PROOF_DOMAIN
     else:
         raise LifecycleAuthorityError(
             "exact-state adoption proof contains unknown or missing fields"

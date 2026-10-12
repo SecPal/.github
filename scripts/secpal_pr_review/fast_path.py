@@ -21,6 +21,13 @@ from typing import Any, Callable, TypeVar
 
 CENTRAL_REGISTRY_ROOT = Path(__file__).resolve().parents[2]
 CENTRAL_REGISTRY_REPOSITORY = "SecPal/.github"
+EXACT_UNBOUND_RECEIPT_SUBJECT = {
+    "repository": "SecPal/.github", "delivery_issue": 1154, "pull_request": 1156,
+    "head_sha": "3d88fdb0f16de82d7367011a990353482bd10556",
+    "tree_sha": "fc1713bbd841cffd18cd160113d8db2c3203c509",
+    "parent_sha": "1e0e05ba7ee20e1598172889e942a55d23b0782d",
+}
+EXACT_UNBOUND_RECEIPT_P1_THREAD = "PRRT_kwDOQFR1MM6psaGx"
 DELIVERY_REGISTRY_PATH = (
     ".agents/skills/secpal-pr-review/references/repositories.json"
 )
@@ -83,6 +90,7 @@ VERIFIER_MODULE_NAMES = (
     "exact_prerequisite_cli",
     "follow_up",
     "governance_amendment",
+    "unbound_receipt_admission",
     "late_disposition",
     "legacy_enrolled_package_loss",
     "lifecycle_authority",
@@ -1769,6 +1777,10 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         authority_mode == "ADOPTED"
         and source_mode == "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT"
     )
+    unbound_root = (
+        authority_mode == "ADOPTED"
+        and source_mode == "EXACT_STATE_ADOPTION_V5_UNBOUND_RECEIPT_ROOT"
+    )
     source = value.get("source_authority")
     direct_root = (
         authority_mode == "ADOPTED"
@@ -1833,6 +1845,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
                 "EXACT_STATE_ADOPTION_LEGACY_ENROLLED_LOSS",
                 "EXACT_STATE_ADOPTION_V3_RECOVERED_ROOT",
                 "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
+                "EXACT_STATE_ADOPTION_V5_UNBOUND_RECEIPT_ROOT",
             }
             else None
         )
@@ -1887,7 +1900,7 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
         "prior_delivery_tree_sha": _require_oid(value.get("prior_delivery_tree_sha"), "prior authority tree"),
         "prior_validation_receipt_digest": (
             None
-            if (source_mode == "EXISTING_AUTHORITY_COMPOSITION" or recovered_root or amendment_root)
+            if (source_mode == "EXISTING_AUTHORITY_COMPOSITION" or recovered_root or amendment_root or unbound_root)
             and value.get("prior_validation_receipt_digest") is None
             else _require_digest(
                 value.get("prior_validation_receipt_digest"),
@@ -1973,10 +1986,11 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
             normalized, value.get("source_authority"),
             value.get("historical_companions"),
         )
-    if amendment_root:
+    if amendment_root or unbound_root:
         return _normalize_governance_amendment_ready_root(
             normalized, value.get("source_authority"),
             value.get("historical_companions"),
+            unbound=unbound_root,
         )
     if (
         source_mode == "EXACT_STATE_ADOPTION_V3"
@@ -2132,14 +2146,25 @@ def normalize_ready_integration_prior_authority(value: Any) -> dict[str, Any]:
 
 def _normalize_governance_amendment_ready_root(
     normalized: dict[str, Any], source: Any, companions: Any,
+    *, unbound: bool = False,
 ) -> dict[str, Any]:
-    """Represent v4 historical absence; admission independently rederives it."""
+    """Represent typed signed adoption roots; admission independently rederives them."""
+
+    authorization_prefix = "unbound_receipt_admission" if unbound else "governance_amendment_authorization"
+    authorization_id = authorization_prefix + "_id"
+    authorization_digest = authorization_prefix + "_digest"
+    expected_companions = {
+        "reviewed_state_bytes": "PRESENT" if unbound else "UNAVAILABLE",
+        "validation_receipt_bytes": "RAW_RECEIPT_PRESENT_BUT_UNBOUND" if unbound else "ABSENT_NEVER_ISSUED",
+        "final_attestation_bytes": "NO_VALID_COMMIT_BOUND_ATTESTATION" if unbound else "ABSENT_NEVER_ISSUED",
+        "historical_bytes_reconstructed": False,
+    }
 
     source_keys = {
         "proof_version", "source_parent_sha", "source_signer_identity",
         "commit_signature_evidence_digest", "observed_history_digest",
         "intended_state_digest", "head_advanced_count", "head_advanced_history_digest",
-        "governance_amendment_authorization_id", "governance_amendment_authorization_digest",
+        authorization_id, authorization_digest,
         "registered_source_digest", "registration_tip_sha", "adoption_source_evidence_digest",
         "adoption_proof_digest", "adoption_authorization_id", "adoption_authorization_digest",
         "enrollment_publication", "historical_evidence", "feedback",
@@ -2149,13 +2174,13 @@ def _normalize_governance_amendment_ready_root(
     historical = normalize_exact_state_adoption_historical_evidence(source["historical_evidence"])
     feedback = source["feedback"]
     if (
-        source["proof_version"] != "4.0"
+        source["proof_version"] != ("5.0" if unbound else "4.0")
         or source["enrollment_publication"] != normalized["publication"]
-        or historical["state"] != "ABSENT_NEVER_ISSUED"
+        or historical["state"] != ("RAW_RECEIPT_PRESENT_BUT_UNBOUND" if unbound else "ABSENT_NEVER_ISSUED")
         or normalized["prior_validation_receipt_digest"] is not None
         or normalized["prior_final_attestation_digest"] is not None
         or source["adoption_proof_digest"] != normalized["lifecycle"]["current_authority_digest"]
-        or source["adoption_source_evidence_digest"] != source["governance_amendment_authorization_digest"]
+        or source["adoption_source_evidence_digest"] != source[authorization_digest]
         or source["source_signer_identity"] != normalized["expected_signer"]["identity"]
         or type(source["head_advanced_count"]) is not int
         or source["head_advanced_count"] < 0
@@ -2166,30 +2191,38 @@ def _normalize_governance_amendment_ready_root(
         or feedback["material_finding_ids"] != sorted(set(feedback["material_finding_ids"]))
         or not isinstance(companions, dict)
         or companions.get("historical_bytes_reconstructed") is not False
-        or companions != {
-            "reviewed_state_bytes": "UNAVAILABLE",
-            "validation_receipt_bytes": "ABSENT_NEVER_ISSUED",
-            "final_attestation_bytes": "ABSENT_NEVER_ISSUED",
-            "historical_bytes_reconstructed": False,
-        }
+        or companions != expected_companions
     ):
         raise SecurityBlocker("Governance-Amendment Ready root source binding changed")
     for field in (
         "commit_signature_evidence_digest", "observed_history_digest", "intended_state_digest",
-        "head_advanced_history_digest", "governance_amendment_authorization_digest",
+        "head_advanced_history_digest", authorization_digest,
         "registered_source_digest", "adoption_source_evidence_digest", "adoption_proof_digest",
         "adoption_authorization_digest",
     ):
         _require_digest(source[field], field)
     for field in ("state_digest", "feedback_digest", "thread_inventory_digest"):
         _require_digest(feedback[field], field)
-    for field in ("governance_amendment_authorization_id", "adoption_authorization_id"):
+    for field in (authorization_id, "adoption_authorization_id"):
         _require_string(source[field], field)
     if _require_oid(source["source_parent_sha"], "adopted source parent") == normalized["prior_delivery_head_sha"]:
         raise SecurityBlocker("Governance-Amendment Ready root parent is invalid")
     _require_oid(source["registration_tip_sha"], "adopted source registration tip")
+    if unbound:
+        expected = EXACT_UNBOUND_RECEIPT_SUBJECT
+        if (
+            (normalized["repository"], normalized["delivery_issue_number"], normalized["pull_request_number"],
+             normalized["prior_delivery_head_sha"], normalized["prior_delivery_tree_sha"], source["source_parent_sha"])
+            != (expected["repository"], expected["delivery_issue"], expected["pull_request"],
+                expected["head_sha"], expected["tree_sha"], expected["parent_sha"])
+            or normalized["lifecycle"]["remediation_cycles"] != 0
+            or source["head_advanced_count"] != 0
+            or feedback["material_finding_ids"] != [EXACT_UNBOUND_RECEIPT_P1_THREAD]
+        ):
+            raise SecurityBlocker("unbound receipt Ready root scope or P1 inventory changed")
     normalized.update(
-        source_authority_mode="EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT",
+        source_authority_mode=("EXACT_STATE_ADOPTION_V5_UNBOUND_RECEIPT_ROOT" if unbound
+                               else "EXACT_STATE_ADOPTION_V4_GOVERNANCE_AMENDMENT_ROOT"),
         source_authority=copy.deepcopy(source), historical_companions=copy.deepcopy(companions),
     )
     return normalized
@@ -2333,6 +2366,23 @@ def normalize_exact_state_adoption_historical_evidence(
     value: Any,
 ) -> dict[str, Any]:
     """Normalize the closed schema-aware historical receipt identity."""
+
+    if isinstance(value, dict) and value.get("state") == "RAW_RECEIPT_PRESENT_BUT_UNBOUND":
+        fields = {
+            "state", "validation_receipt_digest", "source_validation_evidence_digest",
+            "final_attestation_digest", "bytes_reconstructed",
+            "raw_receipt_sha256", "raw_receipt_digest",
+        }
+        if set(value) != fields or value["bytes_reconstructed"] is not False or any(
+            value[field] is not None for field in (
+                "validation_receipt_digest", "source_validation_evidence_digest",
+                "final_attestation_digest",
+            )
+        ):
+            raise SecurityBlocker("unbound raw receipt cannot claim historical binding")
+        for field in ("raw_receipt_sha256", "raw_receipt_digest"):
+            _require_digest(value[field], field)
+        return copy.deepcopy(value)
 
     fields = {
         "state",
@@ -2540,43 +2590,6 @@ def _normalize_legacy_enrolled_ready_source(
     return normalized
 
 
-def normalize_exact_state_adoption_historical_evidence(
-    value: Any,
-) -> dict[str, Any]:
-    """Normalize the closed schema-aware historical receipt identity."""
-
-    fields = {
-        "state",
-        "validation_receipt_digest",
-        "source_validation_evidence_digest",
-        "final_attestation_digest",
-        "bytes_reconstructed",
-    }
-    if not isinstance(value, dict) or set(value) != fields:
-        raise SecurityBlocker("exact-state historical evidence is malformed")
-    result = copy.deepcopy(value)
-    state = result["state"]
-    if (
-        state not in {"PRESENT", "UNAVAILABLE", "ABSENT_NEVER_ISSUED"}
-        or result["bytes_reconstructed"] is not False
-    ):
-        raise SecurityBlocker("exact-state historical evidence state is unknown")
-    receipt = result["validation_receipt_digest"]
-    source = result["source_validation_evidence_digest"]
-    attestation = result["final_attestation_digest"]
-    if state == "ABSENT_NEVER_ISSUED":
-        if any(item is not None for item in (receipt, source, attestation)):
-            raise SecurityBlocker("absent historical evidence cannot claim a digest")
-    else:
-        _require_digest(receipt, "historical validation receipt")
-        _require_digest(source, "historical source validation")
-        if state == "PRESENT":
-            _require_digest(attestation, "historical final attestation")
-        elif attestation is not None:
-            raise SecurityBlocker(
-                "unavailable historical evidence cannot claim an attestation"
-            )
-    return result
 
 
 def normalize_ready_integration_evidence(
