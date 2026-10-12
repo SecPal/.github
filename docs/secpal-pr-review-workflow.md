@@ -728,7 +728,13 @@ the raw provenance and unresolved finding without supplying a historical
 trailer or using zero-receipt recovery. No other delivery can select this path.
 The read-only `qualify-exact-unbound-receipt --artifact-root PATH --output PATH`
 command verifies eligibility from accepted protected main without signing an
-admission, enrolling #1154 or modifying its source or PR.
+admission, enrolling #1154 or modifying its source or PR. It acquires a missing
+registered Git object into the qualifying checkout's object cache without
+changing HEAD, refs or FETCH_HEAD. Historical receipt comparison uses the
+registered immutable issuance context; provider policy and current safety use
+accepted-main registry bytes. Enrollment repeats current safety and checks the
+exact open issue, Ready PR, source and blocking finding after journal/object
+verification, immediately before the existing publication CAS.
 
 The amendment authorization contains a one-use exact-scope root authorization
 signed by an authority signer whose identity and key come from the bound

@@ -6570,6 +6570,119 @@ class UnboundReceiptProofTests(TestCase):
                 "--pr", "1157",
             ])
 
+    def test_closed_or_foreign_delivery_issue_cannot_be_admitted(self):
+        issue = {"number": 1154, "state": "open", "html_url": "https://github.com/SecPal/.github/issues/1154"}
+        self.owner._verify_issue(issue)
+        for field, value in (("number", 1190), ("state", "closed"),
+                             ("html_url", "https://github.com/example/other/issues/1154"),
+                             ("pull_request", {})):
+            with self.subTest(field=field), self.assertRaises(authority.LifecycleAuthorityError):
+                self.owner._verify_issue({**issue, field: value})
+
+    def test_missing_exact_source_object_is_acquired_without_changing_refs_or_head(self):
+        results = [SimpleNamespace(returncode=1, stdout=b""),
+                   SimpleNamespace(returncode=0, stdout=b""),
+                   SimpleNamespace(returncode=0, stdout=b"commit\n")]
+        with patch.object(publication, "_run_git", side_effect=results) as run:
+            self.owner._ensure_source_object()
+        self.assertEqual([call.args[1] for call in run.call_args_list], [
+            ["cat-file", "-t", self.owner.SUBJECT["head_sha"]],
+            ["fetch", "--no-tags", "--no-write-fetch-head", "origin", self.owner.SUBJECT["head_sha"]],
+            ["cat-file", "-t", self.owner.SUBJECT["head_sha"]],
+        ])
+        with patch.object(publication, "_run_git", return_value=results[0]):
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                self.owner._ensure_source_object()
+
+    def test_publication_rechecks_safety_binding_and_source_after_safety(self):
+        document = self.document()
+        helper = SimpleNamespace(_require_accepted_main_bridge_source=Mock(return_value=HEADS[0]))
+        observed = {"feedback": document["feedback"], "commit_signature_evidence_digest": self.signature_digest}
+        order = []
+        with patch.object(self.owner.transport, "_load_actions_helper", return_value=helper), \
+             patch.object(self.owner, "_ensure_source_object"), \
+             patch.object(self.owner.amendment, "_bound_current_validation", side_effect=lambda *a, **k: order.append("safety") or document["current_validation"]) as safety, \
+             patch.object(self.owner, "_observe", side_effect=lambda *a: order.append("source") or observed):
+            self.owner.reauthenticate_for_publication(document)
+            self.assertEqual(order, ["safety", "source"])
+            safety.assert_called_once()
+        changed = {**document["current_validation"], "policy_digest": "f" * 64}
+        with patch.object(self.owner.transport, "_load_actions_helper", return_value=helper), \
+             patch.object(self.owner, "_ensure_source_object"), \
+             patch.object(self.owner.amendment, "_bound_current_validation", return_value=changed), \
+             patch.object(self.owner, "_observe", return_value=observed):
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                self.owner.reauthenticate_for_publication(document)
+
+    def test_current_registry_selection_uses_only_accepted_epoch_bytes(self):
+        helper = SimpleNamespace(select_repository=Mock(return_value="accepted-entry"), load_registry=Mock())
+        registry = {"schema_version": "1.0", "repositories": []}
+        with patch.object(self.owner.transport, "_load_actions_helper", return_value=helper), \
+             patch.object(self.owner.amendment, "_accepted_main_bytes", return_value=authority.canonical_json_bytes(registry)) as read:
+            self.assertEqual(self.owner._accepted_registry_entry(HEADS[0]), "accepted-entry")
+        read.assert_called_once_with(self.owner.ROOT, HEADS[0], self.owner.amendment.REGISTRY_PATH)
+        helper.load_registry.assert_not_called()
+
+    def test_live_observation_requires_open_issue_and_accepted_registry(self):
+        subject = self.owner.SUBJECT
+        state = SimpleNamespace(state_digest=self.record["completed_state_digest"],
+                                feedback_digest=self.record["completed_feedback_digest"],
+                                feedback={"threads": [{"node_id": self.owner.P1_THREAD, "is_resolved": False, "is_outdated": False}]})
+        helper = SimpleNamespace(select_repository=Mock(return_value="accepted-entry"),
+                                 load_registry=Mock(side_effect=AssertionError("local policy read")),
+                                 FastPathGateway=Mock(return_value=SimpleNamespace(capture_stable_feedback=Mock(return_value=state))))
+        issue = {"number": 1154, "state": "open", "html_url": "https://github.com/SecPal/.github/issues/1154"}
+        pull = {"number": 1156, "state": "open", "draft": False,
+                "head": {"sha": subject["head_sha"], "repo": {"full_name": REPOSITORY}},
+                "base": {"ref": "main", "repo": {"full_name": REPOSITORY}},
+                "created_at": self.owner.history()[0]["observed_at"],
+                "body": "Fixes #1154 " + self.record["raw_receipt_digest"]}
+        commits = [{"sha": subject["head_sha"], "parents": [{"sha": subject["parent_sha"]}],
+                    "commit": {"tree": {"sha": subject["tree_sha"]}, "verification": {"verified": True}}}]
+        chronology = (SimpleNamespace(kind="ready_for_review", occurred_at=self.owner.history()[1]["observed_at"]),)
+        routes = {"repos/SecPal/.github/pulls/1156": pull, "repos/SecPal/.github/pulls/1156/commits": commits,
+                  "repos/SecPal/.github/pulls/1156/reviews": [], "repos/SecPal/.github/issues/1154": issue}
+        with patch.object(self.owner.transport, "_load_actions_helper", return_value=helper), \
+             patch.object(self.owner.amendment, "_accepted_main_bytes", return_value=b'{"schema_version":"1.0","repositories":[]}'), \
+             patch.object(publication, "verify_pre_enrollment_absence"), \
+             patch.object(self.owner.loss, "_commit_signature", return_value=self.signature_digest), \
+             patch.object(self.owner.loss, "_gh_json", side_effect=lambda route: routes[route]), \
+             patch.object(self.owner, "_verify_reviews"), \
+             patch.object(self.owner.loss, "_observe_chronology"), \
+             patch.object(self.owner.loss, "_normalize_chronology", return_value=chronology), \
+             patch.object(self.owner.loss, "_optional_validation_receipt_trailer", return_value=None), \
+             patch.object(self.owner.amendment, "_live_feedback", return_value=self.record["feedback"]):
+            self.owner._observe(HEADS[0])
+            helper.FastPathGateway.assert_called_once_with(self.owner.ROOT, "accepted-entry")
+            helper.load_registry.assert_not_called()
+            issue["state"] = "closed"
+            with self.assertRaises(authority.LifecycleAuthorityError):
+                self.owner._observe(HEADS[0])
+
+    def test_source_drift_after_object_verification_prevents_enrollment_cas(self):
+        proof, verified = self.proof()
+        raw = authority.serialize_exact_state_adoption_evidence(exact_state_adoption_proof=proof)
+        self.policy.repository = REPOSITORY
+        self.policy.publication_branch = "refs/heads/secpal-lifecycle-publications"
+        self.policy.publication_remote_url = "https://github.com/SecPal/.github.git"
+        observations = []
+        def last_source_check(value):
+            self.assertEqual(observations, ["object_verified"])
+            raise authority.LifecycleAuthorityError("original source drifted")
+        with patch.object(publication, "_verify_live_protection"), \
+             patch.object(publication, "_isolated_repository", return_value=nullcontext((REPO_ROOT, {}))), \
+             patch.object(publication, "_observe_remote_current_once", return_value=None), \
+             patch.object(publication, "_publication_fields", return_value={}), \
+             patch.object(publication, "_sign_publication", return_value=b"hermetic fixture"), \
+             patch.object(publication, "_write_publication_object", return_value=HEADS[4]), \
+             patch.object(publication, "_verify_publication_document", side_effect=lambda *a, **k: observations.append("object_verified") or ({"publication_digest": "4" * 64}, verified)), \
+             patch.object(self.owner, "reauthenticate_for_publication", side_effect=last_source_check) as recheck, \
+             patch.object(publication, "_cas_remote_ref") as cas:
+            with self.assertRaisesRegex(authority.LifecycleAuthorityError, "source drifted"):
+                publication.enroll_existing_lifecycle(raw, signer_identity=SIGNER, signer=signer_for())
+            recheck.assert_called_once()
+            cas.assert_not_called()
+
 
 if __name__ == "__main__":
     main(verbosity=2)

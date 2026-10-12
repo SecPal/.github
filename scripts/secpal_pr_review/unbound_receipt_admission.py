@@ -172,6 +172,34 @@ def _verify_reviews(reviews: Any) -> None:
             raise authority.LifecycleAuthorityError("original assessment identity or chronology changed")
 
 
+def _verify_issue(issue: Any) -> None:
+    if not isinstance(issue, dict) or (
+        issue.get("number") != 1154 or issue.get("state") != "open"
+        or issue.get("html_url") != "https://github.com/SecPal/.github/issues/1154"
+        or "pull_request" in issue
+    ):
+        raise authority.LifecycleAuthorityError("registered delivery issue is not the exact open leaf")
+
+
+def _accepted_registry_entry(main: str) -> dict[str, Any]:
+    helper = transport._load_actions_helper()
+    registry = authority.loads_closed_json(amendment._accepted_main_bytes(ROOT, main, amendment.REGISTRY_PATH))
+    return helper.select_repository(registry, SUBJECT["repository"])
+
+
+def _ensure_source_object() -> None:
+    """Acquire only the immutable object into this checkout's cache, without refs."""
+    check = publication._run_git(ROOT, ["cat-file", "-t", SUBJECT["head_sha"]])
+    if check.returncode == 0 and check.stdout.strip() == b"commit":
+        return
+    fetched = publication._run_git(ROOT, [
+        "fetch", "--no-tags", "--no-write-fetch-head", "origin", SUBJECT["head_sha"],
+    ])
+    check = publication._run_git(ROOT, ["cat-file", "-t", SUBJECT["head_sha"]])
+    if fetched.returncode != 0 or check.returncode != 0 or check.stdout.strip() != b"commit":
+        raise authority.LifecycleAuthorityError("immutable registered source object is unavailable")
+
+
 def _verify_document(value: Any) -> dict[str, Any]:
     """Verify immutable signed facts; later remediation does not rewrite history."""
     doc = copy.deepcopy(authority._require_closed(value, FIELDS, "unbound receipt admission"))
@@ -229,13 +257,19 @@ def _observe(main: str) -> dict[str, Any]:
     """Read live provider/source/journal facts using the existing trusted adapters."""
     helper = transport._load_actions_helper()
     record = _record(main)
-    pull = loss._gh_json("repos/SecPal/.github/pulls/1156")
+    # Complete potentially lengthy journal and local cryptographic work before
+    # the last live source/feedback projection, including at the enrollment CAS.
+    publication.verify_pre_enrollment_absence(SUBJECT["repository"], 1154)
+    trust = authority._load_lifecycle_trust_policy(SUBJECT["repository"])
+    signature = loss._commit_signature(ROOT, SUBJECT["head_sha"], SOURCE_SIGNER, trust)
     commits = loss._gh_json("repos/SecPal/.github/pulls/1156/commits")
     _verify_reviews(loss._gh_json("repos/SecPal/.github/pulls/1156/reviews"))
     chronology = loss._normalize_chronology(loss._observe_chronology(SUBJECT["repository"], 1156), SUBJECT["repository"], 1156)
-    entry = helper.select_repository(helper.load_registry(), SUBJECT["repository"])
+    entry = _accepted_registry_entry(main)
     state = helper.FastPathGateway(ROOT, entry).capture_stable_feedback(SUBJECT["repository"], 1156)
     feedback = amendment._live_feedback(SUBJECT["repository"], 1156, SUBJECT["head_sha"])
+    _verify_issue(loss._gh_json("repos/SecPal/.github/issues/1154"))
+    pull = loss._gh_json("repos/SecPal/.github/pulls/1156")
     if (
         pull.get("state") != "open" or pull.get("draft") is not False
         or pull.get("number") != 1156 or pull.get("head", {}).get("sha") != SUBJECT["head_sha"]
@@ -259,9 +293,6 @@ def _observe(main: str) -> dict[str, Any]:
         raise authority.LifecycleAuthorityError("original delivery/provider facts changed")
     if loss._optional_validation_receipt_trailer(ROOT, SUBJECT["head_sha"]) is not None:
         raise authority.LifecycleAuthorityError("raw receipt classification conflicts with source trailer")
-    trust = authority._load_lifecycle_trust_policy(SUBJECT["repository"])
-    signature = loss._commit_signature(ROOT, SUBJECT["head_sha"], SOURCE_SIGNER, trust)
-    publication.verify_pre_enrollment_absence(SUBJECT["repository"], 1154)
     return {"feedback": feedback, "commit_signature_evidence_digest": signature}
 
 
@@ -270,10 +301,14 @@ def acquire(artifact_root: Path) -> dict[str, Any]:
     helper = transport._load_actions_helper()
     main = helper._require_accepted_main_bridge_source(SUBJECT["repository"])
     record = _record(main)
+    _ensure_source_object()
     before = _observe(main)
     raw = _read_artifact(artifact_root, ".context/issue1154/canonical-receipt.json")
     draft_raw = _read_artifact(artifact_root, ".context/issue1154/draft-feedback.json")
     draft = fast_path.StableFeedbackState.from_payload(authority.loads_closed_json(draft_raw))
+    # This is retained issuance context, pinned by accepted policy and the
+    # signed immutable source. It grants no historical validation authority;
+    # current safety and provider policy separately use accepted main.
     registry = authority.loads_closed_json(amendment._accepted_main_bytes(ROOT, SUBJECT["head_sha"], amendment.REGISTRY_PATH))
     entry = helper.select_repository(registry, SUBJECT["repository"])
     binding = fast_path.validation_registry_projection(entry)
@@ -327,8 +362,16 @@ def reauthenticate_for_publication(value: Any) -> None:
     doc = _verify_document(value)
     helper = transport._load_actions_helper()
     main = helper._require_accepted_main_bridge_source(SUBJECT["repository"])
-    if main != doc["accepted_main_sha"] or _observe(main) != {
+    if main != doc["accepted_main_sha"]:
+        raise authority.LifecycleAuthorityError("unbound receipt publication epoch changed")
+    _ensure_source_object()
+    validation = amendment._bound_current_validation(
+        ROOT, SUBJECT["repository"], main,
+        target_head_sha=SUBJECT["head_sha"], target_tree_sha=SUBJECT["tree_sha"],
+    )
+    if validation != doc["current_validation"] or _observe(main) != {
         "feedback": doc["feedback"],
         "commit_signature_evidence_digest": doc["commit_signature_evidence_digest"],
     }:
         raise authority.LifecycleAuthorityError("unbound receipt publication facts changed")
+    helper._require_accepted_main_bridge_source(SUBJECT["repository"], expected_main=main)

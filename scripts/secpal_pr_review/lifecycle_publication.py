@@ -2689,12 +2689,6 @@ def enroll_existing_lifecycle(
         authority.verify_pre_enrollment_validation_evidence_loss_admission(
             canonical_json_bytes(bundle["exact_state_adoption_proof"]["validation_evidence_loss_admission"])
         )
-    if exact_adoption and bundle["exact_state_adoption_proof"].get("proof_version") == authority.EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION:
-        from . import unbound_receipt_admission
-
-        unbound_receipt_admission.reauthenticate_for_publication(
-            bundle["exact_state_adoption_proof"]["unbound_receipt_admission"]
-        )
     policy = authority._load_lifecycle_trust_policy(verified.repository)
     _verify_live_protection(policy)
     with _isolated_repository(policy, write=True) as (root, credential_environment):
@@ -2742,6 +2736,12 @@ def enroll_existing_lifecycle(
             expected_branch=policy.publication_branch,
             native_genesis_admission=admission,
         )
+        if exact_adoption and bundle["exact_state_adoption_proof"].get("proof_version") == authority.EXACT_ADOPTION_UNBOUND_RECEIPT_VERSION:
+            from . import unbound_receipt_admission
+
+            unbound_receipt_admission.reauthenticate_for_publication(
+                bundle["exact_state_adoption_proof"]["unbound_receipt_admission"]
+            )
         _cas_remote_ref(
             root, policy.publication_remote_url, policy.publication_branch,
             object_oid, tip, credential_environment=credential_environment,
