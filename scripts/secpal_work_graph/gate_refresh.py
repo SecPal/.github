@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -82,6 +83,15 @@ class CommandError(RefreshError):
         super().__init__("authenticated GitHub command failed")
 
 
+def _closed_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate provider JSON key")
+        result[key] = value
+    return result
+
+
 def _response(
     stdout: str, *, maximum_bytes: int = MAXIMUM_RESPONSE_BYTES
 ) -> tuple[int | None, dict[str, str], object]:
@@ -116,7 +126,7 @@ def _response(
     if not bounded:
         return status, headers, None
     try:
-        payload = json.loads(body)
+        payload = json.loads(body, object_pairs_hook=_closed_json_object)
     except (ValueError, RecursionError):
         payload = None
     return status, headers, payload
@@ -157,7 +167,8 @@ def _diagnostics(
     elif status == 429 or (
         status == 403
         and (
-            retry.get("rate_limit_remaining") == 0
+            "retry_after_seconds" in retry
+            or retry.get("rate_limit_remaining") == 0
             or safe_message
             in {"API rate limit exceeded", "You have exceeded a secondary rate limit."}
         )
@@ -371,14 +382,29 @@ class CommandGateway:
         self.repository_root = repository_root.resolve(strict=True)
 
     def _run(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        # Preserve the existing credential/profile authority, but exclude host,
+        # TLS and unrelated environment overrides from the provider boundary.
+        environment = {
+            "PATH": os.defpath,
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "GH_HOST": "github.com",
+            "PAGER": "cat",
+            "GH_PAGER": "cat",
+            "GH_PROMPT_DISABLED": "1",
+        }
+        for key in ("HOME", "GH_CONFIG_DIR", "GH_TOKEN", "GITHUB_TOKEN"):
+            if key in os.environ:
+                environment[key] = os.environ[key]
         try:
             return subprocess.run(
-                [self.gh, *arguments],
+                [self.gh, arguments[0], "--hostname", "github.com", *arguments[1:]],
                 cwd=self.repository_root,
                 text=True,
                 capture_output=True,
                 check=False,
                 timeout=60,
+                env=environment,
             )
         except UnicodeError:
             raise CommandError("OUTPUT_UNREADABLE") from None

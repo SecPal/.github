@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import subprocess
 import sys
 from pathlib import Path
-from unittest import TestCase, main, mock
+from unittest import SkipTest, TestCase, main, mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -163,6 +163,83 @@ class GateRefreshTests(TestCase):
 
 
 class PublicationTests(TestCase):
+    def test_duplicate_response_keys_are_malformed_and_ambiguous(self):
+        body = {
+            "id": 123,
+            "url": f"https://api.github.com/repos/{self.repository}/statuses/{self.pull.head_sha}",
+            "state": "pending",
+            "context": gate_refresh.HARD_CONTEXT,
+            "target_url": self.target,
+        }
+        for key in ("url", "context", "state", "target_url", "id"):
+            with self.subTest(key=key):
+                raw = "{" + json.dumps(key) + ':"conflicting",' + json.dumps(body)[1:]
+                response = subprocess.CompletedProcess(
+                    [], 0, "HTTP/2.0 201 Created\n\n" + raw, ""
+                )
+                evidence = self.publish_error(response)
+                self.assertEqual(evidence["outcome"], "AMBIGUOUS")
+                self.assertEqual(evidence["http_status"], 201)
+        status, _, payload = gate_refresh._response(
+            'HTTP/2.0 200 OK\n\n[{"id":1,"id":2}]'
+        )
+        self.assertEqual(status, 200)
+        self.assertIsNone(payload)
+
+    def test_secondary_rate_limit_uses_validated_retry_after(self):
+        evidence = self.publish_error(
+            self.response(
+                403,
+                {
+                    "message": "You have exceeded a secondary rate limit. Please wait a few minutes before you try again."
+                },
+                "Retry-After: 60\r\nX-RateLimit-Remaining: 100\r\n",
+            )
+        )
+        self.assertEqual(evidence["category"], "RATE_LIMITED")
+        self.assertIsNone(evidence["safe_message"])
+        for value in ("secret", "-1", "99999999999"):
+            evidence = self.publish_error(
+                self.response(
+                    403,
+                    {"message": "untrusted"},
+                    f"Retry-After: {value}\r\nX-RateLimit-Remaining: 100\r\n",
+                )
+            )
+            self.assertEqual(evidence["category"], "AUTHORIZATION_REJECTED")
+
+    def test_command_pins_host_and_excludes_unrelated_environment(self):
+        environment = {
+            "GH_HOST": "wrong.invalid",
+            "GH_ENTERPRISE_TOKEN": "synthetic-enterprise",
+            "GH_TOKEN": "synthetic-github",
+            "PRIVATE_ENV": "synthetic-secret",
+            "SSL_CERT_FILE": "wrong.pem",
+            "PATH": "/untrusted",
+            "HOME": "/synthetic-home",
+            "GH_CONFIG_DIR": "/synthetic-config",
+        }
+        gateway = gate_refresh.CommandGateway(gh="/usr/bin/gh", repository_root=ROOT)
+        with mock.patch.dict(os.environ, environment, clear=True), mock.patch(
+            "subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")
+        ) as run:
+            gateway._run(["api", "repos/SecPal/.github/commits/abc/statuses"])
+        self.assertEqual(
+            run.call_args.args[0][:4],
+            ["/usr/bin/gh", "api", "--hostname", "github.com"],
+        )
+        child = run.call_args.kwargs["env"]
+        self.assertEqual(child["GH_HOST"], "github.com")
+        self.assertEqual(child["PATH"], os.defpath)
+        self.assertEqual(child["GH_TOKEN"], "synthetic-github")
+        self.assertEqual(child["GH_CONFIG_DIR"], "/synthetic-config")
+        for key in ("GH_ENTERPRISE_TOKEN", "PRIVATE_ENV", "SSL_CERT_FILE"):
+            self.assertNotIn(key, child)
+
+    def test_optional_cli_absence_skips_only_real_transport(self):
+        with mock.patch("shutil.which", return_value=None), self.assertRaises(SkipTest):
+            self.test_real_gh_transport_preserves_http_rejection_without_secret_output()
+
     def setUp(self):
         self.gateway = gate_refresh.CommandGateway(gh="gh", repository_root=ROOT)
         self.pull = gate_refresh.PullRequest(10, "a" * 40)
@@ -585,7 +662,10 @@ class PublicationTests(TestCase):
         # Real CLI/TLS/HTTP representation, with an entirely local provider and
         # a synthetic credential. Never contacts GitHub or reads local gh config.
         gh = shutil.which("gh")
-        self.assertIsNotNone(gh, "the maintained transport requires gh")
+        if gh is None:
+            self.skipTest(
+                "gh is optional for local preflight; controlled regressions still run"
+            )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             cert, key = root / "cert.pem", root / "key.pem"
@@ -615,22 +695,20 @@ class PublicationTests(TestCase):
             requests = []
 
             class Provider(BaseHTTPRequestHandler):
-                def do_POST(handler):
+                def do_POST(self):
                     requests.append(
                         (
-                            handler.path,
+                            self.path,
                             json.loads(
-                                handler.rfile.read(
-                                    int(handler.headers["Content-Length"])
-                                )
+                                self.rfile.read(int(self.headers["Content-Length"]))
                             ),
                         )
                     )
-                    handler.send_response(422)
-                    handler.send_header("Content-Type", "application/json")
-                    handler.send_header("X-GitHub-Request-Id", "ABCD:1234:5678:90AB")
-                    handler.end_headers()
-                    handler.wfile.write(
+                    self.send_response(422)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("X-GitHub-Request-Id", "ABCD:1234:5678:90AB")
+                    self.end_headers()
+                    self.wfile.write(
                         json.dumps(
                             {
                                 "message": "Validation Failed",
@@ -646,7 +724,7 @@ class PublicationTests(TestCase):
                         ).encode()
                     )
 
-                def log_message(handler, *arguments):
+                def log_message(self, *arguments):
                     pass
 
             server = HTTPServer(("127.0.0.1", 0), Provider)
@@ -665,7 +743,21 @@ class PublicationTests(TestCase):
             }
             try:
                 gateway = gate_refresh.CommandGateway(gh=gh, repository_root=ROOT)
-                with mock.patch.dict(os.environ, environment, clear=True):
+
+                # Only this controlled test transport selects the local host.
+                # Production host/environment pinning has a separate regression.
+                def local_transport(arguments):
+                    return subprocess.run(
+                        [gh, *arguments],
+                        cwd=ROOT,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                        timeout=60,
+                        env=environment,
+                    )
+
+                with mock.patch.object(gateway, "_run", side_effect=local_transport):
                     with self.assertRaises(gate_refresh.RefreshError) as caught:
                         gateway.publish(
                             self.repository, self.pull, "pending", "refresh"
