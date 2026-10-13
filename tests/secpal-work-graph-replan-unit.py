@@ -457,6 +457,20 @@ class PlanningTests(TestCase):
             node(9, parent=key(1)),
         )
 
+    def test_plan_bound_is_checked_before_any_simulation_or_mutation(self):
+        from unittest.mock import patch
+        request = {"current_issue": key(2), "finding": finding("PROMOTE_TO_SUB_EPIC"),
+                   "operation": {"kind": "PROMOTE_TO_SUB_EPIC",
+                   "children": [{"alias": f"child-{i}", "repository": REPO,
+                                 "title": f"Child {i}", "body": "## Acceptance Criteria\n\n- Done.\n"}
+                                for i in range(500)],
+                   "blocked_by_placement": {key(3): [replanning.AGGREGATE]},
+                   "blocking_placement": {key(8): [replanning.AGGREGATE]}}}
+        with patch.object(replanning, "_validate_simulated_plan") as simulate:
+            with self.assertRaisesRegex(replanning.PlanError, "499-step"):
+                replanning.build_plan(self.snapshot, request, actor="alice")
+            simulate.assert_not_called()
+
     def test_new_responsibility_is_owned_and_keeps_siblings_parallel(self):
         request = {
             "current_issue": key(2),
@@ -1098,7 +1112,7 @@ class ObservationVerificationTests(TestCase):
             object(), self.before, self.after(), journal), ())
 
     def completion_evidence(self, closed):
-        return replanning.ConcurrentCompletion(
+        return github._seal_completion(replanning.ConcurrentCompletion(
             issue_key=closed.key, issue_node_id=closed.node_id,
             repository_id=closed.repository_id,
             current_state=closed.state, current_state_reason=closed.state_reason,
@@ -1114,7 +1128,7 @@ class ObservationVerificationTests(TestCase):
                            "2026-10-12T21:02:09Z", "USER_alice"),),
             started_at="2026-10-12T21:01:20Z",
             observed_at="2026-10-12T21:03:00Z",
-        )
+        ))
 
     def test_forged_or_incomplete_completion_evidence_blocks(self):
         from dataclasses import replace
@@ -1147,7 +1161,7 @@ class ObservationVerificationTests(TestCase):
                 with self.assertRaises(replanning.PlanError):
                     replanning.verify_unchanged_relationships(
                         self.plan, self.before, self.after(**{key(1190): closed}),
-                        self.aliases, completions=(replace(evidence, **changed),))
+                        self.aliases, completions=(github._seal_completion(replace(evidence, **changed)),))
 
     def test_completion_cannot_change_endpoints_or_hide_other_drift(self):
         closed = node(1190, parent=key(1032), blocked_by=(key(1004),),
@@ -1176,6 +1190,54 @@ class ObservationVerificationTests(TestCase):
         with self.assertRaisesRegex(replanning.PlanError, "unplanned issue"):
             replanning.verify_unchanged_relationships(
                 self.plan, self.before, self.after(**{key(665): node(665)}), self.aliases)
+
+    def test_caller_constructed_completion_has_no_provider_provenance(self):
+        from dataclasses import replace
+        closed = node(1190, parent=key(1032), blocked_by=(key(1004),),
+                      state="closed", state_reason="completed")
+        evidence = self.completion_evidence(closed)
+        fields = {k: v for k, v in evidence.__dict__.items() if k != "_seal"}
+        forged = replanning.ConcurrentCompletion(**fields)
+        with self.assertRaisesRegex(replanning.PlanError, "provenance"):
+            replanning.verify_unchanged_relationships(
+                self.plan, self.before, self.after(**{key(1190): closed}),
+                self.aliases, completions=(forged,))
+
+    def test_blank_native_identity_cannot_qualify_completion(self):
+        from dataclasses import replace
+        old = replace(self.before.require(key(1190)), node_id="", repository_id="")
+        closed = replace(old, state="closed", state_reason="completed")
+        evidence = self.completion_evidence(closed)
+        with self.assertRaises(replanning.PlanError):
+            replanning._admit_concurrent_completion(old, closed, evidence)
+
+    def test_enrichment_must_match_historical_parent_and_dependency_references(self):
+        from dataclasses import replace
+        for field in ("parent", "blocked_by", "blocking", "children"):
+            nodes = dict(self.before.nodes)
+            old = nodes[key(1004)]
+            updates = {field: key(675) if field == "parent" else (key(675),)}
+            if field == "blocking": updates.update(blocking_observable=True, blocking_count=1)
+            if field == "children": updates.update(children_observable=True)
+            nodes[key(1004)] = replace(old, **updates)
+            baseline = model.Snapshot(nodes)
+            plan = replanning.build_plan(baseline, self.plan.request, actor="alice")
+            after = dict(self.after().nodes);after[key(1004)] = nodes[key(1004)]
+            after[key(675)] = node(675)
+            with self.subTest(field=field), self.assertRaises(replanning.PlanError):
+                replanning.verify_unchanged_relationships(
+                    plan, baseline, model.Snapshot(after), self.aliases)
+
+    def test_recovery_readback_includes_known_unattached_created_identity(self):
+        from unittest.mock import patch
+        orphan = node(675)
+        expected = model.Snapshot({**self.before.nodes, orphan.key: orphan})
+        identity = replanning.CreatedIssueIdentity(orphan.key, orphan.node_id, orphan.repository_id)
+        with patch.object(replan_cli, "_load_plan_snapshot", return_value=(self.before, key(1032))), patch.object(
+                github, "load_snapshot", return_value=(graph(orphan), orphan.key)):
+            replan_cli._reauthenticate_graph(
+                object(), self.plan.request, expected, key(1032),
+                created_identities=(identity,))
 
     def test_enrichment_only_resolves_identities_already_named_by_observed_history(self):
         from dataclasses import replace
@@ -1248,6 +1310,9 @@ class CompletionObservationTests(TestCase):
             def __init__(self):
                 self.calls = []
 
+            def observe_main_protection(self, repository, branch):
+                return {"rulesets": [], "branch_protection": {"strict": True}}
+
             def query(self, document, variables):
                 self.calls.append((document, variables))
                 return github.GraphQLResponse(data, errors)
@@ -1268,6 +1333,9 @@ class CompletionObservationTests(TestCase):
             class ChangingTransport:
                 calls = 0
 
+                def observe_main_protection(self, repository, branch):
+                    return {"rulesets": [], "branch_protection": {"strict": True}}
+
                 def query(self, document, variables):
                     self.calls += 1
                     return github.GraphQLResponse(original if self.calls == 1 else final, ())
@@ -1277,12 +1345,48 @@ class CompletionObservationTests(TestCase):
                                           started_at="2026-10-12T21:01:20Z")
 
         class FailedTransport:
+            def observe_main_protection(self, repository, branch):
+                return {"rulesets": [], "branch_protection": {"strict": True}}
+
             def query(self, document, variables):
                 raise github.GitHubError("sensitive raw provider diagnostic")
 
         with self.assertRaisesRegex(github.GitHubError, "^concurrent-completion provider query failed$"):
             github.observe_completion(FailedTransport(), self.current,
                                       started_at="2026-10-12T21:01:20Z")
+
+    def test_effective_rules_are_independently_reauthenticated(self):
+        adapter = self.adapter()
+        observations = iter((
+            {"rulesets": [{"type": "required_status_checks", "strict": True}]},
+            {"rulesets": []},
+        ))
+        adapter.observe_main_protection = lambda repository, branch: next(observations)
+        with self.assertRaisesRegex(github.GitHubError, "readback changed"):
+            github.observe_completion(adapter, self.current,
+                                      started_at="2026-10-12T21:01:20Z")
+
+    def test_ruleset_only_main_has_no_observed_admin_bypass_qualification(self):
+        from copy import deepcopy
+        payload = deepcopy(self.payload)
+        payload["repository"]["defaultBranchRef"]["branchProtectionRule"] = None
+        with self.assertRaises(github.GitHubError):
+            github.observe_completion(self.adapter(payload), self.current,
+                                      started_at="2026-10-12T21:01:20Z")
+
+    def test_rule_observer_consumes_existing_bounded_policy_owner(self):
+        from unittest.mock import Mock, patch
+        helper = Mock()
+        helper.default_config.return_value = {}
+        normalized = {"rulesets": [{"type": "required_status_checks"}],
+                      "branch_protection": {"strict": True}}
+        helper._capture_rules.return_value = (normalized, [], ["rulesets", "branch_protection"])
+        adapter = github.GitHubReadAdapter()
+        with patch.object(github, "_review_policy_owner", return_value=helper):
+            self.assertEqual(adapter.observe_main_protection(REPO, "main"), normalized)
+        helper.Budget.assert_called_once_with({"maximum_api_calls": 12, "maximum_items": 1000})
+        self.assertEqual(helper._capture_rules.call_args.args[1:], ("main", {
+            "require_ruleset_evidence": True, "require_branch_protection_evidence": True}))
 
     def test_current_completion_is_observed_independently(self):
         adapter = self.adapter()
@@ -1308,6 +1412,9 @@ class CompletionObservationTests(TestCase):
         class PaginatedTransport:
             calls = 0
 
+            def observe_main_protection(self, repository, branch):
+                return {"rulesets": [], "branch_protection": {"strict": True}}
+
             def query(self, document, variables):
                 self.calls += 1
                 return github.GraphQLResponse(initial if self.calls == 1 else following, ())
@@ -1327,6 +1434,9 @@ class CompletionObservationTests(TestCase):
 
         class EndlessTransport:
             calls = 0
+
+            def observe_main_protection(self, repository, branch):
+                return {"rulesets": [], "branch_protection": {"strict": True}}
 
             def query(self, document, variables):
                 self.calls += 1
@@ -2038,6 +2148,14 @@ class GitRecoverySignerTests(TestCase):
             )
             with self.assertRaisesRegex(replanning.StalePlanError, "reference"):
                 signer.verify(authentication, operation_digest, initial)
+
+    def test_recovery_signer_does_not_inherit_caller_clock(self):
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"GIT_AUTHOR_DATE": "2099-01-01T00:00:00Z",
+                                     "GIT_COMMITTER_DATE": "2099-01-01T00:00:00Z"}):
+            environment = replanning.GitRecoverySigner._environment()
+            self.assertNotIn("GIT_AUTHOR_DATE", environment)
+            self.assertNotIn("GIT_COMMITTER_DATE", environment)
 
     def test_hostile_signing_environment_is_not_inherited(self):
         hostile = {

@@ -12,10 +12,14 @@ human-readable `gh` output is parsed.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import sys
 import json
 import subprocess
 from collections import deque
 from dataclasses import dataclass, replace
+from functools import cache
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
 
@@ -202,6 +206,29 @@ class GitHubGraphQLAdapter:
 @dataclass
 class GitHubReadAdapter(GitHubGraphQLAdapter):
     """The canonical read-only work-graph boundary."""
+
+    def observe_main_protection(self, repository: str, branch: str) -> Mapping[str, Any]:
+        """Reuse the maintained effective-rule observer, bounded and read-only.
+
+        Classic admin enforcement is still a mandatory qualification boundary:
+        applicable rulesets alone cannot prove absence of administrative bypass.
+        """
+        owner, name = repository.split("/", 1)
+        helper = _review_policy_owner()
+        config = helper.default_config(repository)
+        config.update(maximum_api_calls=12, maximum_items=1000)
+        runner = helper.CommandRunner(
+            executable_paths={"gh": str(Path(self.gh_executable).resolve())}
+            if Path(self.gh_executable).is_absolute() else None,
+            timeout_seconds=max(1, int(self.timeout)))
+        client = helper.GitHubClient(runner, helper.Budget(config), owner, name, 0)
+        try:
+            normalized, _, _ = helper._capture_rules(client, branch, {
+                "require_ruleset_evidence": True,
+                "require_branch_protection_evidence": True})
+            return normalized
+        except (RuntimeError, ValueError, OSError):
+            raise GitHubError("concurrent-completion effective protection is unavailable") from None
 
     def viewer_login(self) -> str:
         """Resolve the invocation-context executor identity from `gh` authentication."""
@@ -603,6 +630,41 @@ def _canonical(repository: str, number: str, reference: str) -> str:
     return key
 
 
+@cache
+def _review_policy_owner():
+    """Load the existing rule semantics owner; define no parallel policy."""
+    path = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
+    name = "_secpal_work_graph_review_policy"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_COMPLETION_TOKEN = object()
+
+
+def _completion_digest(value) -> str:
+    return hashlib.sha256(json.dumps(
+        {k: v for k, v in vars(value).items() if k != "_seal"},
+        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _seal_completion(value):
+    """Seal only the provider reader's independently reauthenticated result."""
+    return replace(value, _seal=(_COMPLETION_TOKEN, _completion_digest(value)))
+
+
+def require_observed_completion(value) -> None:
+    from .replanning import ConcurrentCompletion, PlanError
+    seal = getattr(value, "_seal", None)
+    if (type(value) is not ConcurrentCompletion or not isinstance(seal, tuple)
+            or len(seal) != 2 or seal[0] is not _COMPLETION_TOKEN
+            or seal[1] != _completion_digest(value)):
+        raise PlanError("concurrent completion has no authenticated provider provenance")
+
+
 # Completion observations use native closing links, complete state-event history,
 # and a pinned protected-main history. They never consume request assertions.
 _COMPLETION_CORE = f"""id number state stateReason body
@@ -745,6 +807,7 @@ def observe_completion(
             raise GitHubError("concurrent-completion current issue observation changed")
         pull = _completion_pr_projection(issue)
         main = _completion_main_projection(initial["defaultBranchRef"])
+        protection = adapter.observe_main_protection(repository, main[0])
         if pull[5] != repository:
             raise GitHubError("concurrent-completion closing repository is foreign")
 
@@ -792,7 +855,9 @@ def observe_completion(
             raise GitHubError("concurrent-completion main ancestry exceeds its bound")
 
         final = read(COMPLETION_REAUTH_QUERY, variables)
-        if (_completion_issue_projection(final["issue"]) != core
+        final_protection = adapter.observe_main_protection(repository, main[0])
+        if (final_protection != protection
+                or _completion_issue_projection(final["issue"]) != core
                 or _completion_pr_projection(final["issue"]) != pull
                 or _completion_main_projection(final["defaultBranchRef"]) != main
                 or not events
@@ -802,7 +867,7 @@ def observe_completion(
     except (KeyError, TypeError, AttributeError, ValueError):
         raise GitHubError("concurrent-completion provider representation is incomplete") from None
 
-    return ConcurrentCompletion(
+    return _seal_completion(ConcurrentCompletion(
         issue_key=current.key, issue_node_id=core[0], repository_id=current.repository_id,
         current_state=core[2], current_state_reason=core[3], current_body_digest=core[4],
         current_parent=core[5], closing_pr_key=node_key(repository, pull[1]),
@@ -812,4 +877,4 @@ def observe_completion(
         main_name=main[0], main_oid=main[1], main_admin_enforced=main[2], main_strict=main[3],
         history_oids=tuple(history), state_events=tuple(events), started_at=started_at,
         observed_at=datetime.now(timezone.utc).isoformat(),
-    )
+    ))

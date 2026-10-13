@@ -1405,32 +1405,13 @@ the [canonical Work-Graph contract](../docs/work-graph-contract.md). An exact
 signed recovery chain records mutation progress; a later verification failure
 does not erase completed mutations or authorize replay.
 
-Relationship verification compares only facts actually observed in the signed
-baseline. Omitted ancestor/dependency connections remain unknown, including when
-a later reader observes them completely. Mutation endpoints require complete
-parent, children, forward/reverse dependencies and exact sibling order on both
-sides. Projection enrichment may resolve only identities already named by
-historically observed relationships; new identities and missing required facts
-remain blocking. Current observations never replace historical unknowns.
+Observation completeness and concurrent-completion admission are defined by
+[the canonical mutation-verification contract](../docs/work-graph-contract.md#76-native-mutation-verification).
+The commands apply that contract; they define no separate graph semantics.
 
-Unrelated OPEN → completed changes require independent native completion
-observations, never request assertions. The reader authenticates the Issue and
-repository, complete close/reopen chronology, unique native closing PR, valid
-merge signature, protected default-main identity and merge ancestry, followed by
-independent read-back. Admission preserves known content and relationships and
-rejects mutation endpoints, competing claims/closers, reopening, unexpected
-drift and incomplete history. The interval begins at the authenticated existing
-signed recovery root. At most ten changed Issues, ten pages per history, 500
-state events and 1,000 ancestry entries are observed. The graph is read again
-before continuing; a changed graph blocks.
-
-These observations neither authorize delivery nor waive normal review, required
-checks or merge gates. Signed plans, baselines, journals and failed historical
-verdicts remain unchanged. A separate current-state qualification is not
-retroactive success of a failed historical invocation. Completed-prefix
-verification can consume the pure `recover_plan` verifier without invoking the
-mutating CLI; do not run `apply` or `recover --apply` merely to repeat verification
-or a failed legacy refresh.
+Completed-prefix verification can consume the pure `recover_plan` verifier
+without invoking the mutating CLI. Do not run `apply` or `recover --apply` merely
+to repeat verification or a failed legacy refresh.
 
 ### `secpal-dependabot-manifest-coverage.mjs`
 

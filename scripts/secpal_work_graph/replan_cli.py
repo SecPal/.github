@@ -276,7 +276,8 @@ def _apply_guarded(
             original = replanning.snapshot_from_document(evidence["baseline"])
             completions = _observe_completions(adapter, original, recovery_snapshot, recovery)
             if completions:
-                _reauthenticate_graph(adapter, request, recovery_snapshot, scope)
+                _reauthenticate_graph(adapter, request, recovery_snapshot, scope,
+                                      created_identities=tuple(recovered.values()))
             plan, baseline, recovered, _ = replanning.recover_plan(
                 plan.to_dict(), recovery_snapshot, actor=actor, recovery=recovery,
                 completions=completions,
@@ -327,8 +328,18 @@ def _observe_completions(adapter, before: Snapshot, after: Snapshot, recovery):
                  for node in changed)
 
 
-def _reauthenticate_graph(adapter, request, expected: Snapshot, scope: str) -> None:
+def _reauthenticate_graph(adapter, request, expected: Snapshot, scope: str, *,
+                          created_identities=()) -> None:
     readback, readback_scope = _load_plan_snapshot(adapter, request)
+    snapshots = [readback]
+    for identity in created_identities:
+        if readback.get(identity.key) is None:
+            created, canonical = github.load_snapshot(
+                adapter, identity.key, include_reverse_dependencies=True)
+            if canonical != identity.key:
+                raise replanning.PlanError("recovery issue identity is no longer canonical")
+            snapshots.append(created)
+    readback = _merge_snapshots(*snapshots)
     if (readback_scope != scope or replanning.snapshot_digest(readback)
             != replanning.snapshot_digest(expected)):
         raise replanning.PlanError("graph changed during concurrent-completion observation")

@@ -56,6 +56,8 @@ TRUSTED_GIT_DIRECTORIES = tuple(
 )
 GIT_ENVIRONMENT_OVERRIDES = frozenset(
     {
+        "GIT_AUTHOR_DATE",
+        "GIT_COMMITTER_DATE",
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
         "GIT_CEILING_DIRECTORIES",
         "GIT_COMMON_DIR",
@@ -1489,6 +1491,8 @@ def build_plan(snapshot: Snapshot, request: Mapping[str, Any], *, actor: str) ->
         steps=tuple(steps),
         request=request,
     )
+    if len(plan.steps) > 499:
+        raise PlanError("compiled plan exceeds the 499-step recovery-chain bound")
     _validate_simulated_plan(snapshot, plan)
     return plan
 
@@ -2006,6 +2010,7 @@ class ConcurrentCompletion:
     state_events: tuple[tuple[str, str, str, str], ...]
     started_at: str
     observed_at: str
+    _seal: object = None
 
 
 def _event_time(value: str) -> datetime:
@@ -2021,13 +2026,16 @@ def _event_time(value: str) -> datetime:
 def _admit_concurrent_completion(old: Node, live: Node, evidence: ConcurrentCompletion) -> None:
     """Authenticate one non-conflicting ordinary completion, without observing IO."""
 
+    from .github import require_observed_completion
+    require_observed_completion(evidence)
     repository, _ = parse_node_key(old.key)
     try:
         pr_repository, _ = parse_node_key(evidence.closing_pr_key)
     except ValueError:
         raise PlanError("concurrent completion pull-request identity is malformed") from None
     if (
-        not old.is_open or live.state != "closed" or live.state_reason != "completed"
+        not old.node_id or not old.repository_id
+        or not old.is_open or live.state != "closed" or live.state_reason != "completed"
         or evidence.issue_key != old.key
         or evidence.issue_node_id != old.node_id
         or evidence.repository_id != old.repository_id
@@ -2201,6 +2209,19 @@ def verify_unchanged_relationships(
                 or not live.parent_observable or not live.children_observable
                 or not live.dependencies_observable or not live.blocking_observable):
             raise PlanError(f"current projection enrichment is incomplete for {key}")
+    # Historical references require their observed reciprocal facts, even when
+    # only the referenced node is newly resolved. Unknown historical fields
+    # impose no invented constraint.
+    for old in before.nodes.values():
+        for target in enrichment:
+            live = after.require(target)
+            if ((old.parent_observable and old.parent == target and old.key not in live.children)
+                    or (old.children_observable and target in old.children and live.parent != old.key)
+                    or (old.dependencies_observable and target in old.blocked_by
+                        and old.key not in live.blocking)
+                    or (old.blocking_observable and target in old.blocking
+                        and old.key not in live.blocked_by)):
+                raise PlanError("projection enrichment contradicts observed historical relationships")
     validate_dependency_endpoints(after, enrichment)
 
     for key, old in before.nodes.items():
