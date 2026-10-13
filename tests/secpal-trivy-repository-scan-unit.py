@@ -1479,6 +1479,37 @@ class AndroidCountryDispositionTests(unittest.TestCase):
         self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
 
 
+class CompletePolicyValidityTests(unittest.TestCase):
+    """Every snapshot entry gates every consumer, including unrelated repos."""
+
+    def setUp(self) -> None:
+        self.module = load_module()
+        self.policy = json.loads(POLICY.read_text())
+        self.observations = []
+        for fixture_type in (FrontendBracesDispositionTests, AndroidCountryDispositionTests):
+            fixture = fixture_type()
+            fixture.setUp()
+            self.observations.append(fixture.observation)
+        unrelated = copy.deepcopy(self.observations[0])
+        unrelated["subject"]["repository"] = "SecPal/api"
+        unrelated["findings"] = []
+        self.observations.append(unrelated)
+
+    def test_one_expired_entry_blocks_other_repositories_even_without_findings(self) -> None:
+        now = "2026-10-13T18:00:00Z"
+        for index, exception in enumerate(self.policy["exceptions"]):
+            for observation in self.observations:
+                if observation["subject"]["repository"] == exception["repository"]:
+                    continue
+                with self.subTest(expired=exception["repository"], consumer=observation["subject"]["repository"]):
+                    observed = copy.deepcopy(observation)
+                    observed["completed_at"] = now
+                    policy = copy.deepcopy(self.policy)
+                    policy["exceptions"][index]["expires_at"] = now
+                    with self.assertRaisesRegex(self.module.ContractError, "expired"):
+                        self.module.admit(observed, policy)
+
+
 class SecretSourceBindingTests(unittest.TestCase):
     """Source facts come from Git observation, never native scanner metadata."""
 
