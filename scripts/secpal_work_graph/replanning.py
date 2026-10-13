@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
@@ -1002,6 +1003,47 @@ class RecoveryJournal:
         document["outcome"] = "UNKNOWN_MUTATION_OUTCOME"
         self._write(document, previous=previous)
 
+    def started_at(self) -> str:
+        """Authenticate the existing chain's root timestamp without changing it.
+
+        Only complete, linear signed history supplies the concurrency interval.
+        A crash-ahead ref must first use the existing recovery admission.
+        """
+        evidence = self.load()
+        template = {key: value for key, value in evidence.items() if key != "authentication"}
+        operation = plan_digest(self.plan)
+        tip = evidence["authentication"]["commit_oid"]
+        if self.signer._run(["rev-parse", "--verify", self.signer._ref_name(operation)]).strip() != tip:
+            raise StalePlanError("concurrency observation requires the exact durable recovery tip")
+        commits = []
+        cursor = tip
+        for _ in range(1000):
+            parents = self.signer._parents(cursor)
+            if len(parents) > 1 or cursor in commits:
+                raise StalePlanError("recovery authentication chain is non-linear")
+            commits.append(cursor)
+            if not parents:
+                break
+            cursor = parents[0]
+        else:
+            raise StalePlanError("recovery authentication chain exceeds its bound")
+        previous = None
+        previous_oid = ""
+        for commit in reversed(commits):
+            document = self.signer._commit_document(commit, operation, template, previous_oid)
+            _validate_recovery_state(self.plan, document)
+            if previous is None:
+                if document["outcome"] != "NO_WRITES" or document["next_step"] != 0:
+                    raise StalePlanError("recovery root does not authenticate the unmutated baseline")
+            else:
+                _validate_recovery_transition(self.plan, previous, document)
+            previous, previous_oid = document, commit
+        if previous != _signed_recovery_document(template):
+            raise StalePlanError("recovery chain does not bind the durable journal")
+        timestamp = self.signer._run(["show", "-s", "--format=%cI", commits[-1]]).strip()
+        _event_time(timestamp)
+        return timestamp
+
     def cancel_unattempted_step(self, step_index: int) -> None:
         previous = self.load()
         if previous["attempting_step"] != step_index:
@@ -1770,6 +1812,7 @@ def recover_plan(
     *,
     actor: str,
     recovery: RecoveryJournal,
+    completions: tuple[ConcurrentCompletion, ...] = (),
 ) -> tuple[Plan, Snapshot, dict[str, CreatedIssueIdentity], int]:
     """Authenticate a known prefix, reject unrelated drift, and validate its suffix."""
 
@@ -1789,7 +1832,8 @@ def recover_plan(
     next_step = int(evidence["next_step"])
     try:
         verify_applied(plan, live, identities, step_limit=next_step)
-        verify_unchanged_relationships(plan, baseline, live, identities, step_limit=next_step)
+        verify_unchanged_relationships(
+            plan, baseline, live, identities, step_limit=next_step, completions=completions)
         _validate_simulated_plan(
             live,
             plan,
@@ -1934,6 +1978,112 @@ def verify_applied(
                 raise PlanError("sub-issue ordering was not applied")
 
 
+@dataclass(frozen=True)
+class ConcurrentCompletion:
+    """Normalized provider observations; never accepted from request JSON."""
+
+    issue_key: str
+    issue_node_id: str
+    repository_id: str
+    current_state: str
+    current_state_reason: str | None
+    current_body_digest: str
+    current_parent: str | None
+    closing_pr_key: str
+    closing_pr_node_id: str
+    closing_pr_repository_id: str
+    closing_pr_base_ref: str
+    closing_pr_state: str
+    merged_at: str
+    merged_by_id: str
+    merge_oid: str
+    merge_signature_valid: bool
+    main_name: str
+    main_oid: str
+    main_admin_enforced: bool
+    main_strict: bool
+    history_oids: tuple[str, ...]
+    state_events: tuple[tuple[str, str, str, str], ...]
+    started_at: str
+    observed_at: str
+
+
+def _event_time(value: str) -> datetime:
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            raise ValueError
+        return stamp
+    except (AttributeError, TypeError, ValueError):
+        raise PlanError("concurrent completion chronology is malformed") from None
+
+
+def _admit_concurrent_completion(old: Node, live: Node, evidence: ConcurrentCompletion) -> None:
+    """Authenticate one non-conflicting ordinary completion, without observing IO."""
+
+    repository, _ = parse_node_key(old.key)
+    try:
+        pr_repository, _ = parse_node_key(evidence.closing_pr_key)
+    except ValueError:
+        raise PlanError("concurrent completion pull-request identity is malformed") from None
+    if (
+        not old.is_open or live.state != "closed" or live.state_reason != "completed"
+        or evidence.issue_key != old.key
+        or evidence.issue_node_id != old.node_id
+        or evidence.repository_id != old.repository_id
+        or (evidence.current_state, evidence.current_state_reason,
+            evidence.current_body_digest, evidence.current_parent)
+        != (live.state, live.state_reason, live.body_digest, live.parent)
+        or pr_repository != repository
+        or not evidence.closing_pr_node_id
+        or evidence.closing_pr_repository_id != old.repository_id
+        or evidence.closing_pr_state != "MERGED"
+        or evidence.closing_pr_base_ref != evidence.main_name
+        or evidence.main_name != "main"
+        or evidence.main_admin_enforced is not True
+        or evidence.main_strict is not True
+        or evidence.merge_signature_valid is not True
+        or not evidence.merged_by_id
+        or not old.claims_observable or not live.claims_observable or live.claims
+        or len(old.claims) > 1
+        or (old.claims and old.claims[0].pull_request != evidence.closing_pr_key)
+    ):
+        raise PlanError("concurrent completion identity or accepted delivery does not qualify")
+    history = evidence.history_oids
+    if (
+        not isinstance(history, tuple) or not history or len(history) > 1000
+        or any(not isinstance(oid, str) for oid in history)
+        or len(set(history)) != len(history)
+        or history[0] != evidence.main_oid or evidence.merge_oid not in history
+        or any(not isinstance(oid, str) or not re.fullmatch(r"[0-9a-f]{40}", oid)
+               for oid in history)
+    ):
+        raise PlanError("concurrent completion is not bound to protected-main ancestry")
+    start, end = _event_time(evidence.started_at), _event_time(evidence.observed_at)
+    merged = _event_time(evidence.merged_at)
+    if not start <= merged <= end:
+        raise PlanError("concurrent merge falls outside the authenticated observation interval")
+    events = evidence.state_events
+    if (not isinstance(events, tuple) or not events or len(events) > 500
+            or any(not isinstance(event, tuple) or len(event) != 4
+                   or any(not isinstance(field, str) for field in event) for event in events)
+            or len({event[0] for event in events}) != len(events)):
+        raise PlanError("concurrent state-event coverage is incomplete or ambiguous")
+    within = []
+    previous_time = None
+    for identity, kind, timestamp, actor in events:
+        when = _event_time(timestamp)
+        if (not identity or kind not in {"ClosedEvent", "ReopenedEvent"} or when > end
+                or (previous_time is not None and when < previous_time)):
+            raise PlanError("concurrent state-event chronology does not qualify")
+        previous_time = when
+        if when >= start:
+            within.append((kind, when, actor))
+    if (len(within) != 1 or within[0][0] != "ClosedEvent"
+            or not merged <= within[0][1] <= end or within[0][2] != evidence.merged_by_id):
+        raise PlanError("concurrent completion is not the exact authenticated state transition")
+
+
 def verify_unchanged_relationships(
     plan: Plan,
     before: Snapshot,
@@ -1941,8 +2091,48 @@ def verify_unchanged_relationships(
     aliases: Mapping[str, CreatedIssueIdentity],
     *,
     step_limit: int | None = None,
+    completions: tuple[ConcurrentCompletion, ...] = (),
 ) -> None:
-    """Reject unrelated state, hierarchy, ordering, or dependency changes."""
+    """Compare observed history; unknown connections are not empty lists.
+
+    Mutation endpoints remain complete on both sides. Other projections need
+    only preserve the facts actually authenticated by the signed baseline.
+    """
+
+    steps = plan.steps if step_limit is None else plan.steps[:step_limit]
+    endpoints = {
+        _resolve(reference, aliases)
+        for step in steps
+        for field, reference in step.arguments.items()
+        if field in {"parent", "child", "blocked", "blocker"}
+        and isinstance(reference, str)
+    }
+    for phase, snapshot, keys in (
+        ("pre-mutation", before, endpoints & set(before.nodes)),
+        ("post-mutation", after, endpoints),
+    ):
+        for key in sorted(keys):
+            node = snapshot.get(key)
+            if (
+                node is None
+                or not node.parent_observable
+                or not node.children_observable
+                or not node.dependencies_observable
+                or not node.blocking_observable
+                or node.blocking_count != len(node.blocking)
+            ):
+                raise PlanError(f"{phase} relationship state is incomplete for {key}")
+        validate_dependency_endpoints(snapshot, keys)
+
+    completion_by_key = {}
+    for evidence in completions:
+        if (not isinstance(evidence, ConcurrentCompletion)
+                or evidence.issue_key in completion_by_key
+                or evidence.issue_key not in before.nodes
+                or evidence.issue_key in endpoints
+                or evidence.issue_key == plan.current_issue):
+            raise PlanError("concurrent completion evidence is competing or affects a mutation endpoint")
+        completion_by_key[evidence.issue_key] = evidence
 
     expected_children = {key: list(node.children) for key, node in before.nodes.items()}
     expected_blocked_by = {key: list(node.blocked_by) for key, node in before.nodes.items()}
@@ -1956,7 +2146,6 @@ def verify_unchanged_relationships(
         expected_blocking[key] = []
         expected_parent[key] = None
 
-    steps = plan.steps if step_limit is None else plan.steps[:step_limit]
     for step in steps:
         arguments = step.arguments
         if step.kind == "CREATE_ISSUE":
@@ -1991,26 +2180,55 @@ def verify_unchanged_relationships(
                 expected_blocking[blocker].remove(blocked)
 
     expected_keys = set(before.nodes) | {identity.key for identity in aliases.values()}
-    if set(after.nodes) != expected_keys:
+    historically_named = set()
+    for old in before.nodes.values():
+        if old.parent_observable and old.parent:
+            historically_named.add(old.parent)
+        for observed, references in (
+            (old.children_observable, old.children),
+            (old.dependencies_observable, old.blocked_by),
+            (old.blocking_observable, old.blocking),
+        ):
+            if observed:
+                historically_named.update(references)
+    enrichment = set(after.nodes) - expected_keys
+    if (not expected_keys.issubset(after.nodes) or len(enrichment) > 1000
+            or not enrichment.issubset(historically_named)):
         raise PlanError("post-mutation scope contains an unplanned issue identity")
+    for key in enrichment:
+        live = after.require(key)
+        if (not live.resolved or not live.node_id or not live.repository_id
+                or not live.parent_observable or not live.children_observable
+                or not live.dependencies_observable or not live.blocking_observable):
+            raise PlanError(f"current projection enrichment is incomplete for {key}")
+    validate_dependency_endpoints(after, enrichment)
 
     for key, old in before.nodes.items():
         live = after.get(key)
         if live is None:
             raise PlanError(f"pre-existing issue {key} disappeared during mutation")
-        immutable = (old.state, old.state_reason, expected_parent[key], old.title, old.body_digest)
-        if (live.state, live.state_reason, live.parent, live.title, live.body_digest) != immutable:
-            raise PlanError(f"unrelated issue state, content, or parent changed for {key}")
-        if (
-            not live.parent_observable
-            or not live.children_observable
-            or not live.dependencies_observable
-            or (old.blocking_observable and not live.blocking_observable)
-        ):
+        expected_state, expected_reason = old.state, old.state_reason
+        if key in completion_by_key:
+            _admit_concurrent_completion(old, live, completion_by_key.pop(key))
+            expected_state, expected_reason = "closed", "completed"
+        immutable = (old.node_id, old.repository_id, expected_state, expected_reason,
+                     old.title, old.body_digest)
+        if (live.node_id, live.repository_id, live.state, live.state_reason,
+                live.title, live.body_digest) != immutable:
+            raise PlanError(f"unrelated issue identity, state or content changed for {key}")
+        required = (
+            (old.parent_observable, live.parent_observable),
+            (old.children_observable, live.children_observable),
+            (old.dependencies_observable, live.dependencies_observable),
+            (old.blocking_observable, live.blocking_observable),
+        )
+        if any(observed and not current for observed, current in required):
             raise PlanError(f"post-mutation relationship state is incomplete for {key}")
-        if tuple(expected_children[key]) != live.children:
+        if old.parent_observable and expected_parent[key] != live.parent:
+            raise PlanError(f"unrelated issue parent changed for {key}")
+        if old.children_observable and tuple(expected_children[key]) != live.children:
             raise PlanError(f"unplanned child relationship or order change for {key}")
-        if set(expected_blocked_by[key]) != set(live.blocked_by):
+        if old.dependencies_observable and set(expected_blocked_by[key]) != set(live.blocked_by):
             raise PlanError(f"unplanned blocked-by relationship change for {key}")
         if old.blocking_observable and set(expected_blocking[key]) != set(live.blocking):
             raise PlanError(f"unplanned blocking relationship change for {key}")

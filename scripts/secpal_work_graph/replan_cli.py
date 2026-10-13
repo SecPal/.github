@@ -273,8 +273,13 @@ def _apply_guarded(
                     raise replanning.StalePlanError("recovery issue identity is no longer canonical")
                 recovery_snapshots.append(created_snapshot)
             recovery_snapshot = _merge_snapshots(*recovery_snapshots)
+            original = replanning.snapshot_from_document(evidence["baseline"])
+            completions = _observe_completions(adapter, original, recovery_snapshot, recovery)
+            if completions:
+                _reauthenticate_graph(adapter, request, recovery_snapshot, scope)
             plan, baseline, recovered, _ = replanning.recover_plan(
-                plan.to_dict(), recovery_snapshot, actor=actor, recovery=recovery
+                plan.to_dict(), recovery_snapshot, actor=actor, recovery=recovery,
+                completions=completions,
             )
             snapshot = recovery_snapshot
         aliases = replanning.apply_plan(
@@ -296,11 +301,37 @@ def _apply_guarded(
         if post_scope != expected_post_scope:
             raise replanning.PlanError("owning scope changed during mutation")
         replanning.verify_applied(plan, post_snapshot, aliases)
-        replanning.verify_unchanged_relationships(plan, baseline, post_snapshot, aliases)
+        completions = _observe_completions(adapter, baseline, post_snapshot, recovery)
+        if completions:
+            _reauthenticate_graph(adapter, request, post_snapshot, post_scope)
+        replanning.verify_unchanged_relationships(
+            plan, baseline, post_snapshot, aliases, completions=completions)
         resolution = resolver.resolve(post_snapshot, post_scope)
         if not resolution.complete or resolution.structurally_malformed:
             raise replanning.PlanError("resulting canonical graph is incomplete or malformed")
         return aliases, [item.as_json() for item in resolution.findings]
+
+
+def _observe_completions(adapter, before: Snapshot, after: Snapshot, recovery):
+    """Observe changed states through the canonical reader, never request input."""
+    changed = [after.require(key) for key, old in before.nodes.items()
+               if after.get(key) is not None
+               and (old.state, old.state_reason)
+               != (after.require(key).state, after.require(key).state_reason)]
+    if not changed:
+        return ()
+    if len(changed) > 10:
+        raise replanning.PlanError("concurrent completions exceed the ten-issue observation bound")
+    started_at = recovery.started_at()
+    return tuple(github.observe_completion(adapter, node, started_at=started_at)
+                 for node in changed)
+
+
+def _reauthenticate_graph(adapter, request, expected: Snapshot, scope: str) -> None:
+    readback, readback_scope = _load_plan_snapshot(adapter, request)
+    if (readback_scope != scope or replanning.snapshot_digest(readback)
+            != replanning.snapshot_digest(expected)):
+        raise replanning.PlanError("graph changed during concurrent-completion observation")
 
 
 def main(argv: Sequence[str] | None = None, *, stdin=None, stdout=None, stderr=None) -> int:
