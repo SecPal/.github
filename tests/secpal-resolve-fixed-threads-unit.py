@@ -2762,6 +2762,164 @@ class ResolveFixedThreadsTests(TestCase):
         )
         self.assertIsNone(boundary.eligibility)
 
+    def _android_641_boundary(self, **overrides: Any) -> Any:
+        # Byte-for-byte originals authenticated against the signed delivery;
+        # these are frozen source evidence, never today's feedback capture.
+        # The .raw suffix keeps JSON formatters from rewriting original bytes.
+        root = OPENPGP_FIXTURE_ROOT / "android-641"
+        arguments = {
+            "repository": "SecPal/android",
+            "delivery_issue": 641,
+            "number": 747,
+            "expected_head": "98dbd7d8e72461da5f2b1d55eca217a28281f95f",
+            "final_reviewed_state_path": root / "draft-reviewed-state.json.raw",
+            "expected_final_reviewed_state_digest":
+                "f3e5c761e116ee71fe6e6e4e2cd8161ad84677ee4d40950c731d0d3d58f85822",
+            "final_validation_evidence_path": root / "final-attestation.json.raw",
+            "final_eligibility_evidence_path": None,
+        }
+        return load_final_feedback_boundary(**{**arguments, **overrides})
+
+    def test_android_641_originals_require_exact_absence_admission(self) -> None:
+        boundary = self._android_641_boundary()
+        root = OPENPGP_FIXTURE_ROOT / "android-641"
+        receipt = json.loads((root / "validation-receipt.json.raw").read_bytes())
+        self.assertEqual(boundary.validation.validation_receipt, receipt)
+        self.assertNotIn("eligibility_evidence_digest", receipt)
+        self.assertNotIn("eligibility_evidence_digest", boundary.validation.attestation)
+        self.assertEqual(boundary.reviewed.thread_ids, frozenset())
+        self.assertEqual(boundary.reviewed.payload["reviews"], [])
+        self.assertEqual(boundary.reviewed.payload["conversation_comments"], [])
+        self.assertEqual(
+            boundary.eligibility_absence.recovery_digest,
+            "27100f4f0c2a62abbb2512a155511807373979d5c35e40937453ea560e4b1c37",
+        )
+        self.assertIsNone(boundary.eligibility)
+        for thread in ("PRRT_kwDORkeLeM6r33Sa", "PRRT_kwDORkeLeM6r36e9"):
+            self.assertEqual(MODULE.derive_post_freeze_origin(boundary, thread),
+                             "ABSENT_FROM_BOTH")
+        for overrides in (
+            {"repository": "SecPal/.github"}, {"delivery_issue": 642},
+            {"number": 748}, {"expected_head": "0" * 40},
+            {"expected_final_reviewed_state_digest": "0" * 64},
+            {"final_eligibility_evidence_path": root / "missing.json"},
+        ):
+            with self.subTest(overrides=overrides), self.assertRaises(MODULE.ResolutionError):
+                self._android_641_boundary(**overrides)
+        entry = copy.deepcopy(MODULE._load_repository_entry("SecPal/android"))
+        entry.pop("final_eligibility_absence_recoveries")
+        with mock.patch.object(MODULE, "_load_repository_entry", return_value=entry):
+            with self.assertRaisesRegex(MODULE.ResolutionError, "recovery is unavailable"):
+                self._android_641_boundary()
+
+    def test_android_641_absence_rejects_changed_evidence(self) -> None:
+        boundary = self._android_641_boundary()
+        entry = MODULE._load_repository_entry("SecPal/android")
+        changed_reviewed = copy.deepcopy(boundary.reviewed.payload)
+        changed_reviewed["threads"] = reviewed_state_payload(
+            "PRRT_kwDORkeLeM6r33Sa", [("PRRC_kwDORkeLeM7923Hd", "Later feedback", None)]
+        )["threads"]
+        changed_reviewed = add_provider_review_requests(changed_reviewed, [])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "substituted-reviewed.json"
+            path.write_text(json.dumps(changed_reviewed), encoding="utf-8")
+            # Even a self-consistent later snapshot cannot replace the freeze.
+            with self.assertRaises(MODULE.ResolutionError):
+                self._android_641_boundary(
+                    final_reviewed_state_path=path,
+                    expected_final_reviewed_state_digest=changed_reviewed["state_digest"],
+                )
+        for field, value in (
+            ("final_tree_sha", "0" * 40),
+            ("final_reviewed_state_digest", "0" * 64),
+            ("final_validation_receipt_digest", "0" * 64),
+            ("final_attestation_digest", "0" * 64),
+        ):
+            changed = copy.deepcopy(entry)
+            record = changed["final_eligibility_absence_recoveries"][0]
+            record[field] = value
+            record["recovery_digest"] = MODULE._digest_json({
+                key: item for key, item in record.items() if key != "recovery_digest"
+            })
+            with self.subTest(field=field), mock.patch.object(
+                MODULE, "_load_repository_entry", return_value=changed,
+            ), self.assertRaisesRegex(MODULE.ResolutionError, "invalid or stale"):
+                self._android_641_boundary()
+        for value in (None, "malformed", "e" * 64):
+            with self.subTest(eligibility=value), tempfile.TemporaryDirectory() as directory:
+                attestation = copy.deepcopy(boundary.validation.attestation)
+                attestation["eligibility_evidence_digest"] = value
+                path = Path(directory) / "attestation.json"
+                path.write_text(json.dumps(attestation), encoding="utf-8")
+                with self.assertRaises(MODULE.ResolutionError):
+                    self._android_641_boundary(final_validation_evidence_path=path)
+
+    def test_android_641_absence_preserves_ordinary_source_authentication(self) -> None:
+        boundary = self._android_641_boundary()
+        arguments = {
+            "repository": "SecPal/android",
+            "expected_head": boundary.validation.attestation["head_sha"],
+            "reviewed_head": boundary.reviewed.head_sha,
+            "tree": boundary.validation.validated_tree_sha,
+            "receipt_digest": boundary.validation.validation_receipt_digest,
+            "signer_identity": "aroviqen@secpal.app",
+            "signer_fingerprint":
+                "SHA256:GCaB6jwhFkzWkmHek5dVQNgxEb1JiLMOyhmIAcd0Vsc",
+        }
+        # External signature and Git observations are fixtures here. Real source
+        # verification is a separate mandatory admission qualification.
+        signer = MODULE.verify_local_fix_commit(
+            ROOT, "SecPal/android", arguments["expected_head"],
+            boundary.reviewed, boundary.validation,
+            runner=FakeGit(**arguments), require_signer_identity=True,
+        )
+        self.assertEqual(signer, boundary.eligibility_absence.final_delivery_signer)
+        for changed in (
+            {"repository": "SecPal/api"}, {"expected_head": "0" * 40},
+            {"reviewed_head": "0" * 40}, {"second_parent": "0" * 40},
+            {"tree": "0" * 40}, {"receipt_digest": "0" * 64},
+            {"signer_fingerprint": "SHA256:otherSigner"}, {"signature_valid": False},
+        ):
+            with self.subTest(changed=changed), self.assertRaises(MODULE.ResolutionError):
+                MODULE.verify_local_fix_commit(
+                    ROOT, "SecPal/android", arguments["expected_head"],
+                    boundary.reviewed, boundary.validation,
+                    runner=FakeGit(**{**arguments, **changed}),
+                    require_signer_identity=True,
+                )
+
+    def test_android_641_policy_alone_cannot_resolve_a_thread(self) -> None:
+        boundary = self._android_641_boundary()
+        root = OPENPGP_FIXTURE_ROOT / "android-641"
+        git = FakeGit(
+            repository="SecPal/android",
+            expected_head=boundary.validation.attestation["head_sha"],
+            reviewed_head=boundary.reviewed.head_sha,
+            tree=boundary.validation.validated_tree_sha,
+            receipt_digest=boundary.validation.validation_receipt_digest,
+            signer_identity="aroviqen@secpal.app",
+            signer_fingerprint=boundary.eligibility_absence.final_delivery_signer.fingerprint,
+        )
+        with (
+            mock.patch.object(MODULE, "_run_git", git),
+            mock.patch.object(MODULE, "_run_gh") as github,
+            self.assertRaisesRegex(MODULE.ResolutionError, "artifact is unavailable"),
+        ):
+            MODULE.resolve_late_disposition_threads(
+                "SecPal/android", 641, 747, git.expected_head,
+                ("PRRT_kwDORkeLeM6r33Sa",), apply=True,
+                repository_root=ROOT,
+                final_reviewed_state_path=root / "draft-reviewed-state.json.raw",
+                expected_final_reviewed_state_digest=boundary.reviewed.state_digest,
+                final_validation_evidence_path=root / "final-attestation.json.raw",
+                final_eligibility_evidence_path=None,
+                late_classification_evidence_path=root / "missing-classification.json",
+                late_classification_signature_path=root / "missing-classification.sig",
+                late_disposition_evidence_path=root / "missing-disposition.json",
+                late_disposition_signature_path=root / "missing-disposition.sig",
+            )
+        github.assert_not_called()
+
     def test_exact_821_absence_policy_record_is_canonical(self) -> None:
         entry = MODULE._load_repository_entry("SecPal/.github")
         records = entry["final_eligibility_absence_recoveries"]

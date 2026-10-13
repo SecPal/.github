@@ -941,6 +941,27 @@
     },
     {
       "repository": "SecPal/android",
+      "final_eligibility_absence_recoveries": [
+        {
+          "schema_version": "1.0",
+          "kind": "FINAL_ELIGIBILITY_ABSENCE_RECOVERY",
+          "repository": "SecPal/android",
+          "delivery_issue": 641,
+          "pull_request": 747,
+          "final_head_sha": "98dbd7d8e72461da5f2b1d55eca217a28281f95f",
+          "final_tree_sha": "ca9bdaa1b9193c9f59ab9acbe5534ea69912fceb",
+          "final_reviewed_state_digest": "f3e5c761e116ee71fe6e6e4e2cd8161ad84677ee4d40950c731d0d3d58f85822",
+          "final_validation_receipt_digest": "947d8b06e1d4b12ff1e22d8cf8760d433c1c828727925d39fd77d20d6b3848a6",
+          "final_attestation_digest": "7bce660ab9e6272e7deda4a3d59569311f17cbcc3235f1568d25752964425857",
+          "final_delivery_signer": {
+            "format": "ssh",
+            "fingerprint": "SHA256:GCaB6jwhFkzWkmHek5dVQNgxEb1JiLMOyhmIAcd0Vsc"
+          },
+          "expected_final_reviewed_thread_count": 0,
+          "expected_final_eligibility_status": "ABSENT_NOT_AUTHENTICATED",
+          "recovery_digest": "27100f4f0c2a62abbb2512a155511807373979d5c35e40937453ea560e4b1c37"
+        }
+      ],
       "default_branch": "main",
       "allowed_base_repositories": ["SecPal/android"],
       "reviewer_identities": [],
