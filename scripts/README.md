@@ -1398,6 +1398,21 @@ Requirements: an authenticated `gh` CLI, Python 3, and `npm ci` so the
 present. The tool reads through `gh api graphql` only, performs no mutation, and
 persists no state.
 
+### `secpal-work-graph-replan.py`
+
+The maintained `plan`, `apply --apply`, and `recover --apply` operations consume
+the [canonical Work-Graph contract](../docs/work-graph-contract.md). An exact
+signed recovery chain records mutation progress; a later verification failure
+does not erase completed mutations or authorize replay.
+
+Observation completeness and concurrent-completion admission are defined by
+[the canonical mutation-verification contract](../docs/work-graph-contract.md#76-native-mutation-verification).
+The commands apply that contract; they define no separate graph semantics.
+
+Completed-prefix verification can consume the pure `recover_plan` verifier
+without invoking the mutating CLI. Do not run `apply` or `recover --apply` merely
+to repeat verification or a failed legacy refresh.
+
 ### `secpal-dependabot-manifest-coverage.mjs`
 
 Deterministically discovers tracked dependency manifests and validates either

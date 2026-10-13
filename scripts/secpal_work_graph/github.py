@@ -12,10 +12,14 @@ human-readable `gh` output is parsed.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import sys
 import json
 import subprocess
 from collections import deque
 from dataclasses import dataclass, replace
+from functools import cache
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
 
@@ -202,6 +206,29 @@ class GitHubGraphQLAdapter:
 @dataclass
 class GitHubReadAdapter(GitHubGraphQLAdapter):
     """The canonical read-only work-graph boundary."""
+
+    def observe_main_protection(self, repository: str, branch: str) -> Mapping[str, Any]:
+        """Reuse the maintained effective-rule observer, bounded and read-only.
+
+        Classic admin enforcement is still a mandatory qualification boundary:
+        applicable rulesets alone cannot prove absence of administrative bypass.
+        """
+        owner, name = repository.split("/", 1)
+        helper = _review_policy_owner()
+        config = helper.default_config(repository)
+        config.update(maximum_api_calls=12, maximum_items=1000)
+        runner = helper.CommandRunner(
+            executable_paths={"gh": str(Path(self.gh_executable).resolve())}
+            if Path(self.gh_executable).is_absolute() else None,
+            timeout_seconds=max(1, int(self.timeout)))
+        client = helper.GitHubClient(runner, helper.Budget(config), owner, name, 0)
+        try:
+            normalized, _, _ = helper._capture_rules(client, branch, {
+                "require_ruleset_evidence": True,
+                "require_branch_protection_evidence": True})
+            return normalized
+        except (RuntimeError, ValueError, OSError):
+            raise GitHubError("concurrent-completion effective protection is unavailable") from None
 
     def viewer_login(self) -> str:
         """Resolve the invocation-context executor identity from `gh` authentication."""
@@ -406,6 +433,9 @@ def _required_connections(mode: str, include_reverse_dependencies: bool = False)
         # Post-write unchanged-relationship verification covers every mutation
         # target, including exact endpoints outside the owning subtree.
         return REQUIRED_CONNECTIONS + ("blocking",)
+    # ANCESTOR deliberately observes no relationship connections. Even though
+    # ISSUE_QUERY asks for them, unconsumed/unpaginated payloads stay unknown;
+    # a later complete read cannot establish their historical values.
     return ()
 
 
@@ -598,3 +628,253 @@ def _canonical(repository: str, number: str, reference: str) -> str:
     except ValueError as error:
         raise ValueError(f"{reference} is not repository-qualified as owner/repo#number") from error
     return key
+
+
+@cache
+def _review_policy_owner():
+    """Load the existing rule semantics owner; define no parallel policy."""
+    path = Path(__file__).resolve().parents[1] / "secpal-pr-review.py"
+    name = "_secpal_work_graph_review_policy"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_COMPLETION_TOKEN = object()
+
+
+def _completion_digest(value) -> str:
+    return hashlib.sha256(json.dumps(
+        {k: v for k, v in vars(value).items() if k != "_seal"},
+        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _seal_completion(value):
+    """Seal only the provider reader's independently reauthenticated result."""
+    return replace(value, _seal=(_COMPLETION_TOKEN, _completion_digest(value)))
+
+
+def require_observed_completion(value) -> None:
+    from .replanning import ConcurrentCompletion, PlanError
+    seal = getattr(value, "_seal", None)
+    if (type(value) is not ConcurrentCompletion or not isinstance(seal, tuple)
+            or len(seal) != 2 or seal[0] is not _COMPLETION_TOKEN
+            or seal[1] != _completion_digest(value)):
+        raise PlanError("concurrent completion has no authenticated provider provenance")
+
+
+# Completion observations use native closing links, complete state-event history,
+# and a pinned protected-main history. They never consume request assertions.
+_COMPLETION_CORE = f"""id number state stateReason body
+parent {{ {_REFERENCE_FIELDS} }}"""
+_COMPLETION_EVENTS = """__typename
+... on ClosedEvent { id createdAt actor { login ... on User { id } } }
+... on ReopenedEvent { id createdAt actor { login ... on User { id } } }"""
+_COMPLETION_CLOSERS = """closedByPullRequestsReferences(first: 2, includeClosedPrs: true) {
+  totalCount pageInfo { hasNextPage }
+  nodes { id number state mergedAt mergedBy { login ... on User { id } }
+    baseRefName repository { id nameWithOwner }
+    mergeCommit { oid signature { isValid } }
+  }
+}"""
+_COMPLETION_MAIN = """name
+branchProtectionRule { isAdminEnforced requiresStrictStatusChecks }
+target { ... on Commit { oid } }"""
+COMPLETION_QUERY = f"""query WorkGraphCompletion($owner:String!, $name:String!, $number:Int!) {{
+  repository(owner:$owner, name:$name) {{
+    id nameWithOwner
+    defaultBranchRef {{ {_COMPLETION_MAIN}
+      target {{ ... on Commit {{ history(first:100) {{
+        nodes {{ oid }} pageInfo {{ hasNextPage endCursor }}
+      }} }} }}
+    }}
+    issue(number:$number) {{ {_COMPLETION_CORE} {_COMPLETION_CLOSERS}
+      timelineItems(first:50, itemTypes:[CLOSED_EVENT, REOPENED_EVENT]) {{
+        nodes {{ {_COMPLETION_EVENTS} }} pageInfo {{ hasNextPage endCursor }}
+      }}
+    }}
+  }}
+}}"""
+COMPLETION_TIMELINE_QUERY = f"""query WorkGraphCompletionEvents(
+  $owner:String!, $name:String!, $number:Int!, $cursor:String!) {{
+  repository(owner:$owner, name:$name) {{ id nameWithOwner
+    issue(number:$number) {{ {_COMPLETION_CORE}
+      timelineItems(first:50, after:$cursor, itemTypes:[CLOSED_EVENT, REOPENED_EVENT]) {{
+        nodes {{ {_COMPLETION_EVENTS} }} pageInfo {{ hasNextPage endCursor }}
+      }}
+    }}
+  }}
+}}"""
+COMPLETION_HISTORY_QUERY = """query WorkGraphCompletionHistory(
+  $owner:String!, $name:String!, $oid:String!, $cursor:String!) {
+  repository(owner:$owner, name:$name) { id nameWithOwner
+    object(expression:$oid) { ... on Commit { oid history(first:100, after:$cursor) {
+      nodes { oid } pageInfo { hasNextPage endCursor }
+    } } }
+  }
+}"""
+COMPLETION_REAUTH_QUERY = f"""query WorkGraphCompletionReadback(
+  $owner:String!, $name:String!, $number:Int!) {{
+  repository(owner:$owner, name:$name) {{ id nameWithOwner
+    defaultBranchRef {{ {_COMPLETION_MAIN} }}
+    issue(number:$number) {{ {_COMPLETION_CORE} {_COMPLETION_CLOSERS}
+      timelineItems(last:1, itemTypes:[CLOSED_EVENT, REOPENED_EVENT]) {{
+        nodes {{ {_COMPLETION_EVENTS} }}
+      }}
+    }}
+  }}
+}}"""
+
+
+def _completion_issue_projection(issue: Mapping[str, Any]) -> tuple:
+    """Normalize only actually returned core fields; never invent omitted data."""
+    from .replanning import content_digest
+
+    if not isinstance(issue["body"], str):
+        raise ValueError
+    return (issue["id"], issue["number"], issue["state"].lower(),
+            issue["stateReason"].lower() if issue["stateReason"] else None,
+            content_digest(issue["body"]), _reference(issue["parent"]))
+
+
+def _completion_pr_projection(issue: Mapping[str, Any]) -> tuple:
+    connection = issue["closedByPullRequestsReferences"]
+    if (connection["totalCount"] != 1 or connection["pageInfo"]["hasNextPage"] is not False
+            or len(connection["nodes"]) != 1):
+        raise ValueError
+    pull = connection["nodes"][0]
+    return (pull["id"], pull["number"], pull["state"], pull["baseRefName"],
+            pull["repository"]["id"], pull["repository"]["nameWithOwner"],
+            pull["mergedAt"], pull["mergedBy"]["id"], pull["mergeCommit"]["oid"],
+            (pull["mergeCommit"]["signature"] or {}).get("isValid"))
+
+
+def _completion_main_projection(reference: Mapping[str, Any]) -> tuple:
+    protection = reference["branchProtectionRule"]
+    return (reference["name"], reference["target"]["oid"],
+            protection["isAdminEnforced"], protection["requiresStrictStatusChecks"])
+
+
+def _completion_event_projection(event: Mapping[str, Any]) -> tuple:
+    return (event["id"], event["__typename"], event["createdAt"],
+            (event.get("actor") or {}).get("id", ""))
+
+
+def observe_completion(
+    adapter: GitHubReadAdapter, current: Node, *, started_at: str
+):
+    """Read one completion with ten-page bounds and independent final readback.
+
+    `started_at` comes from the authenticated signed operation, never JSON input.
+    The policy owner separately admits these normalized facts; observing is not
+    permission to ignore a changed mutation endpoint.
+    """
+    from datetime import datetime, timezone
+    from .replanning import ConcurrentCompletion
+
+    repository, number = parse_node_key(current.key)
+    owner, name = repository.split("/", 1)
+    variables = {"owner": owner, "name": name, "number": number}
+
+    def read(query, arguments):
+        try:
+            response = adapter.query(query, arguments)
+        except GitHubError:
+            raise GitHubError("concurrent-completion provider query failed") from None
+        if response.errors:
+            raise GitHubError("concurrent-completion provider observation is incomplete")
+        result = (response.data or {}).get("repository")
+        if (not isinstance(result, dict) or result.get("id") != current.repository_id
+                or result.get("nameWithOwner") != repository):
+            raise GitHubError("concurrent-completion repository identity changed")
+        return result
+
+    def connection_page(connection, maximum):
+        nodes, page = connection["nodes"], connection["pageInfo"]
+        if (not isinstance(nodes, list) or len(nodes) > maximum
+                or type(page["hasNextPage"]) is not bool):
+            raise ValueError
+        return nodes, page
+
+    try:
+        initial = read(COMPLETION_QUERY, variables)
+        issue = initial["issue"]
+        core = _completion_issue_projection(issue)
+        if core != (current.node_id, number, current.state, current.state_reason,
+                    current.body_digest, current.parent):
+            raise GitHubError("concurrent-completion current issue observation changed")
+        pull = _completion_pr_projection(issue)
+        main = _completion_main_projection(initial["defaultBranchRef"])
+        protection = adapter.observe_main_protection(repository, main[0])
+        if pull[5] != repository:
+            raise GitHubError("concurrent-completion closing repository is foreign")
+
+        events = []
+        connection = issue["timelineItems"]
+        cursors = set()
+        for page_number in range(10):
+            nodes, page = connection_page(connection, 50)
+            events.extend(_completion_event_projection(event) for event in nodes)
+            if not page["hasNextPage"]:
+                break
+            if page_number == 9:
+                raise GitHubError("concurrent-completion event history exceeds its bound")
+            cursor = page["endCursor"]
+            if not isinstance(cursor, str) or not cursor or cursor in cursors:
+                raise ValueError
+            cursors.add(cursor)
+            result = read(COMPLETION_TIMELINE_QUERY, {**variables, "cursor": cursor})
+            if _completion_issue_projection(result["issue"]) != core:
+                raise GitHubError("concurrent-completion issue changed during pagination")
+            connection = result["issue"]["timelineItems"]
+        else:
+            raise GitHubError("concurrent-completion event history exceeds its bound")
+
+        history = []
+        connection = initial["defaultBranchRef"]["target"]["history"]
+        cursors = set()
+        for page_number in range(10):
+            nodes, page = connection_page(connection, 100)
+            history.extend(node["oid"] for node in nodes)
+            if pull[8] in history or not page["hasNextPage"]:
+                break
+            if page_number == 9:
+                raise GitHubError("concurrent-completion main ancestry exceeds its bound")
+            cursor = page["endCursor"]
+            if not isinstance(cursor, str) or not cursor or cursor in cursors:
+                raise ValueError
+            cursors.add(cursor)
+            result = read(COMPLETION_HISTORY_QUERY,
+                          {"owner": owner, "name": name, "oid": main[1], "cursor": cursor})
+            if result["object"]["oid"] != main[1]:
+                raise GitHubError("concurrent-completion pinned main identity changed")
+            connection = result["object"]["history"]
+        else:
+            raise GitHubError("concurrent-completion main ancestry exceeds its bound")
+
+        final = read(COMPLETION_REAUTH_QUERY, variables)
+        final_protection = adapter.observe_main_protection(repository, main[0])
+        if (final_protection != protection
+                or _completion_issue_projection(final["issue"]) != core
+                or _completion_pr_projection(final["issue"]) != pull
+                or _completion_main_projection(final["defaultBranchRef"]) != main
+                or not events
+                or tuple(_completion_event_projection(event)
+                         for event in final["issue"]["timelineItems"]["nodes"]) != (events[-1],)):
+            raise GitHubError("concurrent-completion independent readback changed")
+    except (KeyError, TypeError, AttributeError, ValueError):
+        raise GitHubError("concurrent-completion provider representation is incomplete") from None
+
+    return _seal_completion(ConcurrentCompletion(
+        issue_key=current.key, issue_node_id=core[0], repository_id=current.repository_id,
+        current_state=core[2], current_state_reason=core[3], current_body_digest=core[4],
+        current_parent=core[5], closing_pr_key=node_key(repository, pull[1]),
+        closing_pr_node_id=pull[0], closing_pr_repository_id=pull[4],
+        closing_pr_base_ref=pull[3], closing_pr_state=pull[2], merged_at=pull[6],
+        merged_by_id=pull[7], merge_oid=pull[8], merge_signature_valid=pull[9],
+        main_name=main[0], main_oid=main[1], main_admin_enforced=main[2], main_strict=main[3],
+        history_oids=tuple(history), state_events=tuple(events), started_at=started_at,
+        observed_at=datetime.now(timezone.utc).isoformat(),
+    ))

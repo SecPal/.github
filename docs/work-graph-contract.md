@@ -827,6 +827,41 @@ already covered elsewhere are all mentioned in the pull request at most.
 Two exceptions sit above the threshold by definition and are always tracked: an
 unresolved acceptance-criteria gap, and a prerequisite the work actually needs.
 
+### 7.6 Native Mutation Verification
+
+Relationship verification compares only facts actually observed in the signed
+baseline. Omitted ancestor/dependency connections remain unknown, including when
+a later reader observes them completely. Mutation endpoints require complete
+parent, children, forward/reverse dependencies and exact sibling order on both
+sides. Projection enrichment may resolve only identities already named by
+historically observed relationships; new identities and missing required facts
+remain blocking. Current observations never replace historical unknowns.
+
+Unrelated OPEN → completed changes require independent native completion
+observations, never request assertions. The reader authenticates the Issue and
+repository, complete close/reopen chronology, unique native closing PR, valid
+merge signature, protected default-main identity and merge ancestry, followed by
+independent read-back. Admission preserves known content and relationships and
+rejects mutation endpoints, competing claims/closers, reopening, unexpected
+drift and incomplete history. The interval begins at the authenticated existing
+signed recovery root. New signatures exclude caller-supplied Git date overrides.
+Compiled plans are bounded to 499 steps before any mutation, matching the
+1,000-commit signed-chain traversal bound. Provider results carry process-local
+provenance from the canonical reader and cannot be caller-constructed. At most ten changed Issues, ten pages per history, 500
+state events and 1,000 ancestry entries are observed. The graph is read again
+before continuing; a changed graph blocks.
+
+These observations neither authorize delivery nor waive normal review, required
+checks or merge gates. Signed plans, baselines, journals and failed historical
+verdicts remain unchanged. A separate current-state qualification is not
+retroactive success of a failed historical invocation.
+Effective-protection observation consumes the maintained required-check rule
+owner, including applicable rulesets, and requires unchanged independent
+read-back. Complete classic administrative enforcement remains required;
+ruleset-only protection lacks independently observed bypass qualification and
+is rejected. Rules and current merge ancestry alone do not waive ordinary
+signed source, provider-review, required-check or protected-merge authority.
+
 ## 8. Precedence Between Scope And Evidence
 
 Test-driven development and review feedback are binding process rules, and they

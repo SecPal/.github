@@ -18,7 +18,7 @@ from unittest import TestCase, main
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from secpal_work_graph import github, github_replanning, model, replanning  # noqa: E402
+from secpal_work_graph import github, github_replanning, model, replan_cli, replanning  # noqa: E402
 
 REPO = "SecPal/.github"
 
@@ -456,6 +456,20 @@ class PlanningTests(TestCase):
             node(8, blocked_by=(key(2),)),
             node(9, parent=key(1)),
         )
+
+    def test_plan_bound_is_checked_before_any_simulation_or_mutation(self):
+        from unittest.mock import patch
+        request = {"current_issue": key(2), "finding": finding("PROMOTE_TO_SUB_EPIC"),
+                   "operation": {"kind": "PROMOTE_TO_SUB_EPIC",
+                   "children": [{"alias": f"child-{i}", "repository": REPO,
+                                 "title": f"Child {i}", "body": "## Acceptance Criteria\n\n- Done.\n"}
+                                for i in range(500)],
+                   "blocked_by_placement": {key(3): [replanning.AGGREGATE]},
+                   "blocking_placement": {key(8): [replanning.AGGREGATE]}}}
+        with patch.object(replanning, "_validate_simulated_plan") as simulate:
+            with self.assertRaisesRegex(replanning.PlanError, "499-step"):
+                replanning.build_plan(self.snapshot, request, actor="alice")
+            simulate.assert_not_called()
 
     def test_new_responsibility_is_owned_and_keeps_siblings_parallel(self):
         request = {
@@ -973,6 +987,495 @@ class PlanningTests(TestCase):
             )
             with self.subTest(label=label), self.assertRaises(replanning.PlanError):
                 replanning.verify_applied(plan, after, {"new-work": identity})
+
+
+class ObservationVerificationTests(TestCase):
+    """The actual #1192 creation projection keeps historical unknowns unknown."""
+
+    def setUp(self):
+        self.before = graph(
+            node(664, children_observable=False, dependencies_observable=False,
+                 blocking_observable=False),
+            node(667, parent=key(664), children_observable=False,
+                 dependencies_observable=False, blocking_observable=False),
+            node(1032, parent=key(664), children=(key(1183), key(1190))),
+            node(1183, parent=key(1032)),
+            node(1190, parent=key(1032), blocked_by=(key(1004),)),
+            node(1004, parent=key(667), state="closed", state_reason="completed",
+                 children_observable=False, blocking_observable=False,
+                 blocking_count=1),
+        )
+        request = {
+            "current_issue": key(1183),
+            "finding": finding("NEW_RESPONSIBILITY"),
+            "operation": {
+                "kind": "CREATE_OWNED_SIBLING",
+                "issue": {
+                    "alias": "controller", "repository": REPO,
+                    "title": "Inactive Checks controller",
+                    "body": "## Acceptance Criteria\n\n- Remain inactive.\n",
+                },
+            },
+        }
+        self.plan = replanning.build_plan(self.before, request, actor="alice")
+        self.aliases = {"controller": replanning.CreatedIssueIdentity(
+            key=key(1192), node_id="ISSUE_1192", repository_id="REPO_ID")}
+        self.created = node(
+            1192, parent=key(1032), title=self.plan.steps[0].arguments["title"],
+            body_digest=replanning.content_digest(
+                replanning.created_issue_body(self.plan, 0)),
+        )
+
+    def after(self, **changes):
+        values = dict(self.before.nodes)
+        values[key(1032)] = node(1032, parent=key(664),
+                                children=(key(1183), key(1192), key(1190)))
+        values[key(1192)] = self.created
+        values.update(changes)
+        return model.Snapshot(values)
+
+    def test_ancestor_and_dependency_omissions_are_not_empty_observations(self):
+        before = replanning.snapshot_document(self.before)
+        after = self.after()
+        replanning.verify_applied(self.plan, after, self.aliases)
+        replanning.verify_unchanged_relationships(
+            self.plan, self.before, after, self.aliases)
+        self.assertEqual(replanning.snapshot_document(self.before), before)
+
+    def test_current_upgrade_does_not_backfill_unknown_historical_children(self):
+        upgraded = node(664, children=(key(665), key(666), key(667), key(1032)))
+        replanning.verify_unchanged_relationships(
+            self.plan, self.before, self.after(**{key(664): upgraded}), self.aliases)
+        self.assertFalse(self.before.require(key(664)).children_observable)
+        self.assertEqual(self.before.require(key(664)).children, ())
+
+    def test_required_observed_parent_cannot_become_unobservable(self):
+        unreadable = node(664, parent_observable=False, children_observable=False,
+                          dependencies_observable=False, blocking_observable=False)
+        with self.assertRaisesRegex(replanning.PlanError, "incomplete"):
+            replanning.verify_unchanged_relationships(
+                self.plan, self.before, self.after(**{key(664): unreadable}), self.aliases)
+
+    def test_complete_mutation_endpoint_observations_remain_required(self):
+        unreadable = node(1032, parent=key(664),
+                          children=(key(1183), key(1192), key(1190)),
+                          children_observable=False)
+        with self.assertRaisesRegex(replanning.PlanError, "incomplete"):
+            replanning.verify_unchanged_relationships(
+                self.plan, self.before, self.after(**{key(1032): unreadable}), self.aliases)
+
+    def test_unexplained_state_content_and_observed_dependency_drift_block(self):
+        for changed in (
+            node(1004, parent=key(667), state="closed", state_reason="completed",
+                 children_observable=False, blocking_observable=False,
+                 blocking_count=1, blocked_by=(key(1183),)),
+            node(1190, parent=key(1032), blocked_by=(key(1004),),
+                 state="closed", state_reason="completed"),
+            node(1183, parent=key(1032), body_digest="changed"),
+        ):
+            with self.subTest(number=changed.number):
+                with self.assertRaises(replanning.PlanError):
+                    replanning.verify_unchanged_relationships(
+                        self.plan, self.before, self.after(**{changed.key: changed}),
+                        self.aliases)
+
+    def test_unknown_baseline_mutation_endpoint_cannot_be_used_as_empty(self):
+        from dataclasses import replace
+        nodes = dict(self.before.nodes)
+        nodes[key(1032)] = replace(nodes[key(1032)], children_observable=False)
+        with self.assertRaisesRegex(replanning.PlanError, "pre-mutation.*incomplete"):
+            replanning.verify_unchanged_relationships(
+                self.plan, model.Snapshot(nodes), self.after(), self.aliases)
+
+    def test_authenticated_1190_completion_is_separate_from_1192_mutation(self):
+        closed = node(1190, parent=key(1032), blocked_by=(key(1004),),
+                      state="closed", state_reason="completed")
+        evidence = self.completion_evidence(closed)
+        replanning.verify_unchanged_relationships(
+            self.plan, self.before, self.after(**{key(1190): closed}), self.aliases,
+            completions=(evidence,))
+
+    def test_command_observes_changed_states_instead_of_accepting_request_evidence(self):
+        from unittest.mock import Mock, patch
+        closed = node(1190, parent=key(1032), blocked_by=(key(1004),),
+                      state="closed", state_reason="completed")
+        evidence = self.completion_evidence(closed)
+        journal = Mock()
+        journal.started_at.return_value = evidence.started_at
+        with patch.object(github, "observe_completion", return_value=evidence) as observe:
+            result = replan_cli._observe_completions(
+                object(), self.before, self.after(**{key(1190): closed}), journal)
+            self.assertEqual(result, (evidence,))
+            self.assertEqual(observe.call_args.args[1], closed)
+            self.assertEqual(observe.call_args.kwargs, {"started_at": evidence.started_at})
+        self.assertEqual(replan_cli._observe_completions(
+            object(), self.before, self.after(), journal), ())
+
+    def completion_evidence(self, closed):
+        return github._seal_completion(replanning.ConcurrentCompletion(
+            issue_key=closed.key, issue_node_id=closed.node_id,
+            repository_id=closed.repository_id,
+            current_state=closed.state, current_state_reason=closed.state_reason,
+            current_body_digest=closed.body_digest, current_parent=closed.parent,
+            closing_pr_key=key(1191), closing_pr_node_id="PR_1191",
+            closing_pr_repository_id="REPO_ID", closing_pr_base_ref="main",
+            closing_pr_state="MERGED", merged_at="2026-10-12T21:02:07Z",
+            merged_by_id="USER_alice", merge_oid="d" * 40,
+            merge_signature_valid=True, main_name="main", main_oid="d" * 40,
+            main_admin_enforced=True, main_strict=True,
+            history_oids=("d" * 40, "1" * 40),
+            state_events=(("CLOSED_1190", "ClosedEvent",
+                           "2026-10-12T21:02:09Z", "USER_alice"),),
+            started_at="2026-10-12T21:01:20Z",
+            observed_at="2026-10-12T21:03:00Z",
+        ))
+
+    def test_forged_or_incomplete_completion_evidence_blocks(self):
+        from dataclasses import replace
+        closed = node(1190, parent=key(1032), blocked_by=(key(1004),),
+                      state="closed", state_reason="completed")
+        evidence = self.completion_evidence(closed)
+        changes = (
+            {"issue_key": key(1183)}, {"issue_node_id": "FOREIGN"},
+            {"repository_id": "FOREIGN"}, {"current_body_digest": "changed"},
+            {"current_parent": key(664)}, {"closing_pr_key": "Other/repo#1191"},
+            {"closing_pr_repository_id": "FOREIGN"},
+            {"closing_pr_base_ref": "candidate"}, {"closing_pr_state": "OPEN"},
+            {"merge_signature_valid": False}, {"main_admin_enforced": False},
+            {"main_strict": False}, {"history_oids": ("1" * 40,)},
+            {"observed_at": "2026-10-12T21:02:08Z"},
+            {"started_at": "2026-10-12T21:02:08Z"},
+            {"merged_at": "not-a-time"}, {"merged_by_id": "FOREIGN"},
+            {"state_events": ()},
+            {"state_events": (("short",),)},
+            {"state_events": (([], "ClosedEvent", "2026-10-12T21:02:09Z", "USER_alice"),)},
+            {"state_events": (("OLD", "ReopenedEvent", "2026-10-12T21:01:10Z", "USER_alice"),
+                               ("OLDER", "ClosedEvent", "2026-10-12T21:01:00Z", "USER_alice"))
+                               + evidence.state_events},
+            {"state_events": evidence.state_events + evidence.state_events},
+            {"state_events": evidence.state_events + (
+                ("REOPENED", "ReopenedEvent", "2026-10-12T21:02:10Z", "USER_alice"),)},
+        )
+        for changed in changes:
+            with self.subTest(changed=changed):
+                with self.assertRaises(replanning.PlanError):
+                    replanning.verify_unchanged_relationships(
+                        self.plan, self.before, self.after(**{key(1190): closed}),
+                        self.aliases, completions=(github._seal_completion(replace(evidence, **changed)),))
+
+    def test_completion_cannot_change_endpoints_or_hide_other_drift(self):
+        closed = node(1190, parent=key(1032), blocked_by=(key(1004),),
+                      state="closed", state_reason="completed")
+        evidence = self.completion_evidence(closed)
+        for changes, completions in (
+            ({key(1190): closed}, (evidence, evidence)),
+            ({key(1190): node(1190, parent=key(1032), state="closed",
+                             state_reason="completed")}, (evidence,)),
+            ({key(1190): closed, key(1183): node(1183, parent=None)}, (evidence,)),
+            ({key(1190): closed}, (self.completion_evidence(self.created),)),
+        ):
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaises(replanning.PlanError):
+                    replanning.verify_unchanged_relationships(
+                        self.plan, self.before, self.after(**changes), self.aliases,
+                        completions=completions)
+
+    def test_caller_request_cannot_supply_completion_authority(self):
+        request = dict(self.plan.request)
+        request["completions"] = ["forged"]
+        with self.assertRaisesRegex(replanning.PlanError, "unknown"):
+            replanning.build_plan(self.before, request, actor="alice")
+
+    def test_unplanned_identity_still_blocks_projection_change(self):
+        with self.assertRaisesRegex(replanning.PlanError, "unplanned issue"):
+            replanning.verify_unchanged_relationships(
+                self.plan, self.before, self.after(**{key(665): node(665)}), self.aliases)
+
+    def test_caller_constructed_completion_has_no_provider_provenance(self):
+        from dataclasses import replace
+        closed = node(1190, parent=key(1032), blocked_by=(key(1004),),
+                      state="closed", state_reason="completed")
+        evidence = self.completion_evidence(closed)
+        fields = {k: v for k, v in evidence.__dict__.items() if k != "_seal"}
+        forged = replanning.ConcurrentCompletion(**fields)
+        with self.assertRaisesRegex(replanning.PlanError, "provenance"):
+            replanning.verify_unchanged_relationships(
+                self.plan, self.before, self.after(**{key(1190): closed}),
+                self.aliases, completions=(forged,))
+
+    def test_blank_native_identity_cannot_qualify_completion(self):
+        from dataclasses import replace
+        old = replace(self.before.require(key(1190)), node_id="", repository_id="")
+        closed = replace(old, state="closed", state_reason="completed")
+        evidence = self.completion_evidence(closed)
+        with self.assertRaises(replanning.PlanError):
+            replanning._admit_concurrent_completion(old, closed, evidence)
+
+    def test_enrichment_must_match_historical_parent_and_dependency_references(self):
+        from dataclasses import replace
+        for field in ("parent", "blocked_by", "blocking", "children"):
+            nodes = dict(self.before.nodes)
+            old = nodes[key(1004)]
+            updates = {field: key(675) if field == "parent" else (key(675),)}
+            if field == "blocking": updates.update(blocking_observable=True, blocking_count=1)
+            if field == "children": updates.update(children_observable=True)
+            nodes[key(1004)] = replace(old, **updates)
+            baseline = model.Snapshot(nodes)
+            plan = replanning.build_plan(baseline, self.plan.request, actor="alice")
+            after = dict(self.after().nodes);after[key(1004)] = nodes[key(1004)]
+            after[key(675)] = node(675)
+            with self.subTest(field=field), self.assertRaises(replanning.PlanError):
+                replanning.verify_unchanged_relationships(
+                    plan, baseline, model.Snapshot(after), self.aliases)
+
+    def test_recovery_readback_includes_known_unattached_created_identity(self):
+        from unittest.mock import patch
+        orphan = node(675)
+        expected = model.Snapshot({**self.before.nodes, orphan.key: orphan})
+        identity = replanning.CreatedIssueIdentity(orphan.key, orphan.node_id, orphan.repository_id)
+        with patch.object(replan_cli, "_load_plan_snapshot", return_value=(self.before, key(1032))), patch.object(
+                github, "load_snapshot", return_value=(graph(orphan), orphan.key)):
+            replan_cli._reauthenticate_graph(
+                object(), self.plan.request, expected, key(1032),
+                created_identities=(identity,))
+
+    def test_enrichment_only_resolves_identities_already_named_by_observed_history(self):
+        from dataclasses import replace
+        nodes = dict(self.before.nodes)
+        nodes[key(1004)] = replace(nodes[key(1004)], parent=key(675))
+        self.before = model.Snapshot(nodes)
+        self.plan = replanning.build_plan(self.before, self.plan.request, actor="alice")
+        observed = node(675, children=(key(1004),))
+        replanning.verify_unchanged_relationships(
+            self.plan, self.before, self.after(**{key(675): observed}), self.aliases)
+        self.assertIsNone(self.before.get(key(675)))
+        with self.assertRaisesRegex(replanning.PlanError, "incomplete"):
+            replanning.verify_unchanged_relationships(
+                self.plan, self.before,
+                self.after(**{key(675): replace(observed, children_observable=False)}),
+                self.aliases)
+
+
+class CompletionObservationTests(TestCase):
+    """Controlled transport starts from the observed GitHub #1190 representation."""
+
+    def setUp(self):
+        self.current = node(1190, parent=key(1032), state="closed",
+                            state_reason="completed",
+                            body_digest=replanning.content_digest(""))
+        self.payload = {
+            "repository": {
+                "id": "REPO_ID", "nameWithOwner": REPO,
+                "defaultBranchRef": {
+                    "name": "main",
+                    "branchProtectionRule": {
+                        "isAdminEnforced": True, "requiresStrictStatusChecks": True},
+                    "target": {
+                        "oid": "d" * 40,
+                        "history": {"nodes": [{"oid": "d" * 40}],
+                                    "pageInfo": {"hasNextPage": False, "endCursor": None}},
+                    },
+                },
+                "issue": {
+                    "id": "ISSUE_1190", "number": 1190, "state": "CLOSED",
+                    "stateReason": "COMPLETED", "body": "",
+                    "parent": {"id": "ISSUE_1032", "number": 1032,
+                               "repository": {"id": "REPO_ID", "nameWithOwner": REPO}},
+                    "closedByPullRequestsReferences": {
+                        "totalCount": 1, "pageInfo": {"hasNextPage": False},
+                        "nodes": [{
+                            "id": "PR_1191", "number": 1191, "state": "MERGED",
+                            "mergedAt": "2026-10-12T21:02:07Z",
+                            "mergedBy": {"id": "USER_alice", "login": "alice"},
+                            "baseRefName": "main",
+                            "repository": {"id": "REPO_ID", "nameWithOwner": REPO},
+                            "mergeCommit": {"oid": "d" * 40,
+                                            "signature": {"isValid": True}},
+                        }],
+                    },
+                    "timelineItems": {
+                        "pageInfo": {"hasNextPage": False, "endCursor": "last-event"},
+                        "nodes": [{"__typename": "ClosedEvent", "id": "CLOSED_1190",
+                                   "createdAt": "2026-10-12T21:02:09Z",
+                                   "actor": {"id": "USER_alice", "login": "alice"}}],
+                    },
+                },
+            },
+        }
+
+    def adapter(self, payload=None, errors=()):
+        data = self.payload if payload is None else payload
+
+        class Transport:
+            def __init__(self):
+                self.calls = []
+
+            def observe_main_protection(self, repository, branch):
+                return {"rulesets": [], "branch_protection": {"strict": True}}
+
+            def query(self, document, variables):
+                self.calls.append((document, variables))
+                return github.GraphQLResponse(data, errors)
+
+        return Transport()
+
+    def test_provider_failure_and_changed_independent_readback_do_not_qualify(self):
+        from copy import deepcopy
+        for field in ("body", "state", "main", "event"):
+            final = deepcopy(self.payload)
+            issue = final["repository"]["issue"]
+            if field == "body": issue["body"] = "changed"
+            if field == "state": issue["state"] = "OPEN"
+            if field == "main": final["repository"]["defaultBranchRef"]["target"]["oid"] = "1" * 40
+            if field == "event": issue["timelineItems"]["nodes"][0]["id"] = "OTHER"
+            original = self.payload
+
+            class ChangingTransport:
+                calls = 0
+
+                def observe_main_protection(self, repository, branch):
+                    return {"rulesets": [], "branch_protection": {"strict": True}}
+
+                def query(self, document, variables):
+                    self.calls += 1
+                    return github.GraphQLResponse(original if self.calls == 1 else final, ())
+
+            with self.subTest(field=field), self.assertRaises(github.GitHubError):
+                github.observe_completion(ChangingTransport(), self.current,
+                                          started_at="2026-10-12T21:01:20Z")
+
+        class FailedTransport:
+            def observe_main_protection(self, repository, branch):
+                return {"rulesets": [], "branch_protection": {"strict": True}}
+
+            def query(self, document, variables):
+                raise github.GitHubError("sensitive raw provider diagnostic")
+
+        with self.assertRaisesRegex(github.GitHubError, "^concurrent-completion provider query failed$"):
+            github.observe_completion(FailedTransport(), self.current,
+                                      started_at="2026-10-12T21:01:20Z")
+
+    def test_effective_rules_are_independently_reauthenticated(self):
+        adapter = self.adapter()
+        observations = iter((
+            {"rulesets": [{"type": "required_status_checks", "strict": True}]},
+            {"rulesets": []},
+        ))
+        adapter.observe_main_protection = lambda repository, branch: next(observations)
+        with self.assertRaisesRegex(github.GitHubError, "readback changed"):
+            github.observe_completion(adapter, self.current,
+                                      started_at="2026-10-12T21:01:20Z")
+
+    def test_ruleset_only_main_has_no_observed_admin_bypass_qualification(self):
+        from copy import deepcopy
+        payload = deepcopy(self.payload)
+        payload["repository"]["defaultBranchRef"]["branchProtectionRule"] = None
+        with self.assertRaises(github.GitHubError):
+            github.observe_completion(self.adapter(payload), self.current,
+                                      started_at="2026-10-12T21:01:20Z")
+
+    def test_rule_observer_consumes_existing_bounded_policy_owner(self):
+        from unittest.mock import Mock, patch
+        helper = Mock()
+        helper.default_config.return_value = {}
+        normalized = {"rulesets": [{"type": "required_status_checks"}],
+                      "branch_protection": {"strict": True}}
+        helper._capture_rules.return_value = (normalized, [], ["rulesets", "branch_protection"])
+        adapter = github.GitHubReadAdapter()
+        with patch.object(github, "_review_policy_owner", return_value=helper):
+            self.assertEqual(adapter.observe_main_protection(REPO, "main"), normalized)
+        helper.Budget.assert_called_once_with({"maximum_api_calls": 12, "maximum_items": 1000})
+        self.assertEqual(helper._capture_rules.call_args.args[1:], ("main", {
+            "require_ruleset_evidence": True, "require_branch_protection_evidence": True}))
+
+    def test_current_completion_is_observed_independently(self):
+        adapter = self.adapter()
+        observation = github.observe_completion(
+            adapter, self.current, started_at="2026-10-12T21:01:20Z")
+        self.assertEqual(observation.issue_key, key(1190))
+        self.assertEqual(observation.closing_pr_key, key(1191))
+        self.assertEqual(observation.state_events[0][2], "2026-10-12T21:02:09Z")
+        self.assertEqual(adapter.calls[0][1]["number"], 1190)
+        self.assertGreaterEqual(len(adapter.calls), 2)
+
+    def test_complete_paginated_state_history_precedes_independent_readback(self):
+        from copy import deepcopy
+        initial = deepcopy(self.payload)
+        initial["repository"]["issue"]["timelineItems"] = {
+            "pageInfo": {"hasNextPage": True, "endCursor": "earlier"},
+            "nodes": [{"__typename": "ReopenedEvent", "id": "EARLIER_REOPEN",
+                       "createdAt": "2026-10-12T20:00:00Z",
+                       "actor": {"id": "USER_alice"}}],
+        }
+        following = self.payload
+
+        class PaginatedTransport:
+            calls = 0
+
+            def observe_main_protection(self, repository, branch):
+                return {"rulesets": [], "branch_protection": {"strict": True}}
+
+            def query(self, document, variables):
+                self.calls += 1
+                return github.GraphQLResponse(initial if self.calls == 1 else following, ())
+
+        adapter = PaginatedTransport()
+        observation = github.observe_completion(
+            adapter, self.current, started_at="2026-10-12T21:01:20Z")
+        self.assertEqual(adapter.calls, 3)
+        self.assertEqual(len(observation.state_events), 2)
+        replanning._admit_concurrent_completion(
+            node(1190, parent=key(1032), body_digest=replanning.content_digest("")),
+            self.current, observation)
+
+    def test_page_bound_does_not_query_an_eleventh_event_page(self):
+        from copy import deepcopy
+        payload = self.payload
+
+        class EndlessTransport:
+            calls = 0
+
+            def observe_main_protection(self, repository, branch):
+                return {"rulesets": [], "branch_protection": {"strict": True}}
+
+            def query(self, document, variables):
+                self.calls += 1
+                value = deepcopy(payload)
+                value["repository"]["issue"]["timelineItems"]["pageInfo"] = {
+                    "hasNextPage": True, "endCursor": str(self.calls)}
+                return github.GraphQLResponse(value, ())
+
+        adapter = EndlessTransport()
+        with self.assertRaises(github.GitHubError):
+            github.observe_completion(adapter, self.current,
+                                      started_at="2026-10-12T21:01:20Z")
+        self.assertEqual(adapter.calls, 10)
+
+    def test_wrong_identity_partial_errors_and_ambiguous_closing_prs_block(self):
+        from copy import deepcopy
+        payloads = []
+        for change in ("identity", "multiple", "partial", "main"):
+            value = deepcopy(self.payload)
+            repository = value["repository"]
+            issue = repository["issue"]
+            if change == "identity": issue["id"] = "FOREIGN"
+            if change == "multiple":
+                issue["closedByPullRequestsReferences"]["totalCount"] = 2
+            if change == "partial":
+                issue["timelineItems"]["pageInfo"] = {
+                    "hasNextPage": True, "endCursor": None}
+            if change == "main": repository["defaultBranchRef"] = None
+            payloads.append(value)
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                with self.assertRaises(github.GitHubError):
+                    github.observe_completion(
+                        self.adapter(payload), self.current,
+                        started_at="2026-10-12T21:01:20Z")
+        with self.assertRaises(github.GitHubError):
+            github.observe_completion(
+                self.adapter(errors=({"type": "FORBIDDEN", "path": ["timelineItems"]},)),
+                self.current, started_at="2026-10-12T21:01:20Z")
 
 
 class MutationBoundaryTests(TestCase):
@@ -1500,6 +2003,24 @@ class MutationBoundaryTests(TestCase):
 
 
 class GitRecoverySignerTests(TestCase):
+    def test_concurrency_anchor_authenticates_entire_chain_without_rewriting_it(self):
+        with hermetic_signing_account("ssh") as fixture:
+            plan, baseline = recovery_plan(replanning.Step(
+                "ADD_BLOCKED_BY", {"blocked": key(1), "blocker": key(2)}))
+            signer = replanning.GitRecoverySigner.discover(fixture["repository"])
+            journal = replanning.RecoveryJournal.for_plan(plan, signer)
+            journal.start(baseline)
+            root = journal.load()["authentication"]["commit_oid"]
+            expected = signer._run(["show", "-s", "--format=%cI", root]).strip()
+            journal.begin_step(0)
+            journal.complete_step(0, None)
+            original = journal.path.read_bytes()
+            self.assertEqual(journal.started_at(), expected)
+            self.assertEqual(journal.path.read_bytes(), original)
+            signer._run(["update-ref", signer._ref_name(replanning.plan_digest(plan)), root])
+            with self.assertRaises(replanning.StalePlanError):
+                journal.started_at()
+
     def test_plan_rejects_signed_crash_ahead_alias_for_non_create_step(self):
         with hermetic_signing_account("ssh") as fixture:
             plan, baseline = recovery_plan(
@@ -1627,6 +2148,14 @@ class GitRecoverySignerTests(TestCase):
             )
             with self.assertRaisesRegex(replanning.StalePlanError, "reference"):
                 signer.verify(authentication, operation_digest, initial)
+
+    def test_recovery_signer_does_not_inherit_caller_clock(self):
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"GIT_AUTHOR_DATE": "2099-01-01T00:00:00Z",
+                                     "GIT_COMMITTER_DATE": "2099-01-01T00:00:00Z"}):
+            environment = replanning.GitRecoverySigner._environment()
+            self.assertNotIn("GIT_AUTHOR_DATE", environment)
+            self.assertNotIn("GIT_COMMITTER_DATE", environment)
 
     def test_hostile_signing_environment_is_not_inherited(self):
         hostile = {
