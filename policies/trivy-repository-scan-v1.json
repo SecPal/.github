@@ -27,25 +27,25 @@
   },
   "exceptions": [
     {
-      "id": "frontend-braces-cve-2026-93687-not-affected-20261005",
+      "id": "frontend-braces-cve-2026-93687-not-affected-1199",
       "repository": "SecPal/frontend",
       "class": "VULNERABILITY",
       "rule_id": "CVE-2026-93687",
       "path": "package-lock.json",
       "disposition": "NOT_AFFECTED",
-      "expires_at": "2026-10-19T00:00:00Z",
-      "rationale": "Reviewed frontend e5322a16ed71c08f0aa07f882e059e3536ff1975: braces 3.0.3 is dev-only through Lingui/micromatch and static-copy/chokidar. Lingui uses static repository patterns with filenames as data through picomatch; static-copy watches literal repository targets, never request paths or filenames as brace patterns. No untrusted brace-pattern input reaches braces; vulnerable executable code is absent from the Nginx runtime (retained SBOM metadata is not code). Before renewal, recheck published fixes, dependency topology, reachability and runtime contents; prefer dependency remediation."
+      "expires_at": "2026-10-27T00:00:00Z",
+      "rationale": "Independently requalified under SecPal/.github#1199 on 2026-10-13 at frontend 076bb1b204fef897231a04eaa0c580511b98bb65. Locked installation retains only dev-only braces 3.0.3 through @lingui/cli 6.9.0 -> micromatch 4.0.8 and vite-plugin-static-copy 4.1.1 -> chokidar 3.6.0. Lingui any/capture use fixed repository patterns with filenames as data through picomatch; static-copy watches literal repository targets and never promotes HTTP paths or filenames to brace patterns. Current reachability tests pass; the rebuilt Nginx runtime excludes Node, node_modules and executable braces code while retaining full SBOM metadata. Fresh three-class Trivy replay retains the reviewed CVE. npm still publishes 3.0.3; upstream PR #72 is closed unmerged, and current parent releases retain braces. Two-week review deadline requires renewed upstream, dependency, build/watch/CLI reachability and runtime checks; prefer safe dependency removal over renewal. This is a bounded use-specific NOT_AFFECTED disposition, not a claim that braces is fixed."
     },
     {
-      "id": "android-country-reference-sendgrid-20261013",
+      "id": "android-country-reference-sendgrid-1199",
       "repository": "SecPal/android",
       "class": "SECRET",
       "rule_id": "sendgrid-api-token",
       "path": "android/app/src/main/assets/public/assets/EmployeeAddressFields-D642volM.js",
       "source_blob": "f0bc32de9c027ed0bd3b7842642e5d137510e65c",
       "disposition": "IGNORED",
-      "expires_at": "2026-10-18T00:00:00Z",
-      "rationale": "Independently revalidated Android 63d9ed67dec7bf28814025a193a7cd4206717f2c and its frontend pin 8c950220d8ae582a536135eed75c8ecb2a4858c8 on 2026-10-13. The 9782-byte asset rebuilds identically; its 198 static alpha-2 country codes match src/lib/iso3166CountryOptions.ts blob b3e8f72d92d280ffc1f0f3a569ea1c33cc23ccca. The pinned Trivy 0.74.0 SendGrid detector matches only the dot-separated country literal, with no credential, environment value or dynamic interpolation. Fresh three-class action replay retains exactly this finding. Bounded five-day review window for Android adoption; before renewal independently recheck source lineage, exact blob, scanner necessity and static-data classification. Changed asset bytes require separate review."
+      "expires_at": "2026-10-27T00:00:00Z",
+      "rationale": "Independently requalified under SecPal/.github#1199 on 2026-10-13 at Android cebff0f878e64d50f690635a3b23382b80986a9e and frontend pin 8c950220d8ae582a536135eed75c8ecb2a4858c8. The complete 9782-byte asset rebuilds identically using Android's pinned build settings; all 198 distinct static alpha-2 country codes match src/lib/iso3166CountryOptions.ts blob b3e8f72d92d280ffc1f0f3a569ea1c33cc23ccca. The sole Trivy 0.74.0 SendGrid match lies entirely inside the static country literal, without credential, environment or interpolated input. Fresh three-class action replay retains exactly this blob-bound finding. The two-week bridge ends at the explicit source-remediation and consumer-adoption review on 2026-10-27: prefer a separately reviewed frontend encoding correction that avoids the minifier's token-shaped literal, followed by Android pin/rebuild qualification. No such source correction is yet accepted. Before any renewal recheck source lineage, exact bytes, scanner necessity and static-data classification. Different bytes remain actionable and require independent review."
     }
   ],
   "vex": {

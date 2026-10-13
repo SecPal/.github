@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1236,7 +1237,7 @@ class FrontendBracesDispositionTests(unittest.TestCase):
         self.observation = self.module.normalize_native(
             native,
             repository="SecPal/frontend",
-            commit="e5322a16ed71c08f0aa07f882e059e3536ff1975",
+            commit="076bb1b204fef897231a04eaa0c580511b98bb65",
             workspace=".",
             scanner={
                 "name": "trivy",
@@ -1263,13 +1264,13 @@ class FrontendBracesDispositionTests(unittest.TestCase):
         self.assertEqual(
             {key: value for key, value in exception.items() if key != "rationale"},
             {
-                "id": "frontend-braces-cve-2026-93687-not-affected-20261005",
+                "id": "frontend-braces-cve-2026-93687-not-affected-1199",
                 "repository": "SecPal/frontend",
                 "class": "VULNERABILITY",
                 "rule_id": "CVE-2026-93687",
                 "path": "package-lock.json",
                 "disposition": "NOT_AFFECTED",
-                "expires_at": "2026-10-19T00:00:00Z",
+                "expires_at": "2026-10-27T00:00:00Z",
             },
         )
         self.assertTrue(exception["rationale"].strip())
@@ -1390,7 +1391,7 @@ class AndroidCountryDispositionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
         self.policy = json.loads(POLICY.read_text())
-        self.commit = "63d9ed67dec7bf28814025a193a7cd4206717f2c"
+        self.commit = "cebff0f878e64d50f690635a3b23382b80986a9e"
         self.blob = "f0bc32de9c027ed0bd3b7842642e5d137510e65c"
         self.path = "android/app/src/main/assets/public/assets/EmployeeAddressFields-D642volM.js"
         self.observation = self.module.normalize_native(
@@ -1422,8 +1423,8 @@ class AndroidCountryDispositionTests(unittest.TestCase):
         })
         self.assertEqual(result["findings"][0]["source_blob"], self.blob)
         self.assertEqual(result["findings"][0]["exception"], {
-            "id": "android-country-reference-sendgrid-20261013",
-            "disposition": "IGNORED", "expires_at": "2026-10-18T00:00:00Z",
+            "id": "android-country-reference-sendgrid-1199",
+            "disposition": "IGNORED", "expires_at": "2026-10-27T00:00:00Z",
         })
         jsonschema.validate(result, json.loads(SCHEMA.read_text()))
         self.assertEqual(len(self.policy["exceptions"]), 2)
@@ -1465,7 +1466,7 @@ class AndroidCountryDispositionTests(unittest.TestCase):
                 policy["exceptions"][-1][field] = value
                 with self.assertRaises(self.module.ContractError):
                     self.module.admit(self.observation, policy)
-        self.observation["completed_at"] = "2026-10-18T00:00:00Z"
+        self.observation["completed_at"] = "2026-10-27T00:00:00Z"
         with self.assertRaisesRegex(self.module.ContractError, "expired"):
             self.module.admit(self.observation, self.policy)
 
@@ -1477,6 +1478,64 @@ class AndroidCountryDispositionTests(unittest.TestCase):
         self.observation["database"]["status"] = "STALE"
         result = self.module.admit(self.observation, self.policy)
         self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+
+
+class CompletePolicyValidityTests(unittest.TestCase):
+    """Every snapshot entry gates every consumer, including unrelated repos."""
+
+    def setUp(self) -> None:
+        self.module = load_module()
+        self.policy = json.loads(POLICY.read_text())
+        self.observations = []
+        for fixture_type in (FrontendBracesDispositionTests, AndroidCountryDispositionTests):
+            fixture = fixture_type()
+            fixture.setUp()
+            self.observations.append(fixture.observation)
+        unrelated = copy.deepcopy(self.observations[0])
+        unrelated["subject"]["repository"] = "SecPal/api"
+        unrelated["findings"] = []
+        self.observations.append(unrelated)
+
+    def test_complete_policy_remains_valid_through_review_window(self) -> None:
+        start = datetime(2026, 10, 13, tzinfo=timezone.utc)
+        times = [start + timedelta(days=day) for day in range(14)]
+        times.append(datetime(2026, 10, 26, 23, 59, 59, 999999, tzinfo=timezone.utc))
+        for observation in self.observations:
+            for timestamp in times:
+                with self.subTest(repository=observation["subject"]["repository"], timestamp=timestamp):
+                    observed = copy.deepcopy(observation)
+                    observed["completed_at"] = timestamp.isoformat().replace("+00:00", "Z")
+                    observed["database"].update(
+                        updated_at=(timestamp - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+                        downloaded_at=(timestamp - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+                        next_update=(timestamp + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+                    )
+                    result = self.module.admit(observed, self.policy)
+                    self.assertEqual(result["gate_state"], "CLEAN")
+                    self.assertEqual(result["summary"]["excepted"], len(observed["findings"]))
+
+    def test_one_expired_entry_blocks_other_repositories_even_without_findings(self) -> None:
+        now = "2026-10-13T18:00:00Z"
+        for index, exception in enumerate(self.policy["exceptions"]):
+            for observation in self.observations:
+                if observation["subject"]["repository"] == exception["repository"]:
+                    continue
+                with self.subTest(expired=exception["repository"], consumer=observation["subject"]["repository"]):
+                    observed = copy.deepcopy(observation)
+                    observed["completed_at"] = now
+                    policy = copy.deepcopy(self.policy)
+                    policy["exceptions"][index]["expires_at"] = now
+                    with self.assertRaisesRegex(self.module.ContractError, "expired"):
+                        self.module.admit(observed, policy)
+
+    def test_complete_policy_rejects_exact_new_expiry_and_later(self) -> None:
+        for now in ("2026-10-27T00:00:00Z", "2026-10-28T00:00:00Z"):
+            for observation in self.observations:
+                with self.subTest(repository=observation["subject"]["repository"], timestamp=now):
+                    observed = copy.deepcopy(observation)
+                    observed["completed_at"] = now
+                    with self.assertRaisesRegex(self.module.ContractError, "expired"):
+                        self.module.admit(observed, self.policy)
 
 
 class SecretSourceBindingTests(unittest.TestCase):
@@ -1506,7 +1565,7 @@ class SecretSourceBindingTests(unittest.TestCase):
         # This mechanism fixture reviews its own temporary blob, independently
         # of the production Android disposition exercised above.
         self.policy["exceptions"] = [entry for entry in self.policy["exceptions"]
-                                     if entry["id"] != "android-country-reference-sendgrid-20261013"]
+                                     if entry["id"] != "android-country-reference-sendgrid-1199"]
         self.policy["exceptions"].append({
             "id": "secret-source-fixture", "repository": "SecPal/android",
             "class": "SECRET", "rule_id": "sendgrid-api-token", "path": self.path,
