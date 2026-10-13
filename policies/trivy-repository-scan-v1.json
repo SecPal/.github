@@ -35,6 +35,17 @@
       "disposition": "NOT_AFFECTED",
       "expires_at": "2026-10-19T00:00:00Z",
       "rationale": "Reviewed frontend e5322a16ed71c08f0aa07f882e059e3536ff1975: braces 3.0.3 is dev-only through Lingui/micromatch and static-copy/chokidar. Lingui uses static repository patterns with filenames as data through picomatch; static-copy watches literal repository targets, never request paths or filenames as brace patterns. No untrusted brace-pattern input reaches braces; vulnerable executable code is absent from the Nginx runtime (retained SBOM metadata is not code). Before renewal, recheck published fixes, dependency topology, reachability and runtime contents; prefer dependency remediation."
+    },
+    {
+      "id": "android-country-reference-sendgrid-20261013",
+      "repository": "SecPal/android",
+      "class": "SECRET",
+      "rule_id": "sendgrid-api-token",
+      "path": "android/app/src/main/assets/public/assets/EmployeeAddressFields-D642volM.js",
+      "source_blob": "f0bc32de9c027ed0bd3b7842642e5d137510e65c",
+      "disposition": "IGNORED",
+      "expires_at": "2026-10-18T00:00:00Z",
+      "rationale": "Independently revalidated Android 63d9ed67dec7bf28814025a193a7cd4206717f2c and its frontend pin 8c950220d8ae582a536135eed75c8ecb2a4858c8 on 2026-10-13. The 9782-byte asset rebuilds identically; its 198 static alpha-2 country codes match src/lib/iso3166CountryOptions.ts blob b3e8f72d92d280ffc1f0f3a569ea1c33cc23ccca. The pinned Trivy 0.74.0 SendGrid detector matches only the dot-separated country literal, with no credential, environment value or dynamic interpolation. Fresh three-class action replay retains exactly this finding. Bounded five-day review window for Android adoption; before renewal independently recheck source lineage, exact blob, scanner necessity and static-data classification. Changed asset bytes require separate review."
     }
   ],
   "vex": {
