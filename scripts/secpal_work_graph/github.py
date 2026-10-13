@@ -751,11 +751,13 @@ def observe_completion(
         events = []
         connection = issue["timelineItems"]
         cursors = set()
-        for _ in range(10):
+        for page_number in range(10):
             nodes, page = connection_page(connection, 50)
             events.extend(_completion_event_projection(event) for event in nodes)
             if not page["hasNextPage"]:
                 break
+            if page_number == 9:
+                raise GitHubError("concurrent-completion event history exceeds its bound")
             cursor = page["endCursor"]
             if not isinstance(cursor, str) or not cursor or cursor in cursors:
                 raise ValueError
@@ -770,11 +772,13 @@ def observe_completion(
         history = []
         connection = initial["defaultBranchRef"]["target"]["history"]
         cursors = set()
-        for _ in range(10):
+        for page_number in range(10):
             nodes, page = connection_page(connection, 100)
             history.extend(node["oid"] for node in nodes)
             if pull[8] in history or not page["hasNextPage"]:
                 break
+            if page_number == 9:
+                raise GitHubError("concurrent-completion main ancestry exceeds its bound")
             cursor = page["endCursor"]
             if not isinstance(cursor, str) or not cursor or cursor in cursors:
                 raise ValueError

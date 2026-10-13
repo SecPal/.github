@@ -1294,6 +1294,53 @@ class CompletionObservationTests(TestCase):
         self.assertEqual(adapter.calls[0][1]["number"], 1190)
         self.assertGreaterEqual(len(adapter.calls), 2)
 
+    def test_complete_paginated_state_history_precedes_independent_readback(self):
+        from copy import deepcopy
+        initial = deepcopy(self.payload)
+        initial["repository"]["issue"]["timelineItems"] = {
+            "pageInfo": {"hasNextPage": True, "endCursor": "earlier"},
+            "nodes": [{"__typename": "ReopenedEvent", "id": "EARLIER_REOPEN",
+                       "createdAt": "2026-10-12T20:00:00Z",
+                       "actor": {"id": "USER_alice"}}],
+        }
+        following = self.payload
+
+        class PaginatedTransport:
+            calls = 0
+
+            def query(self, document, variables):
+                self.calls += 1
+                return github.GraphQLResponse(initial if self.calls == 1 else following, ())
+
+        adapter = PaginatedTransport()
+        observation = github.observe_completion(
+            adapter, self.current, started_at="2026-10-12T21:01:20Z")
+        self.assertEqual(adapter.calls, 3)
+        self.assertEqual(len(observation.state_events), 2)
+        replanning._admit_concurrent_completion(
+            node(1190, parent=key(1032), body_digest=replanning.content_digest("")),
+            self.current, observation)
+
+    def test_page_bound_does_not_query_an_eleventh_event_page(self):
+        from copy import deepcopy
+        payload = self.payload
+
+        class EndlessTransport:
+            calls = 0
+
+            def query(self, document, variables):
+                self.calls += 1
+                value = deepcopy(payload)
+                value["repository"]["issue"]["timelineItems"]["pageInfo"] = {
+                    "hasNextPage": True, "endCursor": str(self.calls)}
+                return github.GraphQLResponse(value, ())
+
+        adapter = EndlessTransport()
+        with self.assertRaises(github.GitHubError):
+            github.observe_completion(adapter, self.current,
+                                      started_at="2026-10-12T21:01:20Z")
+        self.assertEqual(adapter.calls, 10)
+
     def test_wrong_identity_partial_errors_and_ambiguous_closing_prs_block(self):
         from copy import deepcopy
         payloads = []
