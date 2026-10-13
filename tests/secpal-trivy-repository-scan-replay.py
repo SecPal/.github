@@ -92,6 +92,10 @@ def replay_source_binding(root: Path, action_path: Path, environment: dict) -> d
     shutil.copytree(action_path.parents[3], governance)
     policy_path = governance / "policies/trivy-repository-scan-v1.json"
     policy = json.loads(policy_path.read_text())
+    # This disposable mechanism replay supplies its own reviewed source policy;
+    # production policy necessity is independently qualified by its delivery.
+    policy["exceptions"] = [entry for entry in policy["exceptions"]
+                            if entry["id"] != "android-country-reference-sendgrid-20261013"]
     policy["exceptions"].append({
         "id": "immutable-source-binding-replay", "repository": "SecPal/android",
         "class": "SECRET", "rule_id": "sendgrid-api-token", "path": ANDROID_ASSET,

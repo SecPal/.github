@@ -1255,7 +1255,10 @@ class FrontendBracesDispositionTests(unittest.TestCase):
         )
 
     def test_exact_selector_retains_complete_finding_and_exception_metadata(self) -> None:
-        self.assertEqual(len(self.policy["exceptions"]), 1)
+        self.assertEqual(len([
+            entry for entry in self.policy["exceptions"]
+            if entry["repository"] == "SecPal/frontend"
+        ]), 1)
         exception = self.policy["exceptions"][0]
         self.assertEqual(
             {key: value for key, value in exception.items() if key != "rationale"},
@@ -1381,6 +1384,101 @@ class FrontendBracesDispositionTests(unittest.TestCase):
         self.assertEqual(result["summary"]["excepted"], 1)
 
 
+class AndroidCountryDispositionTests(unittest.TestCase):
+    """Admission regression for the independently replayed Android source."""
+
+    def setUp(self) -> None:
+        self.module = load_module()
+        self.policy = json.loads(POLICY.read_text())
+        self.commit = "63d9ed67dec7bf28814025a193a7cd4206717f2c"
+        self.blob = "f0bc32de9c027ed0bd3b7842642e5d137510e65c"
+        self.path = "android/app/src/main/assets/public/assets/EmployeeAddressFields-D642volM.js"
+        self.observation = self.module.normalize_native(
+            {"SchemaVersion": 2, "ArtifactType": "repository", "ArtifactName": ".",
+             "Results": [{"Target": self.path, "Secrets": [{
+                 "RuleID": "sendgrid-api-token", "Severity": "MEDIUM",
+                 "StartLine": 1, "EndLine": 1,
+             }]}]},
+            repository="SecPal/android", commit=self.commit, workspace=".",
+            scanner={"name": "trivy", "version": self.module.TRIVY_VERSION,
+                     "immutable_id": self.module.TRIVY_ARCHIVE_ID,
+                     "configuration_sha256": self.module.configuration_identity()},
+            database={**valid_database(), "updated_at": "2026-10-13T01:00:00Z",
+                      "next_update": "2026-10-14T01:00:00Z",
+                      "downloaded_at": "2026-10-13T08:00:00Z"},
+            completed_at="2026-10-13T09:00:00Z",
+        )
+        self.observation = self.module.normalize_secret_sources(
+            self.observation, {"commit": self.commit, "blobs": {self.path: self.blob}},
+        )
+
+    def test_original_retains_finding_and_exact_exception_metadata(self) -> None:
+        import jsonschema
+
+        result = self.module.admit(self.observation, self.policy)
+        self.assertEqual(result["gate_state"], "CLEAN")
+        self.assertEqual(result["summary"], {
+            "total": 1, "actionable": 0, "review_required": 0, "excepted": 1,
+        })
+        self.assertEqual(result["findings"][0]["source_blob"], self.blob)
+        self.assertEqual(result["findings"][0]["exception"], {
+            "id": "android-country-reference-sendgrid-20261013",
+            "disposition": "IGNORED", "expires_at": "2026-10-18T00:00:00Z",
+        })
+        jsonschema.validate(result, json.loads(SCHEMA.read_text()))
+        self.assertEqual(len(self.policy["exceptions"]), 2)
+
+    def test_substituted_blob_and_other_selectors_preserve_actionability(self) -> None:
+        fingerprint = self.observation["findings"][0]["fingerprint"]
+        for field, value in (("source_blob", "0" * 40), ("repository", "SecPal/frontend"),
+                             ("class", "MISCONFIGURATION"), ("rule_id", "other-secret"),
+                             ("path", "other/EmployeeAddressFields-D642volM.js")):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(self.observation)
+                target = changed["subject"] if field == "repository" else changed["findings"][0]
+                target[field] = value
+                if field == "class":
+                    del target["source_blob"]
+                    target["severity"] = "HIGH"
+                result = self.module.admit(changed, self.policy)
+                self.assertEqual(result["gate_state"], "ACTIONABLE")
+                self.assertEqual(result["summary"]["excepted"], 0)
+                self.assertEqual(result["findings"][0]["fingerprint"], fingerprint)
+
+    def test_unrelated_secret_still_blocks(self) -> None:
+        other = copy.deepcopy(self.observation["findings"][0])
+        other.update(path="credentials.txt", source_blob="0" * 40, fingerprint="sha256:" + "d" * 64)
+        self.observation["findings"].append(other)
+        result = self.module.admit(self.observation, self.policy)
+        self.assertEqual(result["gate_state"], "ACTIONABLE")
+        self.assertEqual(result["summary"], {
+            "total": 2, "actionable": 1, "review_required": 0, "excepted": 1,
+        })
+
+    def test_expiry_and_malformed_policy_fail_closed(self) -> None:
+        for field, value in (("expires_at", self.observation["completed_at"]),
+                             ("expires_at", "2026-10-13T00:00:00Z"),
+                             ("source_blob", None), ("source_blob", self.blob.upper()),
+                             ("disposition", "NOT_AFFECTED"), ("rationale", "")):
+            with self.subTest(field=field, value=value):
+                policy = copy.deepcopy(self.policy)
+                policy["exceptions"][-1][field] = value
+                with self.assertRaises(self.module.ContractError):
+                    self.module.admit(self.observation, policy)
+        self.observation["completed_at"] = "2026-10-18T00:00:00Z"
+        with self.assertRaisesRegex(self.module.ContractError, "expired"):
+            self.module.admit(self.observation, self.policy)
+
+    def test_missing_source_and_stale_health_cannot_authorize_clean(self) -> None:
+        missing = copy.deepcopy(self.observation)
+        del missing["findings"][0]["source_blob"]
+        with self.assertRaises(self.module.ContractError):
+            self.module.admit(missing, self.policy)
+        self.observation["database"]["status"] = "STALE"
+        result = self.module.admit(self.observation, self.policy)
+        self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+
+
 class SecretSourceBindingTests(unittest.TestCase):
     """Source facts come from Git observation, never native scanner metadata."""
 
@@ -1405,6 +1503,10 @@ class SecretSourceBindingTests(unittest.TestCase):
             }],
         }
         self.policy = json.loads(POLICY.read_text())
+        # This mechanism fixture reviews its own temporary blob, independently
+        # of the production Android disposition exercised above.
+        self.policy["exceptions"] = [entry for entry in self.policy["exceptions"]
+                                     if entry["id"] != "android-country-reference-sendgrid-20261013"]
         self.policy["exceptions"].append({
             "id": "secret-source-fixture", "repository": "SecPal/android",
             "class": "SECRET", "rule_id": "sendgrid-api-token", "path": self.path,
