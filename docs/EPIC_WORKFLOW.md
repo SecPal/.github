@@ -3,157 +3,29 @@
 
 # Epic And Sub-Issue Workflow
 
-## Why This Exists
+Use an epic when native GitHub sub-issues help coordinate larger or
+cross-repository work. A focused change can use an ordinary issue or PR.
 
-Large SecPal work often spans multiple repositories, multiple PRs, or both. When that happens, a parent epic can look complete before all acceptance criteria are actually satisfied.
+Describe the intended outcome and acceptance criteria in the owning repository.
+Use native parent/sub-issue links and dependencies. Keep independent work
+parallel and record actual technical blockers.
 
-This guide defines the minimum structure and closure evidence required so an epic reflects reality instead of just merged PR count.
+Link PRs to the work they deliver. Use `Fixes` or `Closes` only when merging the
+PR completes that issue; use ordinary references for related work. Review
+cross-repository results before closing their parent epic. Close superseded
+issues as not planned and preserve their history.
 
-It is the procedural companion to `docs/work-graph-contract.md`, which defines the underlying semantics. Where this guide and the contract appear to disagree, the contract governs.
+When a change depends on live configuration or an external service, verify that
+behavior in the appropriate environment. A documentation change or green unit
+test does not establish production qualification.
 
-## When To Use An Epic
-
-The epic threshold is defined in [docs/work-graph-contract.md](work-graph-contract.md#24-epic-threshold). In short: an epic is required when the work holds more than one independently deliverable contract, sequences changes across repositories, has separately reviewable and mergeable phases, or cannot be reviewed safely as one topic.
-
-A single contract that merely might need mechanical follow-up PRs stays a regular issue. If it is genuinely unclear whether the work holds one contract or several, create the epic.
-
-## Required Structure
-
-### 1. Create The Parent Epic First
-
-Use the organization issue template: `🗺️ Epic (Multiple Contracts)`.
-
-The epic must define:
-
-- a clear goal
-- acceptance criteria
-- non-goals
-- the native sub-issues that carry its contracts
-
-### 2. Split Work Into Sub-Issues
-
-Use one delivery sub-issue per contract, delivered by one primary pull request.
-
-A sub-issue that itself gains children becomes a sub-epic: it carries no contract of its own, is never delivered by a PR, and applies this same structure to its own children. See sections 2.2 and 2.3 of [docs/work-graph-contract.md](work-graph-contract.md).
-
-Each delivery sub-issue must:
-
-- link back to the parent epic through the native parent/sub-issue link
-- carry exactly one contract
-- carry its own acceptance criteria
-- record real blockers as native issue dependencies, and preferred sequence as native sub-issue order
-
-### 3. Link PRs To Sub-Issues, Not The Epic
-
-Every PR should close its sub-issue, not the parent epic.
-
-Use:
-
-```markdown
-Fixes #<sub-issue-number>
-Part of: #<epic-number>
-```
-
-No PR closes the epic through a closing keyword. The epic is closed explicitly once the closure checklist below is satisfied and the closure comment exists, so that closure evidence is never skipped by a merge.
-
-## Parent Epic Closure Checklist
-
-Do not close a parent epic until all of the following are true:
-
-- every linked acceptance criterion is satisfied by merged work, not just planned work
-- the exact child issues and PRs that satisfy each acceptance slice are identified
-- any discovered acceptance gap was reopened or re-filed before closure
-- deferred but still relevant work was moved out of the epic into dedicated follow-up issues before closure, so no child stays open under a closed epic
-- the native sub-issue list reflects reality across all touched repositories, and no Markdown mirror of child state is left behind
-
-If any item above is still unclear, the epic stays open.
-
-## Cross-Repo Verification
-
-Before closing a cross-repository epic, review the linked work repo by repo.
-
-For each repository involved:
-
-- identify the merged PRs that delivered the intended scope
-- verify the corresponding sub-issues are actually closed or explicitly superseded
-- check whether any promised acceptance slice was only partially implemented
-- check whether follow-up issues were created for deferred scope discovered during delivery
-
-This verification is required even if project board automation already moved issues to a done-like state.
-
-## Required Closure Comment
-
-When an epic is closed, add a closure comment that maps acceptance criteria to the exact child issues and PRs.
-
-Use this structure:
-
-```markdown
-## Epic Closure Evidence
-
-### Acceptance Criteria Mapping
-
-- Criterion: <acceptance slice>
-  Delivered by: <child issue>, <PR>, <repo>
-- Criterion: <acceptance slice>
-  Delivered by: <child issue>, <PR>, <repo>
-
-### Deferred Follow-Up
-
-- <issue link> — <why it remains out of scope>
-
-### Notes
-
-- <optional clarification about superseded or reopened work>
-```
-
-The comment should make it possible to audit why the epic was closed without reconstructing the full history from scratch.
-
-## What To Do When You Find A Gap Late
-
-If epic closure review finds that something was assumed complete but is not actually complete:
-
-1. Reopen the relevant issue if the original scope still applies.
-2. Create a new follow-up issue if the remaining work is distinct.
-3. Link that issue from the parent epic before closing it.
-4. Keep the epic open until the remaining scope is either done or tracked outside the epic.
-
-Do not close the epic first and clean up the tracking later.
-
-## Retrospective Audit Helper
-
-For migration comparison of historical checklist mirrors, use the legacy audit
-helper in this repository. It is report-only: native issue state, hierarchy,
-and dependencies remain authoritative under the canonical contract.
+For an optional read-only comparison of historical checklist mirrors:
 
 ```bash
-bash scripts/audit-closed-epics.sh
+bash scripts/audit-closed-epics.sh --org SecPal --repo .github
 ```
 
-You can scope it to specific repositories when investigating a narrower set of
-epics:
+The report grants no delivery or mutation authority.
 
-```bash
-bash scripts/audit-closed-epics.sh --org SecPal --repo .github --repo api
-```
-
-This compares stale checklist state with current issue state. It does not make
-an epic closure-ready, resolve graph state, or replace native relationships.
-
-## CLA And Other External Services
-
-If a workflow depends on repository settings or external services, merged code alone is not enough evidence. Verify the live configuration separately and track any missing operational step as its own issue.
-
-## Quick Reference
-
-- Each PR closes one sub-issue.
-- The parent epic stays open until closure evidence exists.
-- Cross-repo acceptance checks must happen before epic closure.
-- Deferred work must be linked before, not after, closure.
-
-## Related Guidance
-
-- [docs/work-graph-contract.md](work-graph-contract.md)
-- [README.md](../README.md)
-- [CONTRIBUTING.md](../CONTRIBUTING.md)
-- [.github/ISSUE_TEMPLATE/epic.yml](../.github/ISSUE_TEMPLATE/epic.yml)
-- [.github/ISSUE_TEMPLATE/sub-issue.yml](../.github/ISSUE_TEMPLATE/sub-issue.yml)
+See [native delivery](work-graph-contract.md), [planning](planning.md) and
+[contributor guidance](../CONTRIBUTING.md).

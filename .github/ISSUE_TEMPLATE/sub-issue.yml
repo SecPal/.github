@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 name: 📦 Delivery Issue (Part of Epic)
-description: One deliverable contract inside an epic, closed by exactly one PR
+description: Focused work inside an epic, tracked through native issue relationships
 title: ""
 labels: ["type/sub-issue"]
 body:
@@ -16,18 +16,18 @@ body:
 
         **What is a Delivery Issue?**
         - One contract inside an epic
-        - Carries exactly one contract, delivered by one primary PR
+        - Carries focused, reviewable work
         - Focused on a single logical unit of work
 
         **Workflow:**
         1. Attach this sub-issue natively to its parent epic
-        2. Your PR should close THIS sub-issue: `Fixes #<this-sub-issue-number>`
-        3. Your PR should reference the epic: `Part of: #<epic-number>`
-        4. Never use `Fixes #<epic-number>`; the epic is closed explicitly after its closure evidence comment
+        2. Link the PR to related work; use closing keywords only when it completes the issue
+        3. Reference the epic when it helps explain the context
+        4. Use closing keywords only when the PR completes the referenced issue
 
         📚 Full documentation: See [docs/EPIC_WORKFLOW.md](https://github.com/SecPal/.github/blob/main/docs/EPIC_WORKFLOW.md)
 
-        📐 Canonical semantics: See [docs/work-graph-contract.md](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md)
+        📐 Native delivery guidance: See [docs/work-graph-contract.md](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md)
 
   - type: input
     id: parent_epic
@@ -127,15 +127,15 @@ body:
 
         ## 📝 PR Linking Instructions
 
-        When creating the PR for this sub-issue, use this in your PR description:
+        Reference related work in your PR description:
 
         ```markdown
-        Fixes #<this-sub-issue-number>
+        Refs #<this-sub-issue-number>
         Part of: #<epic-number>
         ```
 
         **⚠️ Important:**
-        - Never use `Fixes #<epic-number>`; closing the epic is a separate step
+        - Use `Fixes` or `Closes` only for issues the PR completes
         - The epic should only close when ALL sub-issues are complete
         - If you discover remaining in-scope gaps, reopen or file follow-up issues before asking to close the parent epic
         - If you're unsure, ask in the epic discussion thread

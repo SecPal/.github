@@ -9,12 +9,9 @@ This file is the concise, provider-neutral runtime baseline for work in this
 repository. Path-specific review criteria live in focused instruction files,
 including `.github/instructions/github-workflows.instructions.md`.
 
-Work structure, ordering, selection, delivery, and evidence semantics are defined
-once in `docs/work-graph-contract.md`. Evidence-pipeline and external-system
-architecture semantics are defined once in `docs/evidence-architecture-contract.md`.
-These canonical contracts are organization-wide governance sources; repository
-baselines may add stricter stack-specific rules but must not weaken or restate
-them divergently.
+Use GitHub PRs, reviews, checks, issues and native issue relationships for delivery
+and planning. Evidence-pipeline and external-system architecture requirements
+remain defined in `docs/evidence-architecture-contract.md`.
 
 ## Scope and Safety
 
@@ -76,24 +73,17 @@ them divergently.
   2. security, privacy, data integrity, lifecycle, and rollout risk;
   3. avoidable complexity, duplication, and opportunities for bounded
      simplification.
-- Green CI is supporting evidence, not a substitute for reviewing behavior and
-  invariants. Do not weaken meaningful CI merely to shorten or reduce runs.
-
-### Initial Automated Review
-
-Apply the [canonical review-acquisition rule](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#531-initial-automated-review).
-These runtime assertions consume that owner; they define no separate lifecycle.
-
-- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`
-- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`
-- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`
+- Green CI supports review of behavior and invariants. Preserve meaningful CI.
+- Use native GitHub review threads and required checks. Resolve genuine findings
+  and merge through the existing protection rules when authorized.
+- Keep a Ready PR Ready; request re-review directly when needed.
+- Reuse successful validation until a relevant source, dependency or configuration
+  change invalidates it. Run focused checks for the changed area.
 
 ## Commits and Communication
 
-- `SECPAL_SIGNING_FORMAT: SSH`; apply the [canonical signing authority](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#532-signing-authority).
-  Preserve existing SSH keys and signing configuration. GitHub-generated
-  signatures are provider evidence, not SecPal OpenPGP signing authority.
-  Every PR commit must have GitHub `verification.verified == true`.
+- Sign commits with the existing SSH identity and configuration. Every PR
+  commit must have GitHub `verification.verified == true`.
 - Never use `--no-verify` or force-push.
 - Keep GitHub-facing communication in English. Make findings concise,
   provider-neutral, actionable, and supported by file/line evidence.
@@ -112,9 +102,6 @@ These runtime assertions consume that owner; they define no separate lifecycle.
 - Create an out-of-scope issue only when the finding is technically proven,
   material, not already tracked, unsuitable for a small in-scope fix, and can
   be expressed with concrete acceptance criteria.
-- Delegate every work-graph decision to `docs/work-graph-contract.md`; do not
-  restate its decomposition, topology, selection, replanning, or evidence
-  semantics locally.
 - Delegate evidence/external-system architecture decisions to
   `docs/evidence-architecture-contract.md`; do not redefine its layer,
   invariant-ownership, diagnosability, or anti-loop semantics locally.

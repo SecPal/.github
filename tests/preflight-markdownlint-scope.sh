@@ -84,11 +84,8 @@ chmod +x "$workspace/tests/validate-copilot-instructions.sh"
 
 # Stand-ins for the unconditional unittest commands in scripts/preflight.sh.
 unit_suites=(
-  polyscope-work-graph-advisory
-  secpal-work-graph-replan-unit
   secpal-trivy-repository-scan-unit
   secpal-trivy-action-archive
-  polyscope-work-graph-replanning
 )
 for suite in "${unit_suites[@]}"; do
   cat >"$workspace/tests/$suite.py" <<'EOF'
@@ -145,16 +142,6 @@ import os
 
 with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
     log.write("evidence-architecture-governance\n")
-EOF
-
-cat >"$workspace/tests/delivery-lifecycle-governance.py" <<'EOF'
-"""Fixture stand-in proving preflight requires Draft-first governance."""
-
-import os
-
-
-with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
-    log.write("delivery-lifecycle-governance\n")
 EOF
 
 cat >"$workspace/tests/postgresql-18-baseline-governance.py" <<'EOF'

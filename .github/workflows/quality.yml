@@ -64,101 +64,6 @@ jobs:
           bash tests/reusable-copilot-instructions-provenance.sh
           bash tests/dependabot-auto-merge.sh
 
-  pr-review-workflow:
-    name: Finite PR Review Workflow
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "26.x"
-
-      - name: Install Node dependencies
-        run: npm ci
-
-      - name: Run guarded-action unit tests
-        run: python3 -m unittest tests/secpal-pr-review-actions-unit.py
-
-      - name: Run bounded provider fallback replacement tests
-        run: python3 -m unittest tests/secpal-provider-fallback-unit.py
-
-      - name: Run adopted Ready prior-authority bridge unit tests
-        run: python3 -m unittest tests/secpal-adopted-ready-prior-authority-unit.py
-
-      - name: Run exact contracts Ready admission regressions
-        run: python3 -m unittest tests/secpal-contracts-524-loss-admission-unit.py
-
-      - name: Run simple resolver unit tests
-        run: python3 -m unittest tests/secpal-resolve-fixed-threads-unit.py
-
-      - name: Run exact unchanged-head prerequisite disposition tests
-        run: |
-          python3 -m unittest tests/secpal-unchanged-prerequisite-unit.py
-          python3 -m unittest tests/secpal-unchanged-prerequisite-evidence-unit.py
-          python3 -m unittest tests/secpal-exact-prerequisite-resolver-unit.py
-
-      - name: Run finite lifecycle-orchestration unit tests
-        run: python3 -m unittest tests/secpal-lifecycle-orchestration-unit.py
-      - name: Run authenticated Ready/Draft lifecycle execution tests
-        run: python3 -m unittest tests/secpal-lifecycle-execution-contract-unit.py
-
-      - name: Run role-specific lifecycle signing tests
-        run: python3 -m unittest tests/secpal-lifecycle-role-signing-unit.py
-
-      - name: Run finite skill policy tests
-        run: bash tests/secpal-pr-review-skill-policy.sh
-
-      - name: Run fake-GitHub and temporary-HOME integration tests
-        run: bash tests/secpal-pr-review-skill-integration.sh
-
-  work-graph-resolver:
-    name: Work-Graph Resolver
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "26.x"
-
-      # markdown-it provides the standards-compliant Markdown parsing the
-      # structural acceptance-criteria check depends on.
-      - name: Install Node dependencies
-        run: npm ci
-
-      - name: Run pure resolver and acceptance-criteria tests
-        run: python3 -m unittest tests/secpal-work-graph-unit.py
-
-      - name: Run fake-GitHub adapter and command tests
-        run: python3 -m unittest tests/secpal-work-graph-adapter.py
-
-      - name: Run advisory audit tests
-        run: python3 -m unittest tests/secpal-work-graph-audit.py
-
-      - name: Run Polyscope advisory contract tests
-        run: python3 -m unittest tests/polyscope-work-graph-advisory.py
-
-      - name: Run graph-first replanning operation tests
-        run: python3 -m unittest tests/secpal-work-graph-replan-unit.py
-
-      - name: Run Polyscope replanning contract tests
-        run: python3 -m unittest tests/polyscope-work-graph-replanning.py
-
-      - name: Run evidence-architecture governance tests
-        run: python3 tests/evidence-architecture-governance.py
-
-      - name: Run PostgreSQL 18 baseline governance tests
-        run: ./scripts/preflight.sh --postgresql-baseline-only
-
   evidence-architecture:
     name: Evidence Architecture PR Gate
     runs-on: ubuntu-latest
@@ -179,6 +84,9 @@ jobs:
 
       - name: Install parser dependencies
         run: npm ci
+
+      - name: Run PostgreSQL 18 baseline validation
+        run: ./scripts/preflight.sh --postgresql-baseline-only
 
       - name: Validate declared architecture
         run: python3 -I scripts/secpal-evidence-architecture.py --repository-root . --repository SecPal/.github

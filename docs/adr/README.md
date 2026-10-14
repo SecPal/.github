@@ -96,12 +96,11 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [ADR-019: Production Edge and Layered Security](20260824-production-edge-layered-security-adr019.md) - 2026-08-24; DIRECT and PROTECTED modes rebaselined under [#768](https://github.com/SecPal/.github/issues/768)
 - [ADR-018: Production Host and Container Runtime](20260824-production-host-container-runtime-adr018.md) - 2026-08-24
 - [ADR-017: PostgreSQL 18 Canonical Database Baseline](20260824-postgresql-18-canonical-baseline-adr017.md) - 2026-08-24
-- [ADR-016: Native Work-Graph and Engineering Governance](20260824-native-work-graph-engineering-governance-adr016.md) - 2026-08-24; refines ADR-013
 - [ADR-015: Global Identity Key Security](20260720-global-identity-key-security-adr015.md) - 2026-07-20
 - [BRAND-0002: Typography](BRAND-0002-typography.md) - 2026-06-13
 - [BRAND-0003: Navigation Pattern](BRAND-0003-navigation-pattern.md) - 2026-06-13
 - [BRAND-0006: App UI Stack Ownership](BRAND-0006-app-ui-stack.md) - 2026-06-13
-- [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15; refined by ADR-016
+- [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15; native issue planning remains active
 
 ### Proposed
 
@@ -109,6 +108,8 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [ADR-002: OpenTimestamp for Audit Trail](20251027-opentimestamp-for-audit-trail.md) - 2025-10-27; revalidation required before acceptance
 
 ### Superseded
+
+- [ADR-016: Native Work-Graph and Engineering Governance](20260824-native-work-graph-engineering-governance-adr016.md) - 2026-08-24; delivery governance replaced by native GitHub PRs, reviews and checks
 
 - [ADR-003: Offline-First Architecture](20251027-offline-first-architecture.md) - 2025-10-27; superseded by [ADR-026](20261002-client-trust-offline-recovery-adr026.md); original Proposed body retained as historical, never-accepted implementation proposals
 - [BRAND-0001: Brand Architecture](BRAND-0001-brand-architecture.md) - 2026-06-13; superseded by [BRAND-0007](BRAND-0007-secpal-product-family-architecture.md) for the current product-family hierarchy while preserved as historical evidence

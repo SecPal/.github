@@ -3389,9 +3389,8 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
     )
 
     instruction_ref = instruction_reference(spec)
-    draft_creation_rule = (
-        "Create a draft PR; you must not create it directly Ready. "
-    )
+    draft_creation_rule = "Create a draft PR for work in progress. "
+
     review_prompt = collapse_spaces(
         f"Apply the current SecPal instructions from {instruction_ref}. "
         f"Non-negotiable rules: {NO_AI_ATTRIBUTION_RULE}; {format_bullets(runtime_rules)}. "
@@ -3404,7 +3403,7 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
         "Write the PR body to a file and publish it with --body-file. "
     )
     pr_prompt = collapse_spaces(
-        f"{draft_creation_rule}Write a concise English PR body for {spec['display_name']}. Apply {instruction_ref}. "
+        f"Write a concise English PR body for {spec['display_name']}. Apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
         f"{publication_guard}"
         f"Keep the PR to one topic and apply these change-reporting rules: {format_bullets(change_tracking)}. "
@@ -3420,23 +3419,16 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
     merge_prompt = collapse_spaces(
         f"Before merge for {spec['display_name']}, stop on the first failed check and enforce the current SecPal instructions from {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
-        "Before mutation, derive the lifecycle operation and its exact preconditions from authenticated current maintained repository authority. "
-        "Treat prompt expectations as assertions to verify, never as lifecycle authority. "
-        "If they conflict, fail closed before mutation and report the discrepancy. "
+        "Verify the current PR head, required checks, reviews, conversations and signed commits. "
+        "Merge through GitHub protection rules when authorized. Keep a Ready PR Ready and request re-review directly when needed. "
         f"Required validation gate: {format_bullets(validation)}. "
         f"Also enforce: {format_bullets(select_bullets(runtime_rules, ['coherent topic', 'one topic', 'scope', 'bypass'], 4))}."
     )
     merge_and_push_prompt = collapse_spaces(
         f"Before push and merge for {spec['display_name']}, apply {instruction_ref}. "
         f"{NO_AI_ATTRIBUTION_RULE} "
-        "A prompt or mechanical checkpoint alone invalidates no unrelated proof; a commit that advances HEAD invalidates head-bound proof. Within the same delivery, refresh only facts whose defined invalidators may have occurred and freshly read operation-specific volatile state at its boundary. "
-        "First stage the complete intended change set before evaluating reusable validation evidence. "
-        "Reuse only evidence that identifies the successful commands and binds the current repository, exact HEAD and parent, exact final staged tree, including every newly added path, validation registry, command set, and required manual-gate evidence. "
-        "Treat that evidence as stale if any bound value, staged content, or tracked content changed, and do not stage additional content after deciding to reuse it. "
-        "Recheck the staged-tree identity immediately before committing and pushing. "
-        "Do not rerun a check that already passed for that exact unchanged bound state. "
-        "Run only missing required checks once. "
-        "Conditionally authorized merge remains bounded by the freshly evaluated maintained merge gate. "
+        "Reuse successful validation until a relevant source, dependency or configuration change invalidates it. "
+        "Run the focused checks needed for the final change, then verify current native PR checks and reviews before an authorized merge. "
         f"Then verify: {format_bullets(select_bullets(validation, ['validation', 'smallest relevant', 'complete required', 'lint', 'typecheck', 'build', 'pest', 'reuse'], 7))}. "
         f"Apply the commit and communication rules: {format_bullets(change_tracking)}. "
         "Do not bypass hooks or force operations."

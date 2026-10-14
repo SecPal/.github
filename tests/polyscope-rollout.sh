@@ -200,9 +200,6 @@ for repo_dir in workspace_root.iterdir():
         "## Focused Overlays\n\n"
         f"{overlays}\n\n"
         "## Core Runtime Baseline\n\n"
-        "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
-        "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
-        "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n\n"
         f"{body.lstrip()}"
     )
     (repo_dir / "AGENTS.md").write_text(agents_text.rstrip() + "\n")
@@ -335,10 +332,6 @@ write_valid_worktree_instructions() {
         '- Preserve existing work.' \
         '' \
         'Delegate to `docs/work-graph-contract.md`.' \
-        '' \
-        '- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`' \
-        '- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`' \
-        '- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`' \
         >"$worktree_dir/AGENTS.md"
     printf '%s\n' \
         '<!--' \
@@ -987,10 +980,7 @@ def write_valid_instruction_root(root: pathlib.Path) -> None:
         "# Test Runtime Instructions\n\n"
         "## Scope and Safety\n\n"
         "- Preserve existing work.\n\n"
-        "`docs/work-graph-contract.md` is canonical.\n\n"
-        "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
-        "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
-        "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
+        "`docs/work-graph-contract.md` is canonical.\n"
     )
     (root / ".github" / "copilot-instructions.md").write_text(
         "<!--\n"
@@ -1264,10 +1254,7 @@ def write_valid_instruction_root(root: pathlib.Path) -> None:
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
         "- Preserve existing work.\n\n"
-        "`docs/work-graph-contract.md` is canonical.\n\n"
-        "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
-        "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
-        "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
+        "`docs/work-graph-contract.md` is canonical.\n"
     )
     (root / ".github" / "copilot-instructions.md").write_text(
         "<!--\n"
@@ -1787,10 +1774,7 @@ fixture = workspace / "instruction-contract-worktree"
     "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Runtime Instructions\n\n"
-    "`docs/work-graph-contract.md` is canonical.\n\n"
-    "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
-    "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
-    "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
+    "`docs/work-graph-contract.md` is canonical.\n"
 )
 (fixture / ".github" / "copilot-instructions.md").write_text(
     "<!--\n"
@@ -1878,10 +1862,7 @@ fixture = workspace / "instruction root with shell $ characters"
     "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Runtime Instructions\n\n"
-    "`docs/work-graph-contract.md` is canonical.\n\n"
-    "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
-    "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
-    "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
+    "`docs/work-graph-contract.md` is canonical.\n"
 )
 (fixture / ".github" / "copilot-instructions.md").write_text(
     "<!--\n"
@@ -2100,10 +2081,7 @@ for instruction_root in (source_api, api_worktree):
         "-->\n\n"
         "# Test Runtime Instructions\n\n"
         "- Preserve existing work.\n\n"
-        "`docs/work-graph-contract.md` is canonical.\n\n"
-        "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
-        "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
-        "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
+        "`docs/work-graph-contract.md` is canonical.\n"
     )
     instruction_root.joinpath(".github", "copilot-instructions.md").write_text(
         "<!--\n"
@@ -3230,10 +3208,7 @@ repo_spec_frontend = workspace / "repo-spec-root" / "frontend"
     "SPDX-License" "-Identifier: AGPL-3.0-or-later\n"
     "-->\n\n"
     "# Frontend Runtime Instructions\n\n"
-    "`docs/work-graph-contract.md` is canonical.\n\n"
-    "- `PRIMARY_AUTOMATED_REVIEW_TRIGGER: DRAFT_TO_READY`\n"
-    "- `PRIMARY_CODEX_COMMENT_TRIGGER_ALLOWED: NO`\n"
-    "- `POST_READY_BOUNDED_COMMENT_FALLBACK: YES`\n"
+    "`docs/work-graph-contract.md` is canonical.\n"
 )
 (repo_spec_frontend / ".github" / "copilot-instructions.md").write_text(
     "<!--\n"
@@ -5277,25 +5252,8 @@ assert 'tool-specific labels or prefixes' in frontend_prompt
 assert 'Run git status --short --branch before any write action.' in api_prompt
 assert 'Use Form Requests for validation and services for business logic.' in api_prompt
 assert 'Keep changes repo-local, minimal, and consistent with the repository stack.' in api_prompt
-assert 'Create a draft PR; you must not create it directly Ready.' in frontend_prompt
 assert 'Preserve a branch or worktree already supplied by the execution environment.' in org_prompts[0]
 assert 'Run the smallest relevant validation while iterating' in org_prompts[1]
-assert 'stage the complete intended change set before evaluating reusable validation evidence' in org_prompts[2]
-assert 'exact final staged tree, including every newly added path' in org_prompts[2]
-assert 'Recheck the staged-tree identity immediately before committing and pushing' in org_prompts[2]
-assert 'Treat that evidence as stale if any bound value, staged content, or tracked content changed' in org_prompts[2]
-assert 'do not stage additional content after deciding to reuse it' in org_prompts[2]
-assert 'Do not rerun a check that already passed for that exact unchanged bound state.' in org_prompts[2]
-assert 'Run only missing required checks once.' in org_prompts[2]
-assert 'derive the lifecycle operation and its exact preconditions from authenticated current maintained repository authority' in org_prompts[1]
-assert 'Treat prompt expectations as assertions to verify, never as lifecycle authority.' in org_prompts[1]
-assert 'fail closed before mutation and report the discrepancy' in org_prompts[1]
-assert 'A prompt or mechanical checkpoint alone invalidates no unrelated proof; a commit that advances HEAD invalidates head-bound proof.' in org_prompts[2]
-assert 'refresh only facts whose defined invalidators may have occurred' in org_prompts[2]
-assert 'Conditionally authorized merge remains bounded by the freshly evaluated maintained merge gate.' in org_prompts[2]
-assert 'covers the exact current Git tree' not in org_prompts[2]
-assert 'binds the current repository, exact HEAD and parent, Git tree' not in org_prompts[2]
-assert 'Run or re-run the touched checks' not in org_prompts[2]
 for row in prompt_rows:
     for prompt in row[1:3]:
         assert '--body-file' in prompt

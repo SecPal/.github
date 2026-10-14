@@ -483,7 +483,7 @@ function updateCustomer(customer: Customer, data: UpdateData): Customer {
    - This is defense in depth under one authoritative definition: each entry
      point is independently reachable, so each enforces the same authorization
      rule rather than defining its own. See
-     [work-graph-contract.md](work-graph-contract.md#111-multiple-enforcement-points).
+     [evidence-architecture-contract.md](evidence-architecture-contract.md).
 
 **Example:**
 
@@ -626,7 +626,7 @@ npm run lint
 
 ### Organization-Wide (`.github` repo)
 
-- [work-graph-contract.md](work-graph-contract.md) - Canonical work-graph and engineering-governance contract
+- [work-graph-contract.md](work-graph-contract.md) - Native GitHub planning and delivery
 - `AGENTS.md` - Authoritative agent-facing runtime baseline in each repository root
 - [copilot-instructions.md](../.github/copilot-instructions.md) - Independent GitHub code-review profile
 - [CONTRIBUTING.md](../CONTRIBUTING.md) - How to contribute
