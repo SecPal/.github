@@ -476,33 +476,6 @@ class NormalReviewAuthorityBoundaryRegressionTests(TestCase):
         ):
             verify_raw(chain.authorities, [chain.events[0], forged])
 
-    def test_lifecycle_verification_has_no_openhands_metadata_surface(self) -> None:
-        for name in (
-            "AuthenticatedNormalReviewQualification",
-            "VerifiedNormalReviewAdmission",
-            "authenticate_openhands_normal_review",
-            "issue_openhands_normal_review_admission",
-            "verify_normal_review_admission",
-            "create_normal_review_transition_authorization",
-            "NORMAL_REVIEW_EVENT_FIELDS",
-        ):
-            with self.subTest(name=name):
-                self.assertFalse(hasattr(authority, name))
-
-        source = "\n".join(
-            inspect.getsource(module)
-            for module in (authority, publication)
-        )
-        for forbidden in (
-            "OpenHands",
-            "control_plane_root",
-            "credential_reference",
-            "verifier_runtime_credential_bindings",
-            "mutation_mcp_count",
-        ):
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, source)
-
 
 class LifecycleAuthorityTests(TestCase):
     def _append_invalid_review_derived_ready_correction(

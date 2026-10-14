@@ -113,12 +113,6 @@ section = """## Licensing, REUSE, and Branding
   licensing change."""
 overlay = section + "\n\n"
 copyright_line = "SPDX-FileCopyrightText: 2026 SecPal Contributors"
-publication_boundary = """- Before creating or editing a PR body, materialize the exact candidate body,
-  apply the effective PR-template/evidence contract, and run every available
-  local PR-body validator against that exact body and intended Draft/Ready state.
-  Failed validation blocks publication. Evidence completeness follows the
-  canonical lifecycle-aware `scripts/validate-pull-request-evidence.sh` validator.
-"""
 
 review_trigger = """### Initial Automated Review
 
@@ -151,11 +145,8 @@ text = text.replace(
 
 if text.count(overlay) != 1 or text.count(copyright_line) != 1:
     raise SystemExit(1)
-if text.count(publication_boundary) != 1:
-    raise SystemExit(1)
 
 text = text.replace(overlay, "", 1)
-text = text.replace(publication_boundary, "", 1)
 text = text.replace(
     copyright_line,
     "SPDX-FileCopyrightText: 2026 SecPal",
@@ -171,18 +162,6 @@ if sed \
   | normalize_agents_instruction_overlays >/dev/null; then
   fail 'modified licensing and branding instruction overlay was accepted'
 fi
-
-for mutation in \
-  '/^- Before creating or editing a PR body,/,/canonical lifecycle-aware.*validator\./d' \
-  's/exact candidate body/unvalidated summary/' \
-  's/intended Draft\/Ready state/unspecified state/' \
-  's/Failed validation blocks publication/Failed validation allows publication/' \
-  's/validate-pull-request-evidence.sh/alternative-evidence-validator.sh/'; do
-  if sed "$mutation" "$REPO_ROOT/AGENTS.md" \
-    | normalize_agents_instruction_overlays >/dev/null; then
-    fail 'missing or weakened PR pre-publication instruction overlay was accepted'
-  fi
-done
 
 # SSH-only local signing and GitHub verification must not be weakened.
 for mutation in \

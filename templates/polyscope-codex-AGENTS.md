@@ -204,23 +204,6 @@ Apply these rules only when the session says it is running inside Polyscope.
   state; stale state or graph drift fails closed. Never edit a plan to bypass
   those checks or use this boundary as a generic GitHub mutation command.
 
-## Hard Delivery-PR Gate
-
-- Before presenting a delivery PR as technically complete, run the owning
-  `SecPal/.github` checkout's `scripts/secpal-pr-advisory.py --enforce` for that
-  PR. Treat its #735 findings as a hard boundary and refuse delivery until they
-  are clear under `docs/work-graph-contract.md`.
-- Delegate graph state to the canonical resolver and lifecycle/disposition
-  validity to the maintained lifecycle authority. Do not infer either from PR
-  prose, reset lifecycle counters, or restart review after the stable-feedback
-  stop condition.
-- Supply explicit judgment observations only when review evidence establishes
-  the violated contract rule. An independently deliverable second responsibility
-  requires graph-first replanning before implementation continues; `--enforce`
-  does not claim to infer that architectural judgment from source. Test, line,
-  and mutation counts may guide review but never constitute a finding by
-  themselves.
-
 ## Work-graph semantics
 
 - Node types, native hierarchy and dependency meaning, sibling order, `READY`,

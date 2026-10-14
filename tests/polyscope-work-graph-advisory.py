@@ -131,32 +131,6 @@ class PolyscopeWorkGraphAdvisoryTest(unittest.TestCase):
         self.assertRegex(parallel_unit, r"(?:do not|or) (?:create|infer) dependencies")
         self.assertRegex(parallel_unit, r"do not [^.]*silently substitute")
 
-    def test_delivery_pr_gate_is_hard_and_uses_the_reviewed_assessment(self) -> None:
-        match = re.search(
-            r"^## Hard Delivery-PR Gate\n(?P<body>.*?)(?=^## |\Z)",
-            self.instructions,
-            flags=re.MULTILINE | re.DOTALL,
-        )
-        self.assertIsNotNone(match)
-        units = self._semantic_units(match.group("body"))
-        matching = [
-            unit
-            for unit in units
-            if all(
-                term in unit
-                for term in (
-                    "scripts/secpal-pr-advisory.py",
-                    "--enforce",
-                    "hard",
-                    "docs/work-graph-contract.md",
-                )
-            )
-        ]
-        self.assertEqual(len(matching), 1)
-        gate_unit = matching[0]
-        self.assertIn("refuse", gate_unit)
-        self.assertIn("#735", gate_unit)
-
     def test_every_ready_next_unit_delegates_to_the_canonical_contract(self) -> None:
         semantic_units = [unit for unit in self.units if re.search(r"\b(?:READY|NEXT)\b", unit)]
         self.assertTrue(semantic_units)

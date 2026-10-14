@@ -90,11 +90,6 @@ These runtime assertions consume that owner; they define no separate lifecycle.
 
 ## Commits and Communication
 
-- Before creating or editing a PR body, materialize the exact candidate body,
-  apply the effective PR-template/evidence contract, and run every available
-  local PR-body validator against that exact body and intended Draft/Ready state.
-  Failed validation blocks publication. Evidence completeness follows the
-  canonical lifecycle-aware `scripts/validate-pull-request-evidence.sh` validator.
 - `SECPAL_SIGNING_FORMAT: SSH`; apply the [canonical signing authority](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#532-signing-authority).
   Preserve existing SSH keys and signing configuration. GitHub-generated
   signatures are provider evidence, not SecPal OpenPGP signing authority.

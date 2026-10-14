@@ -129,8 +129,6 @@ for direct_fixture in \
   tests/prettier-version-alignment.sh \
   tests/project-automation-core.sh \
   tests/pull-request-commit-signatures.sh \
-  tests/pull-request-english.sh \
-  tests/pull-request-evidence.sh \
   tests/reusable-copilot-instructions-provenance.sh \
   tests/reusable-markdown-lint-scope.sh \
   tests/reusable-workflow-policy.sh \

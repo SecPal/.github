@@ -15,20 +15,6 @@ Before rolling out to a repository:
 - [ ] Repository has issues enabled
 - [ ] You have admin access to the repository
 - [ ] `PROJECT_TOKEN` secret is set (can be organization-level or repo-level)
-- [ ] A trusted local checkout of `SecPal/.github` at a reviewed revision is available,
-      with Node.js 26 (Current) and its locked dependencies installed for PR-body validation.
-
-Set the canonical source path before following the target-repository steps:
-
-```bash
-export SECPAL_GOVERNANCE_ROOT=/absolute/path/to/trusted/SecPal/.github
-(cd "$SECPAL_GOVERNANCE_ROOT" && npm ci --ignore-scripts)
-```
-
-The project-board workflow installation does not install governance scripts in
-the target repository. Step 5 invokes the validator from this trusted source;
-it must never use a copy supplied by an untrusted PR. Apply the target's effective
-template and any additional local PR-body validators before publication as well.
 
 ## 🚀 Deployment Steps
 
@@ -165,13 +151,11 @@ trap 'rm -f "$tmpfile"' EXIT
 if [ -f .github/pull_request_template.md ]; then
   cp .github/pull_request_template.md "$tmpfile"
 else
-  cp "$SECPAL_GOVERNANCE_ROOT/.github/pull_request_template.md" "$tmpfile"
+  printf '## Description\n\n## Validation\n' > "$tmpfile"
 fi
 printf '\nCloses #%s\n' "$ISSUE" >> "$tmpfile"
-# Describe the test and replace every placeholder with evidence or an allowed N/A.
-# For this content-only test, give the explicit no-executable-change reason.
+# Describe the test and validation results.
 "${EDITOR:-vi}" "$tmpfile"
-PR_BODY="$(cat "$tmpfile")" PR_DRAFT=true bash "$SECPAL_GOVERNANCE_ROOT/scripts/validate-pull-request-evidence.sh" && \
 gh pr create \
   --repo SecPal/api \
   --draft \

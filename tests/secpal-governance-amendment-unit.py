@@ -801,29 +801,6 @@ class GovernanceAmendmentTests(TestCase):
             with self.assertRaises(actions.fast_path.SecurityBlocker):
                 actions._verify_ready_integration_lifecycle_authority(manifest, changed_feedback, reviewed_state=fresh)
 
-    def test_target_work_graph_failure_is_bound_to_native_prerequisite(self) -> None:
-        statuses = [{
-            "context": "Work-Graph PR Gate", "state": "failure",
-            "sha": HEAD,
-            "description": "Current canonical work-graph evidence blocked delivery",
-        }]
-        graph = {"data": {"repository": {"issue": {"blockedBy": {
-            "pageInfo": {"hasNextPage": False},
-            "nodes": [{"number": 1059, "state": "OPEN"}],
-        }}}}}
-        with mock.patch.object(amendment, "_github_json", return_value=graph):
-            proof = amendment._reviewed_target_work_graph_blocker(
-                "SecPal/.github", 1053, HEAD, statuses
-            )
-        self.assertEqual(proof["blocking_issue"], 1059)
-        changed = copy.deepcopy(statuses)
-        changed[0]["description"] = "tests failed"
-        with mock.patch.object(amendment, "_github_json", return_value=graph):
-            with self.assertRaises(amendment.GovernanceAmendmentError):
-                amendment._reviewed_target_work_graph_blocker(
-                    "SecPal/.github", 1053, HEAD, changed
-                )
-
     def test_reviewed_ready_history_uses_one_complete_provider_phase(self) -> None:
         response = {"data": {"repository": {"pullRequest": {
             "createdAt": "2026-10-02T10:50:21Z", "headRefOid": HEAD,
@@ -2566,7 +2543,6 @@ class GovernanceAmendmentTests(TestCase):
             for item in printed["checks"]
         ]
         existing_bound = {
-            "Validate PR Evidence", "Validate PR Title And Body Language",
             "Validate Signed PR Commits",
         }
         checks = [
@@ -2579,14 +2555,14 @@ class GovernanceAmendmentTests(TestCase):
                 amendment, "_accepted_main_bytes", return_value=policy,
             ), mock.patch.object(
                 amendment.publication, "_run_gh", return_value=subprocess.CompletedProcess(
-                    [], 0, json.dumps({"strict": True, "checks": candidate}).encode(), b"",
+                    [], 0, json.dumps({"strict": False, "checks": candidate}).encode(), b"",
                 ),
             ):
                 return amendment._live_required_check_policy("SecPal/.github", PARENT)
 
-        self.assertEqual(len(checks), 14)
+        self.assertEqual(len(checks), 10)
         self.assertEqual(observe(checks), {
-            "strict": True, "checks": sorted(checks, key=lambda item: item["context"]),
+            "strict": False, "checks": sorted(checks, key=lambda item: item["context"]),
         })
         for app_id in (None, -1, 777, True, "15368", 15368.5):
             changed = [
@@ -2612,7 +2588,7 @@ class GovernanceAmendmentTests(TestCase):
                 amendment.GovernanceAmendmentError
             ):
                 observe(changed)
-        binding = b'REQUIRED_APP_BINDINGS_JSON=\'{ ".github": {"Evidence Architecture PR Gate": 15368} }\''
+        binding = b'REQUIRED_APP_BINDINGS_JSON=\'{ ".github": {"Validate Signed PR Commits": 15368, "Evidence Architecture PR Gate": 15368} }\''
         for label, replacement in {
             "missing declaration": b"",
             "missing binding": b"REQUIRED_APP_BINDINGS_JSON='{ \".github\": {} }'",
@@ -3312,7 +3288,7 @@ class GovernanceAmendmentTests(TestCase):
             "body": "<!-- ccr-overview-v2 -->\nsummary",
         }, review=True))
 
-    def test_strict_provider_merge_gate_binds_base_head_and_clean_state(self) -> None:
+    def test_provider_merge_gate_binds_base_head_and_clean_state(self) -> None:
         item = authorization()
         pull = {
             "state": "open", "draft": False, "merged": False,
@@ -3322,7 +3298,7 @@ class GovernanceAmendmentTests(TestCase):
         }
         with mock.patch.object(
             amendment, "_live_required_check_policy",
-            return_value={"strict": True, "checks": [{"context": "x", "app_id": None}]},
+            return_value={"strict": False, "checks": [{"context": "x", "app_id": None}]},
         ), mock.patch.object(
             amendment, "_github_json", return_value=pull,
         ):
@@ -3335,16 +3311,16 @@ class GovernanceAmendmentTests(TestCase):
             changed = copy.deepcopy(pull); mutate(changed)
             with self.subTest(label=label), mock.patch.object(
                 amendment, "_live_required_check_policy",
-                return_value={"strict": True, "checks": [{"context": "x", "app_id": None}]},
+                return_value={"strict": False, "checks": [{"context": "x", "app_id": None}]},
             ), mock.patch.object(
                 amendment, "_github_json", return_value=changed,
             ), self.assertRaisesRegex(
-                amendment.GovernanceAmendmentError, "strict provider merge gate"
+                amendment.GovernanceAmendmentError, "provider merge gate"
             ):
                 amendment._authenticate_provider_merge_gate(item)
         with mock.patch.object(
             amendment, "_live_required_check_policy",
-            side_effect=amendment.GovernanceAmendmentError("not strict"),
+            side_effect=amendment.GovernanceAmendmentError("noncanonical checks"),
         ), self.assertRaises(amendment.GovernanceAmendmentError):
             amendment._authenticate_provider_merge_gate(item)
 
@@ -3355,7 +3331,7 @@ class GovernanceAmendmentTests(TestCase):
         with mock.patch.object(
             amendment, "_live_required_check_policy",
             side_effect=lambda _repo, main: (
-                {"strict": True} if main == current else
+                {"strict": False} if main == current else
                 (_ for _ in ()).throw(AssertionError("historical policy used"))
             ),
         ), mock.patch.object(

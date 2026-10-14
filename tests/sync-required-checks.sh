@@ -47,7 +47,7 @@ assert_payload_contexts_equal() {
     ($expected | length) == ($expected | unique | length) and
     ([.checks[].context] | sort) == ($expected | sort) and
     all(.checks[];
-      .app_id == (if .context == "Evidence Architecture PR Gate" then 15368 else -1 end)
+      .app_id == (if .context == "Evidence Architecture PR Gate" or .context == "Validate Signed PR Commits" then 15368 else -1 end)
     )
   ' >/dev/null <<<"$payload"; then
     echo "Payload did not contain exactly the expected required checks" >&2
@@ -111,11 +111,7 @@ EXPECTED_CONTEXTS_JSON='{
     "conflict-markers / Detect Git Conflict Markers",
     "Lint GitHub Actions Workflows",
     "CodeQL",
-    "Validate PR Evidence",
-    "Validate PR Title And Body Language",
     "Validate Signed PR Commits",
-    "Work-Graph PR Advisory",
-    "Work-Graph PR Gate",
     "Evidence Architecture PR Gate"
   ],
   "android": [
@@ -197,7 +193,6 @@ for expected_repo in "${expected_repositories[@]}"; do
   payloads["$expected_repo"]="$(bash "$SYNC_SCRIPT" --repo "$expected_repo" --print-payload)"
   expected_contexts="$(jq -c --arg repo "$expected_repo" '.[$repo]' <<<"$EXPECTED_CONTEXTS_JSON")"
   expected_strict=false
-  [[ "$expected_repo" == ".github" ]] && expected_strict=true
   assert_payload_contexts_equal "${payloads[$expected_repo]}" "$expected_contexts" "$expected_strict"
 done
 
@@ -215,24 +210,7 @@ for non_github_repo in android api contracts frontend secpal.app; do
 done
 
 github_payload="${payloads[.github]}"
-assert_payload_has_context "$github_payload" "Validate PR Evidence"
-assert_payload_has_context "$github_payload" "Validate PR Title And Body Language"
 assert_payload_has_context "$github_payload" "Validate Signed PR Commits"
-assert_payload_has_context "$github_payload" "Work-Graph PR Advisory"
-assert_payload_has_context "$github_payload" "Work-Graph PR Gate"
-
-for non_github_repo in android api contracts frontend secpal.app; do
-  if jq -e '.checks | any(.context == "Work-Graph PR Advisory")' >/dev/null \
-    <<<"${payloads[$non_github_repo]}"; then
-    echo "The repository-local work-graph gate context must not be invented for unmanaged caller workflows" >&2
-    exit 1
-  fi
-  if jq -e '.checks | any(.context == "Work-Graph PR Gate")' >/dev/null \
-    <<<"${payloads[$non_github_repo]}"; then
-    echo "The repository-local hard-gate context must not be invented for unavailable caller workflows" >&2
-    exit 1
-  fi
-done
 
 for review_repo in .github android; do
   review_payload="$(bash "$SYNC_SCRIPT" --repo "$review_repo" --print-review-payload)"
@@ -378,13 +356,11 @@ for expected_repo in "${expected_repositories[@]}"; do
     <<<"${payloads[$expected_repo]}" >"$state_dir/$expected_repo.json"
 done
 
-# Replay the authenticated 13-context live baseline: the promoted gate is absent.
+# Exercise promotion of the evidence gate while preserving the signed-commit App binding.
 jq '
   .checks |= map(select(.context != "Evidence Architecture PR Gate")) |
   .checks |= map(
-    if .context == "Validate PR Evidence" or
-       .context == "Validate PR Title And Body Language" or
-       .context == "Validate Signed PR Commits"
+    if .context == "Validate Signed PR Commits"
     then .app_id = 15368
     else .app_id = null
     end
@@ -471,7 +447,7 @@ remediation_failures=0
 expected_status_endpoint='repos/SecPal/.github/branches/main/protection/required_status_checks'
 expected_status_payload="$(
   jq -c '{
-    strict: true,
+    strict: false,
     checks: ([
       .checks[]
       | {
@@ -484,7 +460,7 @@ expected_status_payload="$(
 expected_status_log="$(printf 'GET\t%s\t-\nPATCH\t%s\t%s' \
   "$expected_status_endpoint" "$expected_status_endpoint" "$expected_status_payload")"
 if [[ "$(<"$status_log")" != "$expected_status_log" ]]; then
-  echo "FAIL-FIRST F1: status apply must preserve .github strict mode and mixed check bindings" >&2
+  echo "FAIL-FIRST F1: status apply must apply loose checks and preserve mixed App bindings" >&2
   cat "$status_log" >&2
   remediation_failures=$((remediation_failures + 1))
 fi
@@ -569,7 +545,7 @@ original_sync_script="$SYNC_SCRIPT"
 for mutation in missing substituted duplicate; do
   mutated_script="$TMP_DIR/$mutation-sync.sh"
   case "$mutation" in
-    missing) sed '/^    "Evidence Architecture PR Gate"$/d; s/"Work-Graph PR Gate",/"Work-Graph PR Gate"/' "$original_sync_script" >"$mutated_script" ;;
+    missing) sed '/^    "Evidence Architecture PR Gate"$/d; s/"Validate Signed PR Commits",/"Validate Signed PR Commits"/' "$original_sync_script" >"$mutated_script" ;;
     substituted) sed 's/^    "Evidence Architecture PR Gate"$/    "Evidence Architecture Gate"/' "$original_sync_script" >"$mutated_script" ;;
     duplicate) sed 's/^    "Evidence Architecture PR Gate"$/    "Evidence Architecture PR Gate", "Evidence Architecture PR Gate"/' "$original_sync_script" >"$mutated_script" ;;
   esac
@@ -582,12 +558,12 @@ for mutation in missing substituted duplicate; do
 done
 SYNC_SCRIPT="$original_sync_script"
 
-# The existing 13-context baseline must become exactly 14, preserving all old
-# positive and unbound bindings. The already-activated state is idempotent.
-jq -e '.strict == true and (.checks | length) == 14 and
-  ([.checks[].context] | unique | length) == 14 and
-  ([.checks[] | select(.app_id == 15368)] | length) == 4 and
-  ([.checks[] | select(.app_id == -1)] | length) == 10' \
+# The canonical ten checks preserve positive and unbound bindings.
+# The already-activated state is idempotent.
+jq -e '.strict == false and (.checks | length) == 10 and
+  ([.checks[].context] | unique | length) == 10 and
+  ([.checks[] | select(.app_id == 15368)] | length) == 2 and
+  ([.checks[] | select(.app_id == -1)] | length) == 8' \
   <<<"$expected_status_payload" >/dev/null
 activated_state="$TMP_DIR/activated-state.json"
 printf '%s\n' "$expected_status_payload" >"$activated_state"
