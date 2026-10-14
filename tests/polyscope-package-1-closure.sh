@@ -442,7 +442,7 @@ github_source.joinpath("package.json").write_text(
         {
             "name": "github-test-source",
             "private": True,
-            "scripts": {"copilot:review:scan": "true"},
+            "scripts": {},
         }
     )
     + "\n"

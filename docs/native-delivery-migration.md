@@ -6,7 +6,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 # Delivery governance migration
 
 Implementation plan for the [proposed native contract](native-delivery.md).
-This document introduces no runtime gate. Live rules and other repositories are unchanged.
+This is a temporary migration inventory, not runtime authority. Remove it when
+the cutover finishes; retain only concise contribution guidance in established
+documentation. Live rules and other repositories are unchanged.
 
 ## Verified inventory
 
@@ -74,7 +76,9 @@ repositories have strict: false. This PR preserves all current settings.
 
 Delete the active scheduled/review-triggered Review Memory workflow, its 796-line
 CLI, two exclusive regression scripts and operational guide. Remove four npm
-commands and preflight/governance-suite/focused-instruction callers. Detach only
+commands, the Polyscope run-menu entry and preflight/governance-suite/focused-instruction
+callers. Update rollout fixtures so removed scripts cannot mask real provisioning
+failures. Detach only
 retired memory assertions from retained review-skill and Dependabot tests.
 
 Historical changelog entries and version_collision.py snapshot path bindings remain:
@@ -144,9 +148,13 @@ four repositories and its automatic recurring tracking-issue write path.
     disabled force pushes/deletion. Rollback restores old producers first, then
     their required contexts. Never require a deleted job.
 
-Keep strict current-base validation in .github. A merge queue is optional and needs
-plan/repository support plus merge_group coverage for every required workflow;
-independently verify it before replacing strictness. See GitHub's
+The accepted [decision in #727](https://github.com/SecPal/.github/issues/727)
+uses strict=false while preserving required contexts, source-App bindings,
+signatures, native conflict detection and all other protections. Verify successful
+checks on the actual PR candidate and conflict detection before the administrative
+change. This intentionally gives up guaranteed CI against every subsequently
+advanced main commit; do not describe loose checks as integrated-candidate testing.
+A merge queue is optional, not a prerequisite for honoring #727. See GitHub's
 [protected branch contract](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
 
 ## Measurable acceptance
@@ -161,8 +169,8 @@ routine receipts/attestations, finite review counters or historical recovery
 steps; zero required issue-graph/PR-body parser gates; exclusive tests, schemas,
 fixtures and guides removed with retired code; every required context has an
 applicable producer; unsigned/tampered commits and failing security/build/tests
-block merge; release/domain integrity preserved; no strictness reduction without
-verified integrated-candidate validation. Delivery becomes branch, PR, CI/review, merge.
+block merge; release/domain integrity preserved; strict=false follows #727 after
+head-check and conflict-detection verification. Delivery becomes branch, PR, CI/review, merge.
 
 Earlier qualification remains evidence for its original revision and scope.
 It does not qualify this changed tree or the unimplemented full cutover.

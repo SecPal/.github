@@ -42,8 +42,10 @@ including tampered or unsigned commits and failing security checks.
 
 Only then may an administrator replace redundant required contexts with verified
 native rules or CI contexts. Remove each old workflow after protection no longer
-requires its context and all consumers have migrated. Preserve strict current-base
-validation until merge-queue validation has been verified where supported. Save
+requires its context and all consumers have migrated. Follow the accepted
+[loose-check decision](https://github.com/SecPal/.github/issues/727): verify required
+head checks and native conflict detection, then use strict=false without requiring
+a merge queue. Loose checks do not promise testing against every newer main commit. Save
 before/after protection snapshots; rollback restores the previous contexts and
 code together. Never leave protection requiring a deleted job.
 
