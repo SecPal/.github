@@ -4394,19 +4394,36 @@ def _admit_adoption_v2_provider_observation(
     ready_at = acquisition._timestamp(ready[0]["created_at"])
     if ready_at <= acquisition._timestamp(proof["adoption_timestamp"]):
         raise LifecyclePublicationError("Adoption-v2 provider Ready predates adoption")
-    stamps = [acquisition._timestamp(item["created_at"]) for item in events]
+    # Commit timestamps describe creation, not publication into the PR.
+    stamps = [acquisition._timestamp(item["created_at"]) for item in events
+              if item["kind"] != "COMMIT"]
     if stamps != sorted(stamps):
         raise LifecyclePublicationError("Adoption-v2 provider timeline is out of order")
     ready_index = events.index(ready[0])
-    before = [item for item in events[:ready_index] if item["kind"] == "COMMIT"]
-    after = [item for item in events[ready_index + 1:] if item["kind"] == "COMMIT"]
+    commit_heads = [item["head"] for item in events if item["kind"] == "COMMIT"]
     signed = authority._load_canonical_json(current.serialized_lifecycle_evidence, "provider lifecycle")
     signed = signed.get("lifecycle_evidence", signed)
     successor_heads = [event["resulting_head_sha"] for event in signed["transition_authorizations"][1:]]
-    if (not before or before[-1]["head"] != root.lifecycle.head_sha
-            or not after or after[-1]["head"] != lifecycle.head_sha
-            or [item["head"] for item in after] != successor_heads):
+    if any(commit_heads.count(head) != 1 for head in [root.lifecycle.head_sha, *successor_heads]):
         raise LifecyclePublicationError("Adoption-v2 provider Ready does not bind the signed heads")
+    activities = observed["branch_activity"]
+    roots = [item for item in activities if item["head"] == root.lifecycle.head_sha]
+    if len(roots) != 1:
+        raise LifecyclePublicationError("Adoption-v2 provider root publication is missing or ambiguous")
+    root_push = roots[0]
+    root_at = acquisition._timestamp(root_push["created_at"])
+    after = sorted((item for item in activities
+                    if acquisition._timestamp(item["created_at"]) >= root_at),
+                   key=lambda item: item["created_at"])
+    if (
+        not root_at <= acquisition._timestamp(proof["adoption_timestamp"]) < ready_at
+        or len({item["created_at"] for item in after}) != len(after)
+        or [item["head"] for item in after] != [root.lifecycle.head_sha, *successor_heads]
+        or any(item["kind"] != "push" or item["actor"] != observed["author"] for item in after)
+        or any(item["before"] != previous["head"] for previous, item in zip(after, after[1:]))
+    ):
+        raise LifecyclePublicationError("Adoption-v2 provider push chronology differs from signed history")
+    next_head_at = acquisition._timestamp(after[1]["created_at"])
 
     codex = fast_path.CODEX_REVIEW_PROVIDER
     provider_actor = (codex["login"], codex["node_id"], codex["database_id"])
@@ -4423,8 +4440,7 @@ def _admit_adoption_v2_provider_observation(
     )
     completed = {item["review_type"]: acquisition._result_timestamp(item["completed_at"])
                  for item in facts}
-    next_head_at = acquisition._timestamp(after[0]["created_at"])
-    if any(
+    if acquisition._timestamp(summary["updated_at"]) >= next_head_at or any(
         item["trigger"] != "Draft marked ready"
         or not ready_at < completed[item["review_type"]] < next_head_at
         or completed[item["review_type"]] > acquisition._timestamp(summary["updated_at"])
@@ -4435,6 +4451,11 @@ def _admit_adoption_v2_provider_observation(
     for event in events:
         kind = provider_results._provider_result_type(event, root.lifecycle.head_sha)
         if kind is not None:
+            if event["kind"] == "PullRequestReview":
+                if "last_edited_at" not in event or event["last_edited_at"] is not None:
+                    raise LifecyclePublicationError("Adoption-v2 provider review body is edited or unauthenticated")
+            elif acquisition._timestamp(event["updated_at"]) >= next_head_at:
+                raise LifecyclePublicationError("Adoption-v2 provider result body postdates source remediation")
             if kind not in results or not ready_at < acquisition._timestamp(event["created_at"]) <= completed[kind]:
                 raise LifecyclePublicationError("Adoption-v2 provider result has conflicting chronology")
             results[kind].append(event)
@@ -4448,6 +4469,7 @@ def _admit_adoption_v2_provider_observation(
         raise LifecyclePublicationError("Adoption-v2 provider results are missing or ambiguous")
     return digest_json({"ready": ready[0], "summary": summary,
                         "completion": facts, "results": results,
+                        "published_heads": after,
                         "observed_head": observed["head"]})
 
 
@@ -4471,7 +4493,10 @@ def _derive_adoption_v2_post_ready_provider(
     _authenticate_provider_integration_verifier()
     from . import provider_acquisition as acquisition
     try:
-        observed = acquisition.observe_timeline(current.lifecycle.repository, current.lifecycle.pull_request)
+        observed = acquisition.observe_timeline(
+            current.lifecycle.repository, current.lifecycle.pull_request,
+            include_branch_activity=True,
+        )
         observation_digest = _admit_adoption_v2_provider_observation(current, root, proof, observed)
     except (fast_path.SecurityBlocker, authority.LifecycleAuthorityError, KeyError, TypeError, ValueError) as exc:
         raise LifecyclePublicationError("Adoption-v2 post-Ready provider evidence is invalid") from exc

@@ -1849,7 +1849,7 @@ class LifecyclePublicationTests(TestCase):
              "createdAt": "2026-08-07T00:00:00Z", "actor": actor},
             {"__typename": "PullRequestReview", "id": "REVIEW_code", "databaseId": 21,
              "author": provider, "state": "COMMENTED", "commit": {"oid": HEADS[2]},
-             "submittedAt": "2026-08-07T00:05:00Z",
+             "submittedAt": "2026-08-07T00:05:00Z", "lastEditedAt": None,
              "body": f'### 💡 Codex Review\n\n**Reviewed commit:** `{HEADS[2][:10]}`'},
             {"__typename": "IssueComment", "id": "SUMMARY_terminal", "databaseId": 22,
              "author": provider, "createdAt": "2026-08-07T00:10:00Z",
@@ -1863,7 +1863,38 @@ class LifecyclePublicationTests(TestCase):
             "headRefName": "synthetic-provider-root", "author": actor,
             "timelineItems": {"nodes": nodes, "pageInfo": {"hasNextPage": False}},
         }}}}
+        observed["activity"] = [
+            {"id": 32, "node_id": "PUSH_successor", "before": HEADS[2],
+             "after": HEADS[4], "ref": "refs/heads/synthetic-provider-root",
+             "timestamp": "2026-08-08T00:00:00Z", "activity_type": "push",
+             "actor": {"type": "User", "login": actor["login"],
+                       "id": actor["databaseId"], "node_id": actor["id"]}},
+            {"id": 31, "node_id": "PUSH_root", "before": HEADS[1],
+             "after": HEADS[2], "ref": "refs/heads/synthetic-provider-root",
+             "timestamp": "2026-08-05T00:00:00Z", "activity_type": "push",
+             "actor": {"type": "User", "login": actor["login"],
+                       "id": actor["databaseId"], "node_id": actor["id"]}},
+        ]
         return current, proof, observed
+
+    @staticmethod
+    def adoption_v2_transport(observed):
+        def read(arguments):
+            if "graphql" in arguments:
+                value = observed
+            elif any("/activity?" in item for item in arguments):
+                from urllib.parse import quote
+                ref = observed["data"]["repository"]["pullRequest"]["headRefName"]
+                assert arguments == [
+                    "api", "--hostname", "github.com",
+                    f"repos/{REPOSITORY}/activity?ref={quote('refs/heads/' + ref, safe='')}&per_page=100",
+                    "--method", "GET", "-H", "X-GitHub-Api-Version: 2022-11-28",
+                ]
+                value = observed["activity"]
+            else:
+                raise AssertionError("Unexpected provider transport")
+            return subprocess.CompletedProcess(arguments, 0, json.dumps(value), "")
+        return read
 
     def test_adoption_v2_later_provider_root_composes_with_ready_remediation(self):
         current, proof, observed = self.adoption_v2_post_ready_fixture()
@@ -1872,9 +1903,7 @@ class LifecyclePublicationTests(TestCase):
         self.assertNotIn("REVIEW_SUBMITTED", [
             item["kind"] for item in proof["observed_pre_enrollment_history"]
         ])
-        with patch.object(publication, "_authenticate_provider_integration_verifier"), patch.object(publication, "_run_gh", return_value=subprocess.CompletedProcess(
-            [], 0, json.dumps(observed), "",
-        )):
+        with patch.object(publication, "_authenticate_provider_integration_verifier"), patch.object(publication, "_run_gh", side_effect=self.adoption_v2_transport(observed)):
             binding = publication.derive_ready_source_recovery_provider_binding(current)
             self.assertEqual(binding.provider_head(
                 repository=REPOSITORY, pull_request=PR, current_head_sha=HEADS[4],
@@ -1926,9 +1955,10 @@ class LifecyclePublicationTests(TestCase):
                 "__typename": "ConvertToDraftEvent", "id": "DRAFT_extra", "createdAt": "2026-08-07T00:01:00Z"}),
             "force_push": lambda v: nodes(v).insert(2, {
                 "__typename": "HeadRefForcePushedEvent", "id": "FORCE_extra", "createdAt": "2026-08-07T00:01:00Z"}),
-            "unpublished_intermediate_head": lambda v: nodes(v).insert(4, {
-                "__typename": "PullRequestCommit", "id": "COMMIT_extra",
-                "commit": {"oid": HEADS[1], "committedDate": "2026-08-07T01:00:00Z"}}),
+            "unpublished_intermediate_head": lambda v: v["activity"].insert(1, {
+                **v["activity"][0], "id": 33, "node_id": "PUSH_extra",
+                "before": HEADS[2], "after": HEADS[1],
+                "timestamp": "2026-08-07T01:00:00Z"}),
             "duplicate_result": lambda v: nodes(v).insert(3, {
                 **nodes(v)[2], "id": "REVIEW_other", "databaseId": 56}),
             "duplicate_summary": lambda v: nodes(v).insert(4, {
@@ -1939,9 +1969,7 @@ class LifecyclePublicationTests(TestCase):
                 with self.subTest(name=name):
                     value = copy.deepcopy(baseline)
                     change(value)
-                    with patch.object(publication, "_run_gh", return_value=subprocess.CompletedProcess(
-                        [], 0, json.dumps(value), "",
-                    )), self.assertRaises(publication.LifecyclePublicationError):
+                    with patch.object(publication, "_run_gh", side_effect=self.adoption_v2_transport(value)), self.assertRaises(publication.LifecyclePublicationError):
                         publication.derive_ready_source_recovery_provider_binding(current)
 
     def test_adoption_v2_preserves_signed_finite_history_and_current(self):
@@ -1980,7 +2008,7 @@ class LifecyclePublicationTests(TestCase):
                     current, serialized_lifecycle_evidence=authority.canonical_json_bytes(value),
                 ))
         with patch.object(publication, "_authenticate_provider_integration_verifier"), patch.object(
-            publication, "_run_gh", return_value=subprocess.CompletedProcess([], 0, json.dumps(observed), ""),
+            publication, "_run_gh", side_effect=self.adoption_v2_transport(observed),
         ):
             binding = publication.derive_ready_source_recovery_provider_binding(current)
             with self.assertRaisesRegex(publication.LifecyclePublicationError, "stale or substituted"):
@@ -2001,6 +2029,92 @@ class LifecyclePublicationTests(TestCase):
             with self.assertRaisesRegex(publication.LifecyclePublicationError, "verifier is not accepted main"):
                 publication.derive_ready_source_recovery_provider_binding(current)
             observation.assert_not_called()
+
+    def test_adoption_v2_uses_push_chronology_not_commit_metadata(self):
+        current, _, observed = self.adoption_v2_post_ready_fixture()
+        nodes = observed["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+        successor = nodes.pop()
+        successor["commit"]["committedDate"] = "2026-08-06T00:00:00Z"
+        nodes.insert(1, successor)
+        with patch.object(publication, "_authenticate_provider_integration_verifier"), patch.object(
+            publication, "_run_gh", side_effect=self.adoption_v2_transport(observed),
+        ):
+            binding = publication.derive_ready_source_recovery_provider_binding(current)
+            self.assertEqual(binding.provider_head_sha, HEADS[2])
+
+    def test_adoption_v2_rejects_retroactive_provider_bodies(self):
+        current, _, baseline = self.adoption_v2_post_ready_fixture()
+        for kind in ("late_summary", "edited_review", "missing_review_edit_evidence"):
+            value = copy.deepcopy(baseline)
+            nodes = value["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"]
+            if kind == "late_summary":
+                summary = nodes[3]
+                summary["updatedAt"] = "2026-08-09T00:00:00Z"
+                summary["userContentEdits"]["nodes"] = [
+                    {"id": "EDIT_initial", "editedAt": summary["createdAt"],
+                     "deletedAt": None, "diff": "Provider review running",
+                     "editor": summary["author"]},
+                    {"id": "EDIT_late", "editedAt": summary["updatedAt"],
+                     "deletedAt": None, "diff": summary["body"],
+                     "editor": summary["author"]},
+                ]
+            elif kind == "edited_review":
+                nodes[2]["lastEditedAt"] = "2026-08-09T00:00:00Z"
+            else:
+                del nodes[2]["lastEditedAt"]
+            with self.subTest(kind=kind), patch.object(publication, "_authenticate_provider_integration_verifier"), patch.object(
+                publication, "_run_gh", side_effect=self.adoption_v2_transport(value),
+            ), self.assertRaises(publication.LifecyclePublicationError):
+                publication.derive_ready_source_recovery_provider_binding(current)
+
+    def test_adoption_v2_requires_complete_exact_branch_publications(self):
+        current, _, baseline = self.adoption_v2_post_ready_fixture()
+        changes = {
+            "missing_root": lambda v: v["activity"].pop(),
+            "missing_successor": lambda v: v["activity"].pop(0),
+            "wrong_ref": lambda v: v["activity"][0].update(ref="refs/heads/foreign"),
+            "wrong_actor": lambda v: v["activity"][0]["actor"].update(node_id="U_foreign"),
+            "wrong_before": lambda v: v["activity"][0].update(before=HEADS[1]),
+            "wrong_head": lambda v: v["activity"][0].update(after=HEADS[5]),
+            "force_push": lambda v: v["activity"][0].update(activity_type="force_push"),
+            "unknown_type": lambda v: v["activity"][0].update(activity_type="unknown"),
+            "root_after_adoption": lambda v: v["activity"][1].update(timestamp="2026-08-07T00:01:00Z"),
+            "successor_before_completion": lambda v: v["activity"][0].update(timestamp="2026-08-07T00:06:00Z"),
+            "equal_publication_time": lambda v: v["activity"][0].update(timestamp=v["activity"][1]["timestamp"]),
+            "duplicate_identity": lambda v: v["activity"].append(v["activity"][0]),
+            "duplicate_root": lambda v: v["activity"].append({
+                **v["activity"][1], "id": 33, "node_id": "PUSH_replayed"}),
+            "missing_timestamp": lambda v: v["activity"][0].pop("timestamp"),
+            "malformed_identity": lambda v: v["activity"][0].update(id=True),
+            "incomplete_bound": lambda v: v.update(activity=v["activity"] * 50),
+        }
+        for label, change in changes.items():
+            value = copy.deepcopy(baseline)
+            change(value)
+            with self.subTest(label=label), patch.object(publication, "_authenticate_provider_integration_verifier"), patch.object(
+                publication, "_run_gh", side_effect=self.adoption_v2_transport(value),
+            ), self.assertRaises(publication.LifecyclePublicationError):
+                publication.derive_ready_source_recovery_provider_binding(current)
+
+    def test_adoption_v2_branch_observation_is_bounded_and_read_only(self):
+        current, _, observed = self.adoption_v2_post_ready_fixture()
+        observed["data"]["repository"]["pullRequest"]["headRefName"] = "release/provider-root"
+        for item in observed["activity"]:
+            item["ref"] = "refs/heads/release/provider-root"
+        transport = self.adoption_v2_transport(observed)
+        with patch.object(publication, "_authenticate_provider_integration_verifier"), patch.object(
+            publication, "_run_gh", side_effect=transport,
+        ):
+            self.assertEqual(publication.derive_ready_source_recovery_provider_binding(current).provider_head_sha, HEADS[2])
+        for response in ((1, '{"message":"Forbidden"}'), (0, 'not json'), (0, '{"id":1,"id":2}')):
+            def failed_read(arguments):
+                if "graphql" in arguments:
+                    return transport(arguments)
+                return subprocess.CompletedProcess(arguments, response[0], response[1], "")
+            with self.subTest(response=response), patch.object(publication, "_authenticate_provider_integration_verifier"), patch.object(
+                publication, "_run_gh", side_effect=failed_read,
+            ), self.assertRaises(publication.LifecyclePublicationError):
+                publication.derive_ready_source_recovery_provider_binding(current)
 
     def test_ready_source_provider_binding_derives_attested_ready_predecessor(self) -> None:
         chain = Chain()

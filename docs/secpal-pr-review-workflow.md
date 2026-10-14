@@ -1933,6 +1933,16 @@ Ready/Draft churn, stale CURRENT or an unaccepted verifier fail closed. The
 binding retains an ephemeral observation digest; it creates no historical
 `REVIEW_SUBMITTED`, durable artifact or replacement receipt.
 
+Publication chronology comes from the same provider observer's bounded,
+branch-filtered GitHub activity read, pinned to REST version 2022-11-28. A full
+100-entry page cannot establish completeness and is rejected. The unique root
+push and every subsequent push must agree with the signed lifecycle heads,
+predecessors and authenticated actor. Commit timestamps supply no publication
+authority. The current terminal summary and any comment result must predate
+the first remediation push; native review results require explicit unedited-body
+evidence. Missing or edited evidence fails closed instead of reconstructing a
+historical review version.
+
 This composition grants no review or remediation budget, source advancement,
 thread-resolution, Recovery-publication or merge authority. Current Stable
 Feedback and current-safety qualification remain separate gates of the existing
