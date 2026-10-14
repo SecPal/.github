@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import json
 import re
 from typing import Any
+from urllib.parse import quote
 
 from . import fast_path
 from . import lifecycle_authority as authority
@@ -47,7 +48,7 @@ _QUERY = """query($owner:String!, $name:String!, $number:Int!) {
             author {
             __typename login ... on User { id databaseId } ... on Bot { id databaseId }
           } }
-          ... on PullRequestReview { id databaseId body submittedAt state commit { oid } author {
+          ... on PullRequestReview { id databaseId body submittedAt lastEditedAt state commit { oid } author {
             __typename login ... on User { id databaseId } ... on Bot { id databaseId }
           } }
         }
@@ -123,9 +124,13 @@ def require_verified_acquisitions(
     return value
 
 
-def _observe(repository: str, pull_request: int) -> dict[str, Any]:
+def observe_timeline(
+    repository: str, pull_request: int, *, include_branch_activity: bool = False,
+) -> dict[str, Any]:
     """One complete bounded live timeline; truncation grants no authority."""
 
+    repository = authority._require_repository(repository)
+    pull_request = authority._require_positive_int(pull_request, "provider PR")
     owner, name = repository.split("/", 1)
     result = publication._run_gh([
         "api", "--hostname", "github.com", "graphql", "-f", f"query={_QUERY}",
@@ -138,6 +143,62 @@ def _observe(repository: str, pull_request: int) -> dict[str, Any]:
     except (ValueError, UnicodeDecodeError) as exc:
         raise fast_path.SecurityBlocker("first fallback timeline observation is malformed") from exc
     observed = _normalize_observation(raw)
+    if observed["repository"] != repository or observed["pull_request"] != pull_request:
+        raise fast_path.SecurityBlocker("provider timeline identity changed")
+    if include_branch_activity:
+        ref = "refs/heads/" + observed["head_ref"]
+        result = publication._run_gh([
+            "api", "--hostname", "github.com",
+            f"repos/{repository}/activity?ref={quote(ref, safe='')}&per_page=100",
+            "--method", "GET", "-H", "X-GitHub-Api-Version: 2022-11-28",
+        ])
+        if result.returncode != 0:
+            raise fast_path.SecurityBlocker("provider branch activity is unavailable")
+        try:
+            activity = json.loads(result.stdout, object_pairs_hook=publication._reject_duplicate_pairs)
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise fast_path.SecurityBlocker("provider branch activity is malformed") from exc
+        observed["branch_activity"] = _normalize_branch_activity(activity, ref)
+    return observed
+
+
+def _normalize_branch_activity(raw: Any, ref: str) -> tuple[dict[str, Any], ...]:
+    """Bounded server publication facts; lifecycle admission owns their meaning."""
+
+    if not isinstance(raw, list) or len(raw) >= 100:
+        raise fast_path.SecurityBlocker("provider branch activity exceeds its complete bound")
+    normalized = []
+    seen_ids, seen_nodes = set(), set()
+    try:
+        for item in raw:
+            identity = authority._require_positive_int(item["id"], "branch activity ID")
+            node = authority._require_identity(item["node_id"], "branch activity node")
+            if identity in seen_ids or node in seen_nodes or item["ref"] != ref:
+                raise fast_path.SecurityBlocker("provider branch activity is duplicated or foreign")
+            seen_ids.add(identity)
+            seen_nodes.add(node)
+            if item["activity_type"] not in {
+                "push", "force_push", "branch_creation", "branch_deletion",
+                "pr_merge", "merge_queue_merge",
+            }:
+                raise fast_path.SecurityBlocker("provider branch activity is unknown")
+            _timestamp(item["timestamp"])
+            actor = item["actor"]
+            normalized.append({
+                "database_id": identity, "node_id": node, "ref": ref,
+                "kind": item["activity_type"], "created_at": item["timestamp"],
+                "before": authority._require_oid(item["before"], "activity predecessor"),
+                "head": authority._require_oid(item["after"], "activity head"),
+                "actor": _actor({"__typename": actor["type"], "login": actor["login"],
+                                 "id": actor["node_id"], "databaseId": actor["id"]}),
+            })
+    except (KeyError, TypeError, ValueError, authority.LifecycleAuthorityError) as exc:
+        raise fast_path.SecurityBlocker("provider branch activity is malformed") from exc
+    return tuple(normalized)
+
+
+def _observe(repository: str, pull_request: int) -> dict[str, Any]:
+    observed = observe_timeline(repository, pull_request)
     observed["head_publication"] = _observe_head_publication(observed)
     return observed
 
@@ -304,6 +365,10 @@ def _normalize_observation(raw: Any) -> dict[str, Any]:
                     event["versions"] = _comment_versions(node, event["actor"])
                 else:
                     event.update(head=authority._require_oid(node["commit"]["oid"], "review head"), state=node["state"])
+                    if "lastEditedAt" in node:
+                        if node["lastEditedAt"] is not None:
+                            _timestamp(node["lastEditedAt"])
+                        event["last_edited_at"] = node["lastEditedAt"]
             else:
                 raise fast_path.SecurityBlocker("first fallback timeline has an unknown event")
             _timestamp(stamp)

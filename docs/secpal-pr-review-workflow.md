@@ -1920,6 +1920,34 @@ remain required. This composition changes neither bounded provider acquisition
 nor review, remediation, Ready, Recovery or Continuation budgets. The broader
 provider-lineage contract remains owned by #1031.
 
+For an Exact-State-Adoption v2 root, conservative review-budget consumption
+remains distinct from provider-review proof. The #1204 composition accepts its
+signed first same-head Ready successor beneath authenticated Ready-preserving
+remediation only when independent provider evidence establishes actual later
+Code/Security completion on that Ready head. The existing successor verifier
+selects the candidate head; callers cannot nominate it. The existing complete
+GitHub timeline normalizer and canonical provider-summary parser authenticate
+the unique Ready event, provider actors, native Code result, exact-head terminal
+Code/Security rows, chronology and published successor heads. Ambiguous sources,
+Ready/Draft churn, stale CURRENT or an unaccepted verifier fail closed. The
+binding retains an ephemeral observation digest; it creates no historical
+`REVIEW_SUBMITTED`, durable artifact or replacement receipt.
+
+Publication chronology comes from the same provider observer's bounded,
+branch-filtered GitHub activity read, pinned to REST version 2022-11-28. A full
+100-entry page cannot establish completeness and is rejected. The unique root
+push and every subsequent push must agree with the signed lifecycle heads,
+predecessors and authenticated actor. Commit timestamps supply no publication
+authority. The current terminal summary and any comment result must predate
+the first remediation push; native review results require explicit unedited-body
+evidence. Missing or edited evidence fails closed instead of reconstructing a
+historical review version.
+
+This composition grants no review or remediation budget, source advancement,
+thread-resolution, Recovery-publication or merge authority. Current Stable
+Feedback and current-safety qualification remain separate gates of the existing
+Ready-source recovery. Historical package-loss admission is unchanged.
+
 The #1129 corrective composition extends the #1078 bootstrap to mixed published
 successors in either order, including alternating integrations and ordinary
 remediations within the existing finite limits. One backward walk starts at

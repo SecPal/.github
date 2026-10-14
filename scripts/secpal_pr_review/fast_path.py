@@ -574,14 +574,14 @@ def codex_review_type(body: Any) -> str | None:
     return None
 
 
-def verify_codex_provider_summary(
+def _verified_codex_provider_summary_rows(
     body: Any,
     *,
     head_sha: str,
     repository: str | None = None,
     pull_request_number: int | None = None,
     require_terminal: bool = True,
-) -> None:
+) -> list[dict[str, str]]:
     """Verify the canonical terminal Code/Security provider summary for a head."""
 
     head_sha = _require_oid(head_sha, "Codex provider summary head")
@@ -633,6 +633,7 @@ def verify_codex_provider_summary(
         raise SecurityBlocker("Codex review provider is not terminal")
     if not require_terminal and status.get("status") not in {"running", "completed"}:
         raise SecurityBlocker("Codex review provider status is indeterminate")
+    verified_rows = []
     for review_type in required_codex_review_types():
         label = {"CODE": "Code Review", "SECURITY": "Security Review"}[review_type]
         rows = [line for line in body.splitlines() if f"**{label}**" in line]
@@ -653,6 +654,48 @@ def verify_codex_provider_summary(
             pending = row_status.replace("🔄 **Running** since ", "✅ **Completed** ", 1)
             if require_terminal or not row_status.startswith("🔄 **Running** since ") or not _is_codex_completed_status(pending):
                 raise SecurityBlocker("Codex review provider is not terminal")
+        verified_rows.append({
+            "review_type": review_type, "status": row_status,
+            "commit": cells[3].strip(), "trigger": cells[4].strip(),
+        })
+
+    return verified_rows
+
+
+def verify_codex_provider_summary(
+    body: Any, *, head_sha: str, repository: str | None = None,
+    pull_request_number: int | None = None, require_terminal: bool = True,
+) -> None:
+    """Preserve the accepted summary verifier and its historical representations."""
+
+    _verified_codex_provider_summary_rows(
+        body, head_sha=head_sha, repository=repository,
+        pull_request_number=pull_request_number, require_terminal=require_terminal,
+    )
+
+
+def codex_provider_completion_facts(
+    body: Any, *, head_sha: str, repository: str, pull_request_number: int,
+) -> tuple[dict[str, str], ...]:
+    """Expose exact completion facts through the existing canonical parser.
+
+    Historical summary verification remains compatible. New chronology-based
+    admissions additionally require explicit per-type head and timestamp facts.
+    """
+
+    rows = _verified_codex_provider_summary_rows(
+        body, head_sha=head_sha, repository=repository,
+        pull_request_number=pull_request_number,
+    )
+    facts = []
+    for row in rows:
+        commit = re.fullmatch(r"`([0-9a-f]{7,40})`", row["commit"])
+        stamps = re.findall(r'datetime="([^"]+)"', row["status"])
+        if commit is None or not head_sha.startswith(commit[1]) or len(stamps) != 1:
+            raise SecurityBlocker("Codex completion lacks exact head or timestamp evidence")
+        facts.append({"review_type": row["review_type"], "head_sha": head_sha,
+                      "completed_at": stamps[0], "trigger": row["trigger"]})
+    return tuple(facts)
 
 
 def validation_registry_projection(entry: Any) -> dict[str, Any]:
