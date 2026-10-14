@@ -1162,13 +1162,41 @@ class SecretExcerptTests(unittest.TestCase):
         self.commit_source("x" + self.prefix + self.capture + self.suffix)
         self.reject()
 
-    def test_crlf_raw_line_threshold_admits_unique_excerpt(self) -> None:
+    def assert_crlf_excerpt_positions(self, capture: str, positions: list[int]) -> None:
         # Trivy tests the 101-byte raw line before removing the trailing CR.
+        self.capture = capture
         before = "x" * 31
         after = "y" * (100 - len(before) - len(self.capture))
         self.excerpt = "x" * 30 + "*" * len(self.capture) + "y" * 20
-        self.commit_source(before + self.capture + after + "\r")
+        self.source = before + self.capture + after + "\r"
+        self.commit_source(self.source)
+        blob = subprocess.check_output([
+            "git", "-C", str(self.workspace), "show", self.commit + ":secret.txt",
+        ])
+        self.assertEqual(blob, self.source.encode() + b"\n")
+        raw_line = blob.split(b"\n")[0]
+        self.assertTrue(raw_line.endswith(b"\r"))
+        self.assertEqual(len(raw_line), 101)
+        content = raw_line[:-1]
+        self.assertEqual(len(content), 100)
+        mask = self.native["Results"][0]["Secrets"][0]["Code"]["Lines"][0]["Content"].encode()
+        self.assertEqual(mask, self.excerpt.encode())
+        compatible = [
+            start for start in range(len(content) - len(mask) + 1)
+            if all(expected == ord("*") or expected == actual
+                   for expected, actual in zip(mask, content[start:start + len(mask)]))
+        ]
+        self.assertEqual(compatible, positions)
+
+    def test_crlf_raw_line_threshold_admits_unique_excerpt(self) -> None:
+        self.assert_crlf_excerpt_positions("A" + "B" * 42, [1])
         self.verify()
+
+    def test_crlf_raw_line_threshold_rejects_overlapping_excerpts(self) -> None:
+        # The leading x also satisfies the visible prefix one byte later.
+        self.assert_crlf_excerpt_positions("x" + "B" * 42, [1, 2])
+        self.assertLess(2 - 1, len(self.excerpt.encode()))
+        self.reject("ambiguous")
 
     def test_lossy_utf8_boundary_excerpt_remains_unsupported(self) -> None:
         # A byte cut inside the Euro sign emits U+FFFD and a native WARN.
