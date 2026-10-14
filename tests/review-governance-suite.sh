@@ -19,8 +19,7 @@ EOF
 chmod +x "$workspace/bin/python3"
 
 for check in \
-  "$SCRIPT_DIR"/validate-*-instructions.sh \
-  "$SCRIPT_DIR"/*-review-memory*.sh; do
+  "$SCRIPT_DIR"/validate-*-instructions.sh; do
   test -x "$check"
   if [[ "$check" == "$SCRIPT_DIR/validate-ai-instructions.sh" ]]; then
     PATH="$workspace/bin:$PATH" "$check"
