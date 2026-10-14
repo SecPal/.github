@@ -2049,7 +2049,7 @@ def _admit_concurrent_completion(old: Node, live: Node, evidence: ConcurrentComp
         or evidence.closing_pr_base_ref != evidence.main_name
         or evidence.main_name != "main"
         or evidence.main_admin_enforced is not True
-        or evidence.main_strict is not True
+        or not isinstance(evidence.main_strict, bool)
         or evidence.merge_signature_valid is not True
         or not evidence.merged_by_id
         or not old.claims_observable or not live.claims_observable or live.claims

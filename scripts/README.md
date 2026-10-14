@@ -1753,11 +1753,9 @@ bash scripts/sync-required-checks.sh --apply
 2. Builds the exact JSON payload GitHub expects for branch protection updates
 3. Applies the payload through `gh api` using `--input` so booleans and arrays stay typed correctly
 4. Keeps the live branch-protection baseline repeatable after workflow or context drift
-5. Emits `strict: true` only for `SecPal/.github`; all other managed
-   repositories retain `strict: false`. Live-preserving apply mode keeps the
-   same canonical check inventory and app bindings, so a later sync cannot
-   undo the provider-enforced exact-base merge precondition or duplicate a
-   check identity.
+5. Emits `strict: false` while preserving each managed repository's required
+   checks and App bindings. Required candidate checks and native conflict
+   detection remain enforced without requiring unrelated newer main commits.
 
 **Exit Codes:**
 

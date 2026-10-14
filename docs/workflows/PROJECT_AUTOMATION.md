@@ -96,16 +96,12 @@ See [ROLLOUT_GUIDE.md](./ROLLOUT_GUIDE.md) for deployment instructions.
 
 For incremental development and self-review:
 
-Run these PR-body commands from the trusted governance checkout with Node.js 26 (Current)
-and `npm ci --ignore-scripts` completed. For target repositories without these
-scripts, use the canonical-source setup in [ROLLOUT_GUIDE.md](./ROLLOUT_GUIDE.md).
-
 ```bash
 # 1. Start work - create draft PR
 tmpfile=$(mktemp "${TMPDIR:-/tmp}/pr-body.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT
 cp .github/pull_request_template.md "$tmpfile"
-# Fill in Closes #123 and concrete evidence; replace every placeholder (passing may be N/A in Draft).
+# Describe the change and validation results; link related issues when useful.
 "${EDITOR:-vi}" "$tmpfile"
 gh pr create --draft \
   --title "WIP: Implement feature X" \

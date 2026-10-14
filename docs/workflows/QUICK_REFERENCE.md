@@ -107,7 +107,6 @@ gh pr edit 456 --body-file "$tmpfile"
 ## 🔐 Policy Enforcement
 
 - PR titles and author-written PR bodies must be in English.
-- CI blocks obvious German PR title/body markers.
 - Comments and review text remain reviewer-enforced for now.
 - English-only GitHub communication remains reviewer-enforced for now.
 - Signed commit verification is enforced by CI.
@@ -136,7 +135,7 @@ tmpfile=$(mktemp "${TMPDIR:-/tmp}/replacement-pr-body.XXXXXX")
 trap 'rm -f "$tmpfile"' EXIT
 cp .github/pull_request_template.md "$tmpfile"
 printf '\n%s\n' '## Related Pull Requests' '' 'Supersedes PR #123' >> "$tmpfile"
-# Describe the replacement and linked issue; replace placeholders with evidence for this change.
+# Describe the replacement and actual validation results.
 "${EDITOR:-vi}" "$tmpfile"
 gh pr create --draft --title "replacement title" --body-file "$tmpfile"
 ```

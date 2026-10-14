@@ -1122,7 +1122,7 @@ class ObservationVerificationTests(TestCase):
             closing_pr_state="MERGED", merged_at="2026-10-12T21:02:07Z",
             merged_by_id="USER_alice", merge_oid="d" * 40,
             merge_signature_valid=True, main_name="main", main_oid="d" * 40,
-            main_admin_enforced=True, main_strict=True,
+            main_admin_enforced=True, main_strict=False,
             history_oids=("d" * 40, "1" * 40),
             state_events=(("CLOSED_1190", "ClosedEvent",
                            "2026-10-12T21:02:09Z", "USER_alice"),),
@@ -1142,7 +1142,7 @@ class ObservationVerificationTests(TestCase):
             {"closing_pr_repository_id": "FOREIGN"},
             {"closing_pr_base_ref": "candidate"}, {"closing_pr_state": "OPEN"},
             {"merge_signature_valid": False}, {"main_admin_enforced": False},
-            {"main_strict": False}, {"history_oids": ("1" * 40,)},
+            {"main_strict": None}, {"history_oids": ("1" * 40,)},
             {"observed_at": "2026-10-12T21:02:08Z"},
             {"started_at": "2026-10-12T21:02:08Z"},
             {"merged_at": "not-a-time"}, {"merged_by_id": "FOREIGN"},
@@ -1269,7 +1269,7 @@ class CompletionObservationTests(TestCase):
                 "defaultBranchRef": {
                     "name": "main",
                     "branchProtectionRule": {
-                        "isAdminEnforced": True, "requiresStrictStatusChecks": True},
+                        "isAdminEnforced": True, "requiresStrictStatusChecks": False},
                     "target": {
                         "oid": "d" * 40,
                         "history": {"nodes": [{"oid": "d" * 40}],
@@ -1311,7 +1311,7 @@ class CompletionObservationTests(TestCase):
                 self.calls = []
 
             def observe_main_protection(self, repository, branch):
-                return {"rulesets": [], "branch_protection": {"strict": True}}
+                return {"rulesets": [], "branch_protection": {"strict": False}}
 
             def query(self, document, variables):
                 self.calls.append((document, variables))
@@ -1334,7 +1334,7 @@ class CompletionObservationTests(TestCase):
                 calls = 0
 
                 def observe_main_protection(self, repository, branch):
-                    return {"rulesets": [], "branch_protection": {"strict": True}}
+                    return {"rulesets": [], "branch_protection": {"strict": False}}
 
                 def query(self, document, variables):
                     self.calls += 1
@@ -1346,7 +1346,7 @@ class CompletionObservationTests(TestCase):
 
         class FailedTransport:
             def observe_main_protection(self, repository, branch):
-                return {"rulesets": [], "branch_protection": {"strict": True}}
+                return {"rulesets": [], "branch_protection": {"strict": False}}
 
             def query(self, document, variables):
                 raise github.GitHubError("sensitive raw provider diagnostic")
@@ -1379,7 +1379,7 @@ class CompletionObservationTests(TestCase):
         helper = Mock()
         helper.default_config.return_value = {}
         normalized = {"rulesets": [{"type": "required_status_checks"}],
-                      "branch_protection": {"strict": True}}
+                      "branch_protection": {"strict": False}}
         helper._capture_rules.return_value = (normalized, [], ["rulesets", "branch_protection"])
         adapter = github.GitHubReadAdapter()
         with patch.object(github, "_review_policy_owner", return_value=helper):
@@ -1413,7 +1413,7 @@ class CompletionObservationTests(TestCase):
             calls = 0
 
             def observe_main_protection(self, repository, branch):
-                return {"rulesets": [], "branch_protection": {"strict": True}}
+                return {"rulesets": [], "branch_protection": {"strict": False}}
 
             def query(self, document, variables):
                 self.calls += 1
@@ -1436,7 +1436,7 @@ class CompletionObservationTests(TestCase):
             calls = 0
 
             def observe_main_protection(self, repository, branch):
-                return {"rulesets": [], "branch_protection": {"strict": True}}
+                return {"rulesets": [], "branch_protection": {"strict": False}}
 
             def query(self, document, variables):
                 self.calls += 1

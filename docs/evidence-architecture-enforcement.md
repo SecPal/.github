@@ -134,8 +134,8 @@ Source policy does not establish live required-check enforcement. Before the
 separately authorized `bash scripts/sync-required-checks.sh --repo .github --apply`,
 the operator must authenticate accepted protected-main source, current protection,
 successful hosted execution, the exact check and producer identity, and the
-single-context protection delta. Independent read-back must confirm 14 unique
-contexts, this app binding, all prior bindings, `strict=true`, and unchanged
+reviewed protection delta. Independent read-back must confirm ten unique
+contexts, this app binding, all retained bindings, `strict=false`, and unchanged
 surrounding protection. Existing protection and lifecycle gates retain their own
 authority.
 
