@@ -508,7 +508,8 @@ plus the acceptance criteria that falsify it.
 
 ### 5.3 Delivery PR lifecycle
 
-Every new SecPal delivery pull request MUST be created as Draft. An agent MUST
+Every new SecPal delivery pull request created by an agent or a human MUST be
+created as Draft. An agent MUST
 NOT create a new delivery pull request directly in Ready state. Direct-Ready
 creation is a lifecycle violation and is NOT equivalent to the one authorized
 `Draft -> Ready` transition.
@@ -542,7 +543,7 @@ NEW -> DRAFT -> READY -> REVIEW -> OPTIONAL_SINGLE_REMEDIATION_COMMIT -> READY -
 It rejects these sequences:
 
 ```text
-NEW -> READY                                      invalid: direct Ready creation
+NEW -> READY                                      invalid: ordinary direct Ready creation
 DRAFT -> READY -> DRAFT -> READY                  invalid: ordinary or unauthorized Ready/Draft churn
 READY -> REVIEW -> OPTIONAL_SINGLE_REMEDIATION_COMMIT -> NEW REVIEW REQUEST
                                                   invalid: recursive review
@@ -648,6 +649,71 @@ not a SecPal OpenPGP signing method. Compatibility necessary to verify immutable
 historical or provider evidence may remain, but MUST NOT authorize new
 SecPal-controlled OpenPGP signing. Do not rewrite historical signatures or
 provision a new signing method to process them.
+
+### 5.3.3 Authenticated External Dependabot Ready Origin
+
+The sole additional origin is `EXTERNAL_DEPENDABOT_READY`: a GitHub Dependabot
+pull request actually created as Ready, independently authenticated and admitted
+within the existing persistent lifecycle authority. This bounded entry does not
+apply to agent, human, or Polyscope-created delivery PRs. Its chronology begins
+at the actual Ready creation with zero Draft-to-Ready transitions. Admission
+MUST NOT manufacture Draft history, a Ready transition, review consumption, or
+historical validation evidence, and MUST NOT use Ready-to-Draft-to-Ready churn.
+
+```text
+AUTHENTICATED_EXTERNAL_DEPENDABOT_READY
+  -> EXPLICIT_ADMISSION
+  -> BOUNDED_ASSESSMENT
+  -> FINITE_REVIEW
+  -> MERGE
+```
+
+Admission MUST authenticate the GitHub creator as exactly `dependabot[bot]`,
+provider identity, verified commit signatures, and the actual dependency-update
+operation. Names, emails, labels, titles, mutable PR text, or a verified GitHub
+signature alone are insufficient. It MUST bind the expected repository,
+protected base, exact HEAD and tree, complete dependency diff, real chronology,
+native owning leaf, unique primary closing PR, and persistent lifecycle identity.
+Source changes by maintainers, arbitrary code, incomplete evidence, or identity
+drift MUST fail closed. The initial closed update class is one full-SHA GitHub
+Actions reference update; unsupported classes are rejected. Unversioned action
+SHA changes require explicit manual review and merge approval.
+
+The native owning leaf MUST satisfy sections 4, 5.2, and 6. A later ownership
+association MAY be admitted only at its actual observed time, with complete
+unchanged provenance and chronology. Completed or retired issues, epic closure,
+foreign contracts, and failed validation deliveries MUST NOT supply ownership
+or historical success. Existing bot PRs have no blanket retrospective admission.
+
+Genesis requires independent origin authentication and admission through the
+existing protected publication journal, its maintained signer roles, predecessor
+and CAS rules, uniqueness checks, and dynamic CURRENT selection. It MUST NOT
+self-authorize from well-formed or bot-signed data. No new signer, trust root,
+journal, or independent authority family is introduced. Unknown origin types
+and consumers without the required verification capability MUST fail closed.
+
+The ordinary validation receipt and final-attestation requirements remain
+binding wherever their verified contract applies. Any necessary typed source
+proof MUST preserve their validation and authentication invariants within the
+existing authority. Green checks or bot provenance never replace source
+validation, receipts, attestations, security review, or supply-chain acceptance.
+Missing historical evidence MUST NOT be recreated; failed validation trees gain
+no retry authority from admission.
+
+An exact, independently authenticated one-use assessment authorization is
+required before the bounded review entry. Admission alone starts no review.
+Review, remediation, and recovery counters begin at their legitimate initial
+values and change only through authorized transitions; Cycle 3 remains excluded.
+Duplicate genesis, assessment replay, counter reset, erased chronology, and
+recursive review MUST fail closed. Review consumers MUST authenticate this
+origin explicitly instead of inferring an ordinary Ready transition.
+
+Merge still requires authentic terminal Code and Security review evidence where
+prescribed, complete current Stable Feedback, effective branch protection,
+required checks, fresh authenticated security evidence, and all applicable
+manual approvals for the exact head. Admission MUST NOT authorize product
+publication or unsupported automatic merge. This governance extension itself
+uses the ordinary Draft-first delivery lifecycle.
 
 ### 5.4 After The Primary Pull Request Merges
 

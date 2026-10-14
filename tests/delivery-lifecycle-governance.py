@@ -41,6 +41,26 @@ def text_blocks(markdown: str) -> list[str]:
 
 
 class DeliveryLifecycleGovernanceTests(TestCase):
+    def test_external_dependabot_origin_is_explicit_and_not_a_draft_transition(self) -> None:
+        maintenance = section(
+            CONTRACT.read_text(encoding="utf-8"),
+            "5.3.3 Authenticated External Dependabot Ready Origin",
+        )
+        for requirement in (
+            "EXTERNAL_DEPENDABOT_READY",
+            "zero Draft-to-Ready transitions",
+            "independently authenticated",
+            "exact HEAD and tree",
+            "one-use assessment authorization",
+            "ordinary validation receipt and final-attestation requirements",
+            "existing protected publication journal",
+            "Unknown origin types",
+            "MUST fail closed",
+            "MUST NOT authorize product publication",
+        ):
+            with self.subTest(requirement=requirement):
+                self.assertIn(requirement, " ".join(maintenance.split()))
+
     def test_canonical_delivery_lifecycle_is_draft_first_and_finite(self) -> None:
         lifecycle = section(
             CONTRACT.read_text(encoding="utf-8"), "5.3 Delivery PR lifecycle"
