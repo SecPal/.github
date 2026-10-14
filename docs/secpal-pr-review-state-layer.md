@@ -47,8 +47,8 @@ schema violation.
 Package 2.1 does not add a production multi-repository registry. Package 2.2
 will supply the authoritative runtime registry and must validate each selected
 repository configuration against the Package 2.1 configuration schema. The
-registry scope must be governed explicitly; it must not be inferred from the
-four repositories currently scanned by review-memory automation.
+registry scope must be governed explicitly; it must not be inferred from
+optional review automation.
 
 ## Canonical digest
 
