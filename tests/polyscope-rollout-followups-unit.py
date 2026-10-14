@@ -39,6 +39,17 @@ rollout = load_rollout_module()
 
 
 class PolyscopeRolloutFollowupTests(TestCase):
+    def test_governance_workspace_commands_use_the_real_package_scripts(self) -> None:
+        config = rollout.REPO_SETTINGS[".github"]["local_config"]["scripts"]
+        package_scripts = rollout.load_package_scripts(REPO_ROOT)
+        commands = list(config.get("setup", []))
+        commands.extend(item["command"] for item in config.get("run", []))
+        for command in commands:
+            with self.subTest(command=command):
+                rollout.validate_local_config_command(
+                    ".github", REPO_ROOT, package_scripts, set(), command
+                )
+
     def test_retired_preview_hosts_are_rejected_before_workspace_routing(self) -> None:
         state = {name: {"id": name.replace(".", "-")} for name in rollout.REPO_SETTINGS}
         rendered = rollout.render_nginx_config(state)

@@ -2736,9 +2736,7 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
             "runMode": "replace",
             "scripts": {
                 "setup": [build_verified_npm_ci_command()],
-                "run": [
-                    {"label": "AI Review Scan", "command": "npm run copilot:review:scan", "runMode": "preserve"},
-                ],
+                "run": [],
             },
             "tasks": [
                 {

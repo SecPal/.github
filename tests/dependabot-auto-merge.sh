@@ -123,8 +123,6 @@ for direct_fixture in \
   .github/actions/setup-node-with-deps/action.yml \
   tests/android-consumed-workflow-action-pins.sh \
   tests/codeql-applicability.sh \
-  tests/copilot-review-memory-errors.sh \
-  tests/copilot-review-memory.sh \
   tests/dependabot-auto-merge.sh \
   tests/deploy-main-workflow.sh \
   tests/license-compatibility.sh \

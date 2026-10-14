@@ -259,7 +259,6 @@ package_scripts = {
         "test:integration:browser": "node --test tests/**/*.mjs",
     },
     ".github": {
-        "copilot:review:scan": "./scripts/copilot-review-tool.sh scan",
         "test": "npm run test:openapi-verified-presence",
         "test:openapi-verified-presence": "bash tests/check-openapi-verified-endpoints.sh",
     },
@@ -6613,8 +6612,8 @@ assert_rollout_rejects_invalid_local_config \
 
 assert_rollout_rejects_invalid_local_config \
     "$PYTHON_SCRIPT" \
-    '"command": "npm run copilot:review:scan"' \
-    '"command": "npm run missing:scan"' \
+    '"run": []' \
+    '"run": [{"label": "Invalid fixture", "command": "npm run missing:scan"}]' \
     ".github polyscope config references missing npm script 'missing:scan'"
 
 fake_bin_dir="$workspace/fake-bin"

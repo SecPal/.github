@@ -210,7 +210,7 @@
         {
           "argv": ["./tests/review-governance-suite.sh"],
           "working_directory": ".",
-          "purpose": "Run instruction and review-memory governance fixtures"
+          "purpose": "Run governance validation and instruction fixtures"
         },
         {
           "argv": ["./tests/reusable-workflow-policy.sh"],

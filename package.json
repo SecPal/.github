@@ -11,11 +11,7 @@
     "test": "npm run test:openapi-verified-presence && npm run test:node-baseline && npm run test:markdown-toolchain",
     "test:markdown-toolchain": "node --test tests/markdown-toolchain-security.test.mjs",
     "test:node-baseline": "node --test tests/node-baseline-governance.test.mjs",
-    "test:openapi-verified-presence": "bash tests/check-openapi-verified-endpoints.sh",
-    "copilot:review:threads": "./scripts/copilot-review-tool.sh threads",
-    "copilot:review:lessons": "./scripts/copilot-review-tool.sh lessons",
-    "copilot:review:scan": "./scripts/copilot-review-tool.sh scan",
-    "copilot:review:track": "./scripts/copilot-review-tool.sh track"
+    "test:openapi-verified-presence": "bash tests/check-openapi-verified-endpoints.sh"
   },
   "repository": {
     "type": "git",
