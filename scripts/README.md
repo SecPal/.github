@@ -7,6 +7,21 @@ SPDX-License-Identifier: CC0-1.0
 
 This directory contains utility scripts for SecPal development.
 
+## Read-Only WorkGraph Planning
+
+`secpal-work-graph.py` reads native GitHub parent/sub-issue and dependency
+relationships. Commands `show`, `ready`, `next`, `validate` and
+`validate-issue` report scope, readiness, selection and malformed input without
+writing issues or PRs. See [planning semantics](../docs/work-graph-contract.md).
+
+```bash
+python3 scripts/secpal-work-graph.py show SecPal/.github#1032
+python3 scripts/secpal-work-graph.py ready SecPal/.github#1032
+```
+
+`secpal-work-graph-audit.py` provides an optional read-only closure audit using
+native relationships. Neither reader grants PR or merge authority.
+
 ## Validation Scripts
 
 ### `secpal-dependabot-manifest-coverage.mjs`

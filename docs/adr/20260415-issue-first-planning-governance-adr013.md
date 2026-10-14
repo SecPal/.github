@@ -36,8 +36,9 @@ SecPal adopts an issue-first planning model.
 
 ADR-013 owns issue-first planning and the Project-board-as-mirror policy.
 Current planning and delivery use [native GitHub semantics](../work-graph-contract.md).
-ADR-016's custom graph states, execution claims and delivery governance are
-superseded; its original rationale remains historical.
+Native hierarchy, dependencies and read-only ready/blocked resolution remain
+supported. ADR-016's custom PR delivery constraints are superseded; its original
+rationale remains historical.
 
 - GitHub Issues are the canonical source of truth for active planning and deferred follow-up work.
 - Milestones group roadmap and release intent.

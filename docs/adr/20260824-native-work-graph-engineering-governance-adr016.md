@@ -3,11 +3,12 @@ SPDX-License-Identifier: CC0-1.0 -->
 
 # ADR-016: Native Work-Graph and Engineering Governance
 
-**Status:** Superseded for delivery governance
+**Status:** Partially superseded for delivery governance
 
-The custom graph resolver, delivery lifecycle and execution-state requirements
-are retired. Current delivery uses [native GitHub semantics](../work-graph-contract.md).
-The decision below is retained as historical rationale.
+Native issue hierarchy, dependencies, order and useful read-only planning
+resolution remain supported under the [simplified planning contract](../work-graph-contract.md).
+Custom PR lifecycle, merge gates and delivery ceremony are retired. The original
+delivery-specific constraints below are retained as historical rationale.
 **Date:** 2026-08-24
 **Decision authority:** SecPal maintainers
 

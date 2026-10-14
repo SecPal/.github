@@ -367,6 +367,9 @@ if [ -f tests/polyscope-state-audit.sh ]; then
   }
 fi
 
+python3 -m unittest tests/secpal-work-graph-unit.py
+python3 -m unittest tests/secpal-work-graph-adapter.py
+python3 -m unittest tests/secpal-work-graph-audit.py
 python3 -m unittest tests/secpal-trivy-repository-scan-unit.py
 python3 -m unittest tests/secpal-trivy-action-archive.py
 

@@ -84,6 +84,9 @@ chmod +x "$workspace/tests/validate-copilot-instructions.sh"
 
 # Stand-ins for the unconditional unittest commands in scripts/preflight.sh.
 unit_suites=(
+  secpal-work-graph-unit
+  secpal-work-graph-adapter
+  secpal-work-graph-audit
   secpal-trivy-repository-scan-unit
   secpal-trivy-action-archive
 )

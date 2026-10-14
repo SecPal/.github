@@ -93,6 +93,25 @@ Apply these rules only when the session says it is running inside Polyscope.
 - Use native GitHub issue relationships for planning. Keep independent repository
   changes parallel where safe and respect actual technical dependencies.
 
+## Native WorkGraph Planning
+
+- Use GitHub parent/sub-issue links, dependencies and useful project views for
+  issue-first planning. Native relationships are authoritative; board fields
+  and Markdown lists are views.
+- For issue-assigned work, use the existing read-only resolver from the owning
+  `SecPal/.github` checkout when it helps identify scope or real blockers:
+  `python3 scripts/secpal-work-graph.py show <owner/repo#issue>`,
+  `ready <owner/repo#scope>` or `next <owner/repo#scope>`.
+- Use `validate-issue <owner/repo#issue>` to explain readiness or malformed input.
+  Distinguish unreadable relationships from absent relationships and report
+  the resolver's actual findings.
+- Independent ready work can run in parallel. `next` recommends one candidate;
+  it creates no mandatory delivery order, PR gate or merge authority.
+- Preserve existing native relationships. Change a real dependency only when
+  the planning task authorizes it; do not flatten the graph to simplify PRs.
+- Planning semantics belong to `docs/work-graph-contract.md`. Code validation
+  and merge eligibility belong to native GitHub PR checks and protection rules.
+
 ## Evidence Architecture Enforcement
 
 - Consume `docs/evidence-architecture-contract.md`. Keep undeclared semantic completeness,

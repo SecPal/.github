@@ -114,7 +114,7 @@ create_preflight_fixture() {
 
 
   # Hermetic stand-ins for the maintained preflight's required Trivy suites.
-  for suite in secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
+  for suite in secpal-work-graph-unit secpal-work-graph-adapter secpal-work-graph-audit secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
     cat >"$repository/tests/$suite.py" <<'EOF'
 """Prove the required unittest command ran without external collaborators."""
 
