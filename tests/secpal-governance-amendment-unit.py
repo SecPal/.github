@@ -2555,14 +2555,14 @@ class GovernanceAmendmentTests(TestCase):
                 amendment, "_accepted_main_bytes", return_value=policy,
             ), mock.patch.object(
                 amendment.publication, "_run_gh", return_value=subprocess.CompletedProcess(
-                    [], 0, json.dumps({"strict": False, "checks": candidate}).encode(), b"",
+                    [], 0, json.dumps({"strict": True, "checks": candidate}).encode(), b"",
                 ),
             ):
                 return amendment._live_required_check_policy("SecPal/.github", PARENT)
 
         self.assertEqual(len(checks), 10)
         self.assertEqual(observe(checks), {
-            "strict": False, "checks": sorted(checks, key=lambda item: item["context"]),
+            "strict": True, "checks": sorted(checks, key=lambda item: item["context"]),
         })
         for app_id in (None, -1, 777, True, "15368", 15368.5):
             changed = [
@@ -3288,7 +3288,7 @@ class GovernanceAmendmentTests(TestCase):
             "body": "<!-- ccr-overview-v2 -->\nsummary",
         }, review=True))
 
-    def test_provider_merge_gate_binds_base_head_and_clean_state(self) -> None:
+    def test_strict_provider_merge_gate_binds_base_head_and_clean_state(self) -> None:
         item = authorization()
         pull = {
             "state": "open", "draft": False, "merged": False,
@@ -3298,7 +3298,7 @@ class GovernanceAmendmentTests(TestCase):
         }
         with mock.patch.object(
             amendment, "_live_required_check_policy",
-            return_value={"strict": False, "checks": [{"context": "x", "app_id": None}]},
+            return_value={"strict": True, "checks": [{"context": "x", "app_id": None}]},
         ), mock.patch.object(
             amendment, "_github_json", return_value=pull,
         ):
@@ -3311,16 +3311,16 @@ class GovernanceAmendmentTests(TestCase):
             changed = copy.deepcopy(pull); mutate(changed)
             with self.subTest(label=label), mock.patch.object(
                 amendment, "_live_required_check_policy",
-                return_value={"strict": False, "checks": [{"context": "x", "app_id": None}]},
+                return_value={"strict": True, "checks": [{"context": "x", "app_id": None}]},
             ), mock.patch.object(
                 amendment, "_github_json", return_value=changed,
             ), self.assertRaisesRegex(
-                amendment.GovernanceAmendmentError, "provider merge gate"
+                amendment.GovernanceAmendmentError, "strict provider merge gate"
             ):
                 amendment._authenticate_provider_merge_gate(item)
         with mock.patch.object(
             amendment, "_live_required_check_policy",
-            side_effect=amendment.GovernanceAmendmentError("noncanonical checks"),
+            side_effect=amendment.GovernanceAmendmentError("not strict"),
         ), self.assertRaises(amendment.GovernanceAmendmentError):
             amendment._authenticate_provider_merge_gate(item)
 
@@ -3331,7 +3331,7 @@ class GovernanceAmendmentTests(TestCase):
         with mock.patch.object(
             amendment, "_live_required_check_policy",
             side_effect=lambda _repo, main: (
-                {"strict": False} if main == current else
+                {"strict": True} if main == current else
                 (_ for _ in ()).throw(AssertionError("historical policy used"))
             ),
         ), mock.patch.object(

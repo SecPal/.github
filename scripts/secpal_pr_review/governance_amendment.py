@@ -1304,7 +1304,7 @@ def _live_required_check_policy(
             "protected-main required check policy is incomplete"
         ) from exc
     if (
-        not isinstance(strict, bool)
+        strict is not True
         or [item["context"] for item in checks] != sorted(canonical_contexts)
         or len({item["context"] for item in checks}) != len(checks)
         or any(
@@ -1323,9 +1323,9 @@ def _live_required_check_policy(
         )
     ):
         raise GovernanceAmendmentError(
-            "protected-main required check policy is not canonical"
+            "protected-main required check policy is not strict and canonical"
         )
-    return {"strict": strict, "checks": checks}
+    return {"strict": True, "checks": checks}
 
 
 def _live_ready_ci(
@@ -2748,7 +2748,7 @@ def _authenticate_execution(
 
 def _authenticate_provider_merge_gate(item: Mapping[str, Any]) -> None:
     current_base = _consumption_base(item)
-    _live_required_check_policy(
+    policy = _live_required_check_policy(
         item["repository"], current_base
     )
     pull = _github_json(
@@ -2772,7 +2772,8 @@ def _authenticate_provider_merge_gate(item: Mapping[str, Any]) -> None:
             "provider merge gate is incomplete"
         ) from exc
     if (
-        observed != {
+        policy.get("strict") is not True
+        or observed != {
             "state": "open", "draft": False, "merged": False,
             "head_sha": item["head_sha"],
             "base_sha": current_base, "base_ref": "main",
@@ -2780,7 +2781,7 @@ def _authenticate_provider_merge_gate(item: Mapping[str, Any]) -> None:
         }
     ):
         raise GovernanceAmendmentError(
-            "provider merge gate is not exact and current"
+            "strict provider merge gate is not exact and current"
         )
 
 
