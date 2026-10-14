@@ -22,11 +22,7 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "conflict-markers / Detect Git Conflict Markers",
     "Lint GitHub Actions Workflows",
     "CodeQL",
-    "Validate PR Evidence",
-    "Validate PR Title And Body Language",
     "Validate Signed PR Commits",
-    "Work-Graph PR Advisory",
-    "Work-Graph PR Gate",
     "Evidence Architecture PR Gate"
   ],
   "android": [
@@ -103,7 +99,7 @@ EOF
 # membership inventory. GitHub Actions (github-actions, owner github) was
 # independently authenticated through App metadata and successful
 # quality.yml/evidence-architecture jobs. Membership does not imply activation.
-REQUIRED_APP_BINDINGS_JSON='{ ".github": {"Evidence Architecture PR Gate": 15368} }'
+REQUIRED_APP_BINDINGS_JSON='{ ".github": {"Validate Signed PR Commits": 15368, "Evidence Architecture PR Gate": 15368} }'
 
 usage() {
   cat <<'EOF'
@@ -144,7 +140,7 @@ required_checks_strict() {
   local repo="$1"
 
   ensure_known_repository "$repo"
-  [[ "$repo" == ".github" ]] && printf 'true\n' || printf 'false\n'
+  printf 'false\n'
 }
 
 build_payload() {

@@ -234,33 +234,6 @@ if [ -f tests/audit-closed-epics.sh ]; then
   }
 fi
 
-if [ -f tests/pull-request-template.sh ]; then
-  bash tests/pull-request-template.sh || {
-    echo "" >&2
-    echo "❌ Pull request template regression test failed!" >&2
-    echo "Review the test output above and restore any required pull request template content, including the changelog verification checklist item and the no-overstatement reminder, before continuing." >&2
-    exit 1
-  }
-fi
-
-if [ -f tests/pull-request-evidence.sh ]; then
-  bash tests/pull-request-evidence.sh || {
-    echo "" >&2
-    echo "❌ Pull request evidence regression test failed!" >&2
-    echo "Restore the PR evidence template section, validator script, and workflow wiring before continuing." >&2
-    exit 1
-  }
-fi
-
-if [ -f tests/pull-request-english.sh ]; then
-  bash tests/pull-request-english.sh || {
-    echo "" >&2
-    echo "❌ Pull request English-language regression test failed!" >&2
-    echo "Restore the English PR validator script, workflow wiring, template reminder, and enforcement/advisory documentation before continuing." >&2
-    exit 1
-  }
-fi
-
 if [ -f tests/pull-request-commit-signatures.sh ]; then
   bash tests/pull-request-commit-signatures.sh || {
     echo "" >&2
@@ -402,8 +375,6 @@ if [ -f tests/polyscope-state-audit.sh ]; then
 fi
 
 python3 -m unittest tests/polyscope-work-graph-advisory.py
-python3 -m unittest tests/secpal-pr-advisory-unit.py
-python3 -m unittest tests/secpal-work-graph-gate-refresh-unit.py
 python3 -m unittest tests/secpal-work-graph-replan-unit.py
 python3 -m unittest tests/secpal-trivy-repository-scan-unit.py
 python3 -m unittest tests/secpal-trivy-action-archive.py

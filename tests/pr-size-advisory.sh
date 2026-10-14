@@ -125,21 +125,6 @@ if __name__ == "__main__":
     unittest.main()
 EOF
 
-  cat >"$repository/tests/secpal-pr-advisory-unit.py" <<'EOF'
-"""Fixture stand-in for preflight's advisory PR gate tests."""
-
-import unittest
-
-
-class PreflightFixtureTest(unittest.TestCase):
-    def test_fixture_runs(self):
-        pass
-
-
-if __name__ == "__main__":
-    unittest.main()
-EOF
-
   cat >"$repository/tests/secpal-work-graph-replan-unit.py" <<'EOF'
 """Fixture stand-in for preflight's replanning operation tests."""
 
@@ -170,8 +155,8 @@ if __name__ == "__main__":
     unittest.main()
 EOF
 
-  # Hermetic stand-ins for the maintained preflight's required publisher and Trivy suites.
-  for suite in secpal-work-graph-gate-refresh-unit secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
+  # Hermetic stand-ins for the maintained preflight's required Trivy suites.
+  for suite in secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
     cat >"$repository/tests/$suite.py" <<'EOF'
 """Prove the required unittest command ran without external collaborators."""
 
@@ -240,7 +225,7 @@ run_preflight_fixture() {
   fixture_status=$?
   set -e
   if [ "$fixture_status" -eq 0 ]; then
-    for suite in secpal-work-graph-gate-refresh-unit secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
+    for suite in secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
       if [ "$(grep -Fxc "$suite" "$test_log")" -ne 1 ]; then
         record_failure "successful preflight must execute required suite exactly once: $suite"
       fi
@@ -276,7 +261,7 @@ if [ -e "$large_local_repo/.preflight-allow-large-pr" ]; then
 fi
 
 # Required publisher and Trivy dependencies must fail closed before PR-size reporting.
-for suite in secpal-work-graph-gate-refresh-unit secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
+for suite in secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
   stand_in="$large_local_repo/tests/$suite.py"
   mv "$stand_in" "$workspace/saved-stand-in.py"
   for failure in missing failed; do

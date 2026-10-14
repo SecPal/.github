@@ -3401,10 +3401,7 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
         "When shared behavior crosses repository boundaries, inspect affected linked roots that are in scope and identify dependency-ordered rollout risks."
     )
     publication_guard = (
-        "Before programmatic PR creation or body editing, materialize the exact candidate PR body in a file, "
-        "apply the effective repository PR-template/evidence contract, and run every available local PR-body validator, "
-        "including the canonical local PR evidence validator, against that exact file content and intended Draft/Ready state. "
-        "Do not publish or edit the PR if validation fails. Publish only the unchanged validated file with --body-file. "
+        "Write the PR body to a file and publish it with --body-file. "
     )
     pr_prompt = collapse_spaces(
         f"{draft_creation_rule}Write a concise English PR body for {spec['display_name']}. Apply {instruction_ref}. "

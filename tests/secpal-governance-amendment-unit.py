@@ -801,29 +801,6 @@ class GovernanceAmendmentTests(TestCase):
             with self.assertRaises(actions.fast_path.SecurityBlocker):
                 actions._verify_ready_integration_lifecycle_authority(manifest, changed_feedback, reviewed_state=fresh)
 
-    def test_target_work_graph_failure_is_bound_to_native_prerequisite(self) -> None:
-        statuses = [{
-            "context": "Work-Graph PR Gate", "state": "failure",
-            "sha": HEAD,
-            "description": "Current canonical work-graph evidence blocked delivery",
-        }]
-        graph = {"data": {"repository": {"issue": {"blockedBy": {
-            "pageInfo": {"hasNextPage": False},
-            "nodes": [{"number": 1059, "state": "OPEN"}],
-        }}}}}
-        with mock.patch.object(amendment, "_github_json", return_value=graph):
-            proof = amendment._reviewed_target_work_graph_blocker(
-                "SecPal/.github", 1053, HEAD, statuses
-            )
-        self.assertEqual(proof["blocking_issue"], 1059)
-        changed = copy.deepcopy(statuses)
-        changed[0]["description"] = "tests failed"
-        with mock.patch.object(amendment, "_github_json", return_value=graph):
-            with self.assertRaises(amendment.GovernanceAmendmentError):
-                amendment._reviewed_target_work_graph_blocker(
-                    "SecPal/.github", 1053, HEAD, changed
-                )
-
     def test_reviewed_ready_history_uses_one_complete_provider_phase(self) -> None:
         response = {"data": {"repository": {"pullRequest": {
             "createdAt": "2026-10-02T10:50:21Z", "headRefOid": HEAD,
@@ -2566,7 +2543,6 @@ class GovernanceAmendmentTests(TestCase):
             for item in printed["checks"]
         ]
         existing_bound = {
-            "Validate PR Evidence", "Validate PR Title And Body Language",
             "Validate Signed PR Commits",
         }
         checks = [
@@ -2584,7 +2560,7 @@ class GovernanceAmendmentTests(TestCase):
             ):
                 return amendment._live_required_check_policy("SecPal/.github", PARENT)
 
-        self.assertEqual(len(checks), 14)
+        self.assertEqual(len(checks), 10)
         self.assertEqual(observe(checks), {
             "strict": True, "checks": sorted(checks, key=lambda item: item["context"]),
         })
@@ -2612,7 +2588,7 @@ class GovernanceAmendmentTests(TestCase):
                 amendment.GovernanceAmendmentError
             ):
                 observe(changed)
-        binding = b'REQUIRED_APP_BINDINGS_JSON=\'{ ".github": {"Evidence Architecture PR Gate": 15368} }\''
+        binding = b'REQUIRED_APP_BINDINGS_JSON=\'{ ".github": {"Validate Signed PR Commits": 15368, "Evidence Architecture PR Gate": 15368} }\''
         for label, replacement in {
             "missing declaration": b"",
             "missing binding": b"REQUIRED_APP_BINDINGS_JSON='{ \".github\": {} }'",

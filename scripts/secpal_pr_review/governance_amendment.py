@@ -1069,60 +1069,6 @@ def _canonical_required_check_policy(
     return tuple(contexts), bindings
 
 
-def _reviewed_target_work_graph_blocker(
-    repository: str, delivery_issue: int, head_sha: str,
-    statuses: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Authenticate the one expected delivery gate without blessing source CI."""
-
-    failures = [item for item in statuses if item.get("state") != "success"]
-    if (
-        repository != "SecPal/.github" or delivery_issue != 1053
-        or len(failures) != 1
-        or failures[0].get("context") != "Work-Graph PR Gate"
-        or failures[0].get("state") != "failure"
-        or failures[0].get("sha") != head_sha
-        or failures[0].get("description")
-        != "Current canonical work-graph evidence blocked delivery"
-    ):
-        raise GovernanceAmendmentError(
-            "reviewed source has an unrelated failing status"
-        )
-    owner, name = repository.split("/", 1)
-    query = (
-        "query($owner:String!,$name:String!,$number:Int!){"
-        "repository(owner:$owner,name:$name){issue(number:$number){"
-        "blockedBy(first:50){pageInfo{hasNextPage} "
-        "nodes{number state}}}}}"
-    )
-    value = _github_json([
-        "api", "--hostname", "github.com", "graphql",
-        "-f", f"query={query}", "-f", f"owner={owner}",
-        "-f", f"name={name}", "-F", f"number={delivery_issue}",
-    ], "reviewed source native blocker")
-    try:
-        graph = value["data"]["repository"]["issue"]["blockedBy"]
-        nodes = graph["nodes"]
-        if (
-            value.get("errors") or graph["pageInfo"]["hasNextPage"] is not False
-            or not isinstance(nodes, list)
-            or len({item["number"] for item in nodes}) != len(nodes)
-            or 1059 not in {item["number"] for item in nodes}
-            or any(item["state"] != "CLOSED" for item in nodes
-                   if item["number"] != 1059)
-        ):
-            raise ValueError
-    except (KeyError, TypeError, ValueError) as exc:
-        raise GovernanceAmendmentError(
-            "reviewed source native blocker is not exact"
-        ) from exc
-    return {
-        "blocking_issue": 1059,
-        "native_blockers": sorted(nodes, key=lambda item: item["number"]),
-        "status_context": copy.deepcopy(failures[0]),
-    }
-
-
 def _live_ci(
     repository: str, head_sha: str, accepted_main_sha: str,
     *, delivery_issue: int = 960,
@@ -1268,21 +1214,6 @@ def _live_ci(
                 "live governance amendment duplicate check identity is ambiguous"
             )
         effective_runs.append(max(group, key=lambda run: run["id"]))
-    blocker = None
-    if status_state != "success" or any(
-        item["state"] != "success" for item in contexts
-    ):
-        observed_statuses = [
-            {
-                "context": item["context"], "state": item["state"],
-                "sha": item.get("sha", status_head),
-                "description": item.get("description"),
-            }
-            for item in status_items
-        ]
-        blocker = _reviewed_target_work_graph_blocker(
-            repository, delivery_issue, head_sha, observed_statuses
-        )
     if (
         not normalized_runs
         or status_head != head_sha
@@ -1300,13 +1231,9 @@ def _live_ci(
             run["conclusion"] not in {"success", "skipped"}
             for run in effective_runs
         )
-        or status_state != ("failure" if blocker else "success")
+        or status_state != "success"
         or any(
-            (status["state"] != "success" and (
-                blocker is None
-                or status["context"] != "Work-Graph PR Gate"
-                or status["state"] != "failure"
-            ))
+            status["state"] != "success"
             or status["sha"] != head_sha
             for status in contexts
         )
@@ -1338,8 +1265,6 @@ def _live_ci(
         "checks": normalized_runs, "statuses": contexts,
         "required_check_policy": protection,
     }
-    if blocker is not None:
-        evidence["registered_work_graph_blocker"] = blocker
     return {
         "head_sha": head_sha,
         "workflow_identity": SOURCE_CI_VERSION,

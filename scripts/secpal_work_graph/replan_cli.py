@@ -13,7 +13,6 @@ from typing import Any, Mapping, Sequence
 
 from . import (
     acceptance_criteria,
-    gate_refresh,
     github,
     github_replanning,
     replanning,
@@ -177,31 +176,6 @@ def _validate_new_issue_contracts(request: Mapping[str, Any]) -> None:
 
 def _emit(value: Mapping[str, Any], stream) -> None:
     print(json.dumps(value, indent=2, sort_keys=True), file=stream)
-
-
-def _mutation_repositories(plan: replanning.Plan) -> tuple[str, ...]:
-    """Return every repository whose PR graph evidence may have changed."""
-
-    repositories = {parse_node_key(plan.current_issue)[0]}
-
-    def collect(value: Any) -> None:
-        if isinstance(value, str):
-            try:
-                repositories.add(parse_node_key(value)[0])
-            except ValueError:
-                return
-        elif isinstance(value, Mapping):
-            for item in value.values():
-                collect(item)
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                collect(item)
-
-    for step in plan.steps:
-        if step.kind == "CREATE_ISSUE":
-            repositories.add(str(step.arguments["repository"]))
-        collect(step.arguments)
-    return tuple(sorted(repositories))
 
 
 def _error(code: str, message: str) -> dict[str, Any]:
@@ -396,16 +370,6 @@ def main(argv: Sequence[str] | None = None, *, stdin=None, stdout=None, stderr=N
             resume=resume,
         )
         mutation_completed = bool(plan.steps)
-        refresh_reports = []
-        if mutation_completed:
-            refresh_gateway = gate_refresh.CommandGateway(
-                gh=arguments.gh,
-                repository_root=Path(__file__).resolve().parents[2],
-            )
-            refresh_reports = [
-                gate_refresh.refresh_repository(refresh_gateway, repository)
-                for repository in _mutation_repositories(plan)
-            ]
         _emit(
             {
                 "schema": replanning.SCHEMA,
@@ -416,7 +380,6 @@ def main(argv: Sequence[str] | None = None, *, stdin=None, stdout=None, stderr=N
                 "recovery_path": str(recovery.path),
                 "recovery": recovery.load(),
                 "validation_findings": validation_findings,
-                "gate_refresh": refresh_reports,
             },
             stdout,
         )
@@ -424,7 +387,6 @@ def main(argv: Sequence[str] | None = None, *, stdin=None, stdout=None, stderr=N
     except (
         replanning.PlanError,
         github.GitHubError,
-        gate_refresh.RefreshError,
         acceptance_criteria.MarkdownParserUnavailable,
     ) as exc:
         failure_evidence, prior_write_possible = _failure_evidence(arguments, writer, recovery)
