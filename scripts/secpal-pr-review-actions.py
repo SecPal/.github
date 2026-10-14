@@ -2272,6 +2272,7 @@ def _provider_binding_uses_historical_summary(value: Any) -> bool:
             provider_owner.ORDINARY_REMEDIATION_SUFFIX,
             provider_owner.EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING,
             provider_owner.EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION,
+            provider_owner.EXACT_ADOPTION_V2_POST_READY_PROVIDER,
         )
         if (
             type(sources) is not tuple or not sources

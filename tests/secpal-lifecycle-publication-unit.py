@@ -1791,6 +1791,217 @@ class LifecyclePublicationTests(TestCase):
         )
         return current, proof, historical
 
+    def adoption_v2_post_ready_fixture(self):
+        """Signed synthetic historical v2; never issue new review-before-Ready authority."""
+        raw, proof = exact_adoption_evidence(admit_review_budget=True)
+        current = publication.enroll_existing_lifecycle(
+            raw, signer_identity=SIGNER, signer=signer_for(),
+        )
+        signers = execution.SigningAuthorities(
+            SIGNER, signer_for(), SIGNER, signer_for(), SIGNER, signer_for(),
+        )
+        # Historical verification deliberately differs from today's forward
+        # issuer, which cannot newly authorize this conservative-budget Ready.
+        with patch.object(authority, "require_forward_transition",
+                          side_effect=lambda state, kind, digest, **kwargs:
+                          authority._derive_state(state, kind, digest,
+                                                  allow_adopted_observations=True)):
+            raw = execution._append_successor_evidence(
+                current, {"authorization_digest": "d" * 64,
+                          "operation": "DRAFT_TO_READY"}, signers,
+            )
+            ready = publication.advance_current_terminal(
+                raw, signer_identity=SIGNER, signer=signer_for(),
+            )
+        raw = execution._append_successor_evidence(
+            ready, {"authorization_digest": "e" * 64,
+                    "operation": "REMEDIATION_COMPLETED"}, signers,
+            resulting_head_sha=HEADS[4], current_head_evidence=verified_validation_evidence(
+                head=HEADS[4], tree=HEADS[5], parent=HEADS[2],
+            ),
+        )
+        current = publication.advance_current_terminal(
+            raw, signer_identity=SIGNER, signer=signer_for(),
+        )
+        actor = {"__typename": "User", "login": "maintainer", "id": "U_actor", "databaseId": 17}
+        provider = {"__typename": "Bot", **{
+            "login": fast_path.CODEX_REVIEW_PROVIDER["login"],
+            "id": fast_path.CODEX_REVIEW_PROVIDER["node_id"],
+            "databaseId": fast_path.CODEX_REVIEW_PROVIDER["database_id"],
+        }}
+        summary = (
+            "<!-- codex-pull-request-review-summary -->\n"
+            '<!-- codex-security-review:v1 '
+            + json.dumps({"headSha": HEADS[2], "status": "completed",
+                          "repository": REPOSITORY, "pullRequestNumber": PR}) + ' -->\n'
+            '| Review | Status | Commit | Review trigger |\n'
+            '| --- | --- | --- | --- |\n'
+            + ''.join(
+                f'| **{label}** | ✅ **Completed** <relative-time datetime="2026-08-07T00:10:00Z">'
+                f'2026-08-07T00:10:00Z</relative-time> | `{HEADS[2][:7]}` | Draft marked ready |\n'
+                for label in ("Code Review", "Security Review")
+            )
+        )
+        nodes = [
+            {"__typename": "PullRequestCommit", "id": "COMMIT_root",
+             "commit": {"oid": HEADS[2], "committedDate": "2026-08-05T00:00:00Z"}},
+            {"__typename": "ReadyForReviewEvent", "id": "READY_unique",
+             "createdAt": "2026-08-07T00:00:00Z", "actor": actor},
+            {"__typename": "PullRequestReview", "id": "REVIEW_code", "databaseId": 21,
+             "author": provider, "state": "COMMENTED", "commit": {"oid": HEADS[2]},
+             "submittedAt": "2026-08-07T00:05:00Z",
+             "body": f'### 💡 Codex Review\n\n**Reviewed commit:** `{HEADS[2][:10]}`'},
+            {"__typename": "IssueComment", "id": "SUMMARY_terminal", "databaseId": 22,
+             "author": provider, "createdAt": "2026-08-07T00:10:00Z",
+             "updatedAt": "2026-08-07T00:10:00Z", "body": summary,
+             "userContentEdits": {"nodes": [], "pageInfo": {"hasNextPage": False}}},
+            {"__typename": "PullRequestCommit", "id": "COMMIT_successor",
+             "commit": {"oid": HEADS[4], "committedDate": "2026-08-08T00:00:00Z"}},
+        ]
+        observed = {"data": {"repository": {"nameWithOwner": REPOSITORY, "pullRequest": {
+            "number": PR, "state": "OPEN", "isDraft": False, "headRefOid": HEADS[4],
+            "headRefName": "synthetic-provider-root", "author": actor,
+            "timelineItems": {"nodes": nodes, "pageInfo": {"hasNextPage": False}},
+        }}}}
+        return current, proof, observed
+
+    def test_adoption_v2_later_provider_root_composes_with_ready_remediation(self):
+        current, proof, observed = self.adoption_v2_post_ready_fixture()
+        self.assertEqual(proof["proof_version"], "2.0")
+        self.assertFalse(current.lifecycle.adoption_review_submitted)
+        self.assertNotIn("REVIEW_SUBMITTED", [
+            item["kind"] for item in proof["observed_pre_enrollment_history"]
+        ])
+        with patch.object(publication, "_authenticate_provider_integration_verifier"), patch.object(publication, "_run_gh", return_value=subprocess.CompletedProcess(
+            [], 0, json.dumps(observed), "",
+        )):
+            binding = publication.derive_ready_source_recovery_provider_binding(current)
+            self.assertEqual(binding.provider_head(
+                repository=REPOSITORY, pull_request=PR, current_head_sha=HEADS[4],
+            ), HEADS[2])
+        self.assertEqual(current.lifecycle.state["unrestricted_review_count"], 1)
+        self.assertEqual(current.lifecycle.state["remediation_cycle_count"], 2)
+        self.assertEqual(publication.verify_current_lifecycle_authority(
+            REPOSITORY, ISSUE,
+        ), current)
+
+    def test_adoption_v2_rejects_unproven_or_conflicting_provider_evidence(self):
+        current, _, baseline = self.adoption_v2_post_ready_fixture()
+
+        def pull(value):
+            return value["data"]["repository"]["pullRequest"]
+
+        def nodes(value):
+            return pull(value)["timelineItems"]["nodes"]
+
+        def replace_body(value, old, new):
+            node = nodes(value)[3]
+            node["body"] = node["body"].replace(old, new)
+
+        changes = {
+            "consumption_without_provider": lambda v: nodes(v).__delitem__(slice(2, 4)),
+            "summary_without_actual_code_review": lambda v: nodes(v).__delitem__(2),
+            "copilot_only": lambda v: nodes(v)[2].update(author={
+                "__typename": "Bot", "login": "copilot-pull-request-reviewer",
+                "id": "BOT_copilot", "databaseId": 55}),
+            "wrong_repository": lambda v: v["data"]["repository"].update(nameWithOwner="Other/repository"),
+            "wrong_pull_request": lambda v: pull(v).update(number=PR + 1),
+            "wrong_current_head": lambda v: pull(v).update(headRefOid=HEADS[5]),
+            "draft": lambda v: pull(v).update(isDraft=True),
+            "closed": lambda v: pull(v).update(state="CLOSED"),
+            "truncated": lambda v: pull(v)["timelineItems"]["pageInfo"].update(hasNextPage=True),
+            "wrong_ready_head": lambda v: nodes(v)[0]["commit"].update(oid=HEADS[1]),
+            "review_wrong_head": lambda v: nodes(v)[2]["commit"].update(oid=HEADS[1]),
+            "review_before_ready": lambda v: nodes(v)[2].update(submittedAt="2026-08-06T23:59:00Z"),
+            "review_nonterminal": lambda v: nodes(v)[2].update(state="PENDING"),
+            "forged_summary_actor": lambda v: nodes(v)[3]["author"].update(id="BOT_forged"),
+            "summary_wrong_head": lambda v: replace_body(v, HEADS[2], HEADS[1]),
+            "summary_nonterminal": lambda v: replace_body(v, '"status": "completed"', '"status": "running"'),
+            "completion_before_ready": lambda v: replace_body(v, "2026-08-07T00:10:00Z", "2026-08-06T00:10:00Z"),
+            "completion_after_remediation": lambda v: replace_body(v, "2026-08-07T00:10:00Z", "2026-08-09T00:10:00Z"),
+            "unrelated_row_head": lambda v: replace_body(v, f"`{HEADS[2][:7]}`", f"`{HEADS[1][:7]}`"),
+            "manual_request_substitution": lambda v: replace_body(v, "Draft marked ready", "Manual request"),
+            "extra_ready": lambda v: nodes(v).insert(2, {**nodes(v)[1], "id": "READY_second"}),
+            "ready_draft_churn": lambda v: nodes(v).insert(2, {
+                "__typename": "ConvertToDraftEvent", "id": "DRAFT_extra", "createdAt": "2026-08-07T00:01:00Z"}),
+            "force_push": lambda v: nodes(v).insert(2, {
+                "__typename": "HeadRefForcePushedEvent", "id": "FORCE_extra", "createdAt": "2026-08-07T00:01:00Z"}),
+            "unpublished_intermediate_head": lambda v: nodes(v).insert(4, {
+                "__typename": "PullRequestCommit", "id": "COMMIT_extra",
+                "commit": {"oid": HEADS[1], "committedDate": "2026-08-07T01:00:00Z"}}),
+            "duplicate_result": lambda v: nodes(v).insert(3, {
+                **nodes(v)[2], "id": "REVIEW_other", "databaseId": 56}),
+            "duplicate_summary": lambda v: nodes(v).insert(4, {
+                **nodes(v)[3], "id": "SUMMARY_other", "databaseId": 57}),
+        }
+        with patch.object(publication, "_authenticate_provider_integration_verifier"):
+            for name, change in changes.items():
+                with self.subTest(name=name):
+                    value = copy.deepcopy(baseline)
+                    change(value)
+                    with patch.object(publication, "_run_gh", return_value=subprocess.CompletedProcess(
+                        [], 0, json.dumps(value), "",
+                    )), self.assertRaises(publication.LifecyclePublicationError):
+                        publication.derive_ready_source_recovery_provider_binding(current)
+
+    def test_adoption_v2_preserves_signed_finite_history_and_current(self):
+        current, _, observed = self.adoption_v2_post_ready_fixture()
+        corruptions = {
+            "review_reset": ("unrestricted_review_count", 0),
+            "remediation_reset": ("remediation_cycle_count", 0),
+            "remediation_overflow": ("remediation_cycle_count", 3),
+            "extra_ready": ("ready_transition_count", 2),
+            "recovery": ("exceptional_recovery_count", 1),
+            "continuation": ("exceptional_continuation_count", 1),
+            "cycle3": ("cycle_3_absent", False),
+        }
+        for name, (field, value) in corruptions.items():
+            with self.subTest(name=name), self.assertRaises(publication.LifecyclePublicationError):
+                publication.derive_ready_source_recovery_provider_binding(replace(
+                    current, lifecycle=replace(current.lifecycle, state={**current.lifecycle.state, field: value}),
+                ))
+        for field, value in (("delivery_issue", ISSUE + 1), ("pull_request", PR + 1),
+                             ("repository", "Other/repository"), ("head_sha", HEADS[1])):
+            with self.subTest(field=field), self.assertRaises(publication.LifecyclePublicationError):
+                publication.derive_ready_source_recovery_provider_binding(replace(
+                    current, lifecycle=replace(current.lifecycle, **{field: value}),
+                ))
+        for label in ("unsigned", "fabricated_review", "wrong_version"):
+            value = json.loads(current.serialized_lifecycle_evidence)
+            proof = value["exact_state_adoption_proof"]
+            if label == "unsigned":
+                proof.pop("signature")
+            elif label == "fabricated_review":
+                proof["observed_pre_enrollment_history"][1]["kind"] = "REVIEW_SUBMITTED"
+            else:
+                proof["proof_version"] = "1.0"
+            with self.subTest(label=label), self.assertRaises(publication.LifecyclePublicationError):
+                publication.derive_ready_source_recovery_provider_binding(replace(
+                    current, serialized_lifecycle_evidence=authority.canonical_json_bytes(value),
+                ))
+        with patch.object(publication, "_authenticate_provider_integration_verifier"), patch.object(
+            publication, "_run_gh", return_value=subprocess.CompletedProcess([], 0, json.dumps(observed), ""),
+        ):
+            binding = publication.derive_ready_source_recovery_provider_binding(current)
+            with self.assertRaisesRegex(publication.LifecyclePublicationError, "stale or substituted"):
+                replace(binding, provider_head_sha=HEADS[0]).provider_head(
+                    repository=REPOSITORY, pull_request=PR, current_head_sha=HEADS[4],
+                )
+            with patch.object(publication, "verify_current_lifecycle_authority",
+                              return_value=replace(current, publication_oid="f" * 40)):
+                with self.assertRaisesRegex(publication.LifecyclePublicationError, "CURRENT changed"):
+                    publication.derive_ready_source_recovery_provider_binding(current)
+
+    def test_adoption_v2_requires_accepted_provider_verifier_before_observation(self):
+        current, _, _ = self.adoption_v2_post_ready_fixture()
+        from scripts.secpal_pr_review import bootstrap_source_admission as transport
+        with patch.object(transport, "_load_actions_helper", side_effect=RuntimeError("substituted source")), patch.object(
+            publication, "_run_gh",
+        ) as observation:
+            with self.assertRaisesRegex(publication.LifecyclePublicationError, "verifier is not accepted main"):
+                publication.derive_ready_source_recovery_provider_binding(current)
+            observation.assert_not_called()
+
     def test_ready_source_provider_binding_derives_attested_ready_predecessor(self) -> None:
         chain = Chain()
         chain.append("INITIALIZED_DRAFT")

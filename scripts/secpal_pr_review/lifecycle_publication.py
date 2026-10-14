@@ -67,6 +67,7 @@ ORDINARY_REMEDIATION_SUFFIX = "ORDINARY_REMEDIATION_SUFFIX"
 EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION = (
     "EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION"
 )
+EXACT_ADOPTION_V2_POST_READY_PROVIDER = "EXACT_ADOPTION_V2_POST_READY_PROVIDER"
 EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING = (
     "EXACT_ADOPTION_V1_1_HISTORICAL_PROVIDER_BINDING"
 )
@@ -366,6 +367,7 @@ class VerifiedReadySourceRecoveryProviderBinding:
     adopted_remediation_observation_digest: str | None = None
     head_advanced_event_digests: tuple[str, ...] = ()
     ready_integrations: tuple[tuple[Any, Any], ...] = ()
+    post_ready_provider_observation_digest: str | None = None
 
     def provider_head(
         self, *, repository: str, pull_request: int, current_head_sha: str
@@ -4019,6 +4021,7 @@ def _ready_source_provider_binding_fields(
         "head_advanced_event_digests": list(value.head_advanced_event_digests),
         "lifecycle_evidence_digest": value.lifecycle_evidence_digest,
         "provider_binding_sources": list(value.provider_binding_sources),
+        "post_ready_provider_observation_digest": value.post_ready_provider_observation_digest,
         "historical_provider_binding": historical_fields,
         "adopted_remediation_observation_digest": (
             value.adopted_remediation_observation_digest
@@ -4214,29 +4217,14 @@ def _derive_exact_adoption_historical_provider_binding(
     return historical
 
 
-def _derive_provider_backed_adopted_ready_remediation(
-    current: VerifiedLifecyclePublication,
-    bundle: Mapping[str, Any],
-) -> tuple[str, str] | None:
-    """Compose one signed adopted remediation with its direct Ready successor."""
+def _verify_adopted_first_ready_root(
+    current: VerifiedLifecyclePublication, bundle: Mapping[str, Any],
+    proof: Mapping[str, Any],
+    *, require_current: bool = True,
+) -> authority.VerifiedLifecycleAuthority:
+    """Authenticate the same-head first Ready successor of a signed Draft adoption."""
 
-    if frozenset(bundle) != authority.EXACT_ADOPTION_PUBLICATION_FIELDS:
-        return None
     events = bundle.get("transition_authorizations")
-    # Ordinary post-enrollment suffixes retain their existing derivation.
-    if (
-        not isinstance(events, list) or len(events) != 1
-        or not isinstance(events[0], dict)
-        or events[0].get("transition_kind") != "DRAFT_TO_READY"
-    ):
-        return None
-    proof = bundle.get("exact_state_adoption_proof")
-    if (
-        not isinstance(proof, Mapping)
-        or proof.get("proof_version") != authority.SCHEMA_VERSION
-        or proof.get("validation_evidence_loss_admission") is not None
-    ):
-        return None
     try:
         adoption = authority.verify_exact_state_adoption_proof(proof)
     except authority.LifecycleAuthorityError as exc:
@@ -4262,7 +4250,7 @@ def _derive_provider_backed_adopted_ready_remediation(
         current.lifecycle.repository,
         current.lifecycle.delivery_issue,
         current.predecessor_publication_oid,
-        expected_current_publication_oid=current.publication_oid,
+        expected_current_publication_oid=current.publication_oid if require_current else None,
     )
     root = transition.predecessor
     if (
@@ -4321,6 +4309,33 @@ def _derive_provider_backed_adopted_ready_remediation(
         raise LifecyclePublicationError(
             "Ready-source provider adopted Ready state delta is invalid"
         )
+    return adoption
+
+
+def _derive_provider_backed_adopted_ready_remediation(
+    current: VerifiedLifecyclePublication,
+    bundle: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    """Compose one signed adopted remediation with its direct Ready successor."""
+
+    if frozenset(bundle) != authority.EXACT_ADOPTION_PUBLICATION_FIELDS:
+        return None
+    events = bundle.get("transition_authorizations")
+    # Ordinary post-enrollment suffixes retain their existing derivation.
+    if (
+        not isinstance(events, list) or len(events) != 1
+        or not isinstance(events[0], dict)
+        or events[0].get("transition_kind") != "DRAFT_TO_READY"
+    ):
+        return None
+    proof = bundle.get("exact_state_adoption_proof")
+    if (
+        not isinstance(proof, Mapping)
+        or proof.get("proof_version") != authority.SCHEMA_VERSION
+        or proof.get("validation_evidence_loss_admission") is not None
+    ):
+        return None
+    adoption = _verify_adopted_first_ready_root(current, bundle, proof)
     history = proof.get("observed_pre_enrollment_history")
     if (
         not isinstance(history, list) or len(history) != 3
@@ -4346,6 +4361,124 @@ def _derive_provider_backed_adopted_ready_remediation(
             "Ready-source provider adopted remediation heads are invalid"
         )
     return provider_head, digest_json(remediation)
+
+
+def _admit_adoption_v2_provider_observation(
+    current: VerifiedLifecyclePublication,
+    root: VerifiedLifecyclePublication,
+    proof: Mapping[str, Any],
+    observed: Mapping[str, Any],
+) -> str:
+    """Compose signed root eligibility with independently normalized provider facts."""
+
+    from . import provider_acquisition as acquisition
+    from . import provider_reacquisition as provider_results
+
+    lifecycle = current.lifecycle
+    if (
+        observed["repository"] != lifecycle.repository
+        or observed["pull_request"] != lifecycle.pull_request
+        or observed["head"] != lifecycle.head_sha
+        or observed["state"] != "OPEN" or observed["draft"] is not False
+    ):
+        raise LifecyclePublicationError("Adoption-v2 provider transport changed delivery or HEAD")
+    events = observed["events"]
+    ready = [item for item in events if item["kind"] == "ReadyForReviewEvent"]
+    if (
+        len(ready) != 1 or ready[0]["actor"] != observed["author"]
+        or any(item["kind"] in {"ConvertToDraftEvent", "HeadRefForcePushedEvent",
+                               "HeadRefDeletedEvent", "HeadRefRestoredEvent"}
+               for item in events)
+    ):
+        raise LifecyclePublicationError("Adoption-v2 provider Ready chronology is ambiguous")
+    ready_at = acquisition._timestamp(ready[0]["created_at"])
+    if ready_at <= acquisition._timestamp(proof["adoption_timestamp"]):
+        raise LifecyclePublicationError("Adoption-v2 provider Ready predates adoption")
+    stamps = [acquisition._timestamp(item["created_at"]) for item in events]
+    if stamps != sorted(stamps):
+        raise LifecyclePublicationError("Adoption-v2 provider timeline is out of order")
+    ready_index = events.index(ready[0])
+    before = [item for item in events[:ready_index] if item["kind"] == "COMMIT"]
+    after = [item for item in events[ready_index + 1:] if item["kind"] == "COMMIT"]
+    signed = authority._load_canonical_json(current.serialized_lifecycle_evidence, "provider lifecycle")
+    signed = signed.get("lifecycle_evidence", signed)
+    successor_heads = [event["resulting_head_sha"] for event in signed["transition_authorizations"][1:]]
+    if (not before or before[-1]["head"] != root.lifecycle.head_sha
+            or not after or after[-1]["head"] != lifecycle.head_sha
+            or [item["head"] for item in after] != successor_heads):
+        raise LifecyclePublicationError("Adoption-v2 provider Ready does not bind the signed heads")
+
+    codex = fast_path.CODEX_REVIEW_PROVIDER
+    provider_actor = (codex["login"], codex["node_id"], codex["database_id"])
+    summaries = [item for item in events if item["kind"] == "IssueComment"
+                 and fast_path.CODEX_REVIEW_SUMMARY_MARKER in item["body"]]
+    if len(summaries) != 1 or summaries[0]["actor"] != provider_actor:
+        raise LifecyclePublicationError("Adoption-v2 provider summary is missing or substituted")
+    summary = summaries[0]
+    if events.index(summary) <= ready_index:
+        raise LifecyclePublicationError("Adoption-v2 provider summary predates Ready")
+    facts = fast_path.codex_provider_completion_facts(
+        summary["body"], head_sha=root.lifecycle.head_sha,
+        repository=lifecycle.repository, pull_request_number=lifecycle.pull_request,
+    )
+    completed = {item["review_type"]: acquisition._result_timestamp(item["completed_at"])
+                 for item in facts}
+    next_head_at = acquisition._timestamp(after[0]["created_at"])
+    if any(
+        item["trigger"] != "Draft marked ready"
+        or not ready_at < completed[item["review_type"]] < next_head_at
+        or completed[item["review_type"]] > acquisition._timestamp(summary["updated_at"])
+        for item in facts
+    ):
+        raise LifecyclePublicationError("Adoption-v2 provider completion is outside the Ready assessment")
+    results: dict[str, list[Mapping[str, Any]]] = {kind: [] for kind in completed}
+    for event in events:
+        kind = provider_results._provider_result_type(event, root.lifecycle.head_sha)
+        if kind is not None:
+            if kind not in results or not ready_at < acquisition._timestamp(event["created_at"]) <= completed[kind]:
+                raise LifecyclePublicationError("Adoption-v2 provider result has conflicting chronology")
+            results[kind].append(event)
+        elif (event["kind"] in {"PullRequestReview", "IssueComment"}
+              and event["actor"] == provider_actor
+              and (event["kind"] == "PullRequestReview" or fast_path.codex_review_type(event["body"]) is not None)):
+            raise LifecyclePublicationError("Adoption-v2 provider review is unbound or nonterminal")
+    # Code findings have a native review object. Security may finish without a
+    # review object; its authenticated exact-head terminal summary is canonical.
+    if len(results["CODE"]) != 1 or any(len(items) > 1 for items in results.values()):
+        raise LifecyclePublicationError("Adoption-v2 provider results are missing or ambiguous")
+    return digest_json({"ready": ready[0], "summary": summary,
+                        "completion": facts, "results": results,
+                        "observed_head": observed["head"]})
+
+
+def _derive_adoption_v2_post_ready_provider(
+    current: VerifiedLifecyclePublication,
+    root: VerifiedLifecyclePublication,
+    bundle: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    """A conservative budget selects no provider proof; live facts must supply it."""
+
+    proof = bundle.get("exact_state_adoption_proof")
+    if not isinstance(proof, Mapping) or proof.get("proof_version") != authority.EXACT_ADOPTION_CONSUMPTION_VERSION:
+        return None
+    adoption = _verify_adopted_first_ready_root(root, bundle, proof, require_current=False)
+    if adoption.adoption_review_submitted or any(
+        item["kind"] == "REVIEW_SUBMITTED" for item in proof["observed_pre_enrollment_history"]
+    ):
+        raise LifecyclePublicationError("Adoption-v2 conservative budget cannot assert a historical provider review")
+    # The existing protected-main bridge authenticates the complete verifier
+    # closure, including its provider observer and canonical parser.
+    _authenticate_provider_integration_verifier()
+    from . import provider_acquisition as acquisition
+    try:
+        observed = acquisition.observe_timeline(current.lifecycle.repository, current.lifecycle.pull_request)
+        observation_digest = _admit_adoption_v2_provider_observation(current, root, proof, observed)
+    except (fast_path.SecurityBlocker, authority.LifecycleAuthorityError, KeyError, TypeError, ValueError) as exc:
+        raise LifecyclePublicationError("Adoption-v2 post-Ready provider evidence is invalid") from exc
+    authenticated = verify_current_lifecycle_authority(current.lifecycle.repository, current.lifecycle.delivery_issue)
+    if authenticated != current:
+        raise LifecyclePublicationError("Adoption-v2 provider CURRENT changed during observation")
+    return root.lifecycle.head_sha, observation_digest
 
 
 def _exact_reviewed_ready_root_head(
@@ -4876,12 +5009,17 @@ def derive_ready_source_recovery_provider_binding(
     )
     historical = _derive_exact_adoption_historical_provider_binding(root, bundle)
     adopted = _derive_provider_backed_adopted_ready_remediation(root, bundle)
+    post_ready = (
+        _derive_adoption_v2_post_ready_provider(current, root, bundle)
+        if remediation_digests else None
+    )
     candidates = [
         item
         for item in (
             ordinary[0] if ordinary is not None else exact_head,
             historical.provider_head_sha if historical is not None else None,
             adopted[0] if adopted is not None else None,
+            post_ready[0] if post_ready is not None else None,
         )
         if item is not None
     ]
@@ -4903,6 +5041,7 @@ def derive_ready_source_recovery_provider_binding(
                 historical is not None,
             ),
             (EXACT_ADOPTION_PROVIDER_BACKED_REMEDIATION, adopted is not None),
+            (EXACT_ADOPTION_V2_POST_READY_PROVIDER, post_ready is not None),
         )
         if present
     )
@@ -4921,6 +5060,7 @@ def derive_ready_source_recovery_provider_binding(
         "ready_integrations": copy.deepcopy(ready_integrations),
         "lifecycle_evidence_digest": digest_json(parsed),
         "provider_binding_sources": sources,
+        "post_ready_provider_observation_digest": post_ready[1] if post_ready is not None else None,
         "historical_provider_binding": historical,
         "adopted_remediation_observation_digest": (
             adopted[1] if adopted is not None else None

@@ -123,7 +123,7 @@ def require_verified_acquisitions(
     return value
 
 
-def _observe(repository: str, pull_request: int) -> dict[str, Any]:
+def observe_timeline(repository: str, pull_request: int) -> dict[str, Any]:
     """One complete bounded live timeline; truncation grants no authority."""
 
     owner, name = repository.split("/", 1)
@@ -137,7 +137,11 @@ def _observe(repository: str, pull_request: int) -> dict[str, Any]:
         raw = json.loads(result.stdout, object_pairs_hook=publication._reject_duplicate_pairs)
     except (ValueError, UnicodeDecodeError) as exc:
         raise fast_path.SecurityBlocker("first fallback timeline observation is malformed") from exc
-    observed = _normalize_observation(raw)
+    return _normalize_observation(raw)
+
+
+def _observe(repository: str, pull_request: int) -> dict[str, Any]:
+    observed = observe_timeline(repository, pull_request)
     observed["head_publication"] = _observe_head_publication(observed)
     return observed
 

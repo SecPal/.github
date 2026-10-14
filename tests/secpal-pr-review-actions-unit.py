@@ -15118,6 +15118,32 @@ class FastPathTests(TestCase):
                 pull_request_number=1, ready_source_provider_binding=ordinary,
             )
 
+    def test_adoption_v2_binding_uses_canonical_terminal_provider_boundary(self) -> None:
+        binding = replace(
+            self._ready_source_provider_binding(),
+            provider_binding_sources=(lifecycle_publication.EXACT_ADOPTION_V2_POST_READY_PROVIDER,),
+            post_ready_provider_observation_digest="d" * 64,
+        )
+        with mock.patch.object(type(binding), "provider_head", return_value="f" * 40) as provider_head:
+            actions._require_review_providers_terminal(
+                self._codex_provider_state(metadata_head="f" * 40),
+                repository="SecPal/.github", pull_request_number=1,
+                ready_source_provider_binding=binding,
+            )
+            provider_head.assert_called_once_with(
+                repository="SecPal/.github", pull_request=1, current_head_sha=p21.HEAD,
+            )
+            for state in (
+                self._codex_provider_state(metadata_head="e" * 40),
+                self._codex_provider_state(metadata_head="f" * 40, security_status="**Running**"),
+                self._codex_provider_state(metadata_head="f" * 40, metadata_pull_request=2),
+            ):
+                with self.subTest(state=state), self.assertRaises(actions.MutationBlocked):
+                    actions._require_review_providers_terminal(
+                        state, repository="SecPal/.github", pull_request_number=1,
+                        ready_source_provider_binding=binding,
+                    )
+
     def test_ready_source_accepts_exact_v11_historical_provider_summary(self) -> None:
         binding = replace(
             self._ready_source_provider_binding(),
