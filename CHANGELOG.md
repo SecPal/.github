@@ -9,6 +9,24 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-15 - Retire Custom PR Lifecycle
+
+**Removed:**
+
+- Custom PR lifecycle and review helpers, skill installation, receipt/journal
+  publication, finite counters and historical recovery procedures.
+- Custom Work-Graph replanning/recovery writes and exclusive lifecycle schemas,
+  fixtures, policies, tests and CI jobs.
+
+**Changed:**
+
+- Native GitHub issue relationships, useful read-only WorkGraph resolution and
+  Polyscope planning remain supported under a concise planning contract.
+- Delivery and generated prompts use native GitHub PRs, reviews, checks and
+  protection rules. Ready PRs stay Ready; valid validation is reused.
+- Signed commits, evidence-architecture enforcement, PostgreSQL validation,
+  licensing and technical security CI remain effective.
+
 ## 2026-10-11 - Retire GuardGuide Operational Registries
 
 **Removed:**

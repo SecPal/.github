@@ -347,13 +347,6 @@ python3 -I scripts/secpal-evidence-architecture.py --repository-root . --reposit
 python3 tests/secpal-evidence-architecture.py || exit 1
 python3 tests/polyscope-evidence-architecture.py || exit 1
 
-python3 tests/delivery-lifecycle-governance.py || {
-  echo "" >&2
-  echo "❌ Delivery lifecycle governance regression test failed!" >&2
-  echo "Keep every SecPal delivery PR path Draft-first and preserve the finite Ready/review lifecycle." >&2
-  exit 1
-}
-
 run_postgresql_18_baseline_governance
 
 if [ -f tests/sync-required-checks.sh ]; then
@@ -374,11 +367,11 @@ if [ -f tests/polyscope-state-audit.sh ]; then
   }
 fi
 
-python3 -m unittest tests/polyscope-work-graph-advisory.py
-python3 -m unittest tests/secpal-work-graph-replan-unit.py
+python3 -m unittest tests/secpal-work-graph-unit.py
+python3 -m unittest tests/secpal-work-graph-adapter.py
+python3 -m unittest tests/secpal-work-graph-audit.py
 python3 -m unittest tests/secpal-trivy-repository-scan-unit.py
 python3 -m unittest tests/secpal-trivy-action-archive.py
-python3 -m unittest tests/polyscope-work-graph-replanning.py
 
 for preview_test in \
   tests/polyscope-postgresql-socket-proxy.py \

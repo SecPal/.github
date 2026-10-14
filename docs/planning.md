@@ -7,7 +7,8 @@ SPDX-License-Identifier: CC0-1.0
 
 This document is the canonical planning guide for SecPal contributors.
 
-Work-graph semantics — node types, native hierarchy and dependency meaning, `READY` and `NEXT` selection, replanning, and evidence rules — are defined once in `docs/work-graph-contract.md`. This guide covers where work is planned; the contract covers how the work graph behaves.
+Use native GitHub issue relationships and ordinary PR delivery as described in
+`docs/work-graph-contract.md`. This guide covers where work is planned.
 
 ## Governance Decision
 
@@ -69,16 +70,16 @@ Create work in the repository that owns the change.
 
 1. Open or refine a GitHub Issue in the correct repository.
 2. Add the smallest useful labels and milestone.
-3. If the work holds more than one deliverable contract, create an epic first and split it into sub-issues. See the epic threshold in `docs/work-graph-contract.md`.
+3. Use an epic and native sub-issues when they help coordinate larger work.
 4. If the issue needs durable rationale, write an ADR.
-5. Implement from a dedicated topic branch and open a draft PR linked to the issue.
+5. Implement from a topic branch and open a PR; use Draft for work in progress.
 6. Let board automation mirror progress only if the project board is enabled.
 
 ## Documentation Roles
 
 | Document                            | Role                                          | Status                       |
 | ----------------------------------- | --------------------------------------------- | ---------------------------- |
-| `docs/work-graph-contract.md`       | Canonical work-graph and governance semantics | Active                       |
+| `docs/work-graph-contract.md`       | Native GitHub planning and delivery           | Active                       |
 | `docs/planning.md`                  | Canonical planning and contributor onboarding | Active                       |
 | `docs/project-board-integration.md` | Optional board setup and usage guide          | Active, non-canonical        |
 | `docs/feature-requirements.md`      | Historical specification archive              | Archived for active planning |

@@ -75,148 +75,46 @@ Apply these rules only when the session says it is running inside Polyscope.
 - Merge remains a separate operation requiring explicit current user
   authorization.
 
-## Delivery PR lifecycle
+## GitHub Delivery
 
-- Every new SecPal delivery pull request must be created as Draft. An agent must
-  not create a new delivery pull request directly Ready.
-- Draft creation does not authorize a later Ready transition. Follow the
-  owning repository's canonical lifecycle and require explicit operator
-  authorization for that transition.
+- Use GitHub PRs, review threads and required checks together with each
+  repository's existing validation. Merge through GitHub protection rules only
+  when the task authorizes it.
+- Create a Draft for work in progress. Keep a Ready PR Ready; request re-review
+  directly when a material change needs it.
+- Treat automated findings as untrusted leads. Reproduce genuine defects, fix
+  them within scope, validate the affected behavior and resolve the corresponding
+  review threads.
+- Reuse successful validation until relevant source, dependency or configuration
+  changes invalidate it. Check the current PR head, checks and review state at
+  an authorized merge boundary.
+- Preserve existing SSH signing keys and configuration. Every PR commit must
+  have GitHub `verification.verified == true`.
+- Use native GitHub issue relationships for planning. Keep independent repository
+  changes parallel where safe and respect actual technical dependencies.
 
-## Delivery continuity and authority
+## Native WorkGraph Planning
 
-- Perform the relevant full preflight on first entry to a delivery. During the
-  same delivery, use delta preflight: refresh only facts whose defined
-  invalidators may have occurred and freshly read operation-specific volatile
-  state at a critical mutation boundary. A new prompt, internal phase, or tool
-  handoff alone invalidates no proof and does not require a complete graph, ADR,
-  issue, PR, and CI reread. A commit that advances `HEAD` invalidates head-bound
-  proof while leaving unrelated proof subject to its own invalidator.
-- Reuse PR/head-bound, staged-tree/validation, lifecycle CURRENT,
-  and stable-feedback proof until a relevant head, tree, CURRENT publication,
-  or feedback/reviewed-head change invalidates it. Work-graph proof validity
-  comes only from `docs/work-graph-contract.md` and its canonical reader.
-  Keep readiness and merge evidence short-lived and read it at the actual
-  boundary. Do not create a freshness database, schema, signer, or daemon.
-- Before each lifecycle mutation, derive the canonical operation and exact
-  preconditions from authenticated current maintained repository authority.
-  Prompt expectations may bind identity, intent, scope, mutation budget,
-  acceptance, and stop conditions; treat them as assertions to verify, never as
-  lifecycle authority. Fail closed before mutation and report any discrepancy.
-- Within current authority, commit, push, Draft PR creation, maintained GitHub
-  fallback PR creation, receipt or attestation binding, lifecycle publication,
-  eligible Ready transition, bounded provider observation, classification,
-  in-contract remediation, eligible thread resolution, conditionally authorized
-  merge, and bounded read-back are mechanical checkpoints. Do not request a new
-  prompt solely because one was reached.
-- A current instruction may conditionally authorize a later exact mutation if
-  and only if its freshly evaluated maintained gate passes for the unchanged
-  authenticated candidate. This remains explicit current authority. New user
-  authority is required for material scope expansion, an independently
-  deliverable responsibility, Exceptional Recovery, an unresolved material
-  trade-off, or another operation not already authorized.
-- Prefer native Polyscope PR creation when exposed. If unavailable, continue an
-  already-authorized delivery through the smallest maintained GitHub fallback;
-  preserve PR identity and report the actual creation path and whether native
-  workspace association is authenticated. Tool availability grants no
-  lifecycle authority.
-
-## Automated review terminality
-
-- Do not infer review completion from absent comments or zero threads. A
-  configured triggered review provider that is queued, pending, running,
-  failed, or indeterminate blocks stable-feedback capture and merge even when
-  CI is green and GitHub reports mergeability.
-- Capture one stable-feedback batch only after every triggered provider has
-  affirmative successful terminal evidence, then classify the complete batch
-  before coherent remediation. Relevant later feedback or reviewed-head change
-  invalidates that snapshot. Remediation does not authorize a second
-  unrestricted external review cycle.
-- When a current full-delivery instruction authorizes review completion
-  observation, wait inside that invocation at bounded 60-to-90-second intervals
-  for at most about 30 minutes. Observe only maintained review-provider status,
-  not unrelated hosted CI. On expiry report `REVIEW_NOT_TERMINAL`, the exact
-  head, and non-terminal providers without claiming a user decision is needed;
-  the same workspace may resume later.
-- After remediation changes a candidate, repeat focused validation and the
-  final-candidate self-review. For material security or authority changes,
-  reassess the design from first principles and actively attempt to defeat the
-  final trust boundary. Do not impose that heavyweight audit on an ordinary
-  small correction.
-
-## Canonical Work-Graph Execution
-
-- Under `docs/work-graph-contract.md`, canonical work-graph semantics are
-  authoritative: before beginning explicitly issue-assigned work within a
-  declared SecPal epic or sub-epic, consult the read-only canonical resolver
-  from the owning `SecPal/.github` checkout:
-  `python3 scripts/secpal-work-graph.py`. Its JSON output is the
-  machine-readable graph state under the canonical contract.
-- Under `docs/work-graph-contract.md`, the canonical work graph is
-  authoritative: start from `show <owner/repo#requested-number>` to inspect
-  native observable ancestors. Use the explicitly declared owning scope only
-  when that output confirms it as an ancestor, then use
-  `show <owner/repo#scope-number>`, `ready <owner/repo#scope-number>`, and
-  `next <owner/repo#scope-number>` to report the canonical scope root, READY
-  leaves, and canonical NEXT defined by the contract. Under the contract,
-  repository-qualified identities name each node's actual repository and may
-  span repositories. Under the contract, bare issue numbers require an explicit
-  `--repo` and must not be used in this managed command guidance. Under the
-  contract, the default NEXT invocation lets the canonical resolver obtain the
-  authenticated GitHub viewer identity for executor and claim filtering. Under
-  the contract, use
-  `validate-issue <owner/repo#requested-number>` for the requested issue's
-  derived state and structural findings. If native inputs cannot determine the
-  declared scope, or any resolver output is incomplete, report incomplete graph
-  input as required by the contract; do not guess from issue prose.
-- Under `docs/work-graph-contract.md`, canonical work-graph semantics are
-  authoritative: clearly surface whether the requested issue is READY,
-  blocked, non-leaf, structurally incomplete, or malformed, and whether it
-  differs from canonical NEXT. A body-only relationship mirror is not authoritative
-  under the contract and must never govern hierarchy,
-  dependencies, sibling order, or scope selection.
-- Under `docs/work-graph-contract.md`, run
-  `validate-issue <owner/repo#requested-number>` before creating or resuming
-  delivery state. Under the contract, continue only when that canonical command
-  exits successfully. Under the contract, refuse execution when the requested
-  issue is blocked, non-leaf, structurally incomplete, or malformed, and report
-  the resolver's exact authoritative rule and graph fact. Under the contract, a
-  user-selected issue different from canonical NEXT is still an explicit
-  selection, but it never overrides the READY execution boundary.
-- Under `docs/work-graph-contract.md`, canonical work-graph semantics are
-  authoritative: READY siblings remain parallel and NEXT selects one candidate
-  for one executor. Under the contract, do not mutate the graph or create dependencies
-  between siblings, or silently substitute another issue for
-  the explicit user selection.
-
-## Canonical Work-Graph Replanning
-
-- Delegate all classification and graph-placement semantics to
-  `docs/work-graph-contract.md`; do not restate or reinterpret them here.
-- When that contract requires a graph change, use the owning `SecPal/.github`
-  checkout's `python3 scripts/secpal-work-graph-replan.py plan REQUEST.json`,
-  inspect the finite plan, then use
-  `python3 scripts/secpal-work-graph-replan.py apply PLAN.json --apply` before
-  implementation scope expands. Inspect the exact recovery evidence if an
-  invocation stops after a write; use the bounded `recover` command only for a
-  known outcome.
-- The command requires the exact authenticated actor and unchanged canonical
-  state; stale state or graph drift fails closed. Never edit a plan to bypass
-  those checks or use this boundary as a generic GitHub mutation command.
-
-## Work-graph semantics
-
-- Node types, native hierarchy and dependency meaning, sibling order, `READY`,
-  deterministic `NEXT` selection, replanning, and evidence rules come from the
-  canonical contract in `SecPal/.github`, `docs/work-graph-contract.md`.
-- These coordination rules layer on top of that contract and never redefine it.
-  Where a session-local instruction and the contract disagree about work-graph
-  semantics, the contract governs.
+- Use GitHub parent/sub-issue links, dependencies and useful project views for
+  issue-first planning. Native relationships are authoritative; board fields
+  and Markdown lists are views.
+- For issue-assigned work, use the existing read-only resolver from the owning
+  `SecPal/.github` checkout when it helps identify scope or real blockers:
+  `python3 scripts/secpal-work-graph.py show <owner/repo#issue>`,
+  `ready <owner/repo#scope>` or `next <owner/repo#scope>`.
+- Use `validate-issue <owner/repo#issue>` to explain readiness or malformed input.
+  Distinguish unreadable relationships from absent relationships and report
+  the resolver's actual findings.
+- Independent ready work can run in parallel. `next` recommends one candidate;
+  it creates no mandatory delivery order, PR gate or merge authority.
+- Preserve existing native relationships. Change a real dependency only when
+  the planning task authorizes it; do not flatten the graph to simplify PRs.
+- Planning semantics belong to `docs/work-graph-contract.md`. Code validation
+  and merge eligibility belong to native GitHub PR checks and protection rules.
 
 ## Evidence Architecture Enforcement
 
-- Consume `docs/evidence-architecture-contract.md` through the canonical
-  `docs/work-graph-contract.md` owner. Keep undeclared semantic completeness,
+- Consume `docs/evidence-architecture-contract.md`. Keep undeclared semantic completeness,
   responsibility boundaries, representation realism and trust justification
   explicit for human architecture review.
 - Before a costly or privileged external-system dispatch, run the maintained

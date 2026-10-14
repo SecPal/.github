@@ -7,7 +7,7 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status
 
-Canonical companion to `docs/work-graph-contract.md` for evidence pipelines,
+Canonical authority for evidence pipelines,
 validators, conformance harnesses, migration/check tooling, and other code that
 observes or grades external systems. Repository baselines may add stricter
 stack-specific rules but MUST NOT weaken this contract.
@@ -49,9 +49,10 @@ responsibilities before implementation continues.
 
 ## 2. Authoritative Invariant Ownership
 
-`docs/work-graph-contract.md` section 11 remains authoritative: every semantic
-invariant has exactly one owner. This contract makes the consequence explicit
-for evidence systems.
+Every semantic invariant MUST have exactly one authoritative definition,
+identifiable from its code or documentation. Ownership concerns the definition,
+not the number of places that enforce it. Every enforcement point MUST derive
+from, reference or demonstrably agree with that definition.
 
 Preparation, collection, normalization, schema validation, admission, cleanup,
 or another phase MUST NOT independently reimplement the same semantic rule merely
@@ -80,7 +81,11 @@ reviewed realistic representation and exercise the complete applicable path:
 `external representation -> normalization -> closed schema -> independent validation/admission`
 
 Where the owning contract promises a real-system result, reviewed real-system
-evidence remains mandatory under `docs/work-graph-contract.md` section 9.
+evidence MUST exercise the actual relevant collaborator, runtime, provider or
+environment. Authored fixtures and structural checks cannot substitute for that
+result. Evidence MUST identify the exercised version or artifact, environment,
+operation and time context, and support only that scope. Production, release
+and cryptographic requirements remain binding under their owning contracts.
 
 A repeated real-system mismatch between authored fixtures and actual external
 representations is an architecture signal. Before another external run, the
@@ -113,10 +118,10 @@ A sequence of real-system runs that repeatedly discovers adjacent representation
 parser, duplicated-invariant, hidden-boundary, or insufficient-diagnostic defects
 MUST NOT continue as an unbounded patch/rerun loop.
 
-Before the next run, classify whether the failures share a structural cause. If
-they do, the structural correction is a prerequisite under the canonical
-replanning rules. The current real-system leaf is blocked until that prerequisite
-is delivered or its own contract is legitimately replanned.
+Before the next run, identify and correct any shared structural cause, then
+validate the affected boundaries. Do not dispatch the costly real-system run
+until that correction is verified. Use native issues when useful for tracking;
+this requirement creates no mandatory issue, graph state or delivery receipt.
 
 The purpose is not to forbid iterative integration work. The purpose is to stop
 using a paid or destructive external system as a one-assertion-at-a-time debugger

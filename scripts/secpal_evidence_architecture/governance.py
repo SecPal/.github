@@ -422,7 +422,7 @@ def assess_declarations(
             findings.append(
                 _finding(
                     "DUPLICATE_INVARIANT_OWNER",
-                    "evidence architecture section 2 and work-graph section 11",
+                    "evidence architecture section 2",
                     "Declared invariant has multiple explicit owners",
                     "Retain exactly one authoritative declared owner.",
                     item_index=owner_indices[invariant_id][0],
@@ -440,7 +440,7 @@ def assess_declarations(
             findings.append(
                 _finding(
                     "INDEPENDENT_ENFORCEMENT_UNPROVEN",
-                    "evidence architecture section 2 and work-graph section 11.1",
+                    "evidence architecture section 2",
                     "Independent enforcement lacks matching owner, derivation, or executed agreement proof",
                     "Name the authoritative owner and derivation, then supply passing executable agreement evidence.",
                     item_index=invariant_index,
@@ -494,7 +494,7 @@ def assess_runtime_baseline(
             "findings": [
                 _finding(
                     "CONTRADICTORY_RUNTIME_BASELINE_DELEGATION",
-                    "evidence architecture status and work-graph section 13",
+                    "evidence architecture status",
                     "Runtime baseline declares an unsupported delegation mode",
                     "Declare direct or supported transitive work-graph delegation.",
                 )
@@ -508,7 +508,7 @@ def assess_runtime_baseline(
         findings = [
             _finding(
                 "DUPLICATE_GENERIC_EVIDENCE_AUTHORITY",
-                "evidence architecture status and work-graph section 13",
+                "evidence architecture status",
                 "Runtime baseline references a second generic evidence-architecture authority",
                 "Delegate only to the canonical contract or its supported work-graph incorporation.",
             )
@@ -522,7 +522,7 @@ def assess_runtime_baseline(
         findings = [
             _finding(
                 "CONTRADICTORY_RUNTIME_BASELINE_DELEGATION",
-                "evidence architecture status and work-graph section 13",
+                "evidence architecture status",
                 "Declared generic authority contradicts the closed delegation mode",
                 "Declare exactly the canonical direct or supported transitive authority.",
             )
@@ -538,7 +538,7 @@ def assess_runtime_baseline(
         findings = [
             _finding(
                 "MISSING_RUNTIME_BASELINE_DELEGATION",
-                "evidence architecture status and work-graph section 13",
+                "evidence architecture status",
                 "Active runtime baseline has no canonical evidence-architecture delegation",
                 "Reference the canonical companion directly or its normative work-graph incorporation.",
             )
@@ -554,7 +554,7 @@ def assess_runtime_baseline(
             findings = [
                 _finding(
                     "CONTRADICTORY_RUNTIME_BASELINE_DELEGATION",
-                    "evidence architecture status and work-graph section 13",
+                    "evidence architecture status",
                     "Declared delegation mode contradicts the structured canonical reference",
                     "Make the declaration and active runtime baseline reference agree.",
                 )

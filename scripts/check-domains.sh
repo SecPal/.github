@@ -25,7 +25,7 @@ echo "Public hosts: secpal.app, apk.secpal.app, secpal.io"
 echo "Development/preview hosts: secpal.dev, api.secpal.dev, app.secpal.dev, preview.secpal.dev, and approved *.preview.secpal.dev identities"
 echo "Private internal service identities: db.secpal.internal (exact only)"
 echo "Identifier-only values in this scanner's secpal.* scope: io.secpal.* (reverse-DNS namespace)"
-echo "Exact inline-code identifiers: app.secpal.libre, io.secpal.dpc, secpal.lifecycleSigningCredential, and secpal.pre-enrollment-current-safety"
+echo "Exact inline-code identifiers: app.secpal.libre and io.secpal.dpc"
 echo "Deprecated web hosts: api.secpal.app"
 echo "Forbidden secpal.* variants: secpal.com, secpal.org, secpal.net,"
 echo "  secpal.example, app.secpal.app, every other secpal.internal name, and any"
@@ -132,9 +132,6 @@ is_markdown_inline_identifier() {
         || printf '%s\n' "$text" | grep -Eq "(https?|wss?)://[^[:space:]]*$identifier_regex([^A-Za-z0-9._-]|$)"; then
         return 1
     fi
-    if [ "$identifier" = "secpal.pre-enrollment-current-safety" ]; then
-        remaining="${remaining//\`$identifier\/v1\`/}"
-    fi
     remaining="${remaining//\`$identifier\`/}"
     [[ "$remaining" != *"$identifier"* ]]
 }
@@ -175,7 +172,7 @@ while IFS= read -r matched_line; do
                     violations+="${source_path}:${source_line}:${token}"$'\n'
                 fi
                 ;;
-            app.secpal.libre | secpal.lifecycleSigningCredential | secpal.pre-enrollment-current-safety)
+            app.secpal.libre)
                 if ! is_markdown_inline_identifier "$source_path" "$source_text" "$token"; then
                     violations+="${source_path}:${source_line}:${token}"$'\n'
                 fi
@@ -244,7 +241,7 @@ else
     echo "  - Development/preview hosts: secpal.dev, api.secpal.dev, app.secpal.dev, preview.secpal.dev, and *.preview.secpal.dev identities"
     echo "  - Private internal service identity: db.secpal.internal (exact only; not a public host)"
     echo "  - Identifier-only values in this scanner's secpal.* scope: io.secpal.* (reverse-DNS namespace)"
-    echo "  - Exact inline-code identifiers: app.secpal.libre, io.secpal.dpc, secpal.lifecycleSigningCredential, and secpal.pre-enrollment-current-safety"
+    echo "  - Exact inline-code identifiers: app.secpal.libre and io.secpal.dpc"
     echo "  - Deprecated web host: api.secpal.app"
     echo "  - FORBIDDEN secpal.* variants include every other secpal.internal name and unknown values"
     echo "  - Non-secpal domains (e.g. the historical guardguide.de fixture) are out of scope; current hosts need their own policy guards."

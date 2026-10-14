@@ -110,53 +110,11 @@ create_preflight_fixture() {
   mkdir -p "$repository/scripts" "$repository/bin" "$repository/tests" "$repository/node_modules/.bin"
   cp "$PREFLIGHT_SCRIPT" "$repository/scripts/preflight.sh"
 
-  cat >"$repository/tests/polyscope-work-graph-advisory.py" <<'EOF'
-"""Fixture stand-in for preflight's required advisory-test dependency."""
-
-import unittest
 
 
-class PreflightFixtureTest(unittest.TestCase):
-    def test_fixture_runs(self):
-        pass
-
-
-if __name__ == "__main__":
-    unittest.main()
-EOF
-
-  cat >"$repository/tests/secpal-work-graph-replan-unit.py" <<'EOF'
-"""Fixture stand-in for preflight's replanning operation tests."""
-
-import unittest
-
-
-class PreflightFixtureTest(unittest.TestCase):
-    def test_fixture_runs(self):
-        pass
-
-
-if __name__ == "__main__":
-    unittest.main()
-EOF
-
-  cat >"$repository/tests/polyscope-work-graph-replanning.py" <<'EOF'
-"""Fixture stand-in for preflight's managed replanning contract tests."""
-
-import unittest
-
-
-class PreflightFixtureTest(unittest.TestCase):
-    def test_fixture_runs(self):
-        pass
-
-
-if __name__ == "__main__":
-    unittest.main()
-EOF
 
   # Hermetic stand-ins for the maintained preflight's required Trivy suites.
-  for suite in secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
+  for suite in secpal-work-graph-unit secpal-work-graph-adapter secpal-work-graph-audit secpal-trivy-repository-scan-unit secpal-trivy-action-archive; do
     cat >"$repository/tests/$suite.py" <<'EOF'
 """Prove the required unittest command ran without external collaborators."""
 
@@ -190,9 +148,6 @@ EOF
 
   cat >"$repository/tests/evidence-architecture-governance.py" <<'EOF'
 """Fixture stand-in for preflight's required governance-test dependency."""
-EOF
-  cat >"$repository/tests/delivery-lifecycle-governance.py" <<'EOF'
-"""Fixture stand-in for preflight's Draft-first governance dependency."""
 EOF
   cat >"$repository/tests/postgresql-18-baseline-governance.py" <<'EOF'
 """Fixture stand-in for preflight's required PostgreSQL governance dependency."""

@@ -8,10 +8,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 > **Note:** This is the **human-readable** version of our development
 > principles. Repository AI guidance is split between a concise runtime
 > `AGENTS.md`, an independent `.github/copilot-instructions.md` review profile,
-> and focused `.github/instructions/*.instructions.md` overlays. Work-graph,
-> evidence, and invariant-ownership semantics are defined once in
-> [work-graph-contract.md](work-graph-contract.md); this document explains the
-> engineering principles behind them.
+> and focused `.github/instructions/*.instructions.md` overlays. Delivery uses
+> [native GitHub semantics](work-graph-contract.md); evidence and invariant
+> ownership belong to [the evidence architecture contract](evidence-architecture-contract.md).
 
 This document explains the design principles and best practices that guide all actively maintained SecPal repositories, including `.github`, `api`, `frontend`, `contracts`, `android`, `secpal.app`, `deployment`, and `operations`.
 
@@ -483,7 +482,7 @@ function updateCustomer(customer: Customer, data: UpdateData): Customer {
    - This is defense in depth under one authoritative definition: each entry
      point is independently reachable, so each enforces the same authorization
      rule rather than defining its own. See
-     [work-graph-contract.md](work-graph-contract.md#111-multiple-enforcement-points).
+     [evidence-architecture-contract.md](evidence-architecture-contract.md).
 
 **Example:**
 
@@ -626,7 +625,7 @@ npm run lint
 
 ### Organization-Wide (`.github` repo)
 
-- [work-graph-contract.md](work-graph-contract.md) - Canonical work-graph and engineering-governance contract
+- [work-graph-contract.md](work-graph-contract.md) - Native GitHub planning and delivery
 - `AGENTS.md` - Authoritative agent-facing runtime baseline in each repository root
 - [copilot-instructions.md](../.github/copilot-instructions.md) - Independent GitHub code-review profile
 - [CONTRIBUTING.md](../CONTRIBUTING.md) - How to contribute

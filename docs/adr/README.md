@@ -96,12 +96,11 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [ADR-019: Production Edge and Layered Security](20260824-production-edge-layered-security-adr019.md) - 2026-08-24; DIRECT and PROTECTED modes rebaselined under [#768](https://github.com/SecPal/.github/issues/768)
 - [ADR-018: Production Host and Container Runtime](20260824-production-host-container-runtime-adr018.md) - 2026-08-24
 - [ADR-017: PostgreSQL 18 Canonical Database Baseline](20260824-postgresql-18-canonical-baseline-adr017.md) - 2026-08-24
-- [ADR-016: Native Work-Graph and Engineering Governance](20260824-native-work-graph-engineering-governance-adr016.md) - 2026-08-24; refines ADR-013
 - [ADR-015: Global Identity Key Security](20260720-global-identity-key-security-adr015.md) - 2026-07-20
 - [BRAND-0002: Typography](BRAND-0002-typography.md) - 2026-06-13
 - [BRAND-0003: Navigation Pattern](BRAND-0003-navigation-pattern.md) - 2026-06-13
 - [BRAND-0006: App UI Stack Ownership](BRAND-0006-app-ui-stack.md) - 2026-06-13
-- [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15; refined by ADR-016
+- [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15; native issue planning remains active
 
 ### Proposed
 
@@ -117,6 +116,8 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies](20251126-organizational-structure-hierarchy.md) - 2025-11-26; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 
 ### Partially Superseded
+
+- [ADR-016: Native Work-Graph and Engineering Governance](20260824-native-work-graph-engineering-governance-adr016.md) - 2026-08-24; native issue planning/read-only resolution retained; custom PR governance replaced by GitHub PRs, reviews and checks
 
 - [ADR-014: Tenant, Identity, Employee, and Access Model](20260720-tenant-identity-access-model-adr014.md) - 2026-07-20; employment projection, projection-derived lifecycle inputs, and unresolved rehire decisions replaced by [ADR-025](20261002-employment-time-absence-compensation-adr025.md); all other decisions remain binding
 - [BRAND-0004: Footer Wording](BRAND-0004-footer-wording.md) - 2026-06-13; GuardGuide-specific identity and mappings superseded by [BRAND-0007](BRAND-0007-secpal-product-family-architecture.md), with the two-line SecPal footer structure and legal/source rules retained

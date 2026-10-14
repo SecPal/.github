@@ -129,7 +129,8 @@ These exclusions are configured in `.preflight-exclude` and match the GitHub CI 
    new setup).
 6. **Push your branch** and open a pull request against `main`.
 
-All pull requests will be reviewed by a maintainer and by GitHub Copilot.
+Request review through GitHub and satisfy required reviews and checks before
+merging. Keep Ready PRs Ready and request re-review directly when needed.
 
 ## Pull Request Rules
 
@@ -353,9 +354,8 @@ Closes #123"
 
 ## Signing Commits
 
-SecPal uses SSH signing, not GPG/OpenPGP. Follow the
-[canonical signing authority](https://github.com/SecPal/.github/blob/main/docs/work-graph-contract.md#532-signing-authority)
-for commits and role-specific lifecycle, attestation and publication signers.
+SecPal commits use SSH signing. Every PR commit must have GitHub
+`verification.verified == true`.
 
 Preserve the existing SSH signing identity and configuration. Do not replace
 keys, reuse a transport key as a signing credential, disable signing, or switch
@@ -379,9 +379,10 @@ authority.
 
 - **Keep PRs reviewable:** Aim for about 600 changed lines or fewer where a coherent change can be split without separating its implementation, tests, or documentation.
 - **Write clear descriptions:** Use the PR template and fill out all relevant sections.
-- **Link related issues:** Reference issues with `Closes #123` or `Fixes #456`.
+- **Link related issues:** Use ordinary references for related work. Reserve
+  `Closes #123` or `Fixes #456` for issues the change completes.
 - **Ensure CI passes:** All checks must pass before merging.
-- **Request reviews:** Tag relevant maintainers or wait for automatic review.
+- **Request reviews:** Use GitHub review requests and address genuine findings.
 - **Address feedback:** Respond to review comments promptly.
 
 ## Code Style
