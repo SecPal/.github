@@ -3,52 +3,48 @@ SPDX-FileCopyrightText: 2026 SecPal Contributors
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
-# GitHub-native delivery
+# Proposed GitHub-native delivery end state
 
-Status: proposed cutover. Existing required checks and shared consumers remain
-active until their replacements have been independently verified. This document
-does not authorize changes to live protection or repositories outside `.github`.
+This temporary proposal describes the intended result of the simplification.
+It is not an active delivery contract. Existing canonical instructions, required
+checks and shared consumers remain effective until their reviewed cutover.
+After migration, this proposal will be removed and concise contribution guidance
+will live in the established repository documentation.
 
-## Delivery contract
+## Proposed delivery path
 
-Use one branch and pull request for a coherent change. Draft is optional working
-state; Ready requests review. The pull request explains the change and relevant
-validation. Issues are useful planning records, not prerequisites for every PR.
-GitHub reviews and resolved conversations provide review history without local
-review counters, persistent lifecycle journals, receipts or routine attestations.
+The intended delivery path is one branch and pull request for a coherent change.
+Draft would be an optional working state, and Ready would request review.
+The PR would explain the change and relevant validation; issues would provide
+planning records without becoming prerequisites for every delivery.
+GitHub reviews and resolved conversations would supply review history without
+custom counters, lifecycle journals, receipts or routine attestations.
 
-Merge through GitHub only after required checks pass on the current candidate.
-Keep signed commits, protected main, linear history, conversation resolution,
-admin enforcement, and disabled force pushes and branch deletion. Keep existing
-review approval requirements until an administrator makes an explicit decision;
-never impose an approval count that the available independent reviewers cannot
-satisfy. Automated review supplies advice, not a separate delivery state machine.
+GitHub would permit merging only after the required candidate checks pass.
+The security baseline would retain signed commits, protected main, linear
+history, conversation resolution, admin enforcement, disabled force pushes and
+branch deletion, and the existing review approval requirements. Automated review
+would supply advice rather than a separate delivery state machine.
 
-Require applicable build, lint and tests, REUSE/license compatibility, and
-security checks appropriate to the repository. Preserve CodeQL, dependency and
-secret scanning, privacy boundaries, and release artifact integrity. Pin third
-party actions to reviewed commits, use least-privilege tokens and locked
-dependencies. Product audit trails and release provenance are outside the
-retirement of routine PR evidence.
+Applicable build, lint, tests, REUSE/license compatibility and security checks
+would remain. Dependency and secret scanning, CodeQL, reviewed immutable action
+pins, locked dependencies and least-privilege tokens would continue protecting
+the technical change. Product audit trails and release artifact provenance are
+separate guarantees, outside the retirement of routine PR ceremony.
 
-## Cutover safety
+## Proposed transition
 
-Inventory the eight repositories and record actual workflow and runtime callers.
-First remove unconsumed delivery machinery and its exclusive tests, fixtures,
-schemas and documentation. Keep shared entry points with proven active callers.
-Run native replacements on the same candidate while existing mandatory checks
-remain enabled. Have an independent reviewer verify successful and failing cases,
-including tampered or unsigned commits and failing security checks.
+The migration would remove unconsumed machinery and its exclusive tests,
+fixtures, schemas and guides first. Shared paths would stay available until
+their actual callers migrate. Required contexts would be changed only after
+independent verification, with their producers deleted afterwards.
 
-Only then may an administrator replace redundant required contexts with verified
-native rules or CI contexts. Remove each old workflow after protection no longer
-requires its context and all consumers have migrated. Follow the accepted
-[loose-check decision](https://github.com/SecPal/.github/issues/727): verify required
-head checks and native conflict detection, then use strict=false without requiring
-a merge queue. Loose checks do not promise testing against every newer main commit. Save
-before/after protection snapshots; rollback restores the previous contexts and
-code together. Never leave protection requiring a deleted job.
+The accepted [loose-check decision](https://github.com/SecPal/.github/issues/727)
+would use strict=false after verifying required candidate checks and native
+conflict detection. This would not require a merge queue or promise testing
+against every subsequently advanced main commit.
 
-Keep historical journal branches and GitHub records as history, with no future
-delivery dependency. Do not delete records, rewrite published history, reinstall
-retired hooks, or publish server changes as part of this first PR.
+Rollback would restore the previous code and protection together, without
+requiring a deleted job. Historical journal branches and GitHub records would
+remain available as history, without future delivery readers or writers.
+This proposal performs no live protection change or server installation.

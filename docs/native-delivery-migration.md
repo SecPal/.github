@@ -16,22 +16,23 @@ GitHub REST was read on 2026-10-14 for all eight default branches: metadata,
 recursive trees, governance instructions/validators, workflow definitions and
 registrations, classic main protection, inherited/repository rulesets and
 effective main rules. Raw observations remain temporary in this Polyscope
-workspace under .git/native-cutover/. Private source and raw responses are excluded.
+workspace under .git/native-cutover/. Private source, protection details and raw responses are excluded.
 
-| Repository | Required contexts | Signatures                     | Central workflow/action calls |
-| ---------- | ----------------- | ------------------------------ | ----------------------------- |
-| .github    | 14                | Required                       | 3                             |
-| android    | 12                | Required                       | 13                            |
-| api        | 10                | Required                       | 13                            |
-| contracts  | 9                 | Required                       | 10                            |
-| deployment | 5                 | Required                       | 1                             |
-| frontend   | 13                | Required                       | 11                            |
-| operations | 1                 | Not enforced by observed rules | 0                             |
-| secpal.app | 12                | Required                       | 14                            |
+| Repository         | Required contexts | Signatures    | Central workflow/action calls |
+| ------------------ | ----------------- | ------------- | ----------------------------- |
+| .github            | 14                | Required      | 3                             |
+| android            | 12                | Required      | 13                            |
+| api                | 10                | Required      | 13                            |
+| contracts          | 9                 | Required      | 10                            |
+| deployment         | 5                 | Required      | 1                             |
+| frontend           | 13                | Required      | 11                            |
+| Private repository | Not published     | Not published | Not published                 |
+| secpal.app         | 12                | Required      | 14                            |
 
-All eight baselines consume docs/work-graph-contract.md. Deployment and operations
-also consume evidence-architecture-contract.md; deployment explicitly requests
-the central review skill contract. These are configured callers, without a claim
+All seven public baselines consume docs/work-graph-contract.md. Deployment
+also consumes evidence-architecture-contract.md and explicitly requests
+the central review skill contract. The private inventory remains in this authorized
+workspace and needs separate verification before its later migration. These are configured callers, without a claim
 that every operator currently invokes every optional command.
 
 Five product repositories use the common bundle at
@@ -41,16 +42,14 @@ Deployment consumes an older pinned REUSE workflow. Old pins remain available in
 Only .github requires Validate PR Evidence, Validate PR Title And Body Language,
 Validate Signed PR Commits, Work-Graph PR Advisory, Work-Graph PR Gate, and
 Evidence Architecture PR Gate through classic protection. Native required signatures
-are enabled in seven repositories. The private repository uses a ruleset: its 404
-from classic protection does not mean unprotected. Its effective ruleset lacks
-a required-signatures rule.
+are enabled in all seven public repositories. Private protection observations
+remain outside this tracked document.
 
-Secret scanning, push protection and Dependabot security updates are enabled in
-.github and five product repositories; those features are disabled in deployment
-and the private repository. Verify feature availability or alternative scanners
-before claiming equivalent coverage. These existing gaps do not justify disabling
-another check. Main strictness is enabled in .github; the other six classic-protected
-repositories have strict: false. This PR preserves all current settings.
+Secret scanning, push protection and Dependabot security updates remain enabled
+in .github and the five product repositories. Feature availability or alternative
+scanners need verification before claiming equivalent coverage across the entire
+migration scope. Main strictness is enabled in .github; the other six public
+classic-protected repositories have strict: false. This PR preserves current settings.
 
 ## KEEP / REPLACE / DELETE
 
@@ -96,7 +95,7 @@ four repositories and its automatic recurring tracking-issue write path.
   this explicitly authorized simplification.
 - PR-body/language checks execute trusted base code; a template edit cannot
   replace them. Keep exact-body validation until required contexts are retired.
-- All eight baselines request the work-graph contract; deployment requests the
+- Public baselines request the work-graph contract; deployment requests the
   review skill. Deleting those shared paths now breaks configured consumers.
 - Polyscope rollout and user/system installers load the evidence validator/package.
   Replace and independently qualify fail-closed setup before bundle deletion or
