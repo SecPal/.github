@@ -51,10 +51,10 @@ Dependencies are explicit, not inherited from parents or children.
 
 Before adding a blocker, confirm that the dependent task genuinely needs an
 independently deliverable output that it cannot achieve within its current scope.
-Reuse an existing owner; create a prerequisite issue only when none exists.
-Ordinary CI delays, workflow problems, missing local evidence and implementation
-difficulties do not by themselves justify prerequisite issues. Re-evaluate
-dependencies when their underlying technical requirements change.
+Reuse an existing issue that owns the output; create a prerequisite issue only
+when none exists. Ordinary CI delays, workflow problems, missing local evidence
+and implementation difficulties do not by themselves justify prerequisite issues.
+Re-evaluate dependencies when their underlying requirements change.
 
 The existing resolver treats a target closed as `completed` as satisfied.
 `not planned`, duplicate or other closure reasons do not establish delivery of
