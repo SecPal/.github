@@ -1,0 +1,26 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": ".",
+  "ArtifactType": "repository",
+  "Results": [
+    {
+      "Target": "composer.lock",
+      "Class": "lang-pkgs",
+      "Type": "composer",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-108082",
+          "PkgName": "symfony/http-foundation",
+          "InstalledVersion": "v8.0.15",
+          "FixedVersion": "5.4.54, 6.3.0, 6.4.0, 6.4.46, 7.3.0, 7.4.19, 8.1.0, 6.1.0, 6.2.0, 7.1.0, 7.2.0, 7.4.0, 8.1.7",
+          "Severity": "UNKNOWN",
+          "DataSource": {
+            "ID": "php-security-advisories",
+            "Name": "PHP Security Advisories Database",
+            "URL": "https://github.com/FriendsOfPHP/security-advisories"
+          }
+        }
+      ]
+    }
+  ]
+}
