@@ -39,15 +39,16 @@ assert_payload_contexts_equal() {
   local payload="$1"
   local expected="$2"
   local expected_strict="$3"
+  local expected_repo="${4:-}"
 
-  if ! jq -e --argjson expected "$expected" --argjson expected_strict "$expected_strict" '
+  if ! jq -e --argjson expected "$expected" --argjson expected_strict "$expected_strict" --arg repo "$expected_repo" '
     .strict == $expected_strict and
     (.checks | length) == ($expected | length) and
     ([.checks[].context] | length) == ([.checks[].context] | unique | length) and
     ($expected | length) == ($expected | unique | length) and
     ([.checks[].context] | sort) == ($expected | sort) and
     all(.checks[];
-      .app_id == (if .context == "Evidence Architecture PR Gate" or .context == "Validate Signed PR Commits" then 15368 else -1 end)
+      .app_id == (if $repo == "deployment" or .context == "Evidence Architecture PR Gate" or .context == "Validate Signed PR Commits" then 15368 else -1 end)
     )
   ' >/dev/null <<<"$payload"; then
     echo "Payload did not contain exactly the expected required checks" >&2
@@ -151,6 +152,13 @@ EXPECTED_CONTEXTS_JSON='{
     "check-conflicts / Detect Git Conflict Markers",
     "AI Instructions / Validate AI Instructions"
   ],
+  "deployment": [
+    "Repository Contract",
+    "REUSE Compliance / Check REUSE Compliance",
+    "Markdown and Shell",
+    "Quadlet Contract (amd64)",
+    "Quadlet Contract (arm64)"
+  ],
   "frontend": [
     "Check REUSE Compliance / Check REUSE Compliance",
     "Check License Compatibility",
@@ -183,7 +191,7 @@ EXPECTED_CONTEXTS_JSON='{
 }'
 
 mapfile -t expected_repositories < <(jq -r 'keys[]' <<<"$EXPECTED_CONTEXTS_JSON")
-if [[ "${expected_repositories[*]}" != ".github android api contracts frontend secpal.app" ]]; then
+if [[ "${expected_repositories[*]}" != ".github android api contracts deployment frontend secpal.app" ]]; then
   echo "Expected exact canonical required-check repository inventory" >&2
   exit 1
 fi
@@ -192,8 +200,8 @@ declare -A payloads
 for expected_repo in "${expected_repositories[@]}"; do
   payloads["$expected_repo"]="$(bash "$SYNC_SCRIPT" --repo "$expected_repo" --print-payload)"
   expected_contexts="$(jq -c --arg repo "$expected_repo" '.[$repo]' <<<"$EXPECTED_CONTEXTS_JSON")"
-  expected_strict=false
-  assert_payload_contexts_equal "${payloads[$expected_repo]}" "$expected_contexts" "$expected_strict"
+  expected_strict=true
+  assert_payload_contexts_equal "${payloads[$expected_repo]}" "$expected_contexts" "$expected_strict" "$expected_repo"
 done
 
 # The bare 'CodeQL' context is only emitted by .github (its CodeQL Applicability
@@ -352,8 +360,19 @@ chmod +x "$fake_bin/gh"
 state_dir="$TMP_DIR/required-states"
 mkdir -p "$state_dir"
 for expected_repo in "${expected_repositories[@]}"; do
-  jq '.strict = true | .checks |= map(.app_id = null)' \
+  jq --arg repo "$expected_repo" '.strict = false |
+    if $repo == "deployment" then . else .checks |= map(.app_id = null) end' \
     <<<"${payloads[$expected_repo]}" >"$state_dir/$expected_repo.json"
+done
+
+# Existing live API/frontend producers remain bound even where the canonical
+# inventory permits any producer for a newly introduced context.
+for bound_repo in api frontend; do
+  jq '.checks |= map(
+    if .context == "Check License Compatibility" or .context == "Strict CSP" or .context == "Container Contract"
+    then .app_id = 15368 else . end
+  )' "$state_dir/$bound_repo.json" >"$state_dir/$bound_repo.bound.json"
+  mv "$state_dir/$bound_repo.bound.json" "$state_dir/$bound_repo.json"
 done
 
 # Exercise promotion of the evidence gate while preserving the signed-commit App binding.
@@ -403,7 +422,9 @@ assert_mode_conflict conflicting-print --repo api --print-payload --print-review
 assert_mode_conflict repeated-mode --apply --apply
 
 # Retired and substituted repositories must fail before any provider call.
-for unsupported_repository in GuardGuide guardguide.de Assure Visit does-not-exist; do
+# Operations is private with independently owned protection, outside this
+# public required-check inventory.
+for unsupported_repository in operations GuardGuide guardguide.de Assure Visit does-not-exist; do
   for operation in --print-payload --print-review-payload --apply --apply-review-baseline; do
     unsupported_log="$TMP_DIR/$unsupported_repository-${operation#--}.log"
     set +e
@@ -447,7 +468,7 @@ remediation_failures=0
 expected_status_endpoint='repos/SecPal/.github/branches/main/protection/required_status_checks'
 expected_status_payload="$(
   jq -c '{
-    strict: false,
+    strict: true,
     checks: ([
       .checks[]
       | {
@@ -460,7 +481,7 @@ expected_status_payload="$(
 expected_status_log="$(printf 'GET\t%s\t-\nPATCH\t%s\t%s' \
   "$expected_status_endpoint" "$expected_status_endpoint" "$expected_status_payload")"
 if [[ "$(<"$status_log")" != "$expected_status_log" ]]; then
-  echo "FAIL-FIRST F1: status apply must apply loose checks and preserve mixed App bindings" >&2
+  echo "FAIL-FIRST F1: status apply must apply strict checks and preserve mixed App bindings" >&2
   cat "$status_log" >&2
   remediation_failures=$((remediation_failures + 1))
 fi
@@ -518,17 +539,18 @@ fi
 assert_sync_rejects_state() {
   local label="$1"
   local state_file="$2"
+  local repo="${3:-.github}"
   local log_file="$TMP_DIR/$label.log"
   local output status
 
   set +e
   output="$(GH_CALL_LOG="$log_file" GH_REQUIRED_STATE_FILE="$state_file" PATH="$fake_bin" \
-    "$SHELL_BIN" "$SYNC_SCRIPT" --repo .github --apply 2>&1)"
+    "$SHELL_BIN" "$SYNC_SCRIPT" --repo "$repo" --apply 2>&1)"
   status=$?
   set -e
 
-  if [[ $status -eq 0 || "$output" != *"SecPal/.github"* ]]; then
-    echo "Expected $label live state to fail clearly for SecPal/.github" >&2
+  if [[ $status -eq 0 || "$output" != *"SecPal/$repo"* ]]; then
+    echo "Expected $label live state to fail clearly for SecPal/$repo" >&2
     echo "$output" >&2
     exit 1
   fi
@@ -538,6 +560,14 @@ assert_sync_rejects_state() {
     exit 1
   fi
 }
+
+# Deployment's existing five producer bindings are mandatory, never inferred
+# or relaxed when a live entry already has a conflicting identity.
+for binding in null -1 777; do
+  jq --argjson binding "$binding" '.checks[0].app_id = $binding' \
+    "$state_dir/deployment.json" >"$TMP_DIR/deployment-binding.json"
+  assert_sync_rejects_state "deployment-binding-$binding" "$TMP_DIR/deployment-binding.json" deployment
+done
 
 # The binding policy must reference exact canonical membership. Mutate only the
 # candidate inventory and exercise the same CLI; no live provider is available.
@@ -560,7 +590,7 @@ SYNC_SCRIPT="$original_sync_script"
 
 # The canonical ten checks preserve positive and unbound bindings.
 # The already-activated state is idempotent.
-jq -e '.strict == false and (.checks | length) == 10 and
+jq -e '.strict == true and (.checks | length) == 10 and
   ([.checks[].context] | unique | length) == 10 and
   ([.checks[] | select(.app_id == 15368)] | length) == 2 and
   ([.checks[] | select(.app_id == -1)] | length) == 8' \
@@ -691,6 +721,23 @@ all_review_log="$TMP_DIR/all-review.log"
 GH_CALL_LOG="$all_status_log" GH_STATE_DIR="$state_dir" PATH="$fake_bin" \
   "$SHELL_BIN" "$SYNC_SCRIPT" --apply >/dev/null
 GH_CALL_LOG="$all_review_log" PATH="$fake_bin" "$SHELL_BIN" "$SYNC_SCRIPT" --apply-review-baseline >/dev/null
+
+# Every managed repository applies strictness without changing the live
+# producer identities. The separate .github promotion case adds its gate.
+for expected_repo in "${expected_repositories[@]}"; do
+  actual_payload="$(sed -n "/^PATCH[[:space:]]repos\/SecPal\/$expected_repo\/branches\/main\/protection\/required_status_checks[[:space:]]/p" "$all_status_log" | cut -f3-)"
+  if [[ "$expected_repo" == ".github" ]]; then
+    expected_payload="$expected_status_payload"
+  else
+    expected_payload="$(jq -c '.strict = true | .checks |= map(
+      if .app_id == null then .app_id = -1 else . end
+    )' "$state_dir/$expected_repo.json")"
+  fi
+  if [[ "$actual_payload" != "$expected_payload" ]]; then
+    echo "Required-check identity/binding preservation failed for SecPal/$expected_repo" >&2
+    exit 1
+  fi
+done
 
 status_repositories="$(sed -n 's#^PATCH[[:space:]]repos/SecPal/\([^/]*\)/branches/main/protection/required_status_checks.*#\1#p' "$all_status_log")"
 review_repositories="$(sed -n 's#^[^[:space:]]*[[:space:]]repos/SecPal/\([^/]*\)/branches/main/protection/required_pull_request_reviews.*#\1#p' "$all_review_log")"

@@ -357,8 +357,13 @@ bash scripts/sync-required-checks.sh --apply
 - `api`
 - `frontend`
 - `contracts`
+- `deployment`
 - `android`
 - `secpal.app`
+
+Private `operations` retains its separately owned protection and is outside
+this public required-check inventory. Deployment's five existing checks remain
+bound to GitHub Actions App `15368`.
 
 **What It Does:**
 
@@ -366,9 +371,9 @@ bash scripts/sync-required-checks.sh --apply
 2. Builds the exact JSON payload GitHub expects for branch protection updates
 3. Applies the payload through `gh api` using `--input` so booleans and arrays stay typed correctly
 4. Keeps the live branch-protection baseline repeatable after workflow or context drift
-5. Emits `strict: false` while preserving each managed repository's required
-   checks and App bindings. Required candidate checks and native conflict
-   detection remain enforced without requiring unrelated newer main commits.
+5. Emits `strict: true` while preserving each managed repository's required
+   checks and App bindings. Pull request branches must be up to date with
+   protected `main` before merging.
 
 **Exit Codes:**
 
