@@ -282,8 +282,58 @@ class AuditClassificationTests(TestCase):
         self.assertEqual(audit.document([first, second]), audit.document([second, first]))
         self.assertEqual(set(audit.DEFAULT_REPOSITORIES), {
             "SecPal/.github", "SecPal/android", "SecPal/frontend", "SecPal/deployment",
-            "SecPal/api", "SecPal/contracts", "SecPal/secpal.app",
+            "SecPal/api", "SecPal/contracts", "SecPal/secpal.app", "SecPal/operations",
         })
+
+    def test_default_cli_audits_all_eight_active_repositories(self):
+        expected = (
+            "SecPal/.github", "SecPal/android", "SecPal/frontend",
+            "SecPal/deployment", "SecPal/api", "SecPal/contracts",
+            "SecPal/secpal.app", "SecPal/operations",
+        )
+        output = io.StringIO()
+        with (
+            patch.object(audit_cli.github, "GitHubReadAdapter") as adapter,
+            patch.object(
+                audit_cli, "_audit_repository",
+                side_effect=lambda _adapter, repository: {
+                    "repository": repository, "status": "clean", "findings": [],
+                },
+            ) as audit_repository,
+            patch("sys.stdout", output),
+        ):
+            self.assertEqual(audit_cli.main([]), 0)
+        self.assertCountEqual(
+            [call.args for call in audit_repository.call_args_list],
+            [(adapter.return_value, repository) for repository in expected],
+        )
+        document = __import__("json").loads(output.getvalue())
+        self.assertEqual(document["summary"]["repositories"], 8)
+        self.assertEqual(
+            [item["repository"] for item in document["repositories"]],
+            sorted(expected),
+        )
+
+    def test_default_cli_reports_unavailable_private_repository(self):
+        def audit_repository(_adapter, repository):
+            if repository == "SecPal/operations":
+                raise audit_cli.github.GitHubError("audit discovery data is unreadable")
+            return {"repository": repository, "status": "clean", "findings": []}
+
+        output = io.StringIO()
+        with (
+            patch.object(audit_cli.github, "GitHubReadAdapter"),
+            patch.object(audit_cli, "_audit_repository", side_effect=audit_repository),
+            patch("sys.stdout", output),
+        ):
+            self.assertEqual(audit_cli.main([]), 3)
+        document = __import__("json").loads(output.getvalue())
+        operations = next(
+            item for item in document["repositories"]
+            if item["repository"] == "SecPal/operations"
+        )
+        self.assertEqual(operations["status"], "unavailable")
+        self.assertEqual(operations["findings"], [])
 
     def test_cli_returns_zero_for_a_clean_repository(self):
         class EmptyAdapter:
