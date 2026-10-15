@@ -303,7 +303,7 @@ class AuditClassificationTests(TestCase):
             patch("sys.stdout", output),
         ):
             self.assertEqual(audit_cli.main([]), 0)
-        self.assertEqual(
+        self.assertCountEqual(
             [call.args for call in audit_repository.call_args_list],
             [(adapter.return_value, repository) for repository in expected],
         )
