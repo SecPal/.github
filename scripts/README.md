@@ -20,7 +20,11 @@ python3 scripts/secpal-work-graph.py ready SecPal/.github#1032
 ```
 
 `secpal-work-graph-audit.py` provides an optional read-only closure audit using
-native relationships. Neither reader grants PR or merge authority.
+native relationships. Its default inventory covers all eight active SecPal
+repositories, including private `SecPal/operations`; the authenticated reader
+needs access to that repository. Use `--repo` to select an explicit scope. An
+unreadable repository is reported as unavailable rather than silently skipped.
+Neither reader grants PR or merge authority.
 
 ## Validation Scripts
 
