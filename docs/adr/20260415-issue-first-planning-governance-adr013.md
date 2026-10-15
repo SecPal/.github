@@ -11,6 +11,12 @@ SPDX-License-Identifier: CC0-1.0
 
 **Refined by:** [ADR-016](20260824-native-work-graph-engineering-governance-adr016.md)
 
+**Board retirement:** [Issue #1217](https://github.com/SecPal/.github/issues/1217)
+retires the unused optional board, its automation and setup guidance. Issue-first
+planning remains accepted. References below to an optional board mirror record
+the original decision, not a maintained execution or setup contract. The current
+contributor workflow is [planning.md](../planning.md).
+
 ## Date
 
 2026-04-15
@@ -34,7 +40,9 @@ This left contributors without a single canonical planning process and made it t
 
 SecPal adopts an issue-first planning model.
 
-ADR-013 owns issue-first planning and the Project-board-as-mirror policy.
+ADR-013 owns issue-first planning. Its original Project-board-as-mirror policy
+is retained below as historical rationale; the board and its automation are
+retired by Issue #1217 as noted in Status.
 Current planning and delivery use [native GitHub semantics](../work-graph-contract.md).
 Native hierarchy, dependencies and read-only ready/blocked resolution remain
 supported. ADR-016's custom PR delivery constraints are superseded; its original
@@ -95,5 +103,5 @@ The documentation action plan attached to this decision is:
 - [Issue #354](https://github.com/SecPal/.github/issues/354)
 - [SecPal/secpal.app#61](https://github.com/SecPal/secpal.app/issues/61)
 - [docs/planning.md](../planning.md)
-- [docs/project-board-integration.md](../project-board-integration.md)
+- [Historical board guide](https://github.com/SecPal/.github/blob/c49c3d9b46dda9c68b09427135ef5692204eaf47/docs/project-board-integration.md)
 - [docs/EPIC_WORKFLOW.md](../EPIC_WORKFLOW.md)
