@@ -375,6 +375,14 @@ Verified gate. GitHub-generated PGP signatures and strictly necessary immutable
 historical verification are provider/history evidence, never new SecPal signing
 authority.
 
+A new signed commit does not validate earlier unsigned history.
+If an existing PR contains unsigned or unverified historical commits, do not
+force-push or bypass protection. Create a fresh branch from current `main`,
+reapply the intended reviewed changes as SSH-signed commits, and open an ordinary
+replacement PR linked to the original. Do not merge the blocked mixed history
+into the replacement branch. Preserve the original PR as superseded history and
+repeat the applicable verification, checks, and review for the replacement.
+
 ## Pull Request Guidelines
 
 - **Keep PRs reviewable:** Aim for about 600 changed lines or fewer where a coherent change can be split without separating its implementation, tests, or documentation.

@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: 2025-2026 SecPal
+SPDX-FileCopyrightText: 2025-2026 SecPal Contributors
 SPDX-License-Identifier: CC0-1.0
 -->
 
@@ -18,7 +18,7 @@ SecPal uses an issue-first planning model.
 - Milestones group issues into release horizons or roadmap buckets.
 - Labels classify priority, type, and component.
 - ADRs capture planning or architecture decisions that need durable rationale.
-- GitHub Projects may be used as an optional visual layer, but they are never the canonical record of scope, acceptance criteria, priority, or delivery evidence.
+- The unused GitHub Projects board and its automation are retired under [#1217](https://github.com/SecPal/.github/issues/1217); they have no planning or delivery role.
 
 The decision rationale is recorded in ADR-013: `docs/adr/20260415-issue-first-planning-governance-adr013.md`.
 
@@ -33,11 +33,10 @@ The decision rationale is recorded in ADR-013: `docs/adr/20260415-issue-first-pl
 
 ### Supporting But Non-Canonical
 
-- GitHub Project board views
 - `docs/ideas-backlog.md` for long-horizon or non-actionable notes
 - historical specifications kept only for context
 
-If planning data exists only on a board card or in a long-form doc, it is not governed well enough.
+Move any still-needed board-only scope or acceptance criteria into the owning issue before separately authorized board closure. Historical project records do not replace native issue relationships.
 
 ## Public Roadmap Relationship
 
@@ -45,7 +44,7 @@ The public roadmap must be derived from a curated, public-safe subset of issues 
 
 - internal planning stays issue-first inside GitHub
 - the public roadmap must not expose internal-only issue details, board metadata, or sensitive discussions
-- the board may inform internal prioritization, but it is not the public roadmap source of truth
+- retiring the internal board does not remove or change the public product-roadmap page
 
 Implementation planning for the public roadmap is tracked in `SecPal/secpal.app#61`.
 
@@ -73,33 +72,30 @@ Create work in the repository that owns the change.
 3. Use an epic and native sub-issues when they help coordinate larger work.
 4. If the issue needs durable rationale, write an ADR.
 5. Implement from a topic branch and open a PR; use Draft for work in progress.
-6. Let board automation mirror progress only if the project board is enabled.
+6. Use native PR reviews, checks and protected merging; no board status or bot is required.
+
+Signed commit verification is enforced by CI. English-only GitHub communication remains reviewer-enforced for now.
 
 ## Documentation Roles
 
-| Document                            | Role                                          | Status                       |
-| ----------------------------------- | --------------------------------------------- | ---------------------------- |
-| `docs/work-graph-contract.md`       | Native GitHub planning and delivery           | Active                       |
-| `docs/planning.md`                  | Canonical planning and contributor onboarding | Active                       |
-| `docs/project-board-integration.md` | Optional board setup and usage guide          | Active, non-canonical        |
-| `docs/feature-requirements.md`      | Historical specification archive              | Archived for active planning |
+| Document                       | Role                                          | Status                       |
+| ------------------------------ | --------------------------------------------- | ---------------------------- |
+| `docs/work-graph-contract.md`  | Native GitHub planning and delivery           | Active                       |
+| `docs/planning.md`             | Canonical planning and contributor onboarding | Active                       |
+| `docs/feature-requirements.md` | Historical specification archive              | Archived for active planning |
 
-## Board Usage Rules
+## Retired Board Automation
 
-When the SecPal Roadmap board is enabled:
+There is no supported board setup or status-mirroring workflow. Issues, native
+relationships, read-only WorkGraph planning, PRs, reviews, CI and protection
+remain authoritative; no replacement lifecycle machinery is introduced.
 
-- use it for status visualization, cross-repo triage, and work-in-progress awareness
-- do not store acceptance criteria only on project items
-- do not treat board fields as authoritative when they disagree with issues, milestones, or linked PRs
-- do not use the board as the public roadmap feed without a separate public-safe curation step
-
-If the board is unavailable or out of date, planning continues through issues, labels, milestones, and PRs without process loss.
+Project records, App installation and credentials require separate administrator
+authorization after source retirement and a complete consumer inventory.
 
 ## Related Guidance
 
 - `docs/work-graph-contract.md`
 - `docs/EPIC_WORKFLOW.md`
 - `docs/labels.md`
-- `docs/project-board-integration.md`
-- `docs/workflows/PROJECT_AUTOMATION.md`
 - `docs/adr/20260415-issue-first-planning-governance-adr013.md`

@@ -39,16 +39,13 @@ SecPal uses an issue-first planning model:
 - **🎫 GitHub Issues**: Canonical source of truth for active work and deferred follow-up
 - **🏷️ Labels and Milestones**: Priority, type, component, and release grouping
 - **🧭 ADRs**: Durable records for planning and architecture decisions
-- **📊 Project Board**: Optional mirrored view for cross-repository status tracking
+- **🔗 Native Relationships and PRs**: Dependencies, reviews, checks and protected delivery
 
 **Quick Start:**
 
 ```bash
 # Read the canonical planning guide
 cat docs/planning.md
-
-# Optional: read the board mirror guide
-cat docs/project-board-integration.md
 ```
 
 **Workflow:**
@@ -56,68 +53,14 @@ cat docs/project-board-integration.md
 1. **Open or refine an issue** in the repository that owns the work
 2. **Add labels and milestone** to make priority and delivery intent explicit
 3. **Split work into an epic plus sub-issues** before implementation whenever it holds more than one deliverable contract
-4. **Open a draft PR** linked to the issue; board automation mirrors progress only when enabled
+4. **Open a PR** linked to the issue; use Draft while the work is in progress
 
-See [docs/work-graph-contract.md](docs/work-graph-contract.md) for the canonical work-graph and governance semantics, [docs/planning.md](docs/planning.md) for the canonical process, and [docs/project-board-integration.md](docs/project-board-integration.md) for the optional board layer.
-
-### 🤖 Automated Project Board Management
-
-SecPal uses automated workflows to manage the optional [SecPal Roadmap](https://github.com/orgs/SecPal/projects/1) project board. Issues and pull requests are automatically added and their status is updated based on labels, PR state, and review activity, but the board remains a mirrored view rather than the planning source of truth.
-
-**Status Flow:**
-
-```mermaid
-graph LR
-    Enhancement[Enhancement Issue] --> Ideas[💡 Ideas]
-    CoreFeature[Core Feature] --> Planned[📋 Planned]
-    Blocker[Priority: Blocker] --> Backlog[📥 Backlog]
-    Ideas --> Discussion[💬 Discussion]
-    Discussion --> Planned
-    Planned --> InProgress[🚧 In Progress]
-    InProgress --> InReview[👀 In Review]
-    InReview --> Done[✅ Done]
-    InReview -.convert to draft.-> InProgress
-    Any --> WontDo[🚫 Won't Do]
-```
-
-**Key Features:**
-
-- **Automatic issue assignment** to project board based on labels
-- **Draft PR workflow**: Draft PRs → In Progress, Ready PRs → In Review
-- **Single-maintainer support**: Convert to draft to signal "changes needed"
-- **Auto-close on merge**: Linked issues automatically marked as Done
-
-**Quick Commands:**
-
-```bash
-# Create enhancement (→ Ideas)
-gh issue create --label "enhancement" --title "..."
-
-# Create core feature (→ Planned)
-gh issue create --label "core-feature" --title "..."
-
-# Create blocker (→ Backlog)
-gh issue create --label "priority: blocker" --title "..."
-
-# Draft PR workflow (recommended)
-tmpfile=$(mktemp "${TMPDIR:-/tmp}/pr-body.XXXXXX")
-trap 'rm -f "$tmpfile"' EXIT
-cp .github/pull_request_template.md "$tmpfile"
-# Describe the change and validation results.
-"${EDITOR:-vi}" "$tmpfile"
-gh pr create --draft --body-file "$tmpfile"  # → In Progress
-gh pr ready <PR>                            # → In Review
-gh pr ready --undo <PR>                     # → In Progress (changes needed)
-gh pr merge <PR> --squash                   # → Done (auto-closes issue)
-```
-
-**Documentation:**
-
-- [📖 Project Automation Guide](docs/workflows/PROJECT_AUTOMATION.md) - Complete documentation
-- [📋 Quick Reference](docs/workflows/QUICK_REFERENCE.md) - Daily usage commands
-- [🚀 Rollout Guide](docs/workflows/ROLLOUT_GUIDE.md) - Deployment to repositories
-
-See [docs/project-board-integration.md](docs/project-board-integration.md) for board-specific guidance and [docs/planning.md](docs/planning.md) for the canonical planning model.
+See [docs/work-graph-contract.md](docs/work-graph-contract.md) and
+[docs/planning.md](docs/planning.md) for native planning and delivery.
+The unused internal Project board, status-mirroring automation and obsolete
+Draft reminder are retired under [#1217](https://github.com/SecPal/.github/issues/1217).
+This does not retire the public product roadmap. Board records, secrets and
+the legacy App require separately authorized administrative disposition.
 
 ### Pre-commit Hooks
 
