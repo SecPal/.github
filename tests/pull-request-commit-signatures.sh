@@ -9,6 +9,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VALIDATOR="$REPO_ROOT/scripts/validate-pull-request-commit-signatures.sh"
 WORKFLOW="$REPO_ROOT/.github/workflows/pull-request-commit-signatures.yml"
 PLANNING_GUIDE="$REPO_ROOT/docs/planning.md"
+CONTRIBUTING_GUIDE="$REPO_ROOT/CONTRIBUTING.md"
 SHELL_BIN="${BASH:-$(command -v bash)}"
 
 if [ ! -f "$VALIDATOR" ]; then
@@ -78,6 +79,11 @@ fi
 
 if ! grep -Fq 'English-only GitHub communication remains reviewer-enforced for now.' "$PLANNING_GUIDE"; then
   echo "Planning guide must document that English-only GitHub communication is still reviewer-enforced." >&2
+  exit 1
+fi
+
+if ! grep -Fq 'A new signed commit does not validate earlier unsigned history.' "$CONTRIBUTING_GUIDE"; then
+  echo "Contributor guidance must preserve signed-history remediation without bypassing verification." >&2
   exit 1
 fi
 

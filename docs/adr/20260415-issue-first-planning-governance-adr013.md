@@ -40,7 +40,9 @@ This left contributors without a single canonical planning process and made it t
 
 SecPal adopts an issue-first planning model.
 
-ADR-013 owns issue-first planning and the Project-board-as-mirror policy.
+ADR-013 owns issue-first planning. Its original Project-board-as-mirror policy
+is retained below as historical rationale; the board and its automation are
+retired by Issue #1217 as noted in Status.
 Current planning and delivery use [native GitHub semantics](../work-graph-contract.md).
 Native hierarchy, dependencies and read-only ready/blocked resolution remain
 supported. ADR-016's custom PR delivery constraints are superseded; its original
