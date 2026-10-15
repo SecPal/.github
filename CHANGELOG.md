@@ -9,6 +9,22 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-15 - Retire Unused Project Board Automation
+
+**Removed:**
+
+- Unused Project-board mirroring workflows, setup utilities and board-only
+  documentation and tests, coordinated with their five repository callers.
+- The obsolete Draft PR reminder's board-status and CI-credit promises; no
+  replacement comment bot or custom governance is introduced.
+
+**Preserved:**
+
+- Native Issues, relationships, read-only WorkGraph planning, PRs, reviews,
+  checks, signed-commit validation and protected merging.
+- Public product-roadmap content, historical evidence and App/secret records.
+  Provider-side retirement requires separate administrator authorization.
+
 ## 2026-10-15 - Retire Custom PR Lifecycle
 
 **Removed:**

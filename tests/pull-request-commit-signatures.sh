@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VALIDATOR="$REPO_ROOT/scripts/validate-pull-request-commit-signatures.sh"
 WORKFLOW="$REPO_ROOT/.github/workflows/pull-request-commit-signatures.yml"
-QUICK_REFERENCE="$REPO_ROOT/docs/workflows/QUICK_REFERENCE.md"
+PLANNING_GUIDE="$REPO_ROOT/docs/planning.md"
 SHELL_BIN="${BASH:-$(command -v bash)}"
 
 if [ ! -f "$VALIDATOR" ]; then
@@ -21,8 +21,8 @@ if [ ! -f "$WORKFLOW" ]; then
   exit 1
 fi
 
-if [ ! -f "$QUICK_REFERENCE" ]; then
-  echo "Expected quick reference doc was not found: $QUICK_REFERENCE" >&2
+if [ ! -f "$PLANNING_GUIDE" ]; then
+  echo "Expected planning guide was not found: $PLANNING_GUIDE" >&2
   exit 1
 fi
 
@@ -71,13 +71,13 @@ if ! grep -Fq 'synchronize' "$WORKFLOW"; then
   exit 1
 fi
 
-if ! grep -Fq 'Signed commit verification is enforced by CI.' "$QUICK_REFERENCE"; then
-  echo "Quick reference must document that signed commit verification is enforced by CI." >&2
+if ! grep -Fq 'Signed commit verification is enforced by CI.' "$PLANNING_GUIDE"; then
+  echo "Planning guide must document that signed commit verification is enforced by CI." >&2
   exit 1
 fi
 
-if ! grep -Fq 'English-only GitHub communication remains reviewer-enforced for now.' "$QUICK_REFERENCE"; then
-  echo "Quick reference must document that English-only GitHub communication is still reviewer-enforced." >&2
+if ! grep -Fq 'English-only GitHub communication remains reviewer-enforced for now.' "$PLANNING_GUIDE"; then
+  echo "Planning guide must document that English-only GitHub communication is still reviewer-enforced." >&2
   exit 1
 fi
 

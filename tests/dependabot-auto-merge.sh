@@ -24,7 +24,6 @@ DEPENDABOT_CONFIG="$REPO_ROOT/.github/dependabot.yml"
 WORKFLOW_INSTRUCTIONS="$REPO_ROOT/.github/instructions/github-workflows.instructions.md"
 WORKFLOW_EXAMPLE="$REPO_ROOT/EXAMPLE_workflow_for_other_repos.yml"
 WORKFLOW_CATALOG_README="$REPO_ROOT/.github/workflows/README.md"
-ROLLOUT_GUIDE="$REPO_ROOT/docs/workflows/ROLLOUT_GUIDE.md"
 QUALITY_WORKFLOW="$REPO_ROOT/.github/workflows/quality.yml"
 
 resolve_base_revision() {
@@ -127,7 +126,6 @@ for direct_fixture in \
   tests/deploy-main-workflow.sh \
   tests/license-compatibility.sh \
   tests/prettier-version-alignment.sh \
-  tests/project-automation-core.sh \
   tests/pull-request-commit-signatures.sh \
   tests/reusable-copilot-instructions-provenance.sh \
   tests/reusable-markdown-lint-scope.sh \
@@ -153,11 +151,6 @@ fi
 
 if [ ! -f "$WORKFLOW_CATALOG_README" ]; then
   echo "Expected workflow catalog README was not found: $WORKFLOW_CATALOG_README" >&2
-  exit 1
-fi
-
-if [ ! -f "$ROLLOUT_GUIDE" ]; then
-  echo "Expected rollout guide was not found: $ROLLOUT_GUIDE" >&2
   exit 1
 fi
 
@@ -764,13 +757,8 @@ if grep -qE 'uses: SecPal/\.github/\.github/workflows/[^[:space:]]+@main$' "$WOR
   exit 1
 fi
 
-grep -q '^    uses: SecPal/\.github/\.github/workflows/project-automation-v2\.yml@<trusted-commit-sha>$' "$WORKFLOW_EXAMPLE" || {
-  echo "Workflow example must pin project automation to a trusted commit SHA." >&2
-  exit 1
-}
-
-grep -q '^    uses: SecPal/\.github/\.github/workflows/draft-pr-reminder\.yml@<trusted-commit-sha>$' "$WORKFLOW_EXAMPLE" || {
-  echo "Workflow example must pin draft PR reminder to a trusted commit SHA." >&2
+grep -q '^    uses: SecPal/\.github/\.github/workflows/reusable-reuse\.yml@<trusted-commit-sha>$' "$WORKFLOW_EXAMPLE" || {
+  echo "Workflow example must pin REUSE validation to a trusted commit SHA." >&2
   exit 1
 }
 
@@ -784,62 +772,62 @@ grep -q '@<trusted-commit-sha>' "$WORKFLOW_CATALOG_README" || {
   exit 1
 }
 
-ROLLOUT_GUIDE_MAIN_REF_PATTERN="^[[:space:]]*uses:[[:space:]]*['\"]?SecPal/\\.github/\\.github/workflows/[^[:space:]'\\\"]+@main['\"]?([[:space:]]*(#.*)?)?$"
+WORKFLOW_MAIN_REF_PATTERN="^[[:space:]]*uses:[[:space:]]*['\"]?SecPal/\\.github/\\.github/workflows/[^[:space:]'\\\"]+@main['\"]?([[:space:]]*(#.*)?)?$"
 
 printf 'Do not copy moving refs such as `@main` into consumer repositories.\n' |
-  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" && {
-    echo "Rollout guide regression guard must allow prose warnings that mention @main." >&2
+  grep -qE "$WORKFLOW_MAIN_REF_PATTERN" && {
+    echo "Workflow catalog regression guard must allow prose warnings that mention @main." >&2
     exit 1
   }
 
-printf 'Example prose: uses: SecPal/.github/.github/workflows/project-automation-v2.yml@main\n' |
-  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" && {
-    echo "Rollout guide regression guard must ignore prose that embeds a uses: pin mid-line." >&2
+printf 'Example prose: uses: SecPal/.github/.github/workflows/reusable-reuse.yml@main\n' |
+  grep -qE "$WORKFLOW_MAIN_REF_PATTERN" && {
+    echo "Workflow catalog regression guard must ignore prose that embeds a uses: pin mid-line." >&2
     exit 1
   }
 
-printf 'Example prose: uses: "SecPal/.github/.github/workflows/project-automation-v2.yml@main"\n' |
-  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" && {
-    echo "Rollout guide regression guard must ignore prose that embeds a quoted uses: pin mid-line." >&2
+printf 'Example prose: uses: "SecPal/.github/.github/workflows/reusable-reuse.yml@main"\n' |
+  grep -qE "$WORKFLOW_MAIN_REF_PATTERN" && {
+    echo "Workflow catalog regression guard must ignore prose that embeds a quoted uses: pin mid-line." >&2
     exit 1
   }
 
-printf '    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@main\n' |
-  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" || {
-    echo "Rollout guide regression guard must still reject uses: pins that track @main." >&2
+printf '    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@main\n' |
+  grep -qE "$WORKFLOW_MAIN_REF_PATTERN" || {
+    echo "Workflow catalog regression guard must still reject uses: pins that track @main." >&2
     exit 1
   }
 
-printf '    uses: SecPal/.github/.github/workflows/project-automation-v2.yml@main # rotate after review\n' |
-  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" || {
-    echo "Rollout guide regression guard must still reject uses: pins that track @main when they carry inline comments." >&2
+printf '    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@main # rotate after review\n' |
+  grep -qE "$WORKFLOW_MAIN_REF_PATTERN" || {
+    echo "Workflow catalog regression guard must still reject uses: pins that track @main when they carry inline comments." >&2
     exit 1
   }
 
-printf '    uses: "SecPal/.github/.github/workflows/project-automation-v2.yml@main"\n' |
-  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" || {
-    echo "Rollout guide regression guard must still reject quoted uses: pins that track @main." >&2
+printf '    uses: "SecPal/.github/.github/workflows/reusable-reuse.yml@main"\n' |
+  grep -qE "$WORKFLOW_MAIN_REF_PATTERN" || {
+    echo "Workflow catalog regression guard must still reject quoted uses: pins that track @main." >&2
     exit 1
   }
 
-printf '    uses: "SecPal/.github/.github/workflows/project-automation-v2.yml@main" # rotate after review\n' |
-  grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" || {
-    echo "Rollout guide regression guard must still reject quoted uses: pins that track @main when they carry inline comments." >&2
+printf '    uses: "SecPal/.github/.github/workflows/reusable-reuse.yml@main" # rotate after review\n' |
+  grep -qE "$WORKFLOW_MAIN_REF_PATTERN" || {
+    echo "Workflow catalog regression guard must still reject quoted uses: pins that track @main when they carry inline comments." >&2
     exit 1
   }
 
-if grep -qE "$ROLLOUT_GUIDE_MAIN_REF_PATTERN" "$ROLLOUT_GUIDE"; then
-  echo "Rollout guide must not tell cross-repository consumers to track moving @main refs." >&2
+if grep -qE "$WORKFLOW_MAIN_REF_PATTERN" "$WORKFLOW_CATALOG_README"; then
+  echo "Workflow catalog must not tell cross-repository consumers to track moving @main refs." >&2
   exit 1
 fi
 
-if grep -q '@v1\.0\.0' "$ROLLOUT_GUIDE"; then
-  echo "Rollout guide must not steer cross-repository consumers to stale release tags." >&2
+if grep -q '@v1\.0\.0' "$WORKFLOW_CATALOG_README"; then
+  echo "Workflow catalog must not steer cross-repository consumers to stale release tags." >&2
   exit 1
 fi
 
-grep -q '@<trusted-commit-sha>' "$ROLLOUT_GUIDE" || {
-  echo "Rollout guide must document trusted commit SHA pinning for reusable workflows." >&2
+grep -q '@<trusted-commit-sha>' "$WORKFLOW_CATALOG_README" || {
+  echo "Workflow catalog must document trusted commit SHA pinning for reusable workflows." >&2
   exit 1
 }
 
