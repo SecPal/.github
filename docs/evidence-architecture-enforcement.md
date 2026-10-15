@@ -135,7 +135,7 @@ separately authorized `bash scripts/sync-required-checks.sh --repo .github --app
 the operator must authenticate accepted protected-main source, current protection,
 successful hosted execution, the exact check and producer identity, and the
 reviewed protection delta. Independent read-back must confirm ten unique
-contexts, this app binding, all retained bindings, `strict=false`, and unchanged
+contexts, this app binding, all retained bindings, `strict=true`, and unchanged
 surrounding protection. Existing protection and lifecycle gates retain their own
 authority.
 

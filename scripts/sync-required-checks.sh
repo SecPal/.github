@@ -62,6 +62,13 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "check-conflicts / Detect Git Conflict Markers",
     "AI Instructions / Validate AI Instructions"
   ],
+  "deployment": [
+    "Repository Contract",
+    "REUSE Compliance / Check REUSE Compliance",
+    "Markdown and Shell",
+    "Quadlet Contract (amd64)",
+    "Quadlet Contract (arm64)"
+  ],
   "frontend": [
     "Check REUSE Compliance / Check REUSE Compliance",
     "Check License Compatibility",
@@ -98,8 +105,21 @@ EOF
 # Exact binding policy in the existing required-check owner, not another
 # membership inventory. GitHub Actions (github-actions, owner github) was
 # independently authenticated through App metadata and successful
-# quality.yml/evidence-architecture jobs. Membership does not imply activation.
-REQUIRED_APP_BINDINGS_JSON='{ ".github": {"Validate Signed PR Commits": 15368, "Evidence Architecture PR Gate": 15368} }'
+# quality.yml/evidence-architecture jobs. Deployment bindings were independently
+# read from protected main. Membership does not imply activation.
+REQUIRED_APP_BINDINGS_JSON='{
+  ".github": {
+    "Validate Signed PR Commits": 15368,
+    "Evidence Architecture PR Gate": 15368
+  },
+  "deployment": {
+    "Repository Contract": 15368,
+    "REUSE Compliance / Check REUSE Compliance": 15368,
+    "Markdown and Shell": 15368,
+    "Quadlet Contract (amd64)": 15368,
+    "Quadlet Contract (arm64)": 15368
+  }
+}'
 
 usage() {
   cat <<'EOF'
@@ -140,7 +160,7 @@ required_checks_strict() {
   local repo="$1"
 
   ensure_known_repository "$repo"
-  printf 'false\n'
+  printf 'true\n'
 }
 
 build_payload() {
@@ -236,10 +256,19 @@ build_live_preserving_payload() {
     }' "$live_state_file"
 }
 
+review_baseline_managed() {
+  # Required-check coverage does not extend Deployment's review authority.
+  [[ "$1" != deployment ]]
+}
+
 build_review_payload() {
   local repo="$1"
 
   ensure_known_repository "$repo"
+  if ! review_baseline_managed "$repo"; then
+    echo "Review baseline is not managed for SecPal/$repo." >&2
+    exit 2
+  fi
 
   jq -n \
     --argjson count "$REQUIRED_APPROVING_REVIEW_COUNT" \
@@ -420,7 +449,7 @@ fi
 while IFS= read -r configured_repo; do
   if [[ "$mode" == "apply" ]]; then
     apply_repository "$configured_repo"
-  else
+  elif review_baseline_managed "$configured_repo"; then
     apply_review_repository "$configured_repo"
   fi
 done < <(known_repositories)
