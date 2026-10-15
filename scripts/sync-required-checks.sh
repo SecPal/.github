@@ -256,10 +256,19 @@ build_live_preserving_payload() {
     }' "$live_state_file"
 }
 
+review_baseline_managed() {
+  # Required-check coverage does not extend Deployment's review authority.
+  [[ "$1" != deployment ]]
+}
+
 build_review_payload() {
   local repo="$1"
 
   ensure_known_repository "$repo"
+  if ! review_baseline_managed "$repo"; then
+    echo "Review baseline is not managed for SecPal/$repo." >&2
+    exit 2
+  fi
 
   jq -n \
     --argjson count "$REQUIRED_APPROVING_REVIEW_COUNT" \
@@ -440,7 +449,7 @@ fi
 while IFS= read -r configured_repo; do
   if [[ "$mode" == "apply" ]]; then
     apply_repository "$configured_repo"
-  else
+  elif review_baseline_managed "$configured_repo"; then
     apply_review_repository "$configured_repo"
   fi
 done < <(known_repositories)

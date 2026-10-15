@@ -443,6 +443,24 @@ for unsupported_repository in operations GuardGuide guardguide.de Assure Visit d
   done
 done
 
+# Required-check enrollment must not expand review-baseline write authority.
+for operation in --print-review-payload --apply-review-baseline; do
+  deployment_review_log="$TMP_DIR/deployment-${operation#--}.log"
+  set +e
+  deployment_review_output="$(GH_CALL_LOG="$deployment_review_log" PATH="$fake_bin" \
+    "$SHELL_BIN" "$SYNC_SCRIPT" --repo deployment "$operation" 2>&1)"
+  deployment_review_status=$?
+  set -e
+  if [[ $deployment_review_status -ne 2 || "$deployment_review_output" != *"Review baseline is not managed for SecPal/deployment"* ]]; then
+    echo "Deployment review-baseline mode must be rejected without provider access" >&2
+    exit 1
+  fi
+  if [[ -e "$deployment_review_log" ]]; then
+    echo "Deployment review-baseline rejection must precede every provider call" >&2
+    exit 1
+  fi
+done
+
 review_log="$TMP_DIR/review.log"
 GH_CALL_LOG="$review_log" PATH="$fake_bin" "$SHELL_BIN" "$SYNC_SCRIPT" \
   --repo android --apply-review-baseline >/dev/null
@@ -741,8 +759,9 @@ done
 
 status_repositories="$(sed -n 's#^PATCH[[:space:]]repos/SecPal/\([^/]*\)/branches/main/protection/required_status_checks.*#\1#p' "$all_status_log")"
 review_repositories="$(sed -n 's#^[^[:space:]]*[[:space:]]repos/SecPal/\([^/]*\)/branches/main/protection/required_pull_request_reviews.*#\1#p' "$all_review_log")"
-if [[ -z "$status_repositories" || "$review_repositories" != "$status_repositories" ]]; then
-  echo "Review baseline must iterate over the required-check managed repository set" >&2
+expected_review_repositories="$(printf '%s\n' "${expected_repositories[@]}" | grep -vx deployment)"
+if [[ "$status_repositories" != "$(printf '%s\n' "${expected_repositories[@]}")" || "$review_repositories" != "$expected_review_repositories" ]]; then
+  echo "Required checks must cover seven repositories while preserving the original review-baseline scope" >&2
   echo "Status repositories:" >&2
   echo "$status_repositories" >&2
   echo "Review repositories:" >&2

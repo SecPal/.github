@@ -363,7 +363,8 @@ bash scripts/sync-required-checks.sh --apply
 
 Private `operations` retains its separately owned protection and is outside
 this public required-check inventory. Deployment's five existing checks remain
-bound to GitHub Actions App `15368`.
+bound to GitHub Actions App `15368`. The review-baseline mode retains its
+original six-repository scope and does not manage Deployment's review settings.
 
 **What It Does:**
 
