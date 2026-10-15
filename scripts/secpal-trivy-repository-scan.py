@@ -206,13 +206,18 @@ def _verify_composer_severity_fallback(native: dict[str, Any] | None,
                         "ID": "php-security-advisories",
                         "Name": "PHP Security Advisories Database",
                         "URL": "https://github.com/FriendsOfPHP/security-advisories",
-                    }
-                    or not isinstance(vendors, dict) or not vendors
+                    }):
+                raise ContractError("severity fallback native provenance is unqualified")
+            if finding["severity"] == "UNKNOWN":
+                # The qualified native UNKNOWN representation omits both
+                # provenance fields, not an explicit empty/null/malformed map.
+                if "VendorSeverity" in vulnerability:
+                    raise ContractError("severity fallback native provenance is unqualified")
+            elif (not isinstance(vendors, dict) or not vendors
                     or any(not isinstance(k, str) or not k or type(v) is not int
                            or v not in range(5) for k, v in vendors.items())
                     or set(vendors) - {"ghsa", "nvd"}
                     or vendors.get("nvd", 0) != 0
-                    or finding["severity"] == "UNKNOWN"
                     or ("UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL").index(
                         finding["severity"]) != vendors.get("ghsa")):
                 raise ContractError("severity fallback native provenance is unqualified")

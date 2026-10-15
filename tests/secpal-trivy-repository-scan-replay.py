@@ -14,6 +14,7 @@ import os
 import runpy
 import secrets
 import shutil
+import signal
 import subprocess
 import tarfile
 import tempfile
@@ -229,6 +230,105 @@ def replay_source_binding(root: Path, action_path: Path, environment: dict) -> d
             "caller_mutated_during_scan": mutated.is_set(),
         }
     return {"governance_fixture_commit": governance_commit, "policy_identity": result["policy"], **outcomes}
+
+
+def replay_composer_unknown(root: Path, action_path: Path, environment: dict,
+                            scan_command: list[str], cache: Path, module) -> dict:
+    """Exercise the real omitted-source/omitted-vendor UNKNOWN through the action."""
+    workspace = root / "unknown-workspace"
+    workspace.mkdir()
+    (workspace / "composer.json").write_text(json.dumps({
+        "name": "secpal/unknown-severity-fixture",
+        "require-dev": {"symfony/http-foundation": "v8.0.15"},
+    }) + "\n")
+    (workspace / "composer.lock").write_text(json.dumps({
+        "packages": [], "packages-dev": [{"name": "symfony/http-foundation", "version": "v8.0.15"}],
+    }) + "\n")
+    def git(*arguments: str) -> str:
+        return subprocess.check_output(["git", "-C", str(workspace), *arguments], text=True).strip()
+    git("init", "--quiet")
+    git("add", ".")
+    git("-c", "user.name=SecPal Test", "-c", "user.email=test@secpal.app",
+        "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "UNKNOWN Composer fixture")
+    commit = git("rev-parse", "HEAD")
+    native_path = root / "unknown-native.json"
+    command = list(scan_command)
+    command[command.index("--output") + 1] = str(native_path)
+    command[-1] = str(workspace)
+    scanned = subprocess.run(command, env={"HOME": str(root)}, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.PIPE, check=True, timeout=60)
+    native = json.loads(native_path.read_text())
+    unknown = [v for item in native.get("Results", []) for v in item.get("Vulnerabilities", [])
+               if v.get("Severity") == "UNKNOWN"]
+    diagnostics = scanned.stderr.decode("utf-8")
+    if (len(unknown) != 1 or unknown[0].get("VulnerabilityID") != "CVE-2026-108082"
+            or any("SeveritySource" in v or "VendorSeverity" in v for v in unknown)
+            or any(item.get("Secrets") for item in native.get("Results", []))
+            or diagnostics.count("\tWARN\t" + module.SEVERITY_FALLBACK_DIAGNOSTIC) != 1):
+        raise RuntimeError("live UNKNOWN native representation changed; requalify, never skip")
+    scanner = {
+        "name": "trivy", "version": TRIVY_VERSION,
+        "immutable_id": "sha256:" + TRIVY_ARCHIVE_SHA256,
+        "configuration_sha256": module.configuration_identity(),
+    }
+    module.verify_diagnostics(diagnostics, cache, native=native, workspace=str(workspace), scanner=scanner)
+    native_database = module.database_identity(
+        [cache / "db/metadata.json"], [cache / "db/trivy.db"],
+        datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    )
+    if native_database["status"] != "FRESH":
+        raise RuntimeError("UNKNOWN native probe database is stale")
+    native_path.unlink()
+    runner = root / "unknown-runner"
+    runner.mkdir(mode=0o700)
+    action_environment = {**environment,
+        "GITHUB_WORKSPACE": str(workspace), "GITHUB_SHA": commit,
+        "GITHUB_REPOSITORY": "SecPal/repository-scan-fixture",
+        "RUNNER_TEMP": str(runner), "GITHUB_OUTPUT": str(runner / "output"),
+        "GITHUB_STEP_SUMMARY": str(runner / "summary"),
+    }
+    script = dedent(action_path.read_text().split("      run: |\n", 1)[1].split("\n    - name:", 1)[0])
+    action = subprocess.Popen(["bash", "-c", script], env=action_environment,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        action.communicate(timeout=180)
+    except subprocess.TimeoutExpired:
+        os.killpg(action.pid, signal.SIGTERM)
+        try:
+            action.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(action.pid, signal.SIGKILL)
+            action.communicate()
+        raise RuntimeError("UNKNOWN Composer action exceeded its bounded execution") from None
+    if action.returncode:
+        raise RuntimeError("UNKNOWN Composer maintained action failed")
+    outputs = dict(line.split("=", 1) for line in (runner / "output").read_text().splitlines())
+    evidence = Path(outputs["evidence-path"])
+    result = json.loads((evidence / "result.json").read_text())
+    import jsonschema
+    jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v2.schema.json").read_text()))
+    findings = result["findings"]
+    if (result["operation"]["status"] != "SUCCEEDED" or result["gate_state"] != "REVIEW_REQUIRED"
+            or result["subject"] != {"repository": "SecPal/repository-scan-fixture", "commit": commit}
+            or result["database"]["status"] != "FRESH"
+            or result["scanner"] != scanner
+            or result["policy"] != module._validate_policy(
+                json.loads(POLICY.read_text()), result["completed_at"])
+            or result["summary"] != {"total": 1, "actionable": 0, "review_required": 1, "excepted": 0}
+            or len(findings) != 1 or findings[0]["class"] != "VULNERABILITY"
+            or findings[0]["rule_id"] != "CVE-2026-108082" or findings[0]["severity"] != "UNKNOWN"
+            or findings[0]["package"] != "symfony/http-foundation"
+            or findings[0]["installed_version"] != "v8.0.15"):
+        raise RuntimeError("live UNKNOWN Composer fixture changed or lost REVIEW_REQUIRED; requalify, never skip")
+    if ({path.name for path in evidence.iterdir()} != {"result.json"}
+            or list(runner.glob("secpal-trivy-tool-*")) or list(runner.glob("secpal-trivy-cache-*"))
+            or any(marker in (runner / "summary").read_bytes() for marker in (b'"Code"', b'"Match"'))):
+        raise RuntimeError("UNKNOWN Composer replay retained private scanner material")
+    return {"commit": commit, "gate_state": result["gate_state"], "summary": result["summary"],
+            "native_omitted_severity_source_and_vendor": True,
+            "native_database": native_database,
+            "database": result["database"], "scanner": result["scanner"],
+            "policy": result["policy"], "cleanup": "PASS"}
 
 
 def main() -> int:
@@ -499,6 +599,9 @@ def main() -> int:
             raise RuntimeError("maintained action exposed synthetic capture material")
         if list(runner.glob("secpal-trivy-tool-*")) or list(runner.glob("secpal-trivy-cache-*")):
             raise RuntimeError("maintained action retained private scanner material")
+        unknown_composer = replay_composer_unknown(
+            root, action_path, action_environment, scan_command, cache, module,
+        )
         source_binding = replay_source_binding(root, action_path, action_environment)
         # Inline source suppression is rejected from immutable source before
         # Trivy can omit ignored IaC findings from its native representation.
@@ -549,6 +652,7 @@ def main() -> int:
                     "configuration_identity": action_result["scanner"]["configuration_sha256"],
                     "policy_identity": action_result["policy"],
                     "composer_advisory_qualified": True,
+                    "unknown_composer": unknown_composer,
                     "generic_replay_passed": True,
                     "short_line_redaction": "PASS",
                     "long_line_redaction": "PASS",

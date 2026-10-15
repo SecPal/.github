@@ -234,7 +234,7 @@ remain fail-closed when the advisory is present.
 The pinned [`autoDetectSeverity` implementation](https://github.com/aquasecurity/trivy/blob/v0.74.0/pkg/vulnerability/vulnerability.go)
 first considers the advisory source and NVD (and GHSA for GHSA IDs). Its last
 fallback returns the database severity with an empty source and emits the full
-versioned documentation advisory through `sync.OnceFunc`. The reviewed Composer
+versioned documentation advisory through `sync.OnceFunc`. The known-severity Composer
 CVE representation has no severity for its advisory source, no usable NVD
 severity, and a GHSA `VendorSeverity` entry matching the emitted fallback severity.
 Only GHSA and an optional NVD UNKNOWN entry qualify this fallback; additional
@@ -243,6 +243,20 @@ An advisory-source entry, even UNKNOWN, would return before that warning; an
 NVD UNKNOWN entry can fall through. GHSA IDs and package-specific overrides are
 outside this bounded qualification. The native JSON omits empty
 `SeveritySource`; an explicit empty or malformed source is rejected.
+
+A separately qualified native `UNKNOWN` representation omits **both**
+`SeveritySource` and `VendorSeverity`. Trivy's pinned DB dependency normalizes
+missing severity information to `UNKNOWN` and omits UNKNOWN vendor entries;
+native JSON omits those empty fields. This source explanation is not a claim
+about the build revision of a downloaded database: actual fresh-database native
+qualification independently confirmed the field omissions. Only absent keys
+qualify; explicit empty, null, malformed or populated vendor metadata is not
+equivalent in this UNKNOWN branch. The Composer/CVE/advisory, scanner, exact
+workspace, diagnostic framing/count and database requirements remain mandatory.
+No vendor attribution or known severity is invented. The finding remains
+`UNKNOWN` and the existing policy classifies it as `REVIEW_REQUIRED`, never
+`CLEAN` merely because scanning succeeded. A CLEAN-only caller still blocks it.
+Other scanner/parser warnings and errors remain fail-closed.
 
 This does not attribute the fallback severity to a particular vendor. Trivy DB
 v2 explicitly describes its fallback `Severity` as not source-attributable.
@@ -265,3 +279,22 @@ private native files are deleted. Unknown diagnostics and real parser/process
 failures remain negative cases. Callers must explicitly review and adopt the
 accepted immutable scanner revision; this correction does not change any API
 caller pin.
+
+The secret-free `composer-unknown-0.74.0-native.json` fixture retains the bounded
+native vulnerability fields observed on 2026-10-15 for
+`symfony/http-foundation v8.0.15` / `CVE-2026-108082`, with only the private
+artifact path replaced by `.`. Native archive identity and fresh database
+identity were authenticated; neither source nor vendor severity fields were
+present. Unit mutations reject explicit empty/null/malformed fields, unsupported
+vendor metadata or advisory provenance, substituted scan surfaces and stale
+databases through the maintained evaluator.
+
+The maintained live replay now also creates that two-file Composer development
+fixture, requires the actual native omissions and advisory, and runs the
+archived candidate action to produce schema-validated `REVIEW_REQUIRED` with
+exact subject/configuration/policy and fresh database identity. Its private
+material is removed. This is a date-bound live intelligence fixture: if a future
+database changes its severity or advisory, the test fails with a requalification
+requirement; it never skips the case or fabricates continued UNKNOWN coverage.
+The original hosted API diagnostics/database were not retained, so this current
+qualification does not establish the historical record-level failure cause.

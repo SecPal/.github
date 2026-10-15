@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-15 - Qualify Composer UNKNOWN Severity
+
+**Fixed:**
+
+- Admit the independently qualified Trivy 0.74.0 Composer CVE fallback with
+  UNKNOWN severity and both provenance keys absent. Preserve the findings as
+  review-required instead of treating this representation as a scanner failure.
+- Keep malformed or unsupported provenance, unexpected diagnostics, stale
+  databases, identity failures and redaction failures closed. No caller pin,
+  security exception or CLEAN-only acceptance gate is changed.
+
 ## 2026-10-15 - Retire Unused Project Board Automation
 
 **Removed:**

@@ -420,10 +420,14 @@ class RepositoryScanContractTests(unittest.TestCase):
         native = native_result()
         composer = json.loads((FIXTURES / "composer-0.74.0-native.json").read_text())
         native["Results"][0] = composer["Results"][0]
+        unknown = json.loads((FIXTURES / "composer-unknown-0.74.0-native.json").read_text())
+        native["Results"][0]["Vulnerabilities"].extend(unknown["Results"][0]["Vulnerabilities"])
         advisory = '2026-10-04T12:00:00Z\tWARN\tUsing severities from other vendors for some vulnerabilities. Read https://trivy.dev/docs/v0.74/guide/scanner/vulnerability#severity-selection for details.\n'
         process, result = run_evaluate_fixture(native, diagnostics=advisory)
         self.assertEqual(process.returncode, 0)
         self.assertEqual(result["gate_state"], "ACTIONABLE")
+        self.assertTrue(any(f["class"] == "VULNERABILITY" and f["severity"] == "UNKNOWN" for f in result["findings"]))
+        self.assertGreaterEqual(result["summary"]["review_required"], 1)
         self.assertEqual({f["class"] for f in result["findings"]}, {"VULNERABILITY", "MISCONFIGURATION", "SECRET"})
         self.assertEqual(result["subject"]["repository"], "SecPal/example")
         self.assertRegex(result["subject"]["commit"], r"^[0-9a-f]{40}$")
@@ -439,6 +443,72 @@ class RepositoryScanContractTests(unittest.TestCase):
         self.assertNotEqual(process.returncode, 0)
         self.assertEqual(failed["gate_state"], "UNKNOWN_STALE")
         self.assertEqual(failed["operation"]["failure_code"], "SCANNER_FAILURE")
+
+    def test_composer_unknown_advisory_requires_review_not_clean(self) -> None:
+        native = json.loads((FIXTURES / "composer-unknown-0.74.0-native.json").read_text())
+        advisory = "2026-10-04T12:00:00Z\tWARN\t" + self.module.SEVERITY_FALLBACK_DIAGNOSTIC + "\n"
+        process, result = run_evaluate_fixture(native, diagnostics=advisory)
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(result["operation"]["status"], "SUCCEEDED")
+        self.assertEqual(result["gate_state"], "REVIEW_REQUIRED")
+        self.assertEqual(result["summary"], {
+            "total": 1, "actionable": 0, "review_required": 1, "excepted": 0,
+        })
+        self.assertEqual(result["findings"][0]["severity"], "UNKNOWN")
+        self.assertNotIn("exception", result["findings"][0])
+        self.assertEqual(result["subject"]["repository"], "SecPal/example")
+        self.assertEqual(result["scanner"]["configuration_sha256"], self.module.configuration_identity())
+        self.assertEqual(result["database"], valid_database())
+        process, failed = run_evaluate_fixture(
+            native, diagnostics=advisory + "2026-10-04T12:00:00Z\tWARN\tpartial scan\n",
+        )
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(failed["operation"]["failure_code"], "SCANNER_FAILURE")
+
+    def test_composer_unknown_rejects_explicit_or_unqualified_provenance(self) -> None:
+        native = json.loads((FIXTURES / "composer-unknown-0.74.0-native.json").read_text())
+        advisory = "2026-10-04T12:00:00Z\tWARN\t" + self.module.SEVERITY_FALLBACK_DIAGNOSTIC + "\n"
+        cases = []
+        for field, value in (
+            ("SeveritySource", ""), ("SeveritySource", None), ("SeveritySource", False),
+            ("SeveritySource", []), ("SeveritySource", {}), ("SeveritySource", "ghsa"),
+            ("VendorSeverity", None), ("VendorSeverity", {}), ("VendorSeverity", []),
+            ("VendorSeverity", False), ("VendorSeverity", {"ghsa": 0}),
+            ("VendorSeverity", {"nvd": 0}), ("VendorSeverity", {"ghsa": 3}),
+            ("VendorSeverity", {"ghsa": True}), ("VendorSeverity", {"": 0}),
+            ("VendorSeverity", {"php-security-advisories": 0}),
+            ("DataSource", None), ("DataSource", {}),
+            ("DataSource", {"ID": "php-security-advisories"}),
+            ("VulnerabilityID", "GHSA-abcd-abcd-abcd"), ("Severity", "HIGH"),
+        ):
+            changed = copy.deepcopy(native)
+            changed["Results"][0]["Vulnerabilities"][0][field] = value
+            cases.append(changed)
+        for field, value in (("Type", "npm"), ("Class", "os-pkgs")):
+            changed = copy.deepcopy(native)
+            changed["Results"][0][field] = value
+            cases.append(changed)
+        for changed in cases:
+            with self.subTest(native=changed):
+                process, failed = run_evaluate_fixture(changed, diagnostics=advisory)
+                self.assertNotEqual(process.returncode, 0)
+                self.assertEqual(failed["gate_state"], "UNKNOWN_STALE")
+                self.assertEqual(failed["operation"]["failure_code"], "SCANNER_FAILURE")
+
+    def test_composer_unknown_preserves_database_and_surface_guards(self) -> None:
+        native = json.loads((FIXTURES / "composer-unknown-0.74.0-native.json").read_text())
+        advisory = "2026-10-04T12:00:00Z\tWARN\t" + self.module.SEVERITY_FALLBACK_DIAGNOSTIC + "\n"
+        stale = valid_database()
+        stale["next_update"] = "2026-09-16T10:09:00Z"
+        process, failed = run_evaluate_fixture(native, stale, diagnostics=advisory)
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(failed["operation"]["failure_code"], "DATABASE_FAILURE")
+        for field, value in (("ArtifactName", "/substituted"), ("SchemaVersion", 1)):
+            changed = copy.deepcopy(native)
+            changed[field] = value
+            process, failed = run_evaluate_fixture(changed, diagnostics=advisory)
+            self.assertNotEqual(process.returncode, 0)
+            self.assertEqual(failed["operation"]["failure_code"], "MALFORMED_OUTPUT")
 
     def test_suppressed_native_findings_fail_closed(self) -> None:
         native = native_result()
