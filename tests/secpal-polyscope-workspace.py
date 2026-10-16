@@ -523,6 +523,14 @@ class FilesystemAdmissionTests(unittest.TestCase):
                         with patch.dict(workspace.os.environ, override):
                             self.assertEqual(workspace.workspace_result(
                                 "SecPal/.github", row, None)["workspace_id"], row["id"])
+                    foreign_tree = root / "foreign-worktree"
+                    foreign_tree.mkdir()
+                    subprocess.run(["git", "-C", str(clone), "config", "core.worktree",
+                                    str(foreign_tree)], check=True)
+                    with self.assertRaisesRegex(RuntimeError, "workspace-git-toplevel"):
+                        workspace.workspace_result("SecPal/.github", row, None)
+                    subprocess.run(["git", "-C", str(clone), "config", "--unset",
+                                    "core.worktree"], check=True)
                     monitor_marker = root / "monitor-executed"
                     monitor = root / "monitor"
                     monitor.write_text("#!/bin/sh\ntouch " + shlex.quote(str(monitor_marker)) +

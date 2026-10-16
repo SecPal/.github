@@ -173,6 +173,10 @@ def workspace_result(repo, row, sha, *, created=False):
             or path.resolve(strict=True) != path
             or path.parent != root / row["repo_id"]):
         raise RuntimeError("workspace-path")
+    top = command(["/usr/bin/git", "-C", str(path), "rev-parse", "--show-toplevel"],
+                  operation="workspace-git-toplevel")
+    if Path(top) != path:
+        raise RuntimeError("workspace-git-toplevel")
     allowed = {f"https://github.com/{repo}.git", f"git@github.com:{repo}.git"}
     for options, operation in [(["--all"], "workspace-git-origin"),
                                (["--push", "--all"], "workspace-git-push-origin")]:
