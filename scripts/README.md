@@ -475,7 +475,11 @@ proxies and API redirects cannot replace that authority. Dispatch
 requires the existing executable managed Git wrapper through
 `POLYSCOPE_GIT_BIN_DIR` before setup/execution; missing installation fails closed. Direct Git commands,
 including absolute Git paths, use that wrapper. Admission uses system Git with
-Git override variables removed only from its child environment. Issue
+Git override variables removed from its child environment; dispatch also clears
+Git's native repository-local/configuration overrides while preserving identity
+and transport settings. Every effective fetch/push URL must match the expected
+repository. Admission preserves the index and does not run repository status
+hooks or claim that pending work is clean. Issue
 and PR metadata reach the bridge through stdin, never process arguments.
 
 A serialized create uses a durable in-flight fence in its lock file. After a

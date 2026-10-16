@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tempfile
 import time
@@ -57,7 +58,7 @@ class CoordinatorTests(unittest.TestCase):
 
     def result(self, repo, row, sha, *, created=False):
         return {"workspace_id": row["id"], "path": row["path"], "created": created,
-                "head": sha or "a" * 40, "branch": row["branch"], "dirty": True}
+                "head": sha or "a" * 40, "branch": row["branch"]}
 
     def create(self, *args, **kwargs):
         self.calls += 1
@@ -86,7 +87,7 @@ class CoordinatorTests(unittest.TestCase):
         self.rows.append(self.row)
         before = [p.read_bytes() for p in [source, evidence]]
         result = self.ensure()
-        self.assertTrue(result["dirty"])
+        self.assertEqual(result["workspace_id"], self.row["id"])
         self.assertFalse(result["created"])
         self.assertEqual(before, [p.read_bytes() for p in [source, evidence]])
         self.assertEqual(self.calls, 0)
@@ -292,6 +293,26 @@ class DispatchTests(unittest.TestCase):
             wrapper = str(workspace.GIT_BIN_DIR / "git")
             execute.assert_called_once_with(wrapper, [wrapper, "status"])
 
+    def test_dispatch_clears_git_repository_and_config_overrides(self):
+        overrides = {"GIT_DIR": "/foreign/repository", "GIT_WORK_TREE": "/foreign/tree",
+                     "GIT_INDEX_FILE": "/foreign/index", "GIT_CONFIG_COUNT": "1",
+                     "GIT_CONFIG_KEY_0": "remote.origin.pushurl",
+                     "GIT_CONFIG_VALUE_0": "https://untrusted.invalid/repository",
+                     "GIT_AUTHOR_NAME": "Existing Author"}
+        def execute(*args):
+            for name in overrides:
+                if name != "GIT_AUTHOR_NAME":
+                    self.assertFalse(name in workspace.os.environ, "unexpected Git selector: " + name)
+            self.assertEqual(workspace.os.environ["GIT_AUTHOR_NAME"], "Existing Author")
+            raise SystemExit(0)
+        with (patch.object(workspace, "resolve", return_value=Path("/exact")),
+              patch.object(workspace.os, "chdir"),
+              patch.object(workspace.os, "execvp", side_effect=execute),
+              patch.dict(workspace.os.environ, overrides)):
+            with self.assertRaises(SystemExit):
+                workspace.main(["exec", "--repo", "SecPal/.github", "--workspace-id",
+                                "73355d10", "--", "git", "status"])
+
     def test_missing_command_never_provisions_an_execution_context(self):
         with (patch.object(workspace, "ensure") as ensure,
               patch.object(workspace.os, "execvp") as execute):
@@ -481,7 +502,7 @@ class FilesystemAdmissionTests(unittest.TestCase):
             with patch.object(workspace, "CLONE_ROOT", root):
                 with patch.object(workspace, "git_head", return_value="a" * 40):
                     result = workspace.workspace_result("SecPal/.github", row, None)
-                    self.assertTrue(result["dirty"])
+                    self.assertEqual(result["workspace_id"], row["id"])
                     self.assertEqual(pending.read_bytes(), b"uncommitted")
                     fake_bin = root / "untrusted-bin"
                     fake_bin.mkdir()
@@ -491,7 +512,7 @@ class FilesystemAdmissionTests(unittest.TestCase):
                     fake_git.chmod(0o755)
                     with patch.dict(workspace.os.environ, {"PATH": str(fake_bin) + ":/usr/bin:/bin"}):
                         admitted = workspace.workspace_result("SecPal/.github", row, None)
-                        self.assertTrue(admitted["dirty"])
+                        self.assertEqual(admitted["workspace_id"], row["id"])
                     self.assertFalse(marker.exists())
                     for override in [
                         {"GIT_DIR": str(root / "wrong-git-dir")},
@@ -500,8 +521,39 @@ class FilesystemAdmissionTests(unittest.TestCase):
                          "GIT_CONFIG_VALUE_0": "https://github.com/other/repository.git"},
                     ]:
                         with patch.dict(workspace.os.environ, override):
-                            self.assertTrue(workspace.workspace_result(
-                                "SecPal/.github", row, None)["dirty"])
+                            self.assertEqual(workspace.workspace_result(
+                                "SecPal/.github", row, None)["workspace_id"], row["id"])
+                    monitor_marker = root / "monitor-executed"
+                    monitor = root / "monitor"
+                    monitor.write_text("#!/bin/sh\ntouch " + shlex.quote(str(monitor_marker)) +
+                                       "\nprintf 'token\\0'\n")
+                    monitor.chmod(0o755)
+                    subprocess.run(["git", "-C", str(clone), "add", "pending"], check=True)
+                    subprocess.run(["git", "-C", str(clone), "config", "core.fsmonitor",
+                                    str(monitor)], check=True)
+                    index = clone / ".git/index"
+                    before_index = index.read_bytes()
+                    workspace.workspace_result("SecPal/.github", row, None)
+                    self.assertFalse(monitor_marker.exists())
+                    self.assertEqual(index.read_bytes(), before_index)
+                    for extra in ["https://untrusted.invalid/repository.git",
+                                  "https://github.com/other/repository.git"]:
+                        subprocess.run(["git", "-C", str(clone), "config", "--add",
+                                        "remote.origin.pushurl",
+                                        "https://github.com/SecPal/.github.git"], check=True)
+                        subprocess.run(["git", "-C", str(clone), "config", "--add",
+                                        "remote.origin.pushurl", extra], check=True)
+                        with self.assertRaisesRegex(RuntimeError, "workspace-git-push-origin"):
+                            workspace.workspace_result("SecPal/.github", row, None)
+                        subprocess.run(["git", "-C", str(clone), "config", "--unset-all",
+                                        "remote.origin.pushurl"], check=True)
+                    subprocess.run(["git", "-C", str(clone), "config",
+                                    "url.https://untrusted.invalid/.pushInsteadOf",
+                                    "https://github.com/"], check=True)
+                    with self.assertRaisesRegex(RuntimeError, "workspace-git-push-origin"):
+                        workspace.workspace_result("SecPal/.github", row, None)
+                    subprocess.run(["git", "-C", str(clone), "config", "--unset-all",
+                                    "url.https://untrusted.invalid/.pushInsteadOf"], check=True)
                     for change in [{"branch": "foreign"}, {"path": str(root)},
                                    {"repo_id": "foreign"}]:
                         with self.assertRaises(RuntimeError):

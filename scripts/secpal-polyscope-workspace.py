@@ -173,18 +173,23 @@ def workspace_result(repo, row, sha, *, created=False):
             or path.resolve(strict=True) != path
             or path.parent != root / row["repo_id"]):
         raise RuntimeError("workspace-path")
-    remote = command(["/usr/bin/git", "-C", str(path), "remote", "get-url", "origin"], operation="workspace-git-origin")
-    if remote not in (f"https://github.com/{repo}.git", f"git@github.com:{repo}.git"):
-        raise RuntimeError("workspace-git-origin")
+    allowed = {f"https://github.com/{repo}.git", f"git@github.com:{repo}.git"}
+    for options, operation in [(["--all"], "workspace-git-origin"),
+                               (["--push", "--all"], "workspace-git-push-origin")]:
+        urls = command(["/usr/bin/git", "-C", str(path), "remote", "get-url",
+                        *options, "origin"], operation=operation).splitlines()
+        if not urls or any(url not in allowed for url in urls):
+            raise RuntimeError(operation)
     branch = command(["/usr/bin/git", "-C", str(path), "symbolic-ref", "--short", "HEAD"], operation="workspace-git-branch")
     if branch != row["branch"] or branch in ("main", "master", "production"):
         raise RuntimeError("workspace-branch")
     head = git_head(path)
     if sha is not None and head != sha:
         raise RuntimeError("workspace-head")
-    dirty = bool(command(["/usr/bin/git", "-C", str(path), "status", "--porcelain"], operation="workspace-git-status"))
+    # Do not inspect dirtiness here: status may execute repository-controlled
+    # fsmonitor/filters and refresh the index before authorized task dispatch.
     return {"workspace_id": row["id"], "path": str(path), "head": head,
-            "branch": branch, "dirty": dirty, "created": created}
+            "branch": branch, "created": created}
 
 
 def lookup(repo_record, issue, pr, workspace_id=None):
@@ -389,6 +394,11 @@ def main(argv=None):
                           LOGNAME=pwd.getpwuid(os.geteuid()).pw_name,
                           USER=pwd.getpwuid(os.geteuid()).pw_name,
                           PATH=f"{GIT_BIN_DIR}:{POLYSCOPE_HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin")
+        local_git = set(command(["/usr/bin/git", "rev-parse", "--local-env-vars"],
+                                operation="workspace-git-environment").splitlines())
+        for key in list(os.environ):
+            if key in local_git or key.startswith("GIT_CONFIG_"):
+                del os.environ[key]
         command_args = None
         if args.action == "exec":
             command_args = args.command[1:] if args.command[:1] == ["--"] else args.command
