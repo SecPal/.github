@@ -69,9 +69,15 @@ def native_workspaces(record):
     return api_get("/repos/" + quote(record["id"], safe="") + "/worktrees")
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
 def api_get(path):
     try:
-        with urllib.request.urlopen(admitted_api_base() + path, timeout=10) as response:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+        with opener.open(admitted_api_base() + path, timeout=10) as response:
             return json.load(response)
     except (OSError, ValueError):
         raise RuntimeError("polyscope-api-unavailable") from None
@@ -251,10 +257,13 @@ def create_native(record, metadata, issue, pr, sha, before):
     payload = {"message": message, "beforeIds": [row["id"] for row in before],
                "expectedPr": pr, "expectedIssue": issue, "timeoutMs": 120000,
                "socketUrl": socket_url}
+    environment = {key: value for key, value in os.environ.items()
+                   if key.lower() not in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")}
+    environment.update(NO_PROXY="*", no_proxy="*")
     try:
         result = subprocess.run(["node", str(WS_CLIENT)],
                                 input=json.dumps(payload, separators=(",", ":")),
-                                capture_output=True, text=True, timeout=130)
+                                env=environment, capture_output=True, text=True, timeout=130)
         value = json.loads(result.stdout)
     except (OSError, ValueError, subprocess.SubprocessError):
         raise RuntimeError("polyscope-bridge-unavailable") from None

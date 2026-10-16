@@ -5,12 +5,14 @@
 import concurrent.futures
 import copy
 import importlib.util
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import time
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -375,10 +377,53 @@ class RuntimeConfigurationTests(unittest.TestCase):
                     workspace.repository("SecPal/.github")
 
 
+class LoopbackTransportTests(unittest.TestCase):
+    def test_loopback_authority_cannot_be_replaced_by_proxy_or_redirect(self):
+        hits = []
+        class Proxy(BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_GET(self):
+                hits.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"authority":"proxy"}')
+        proxy = ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
+        proxy_url = "http://127.0.0.1:" + str(proxy.server_port)
+        class Native(BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_GET(self):
+                if self.path.endswith("/redirect"):
+                    self.send_response(302)
+                    self.send_header("Location", proxy_url + "/redirected")
+                    self.end_headers()
+                else:
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b'{"authority":"native-loopback"}')
+        native = ThreadingHTTPServer(("127.0.0.1", 0), Native)
+        for server in (proxy, native):
+            thread = threading.Thread(target=lambda s=server: s.serve_forever(poll_interval=0.01))
+            thread.start()
+            self.addCleanup(thread.join)
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+        base = "http://127.0.0.1:" + str(native.server_port) + "/api"
+        with (patch.object(workspace, "API_BASE", base),
+              patch.dict(workspace.os.environ, {"http_proxy": proxy_url, "HTTP_PROXY": proxy_url,
+                                                "no_proxy": "", "NO_PROXY": ""}),
+              patch.object(workspace.urllib.request, "_opener", None)):
+            self.assertEqual(workspace.api_get("/repos"), {"authority": "native-loopback"})
+            with self.assertRaises(RuntimeError):
+                workspace.api_get("/redirect")
+        self.assertEqual(hits, [])
+
+
 class BridgeBoundaryTests(unittest.TestCase):
     def test_configured_loopback_origin_reaches_native_bridge(self):
         result = subprocess.CompletedProcess([], 0, stdout='{"id":"native-id"}', stderr="")
         with (patch.object(workspace, "API_BASE", "http://127.0.0.1:5432/api"),
+              patch.dict(workspace.os.environ, {"HTTP_PROXY": "http://untrusted.invalid",
+                                                "https_proxy": "http://untrusted.invalid"}),
               patch.object(workspace.subprocess, "run", return_value=result) as run):
             row = workspace.create_native(
                 {"id": "opaque-id"}, {"number": 1224, "title": "Work", "url": "issue",
@@ -386,6 +431,11 @@ class BridgeBoundaryTests(unittest.TestCase):
             self.assertEqual(row["id"], "native-id")
             self.assertEqual(len(run.call_args.args[0]), 2)
             payload = json.loads(run.call_args.kwargs["input"])
+            environment = run.call_args.kwargs["env"]
+            self.assertNotIn("HTTP_PROXY", environment)
+            self.assertNotIn("https_proxy", environment)
+            self.assertEqual(environment["NO_PROXY"], "*")
+            self.assertEqual(environment["no_proxy"], "*")
             self.assertEqual(payload["socketUrl"],
                              "ws://127.0.0.1:5432/ws?client=secpal-workspace-bridge")
 

@@ -470,7 +470,8 @@ authority are introduced. Workspace setup reads parent/dependency facts directly
 GitHub API and executes no source from a registered repository path. Full work
 planning continues to use the existing read-only WorkGraph resolver. The existing `POLYSCOPE_HOME`,
 `POLYSCOPE_CLONE_ROOT` and `POLYSCOPE_API_BASE` settings are consumed directly;
-the API/bridge remains restricted to the configured loopback origin. Dispatch
+the API/bridge remains restricted to the configured loopback origin; ambient
+proxies and API redirects cannot replace that authority. Dispatch
 requires the existing executable managed Git wrapper through
 `POLYSCOPE_GIT_BIN_DIR` before setup/execution; missing installation fails closed. Direct Git commands,
 including absolute Git paths, use that wrapper. Admission uses system Git with
