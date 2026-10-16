@@ -246,7 +246,10 @@ class DispatchTests(unittest.TestCase):
 
     def test_issue_exec_ensures_context_before_dispatch_without_an_id(self):
         result = {"workspace_id": "73355d10", "path": "/authenticated/workspace"}
-        with (patch.object(workspace, "ensure", return_value=result) as ensure,
+        def admitted(*args):
+            self.assertEqual(shutil.which("git"), str(workspace.GIT_BIN_DIR / "git"))
+            return result
+        with (patch.object(workspace, "ensure", side_effect=admitted) as ensure,
               patch.object(workspace.os, "chdir") as chdir,
               patch.object(workspace.os, "execvp", side_effect=SystemExit(0)) as execute,
               patch.dict(workspace.os.environ)):
@@ -397,6 +400,16 @@ class FilesystemAdmissionTests(unittest.TestCase):
                     result = workspace.workspace_result("SecPal/.github", row, None)
                     self.assertTrue(result["dirty"])
                     self.assertEqual(pending.read_bytes(), b"uncommitted")
+                    fake_bin = root / "untrusted-bin"
+                    fake_bin.mkdir()
+                    marker = root / "untrusted-git-ran"
+                    fake_git = fake_bin / "git"
+                    fake_git.write_text("#!/bin/sh\ntouch " + str(marker) + "\nexit 1\n")
+                    fake_git.chmod(0o755)
+                    with patch.dict(workspace.os.environ, {"PATH": str(fake_bin) + ":/usr/bin:/bin"}):
+                        admitted = workspace.workspace_result("SecPal/.github", row, None)
+                        self.assertTrue(admitted["dirty"])
+                    self.assertFalse(marker.exists())
                     for change in [{"branch": "foreign"}, {"path": str(root)},
                                    {"repo_id": "foreign"}]:
                         with self.assertRaises(RuntimeError):

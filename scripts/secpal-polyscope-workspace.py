@@ -73,7 +73,8 @@ def api_get(path):
 
 
 def git_head(workspace):
-    return command(["git", "-C", str(workspace), "rev-parse", "HEAD"], operation="workspace-git-head")
+    # Read-only admission must not execute a caller-supplied Git from PATH.
+    return command(["/usr/bin/git", "-C", str(workspace), "rev-parse", "HEAD"], operation="workspace-git-head")
 
 
 def repository(repo):
@@ -142,16 +143,16 @@ def workspace_result(repo, row, sha, *, created=False):
             or path.resolve(strict=True) != path
             or path.parent != root / row["repo_id"]):
         raise RuntimeError("workspace-path")
-    remote = command(["git", "-C", str(path), "remote", "get-url", "origin"], operation="workspace-git-origin")
+    remote = command(["/usr/bin/git", "-C", str(path), "remote", "get-url", "origin"], operation="workspace-git-origin")
     if remote not in (f"https://github.com/{repo}.git", f"git@github.com:{repo}.git"):
         raise RuntimeError("workspace-git-origin")
-    branch = command(["git", "-C", str(path), "symbolic-ref", "--short", "HEAD"], operation="workspace-git-branch")
+    branch = command(["/usr/bin/git", "-C", str(path), "symbolic-ref", "--short", "HEAD"], operation="workspace-git-branch")
     if branch != row["branch"] or branch in ("main", "master", "production"):
         raise RuntimeError("workspace-branch")
     head = git_head(path)
     if sha is not None and head != sha:
         raise RuntimeError("workspace-head")
-    dirty = bool(command(["git", "-C", str(path), "status", "--porcelain"], operation="workspace-git-status"))
+    dirty = bool(command(["/usr/bin/git", "-C", str(path), "status", "--porcelain"], operation="workspace-git-status"))
     return {"workspace_id": row["id"], "path": str(path), "head": head,
             "branch": branch, "dirty": dirty, "created": created}
 
@@ -351,6 +352,10 @@ def parser():
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
+        os.environ.update(HOME=str(POLYSCOPE_HOME),
+                          LOGNAME=pwd.getpwuid(os.geteuid()).pw_name,
+                          USER=pwd.getpwuid(os.geteuid()).pw_name,
+                          PATH=f"{GIT_BIN_DIR}:{POLYSCOPE_HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin")
         command_args = None
         if args.action == "exec":
             command_args = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -371,10 +376,6 @@ def main(argv=None):
             print(path)
             return 0
         os.chdir(path)
-        os.environ.update(HOME=str(POLYSCOPE_HOME),
-                          LOGNAME=pwd.getpwuid(os.geteuid()).pw_name,
-                          USER=pwd.getpwuid(os.geteuid()).pw_name,
-                          PATH=f"{GIT_BIN_DIR}:{POLYSCOPE_HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin")
         os.execvp(command_args[0], command_args)
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
         # Internal codes only, never raw GitHub/API/command output.
