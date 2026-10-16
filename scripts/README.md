@@ -445,6 +445,54 @@ The rollout installer enables `polyscope-clone-reaper.timer`, which runs the
 reaper daily after startup. The reaper prints reclaimed bytes and supports
 `--json` for operational reporting.
 
+### `secpal-polyscope-workspace.py`
+
+The existing trusted coordinator uses `ensure --repo SecPal/<repo> --issue <n>`
+before dispatching an already authorized delivery. It reuses an exact active
+workspace, including pending source/evidence, or creates one through native
+Polyscope. No additional NEW approval is required. The native workspace ID
+returned by read-back is used for subsequent `exec --workspace-id <id>` calls.
+Issue-bound `exec` without an ID performs this setup automatically. Native
+creation supports an issue or a PR binding; combined selectors require an existing
+exact native mapping and fail before creation when that capability is unavailable.
+Native creation has no authenticated immutable SHA-pin capability; an explicit
+SHA is therefore rejected before new issue or PR workspace creation. Existing workspaces can be SHA-checked.
+
+`resolve` never writes. Plan-only sessions use read-only resolution; setup belongs
+to the trusted coordinator outside that sandbox. Unknown, paused, shared or
+mismatched ownership is a technical blocker, never permission to replace or reset
+a workspace. Native issue self-assignment retains its existing authority.
+
+The system installer maintains the existing `/usr/local/bin/secpal-polyscope-workspace`
+entry and WebSocket bridge, with the already selected `--node-bin` runtime
+pinned in the installed coordinator. There is one native entry, without a
+second user-checkout executable. The stdin bridge is installed before the
+coordinator at a distinct path, so in-flight legacy argv calls retain their old
+bridge during cutover. Its old inactive file can be removed only after live
+acceptance and confirmation that no old invocation still needs it. No new credentials, daemon, workspace registry or cleanup
+authority are introduced. Workspace setup reads parent/dependency facts directly through the authenticated
+GitHub API and executes no source from a registered repository path. Full work
+planning continues to use the existing read-only WorkGraph resolver. The existing `POLYSCOPE_HOME`,
+`POLYSCOPE_CLONE_ROOT` and `POLYSCOPE_API_BASE` settings are consumed directly;
+the API/bridge remains restricted to the configured loopback origin; ambient
+proxies and API redirects cannot replace that authority. Dispatch
+requires the existing executable managed Git wrapper through
+`POLYSCOPE_GIT_BIN_DIR` before setup/execution; missing installation fails closed. Direct Git commands,
+including absolute Git paths, use that wrapper. Admission uses system Git with
+Git override variables removed from its child environment; dispatch also clears
+Git's native repository-local/configuration overrides while preserving identity
+and transport settings. Every effective fetch/push URL must match the expected
+repository. Admission preserves the index and does not run repository status
+hooks or claim that pending work is clean. Issue
+and PR metadata reach the bridge through stdin, never process arguments.
+
+A serialized create uses a durable in-flight fence in its lock file. After a
+lost/ambiguous response, native registration must establish the outcome before
+another create; do not delete the fence or retry blindly. Pending setup failures
+remain explicit technical blockers until native read-back establishes a usable
+workspace. A repository-scoped native rejection and independent absence read-back
+clear only that failed attempt, allowing a later corrected request. No existing workspace is deleted or modified to recover setup.
+
 ### `install-polyscope-rollout.sh`
 
 Installs the unprivileged SecPal Polyscope rollout systemd units that keep

@@ -23,6 +23,35 @@ Apply these rules only when the session says it is running inside Polyscope.
 - Partition an Autopilot plan by repository. Each story must name its workspace
   root, dependencies, acceptance criteria, and validation commands.
 
+## Authorized Workspace Setup
+
+- For an already authorized, concrete issue-bound SecPal delivery, the trusted
+  coordinator must adopt or create its native Polyscope workspace **before**
+  dispatching the task: **ADOPT_OR_CREATE_WORKSPACE → CONTINUE_AUTONOMOUSLY**.
+  Routine isolated workspace creation on existing capacity is pre-authorized;
+  do not ask the operator to choose NEW again.
+- Use the maintained `secpal-polyscope-workspace ensure --repo SecPal/<repo>
+--issue <number> [--pr <number>] [--sha <revision>]` through the existing
+  authenticated provisioner. Retain its returned native `workspace_id`; use
+  `exec --repo SecPal/<repo> --workspace-id <id> -- <command> <arguments>` for
+  subsequent work. Issue/PR-bound `exec` without an ID performs the same setup
+  before dispatch. `resolve` remains strictly read-only.
+- Reuse only an exact, active, isolated ownership match. Preserve all pending
+  source and evidence, including uncommitted work in that issue's workspace.
+  Ambiguous, paused, shared, foreign, invalid or mismatched workspaces fail
+  closed; never create a replacement merely to avoid inspecting a discrepancy.
+- Creation uses the existing native API and registration. Concurrent requests
+  are serialized; an unknown create outcome must be reconciled by native
+  read-back before another create. Do not bypass a pending-outcome fence or
+  delete an old workspace. Cleanup remains independently owned.
+- This setup grants no new GitHub, provider, deployment or merge authority.
+  Required native issue self-assignment stays within existing issue-scoped
+  authority. An unavailable API, credential or provisioning permission is a
+  technical blocker, not missing permission for routine creation.
+- A Plan-only session stays read-only: its trusted coordinator performs any
+  authorized setup outside that sandbox before writable execution. Never use
+  this standing authorization to bypass Plan restrictions.
+
 ## Planning Versus Execution
 
 - Determine the active mode and sandbox before using tools. A Polyscope Plan

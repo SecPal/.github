@@ -8564,3 +8564,6 @@ grep -q 'share https://example.com:443' "$fake_expose_real_log"
 bash "$SCRIPT_DIR/polyscope-package-1-closure.sh"
 bash "$SCRIPT_DIR/polyscope-nginx-helper.sh"
 bash "$SCRIPT_DIR/polyscope-system-installer.sh"
+
+python3 "$SCRIPT_DIR/secpal-polyscope-workspace.py"
+node --test "$SCRIPT_DIR/secpal-polyscope-workspace-ws.test.mjs"

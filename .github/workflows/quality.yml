@@ -122,6 +122,8 @@ jobs:
         run: |
           python3 tests/secpal-evidence-architecture.py
           python3 tests/polyscope-evidence-architecture.py
+          python3 tests/secpal-polyscope-workspace.py
+          node --test tests/secpal-polyscope-workspace-ws.test.mjs
           python3 tests/evidence-architecture-governance.py
 
   vulnerability-policy:

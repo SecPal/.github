@@ -9,6 +9,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_SOURCE="$SCRIPT_DIR/secpal-polyscope-nginx-apply.py"
 LIBRARY_SOURCE="$SCRIPT_DIR/polyscope_nginx.py"
 ROLLOUT_SOURCE="$SCRIPT_DIR/polyscope-rollout.py"
+WORKSPACE_SOURCE="$SCRIPT_DIR/secpal-polyscope-workspace.py"
+WORKSPACE_WS_SOURCE="$SCRIPT_DIR/secpal-polyscope-workspace-ws.js"
 RUNTIME_ROLLOUT_SOURCE="/home/secpal/code/SecPal/.github/scripts/polyscope-rollout.py"
 RUNTIME_SCRIPT_DIR="${RUNTIME_ROLLOUT_SOURCE%/*}"
 RUNTIME_TOOLCHAIN_ROOT="${RUNTIME_SCRIPT_DIR%/scripts}"
@@ -50,7 +52,8 @@ elif [[ "$(id -u)" -ne 0 ]]; then
     exit 1
 fi
 
-for source_file in "$HELPER_SOURCE" "$LIBRARY_SOURCE" "$ROLLOUT_SOURCE"; do
+for source_file in "$HELPER_SOURCE" "$LIBRARY_SOURCE" "$ROLLOUT_SOURCE" \
+    "$WORKSPACE_SOURCE" "$WORKSPACE_WS_SOURCE"; do
     if [[ ! -f "$source_file" ]]; then
         echo "Error: required system-component source is missing: $source_file" >&2
         exit 1
@@ -155,12 +158,25 @@ LIBEXEC_DIR="$(prefix_path /usr/local/libexec)"
 HELPER_TARGET="$LIBEXEC_DIR/secpal-polyscope-nginx-apply"
 LIBRARY_TARGET="$LIBEXEC_DIR/polyscope_nginx.py"
 ROLLOUT_TARGET="$LIBEXEC_DIR/polyscope-rollout.py"
+WORKSPACE_TARGET="$(prefix_path /usr/local/bin/secpal-polyscope-workspace)"
+WORKSPACE_WS_TARGET="$LIBEXEC_DIR/secpal-polyscope-workspace-stdin.js"
 SUDOERS_TARGET="$(prefix_path /etc/sudoers.d/secpal-polyscope-nginx)"
 DROPIN_DIR="$(prefix_path /etc/systemd/system/polyscope-server.service.d)"
 DROPIN_TARGET="$DROPIN_DIR/zz-secpal-runtime.conf"
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-system-components.XXXXXX")"
 trap 'rm -rf "$TEMP_DIR"' EXIT
+
+python3 - "$WORKSPACE_SOURCE" "$TEMP_DIR/secpal-polyscope-workspace" "$NODE_BIN" <<'PY'
+import json
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+marker = 'NODE_BIN = "/usr/bin/node"'
+if source.count(marker) != 1:
+    raise SystemExit("workspace Node runtime marker is invalid")
+Path(sys.argv[2]).write_text(source.replace(marker, "NODE_BIN = " + json.dumps(sys.argv[3])))
+PY
 
 cat >"$TEMP_DIR/secpal-polyscope-nginx" <<'EOF'
 secpal ALL=(root) NOPASSWD: /usr/local/libexec/secpal-polyscope-nginx-apply ""
@@ -208,6 +224,9 @@ if [[ "$STAGE_ONLY" -eq 1 ]]; then
     install -m 0755 "$HELPER_SOURCE" "$HELPER_TARGET"
     install -m 0644 "$LIBRARY_SOURCE" "$LIBRARY_TARGET"
     install -m 0644 "$ROLLOUT_SOURCE" "$ROLLOUT_TARGET"
+    install -d -m 0755 "$(dirname -- "$WORKSPACE_TARGET")"
+    install -m 0644 "$WORKSPACE_WS_SOURCE" "$WORKSPACE_WS_TARGET"
+    install -m 0755 "$TEMP_DIR/secpal-polyscope-workspace" "$WORKSPACE_TARGET"
     install -m 0440 "$TEMP_DIR/secpal-polyscope-nginx" "$SUDOERS_TARGET"
     install -m 0644 "$TEMP_DIR/zz-secpal-runtime.conf" "$DROPIN_TARGET"
     echo "Staged Polyscope system components below $DESTDIR"
@@ -239,6 +258,8 @@ restore_target() {
 backup_target "$HELPER_TARGET" helper
 backup_target "$LIBRARY_TARGET" library
 backup_target "$ROLLOUT_TARGET" rollout
+backup_target "$WORKSPACE_TARGET" workspace
+backup_target "$WORKSPACE_WS_TARGET" workspace_ws
 backup_target "$SUDOERS_TARGET" sudoers
 backup_target "$DROPIN_TARGET" dropin
 
@@ -248,6 +269,8 @@ rollback() {
     restore_target "$HELPER_TARGET" helper
     restore_target "$LIBRARY_TARGET" library
     restore_target "$ROLLOUT_TARGET" rollout
+    restore_target "$WORKSPACE_TARGET" workspace
+    restore_target "$WORKSPACE_WS_TARGET" workspace_ws
     restore_target "$SUDOERS_TARGET" sudoers
     restore_target "$DROPIN_TARGET" dropin
     /usr/bin/systemctl daemon-reload >/dev/null 2>&1 || true
@@ -259,6 +282,8 @@ trap rollback ERR
 install_atomic "$HELPER_SOURCE" "$HELPER_TARGET" 0755
 install_atomic "$LIBRARY_SOURCE" "$LIBRARY_TARGET" 0644
 install_atomic "$ROLLOUT_SOURCE" "$ROLLOUT_TARGET" 0644
+install_atomic "$WORKSPACE_WS_SOURCE" "$WORKSPACE_WS_TARGET" 0644
+install_atomic "$TEMP_DIR/secpal-polyscope-workspace" "$WORKSPACE_TARGET" 0755
 install_atomic "$TEMP_DIR/secpal-polyscope-nginx" "$SUDOERS_TARGET" 0440
 install_atomic "$TEMP_DIR/zz-secpal-runtime.conf" "$DROPIN_TARGET" 0644
 
