@@ -466,12 +466,15 @@ a workspace. Native issue self-assignment retains its existing authority.
 The system installer maintains the existing `/usr/local/bin/secpal-polyscope-workspace`
 entry and WebSocket bridge; the user installer also exposes the same source in
 its bin directory. No new credentials, daemon, workspace registry or cleanup
-authority are introduced. The read-only WorkGraph resolver is consumed from the
-existing registered governance checkout. The existing `POLYSCOPE_HOME`,
+authority are introduced. Workspace setup reads parent/dependency facts directly through the authenticated
+GitHub API and executes no source from a registered repository path. Full work
+planning continues to use the existing read-only WorkGraph resolver. The existing `POLYSCOPE_HOME`,
 `POLYSCOPE_CLONE_ROOT` and `POLYSCOPE_API_BASE` settings are consumed directly;
 the API/bridge remains restricted to the configured loopback origin. Dispatch
 requires the existing executable managed Git wrapper through
-`POLYSCOPE_GIT_BIN_DIR` before setup/execution; missing installation fails closed. Issue
+`POLYSCOPE_GIT_BIN_DIR` before setup/execution; missing installation fails closed. Direct Git commands,
+including absolute Git paths, use that wrapper. Admission uses system Git with
+Git override variables removed only from its child environment. Issue
 and PR metadata reach the bridge through stdin, never process arguments.
 
 A serialized create uses a durable in-flight fence in its lock file. After a

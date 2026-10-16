@@ -175,7 +175,7 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(self.calls, 0)
 
     def test_unavailable_combined_native_binding_stops_before_creation(self):
-        def metadata(path, kind, number, repo):
+        def metadata(kind, number, repo):
             if kind == "issue":
                 return self.metadata
             return {**self.metadata, "number": 1230,
@@ -258,7 +258,8 @@ class DispatchTests(unittest.TestCase):
                                 "--", "git", "status", "--short"])
             ensure.assert_called_once_with("SecPal/.github", 1224, None, None)
             chdir.assert_called_once_with(Path(result["path"]))
-            execute.assert_called_once_with("git", ["git", "status", "--short"])
+            wrapper = str(workspace.GIT_BIN_DIR / "git")
+            execute.assert_called_once_with(wrapper, [wrapper, "status", "--short"])
 
     def test_dispatch_resolves_git_through_existing_managed_wrapper(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -277,6 +278,17 @@ class DispatchTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     workspace.main(["exec", "--repo", "SecPal/.github", "--issue",
                                     "1224", "--", "git", "status"])
+
+    def test_absolute_git_dispatch_retains_the_existing_wrapper(self):
+        with (patch.object(workspace, "resolve", return_value=Path("/exact")),
+              patch.object(workspace.os, "chdir"),
+              patch.object(workspace.os, "execvp", side_effect=SystemExit(0)) as execute,
+              patch.dict(workspace.os.environ)):
+            with self.assertRaises(SystemExit):
+                workspace.main(["exec", "--repo", "SecPal/.github", "--workspace-id",
+                                "73355d10", "--", "/usr/bin/git", "status"])
+            wrapper = str(workspace.GIT_BIN_DIR / "git")
+            execute.assert_called_once_with(wrapper, [wrapper, "status"])
 
     def test_missing_command_never_provisions_an_execution_context(self):
         with (patch.object(workspace, "ensure") as ensure,
@@ -297,6 +309,27 @@ class DispatchTests(unittest.TestCase):
                                 "73355d10", "--", "git", "status"])
             ensure.assert_not_called()
             resolve.assert_called_once_with("SecPal/.github", None, None, None, "73355d10")
+
+
+class NativeRelationshipTests(unittest.TestCase):
+    def test_native_relationship_read_accepts_blocked_work_and_rejects_partial_evidence(self):
+        issue = {"number": 1224, "url": "https://github.com/SecPal/.github/issues/1224",
+                 "parent": None, "blockedBy": {"totalCount": 2},
+                 "blocking": {"totalCount": 1}, "subIssues": {"totalCount": 0}}
+        value = {"data": {"repository": {"issue": issue}}}
+        with (patch.object(workspace, "command", return_value=json.dumps(value)) as command,
+              patch.object(workspace, "repository",
+                           return_value={"path": "/untrusted/registered/path"})):
+            workspace.read_work_graph("SecPal/.github", 1224)
+            self.assertEqual(command.call_args.args[0][:3], ["gh", "api", "graphql"])
+        for value in [
+            {"errors": [{"message": "partial private error"}]},
+            {"data": {"repository": {"issue": None}}},
+            {"data": {"repository": {"issue": {**issue, "number": 999}}}},
+        ]:
+            with patch.object(workspace, "command", return_value=json.dumps(value)):
+                with self.assertRaises(RuntimeError):
+                    workspace.read_work_graph("SecPal/.github", 1224)
 
 
 class RepositoryIdentityTests(unittest.TestCase):
@@ -410,6 +443,15 @@ class FilesystemAdmissionTests(unittest.TestCase):
                         admitted = workspace.workspace_result("SecPal/.github", row, None)
                         self.assertTrue(admitted["dirty"])
                     self.assertFalse(marker.exists())
+                    for override in [
+                        {"GIT_DIR": str(root / "wrong-git-dir")},
+                        {"GIT_WORK_TREE": str(root / "wrong-tree")},
+                        {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "remote.origin.url",
+                         "GIT_CONFIG_VALUE_0": "https://github.com/other/repository.git"},
+                    ]:
+                        with patch.dict(workspace.os.environ, override):
+                            self.assertTrue(workspace.workspace_result(
+                                "SecPal/.github", row, None)["dirty"])
                     for change in [{"branch": "foreign"}, {"path": str(root)},
                                    {"repo_id": "foreign"}]:
                         with self.assertRaises(RuntimeError):

@@ -40,7 +40,12 @@ CREATE_ERRORS = frozenset({"polyscope-create-rejected", "polyscope-create-timeou
 def command(arguments, *, operation, cwd=None, timeout=30):
     """Bounded, non-secret transport diagnostic; never forward provider stderr."""
     try:
-        return subprocess.run(arguments, cwd=cwd, check=True, capture_output=True,
+        environment = None
+        if arguments[0] == "/usr/bin/git":
+            environment = {key: value for key, value in os.environ.items()
+                           if not key.startswith("GIT_")}
+        return subprocess.run(arguments, cwd=cwd, env=environment,
+                              check=True, capture_output=True,
                               text=True, timeout=timeout).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         raise RuntimeError(operation + "-unavailable") from None
@@ -91,23 +96,42 @@ def repository(repo):
     return matches[0]
 
 
-def github(repo_path, kind, number, repo):
+def github(kind, number, repo):
     fields = ("number,title,url,headRefName,baseRefName,body,isDraft,headRefOid,state"
               if kind == "pr" else "number,title,url,body,state")
     return json.loads(command(
         ["gh", kind, "view", str(number), "--repo", repo, "--json", fields],
-        cwd=repo_path, operation="github-" + kind + "-read"))
+        cwd=POLYSCOPE_HOME, operation="github-" + kind + "-read"))
 
 
 def read_work_graph(repo, issue):
-    # Reuse the read-only resolver. A blocked task may still need a workspace;
-    # do not turn planning readiness into another delivery/merge gate.
-    # The existing registration identifies the maintained governance checkout;
-    # do not invent another workspace/repository catalog in the coordinator.
-    root = Path(repository("SecPal/.github")["path"])
-    resolver = root / "scripts/secpal-work-graph.py"
-    command([sys.executable, str(resolver), "show", f"{repo}#{issue}"],
-            operation="work-graph-read", timeout=60)
+    # Authenticate native relationship facts, not work readiness. The full
+    # read-only planning resolver remains separate from workspace provisioning.
+    query = """query WorkspaceIssue($name: String!, $number: Int!) {
+      repository(owner: "SecPal", name: $name) {
+        issue(number: $number) {
+          number url parent { url }
+          blockedBy(first: 1) { totalCount }
+          blocking(first: 1) { totalCount }
+          subIssues(first: 1) { totalCount }
+        }
+      }
+    }"""
+    try:
+        value = json.loads(command(
+            ["gh", "api", "graphql", "-f", "query=" + query,
+             "-f", "name=" + repo.split("/", 1)[1], "-F", "number=" + str(issue)],
+            cwd=POLYSCOPE_HOME, operation="work-graph-read"))
+        node = value["data"]["repository"]["issue"]
+        if (value.get("errors") or type(node) is not dict or node["number"] != issue
+                or node["url"] != f"https://github.com/{repo}/issues/{issue}"
+                or "parent" not in node
+                or any(type(node[key]["totalCount"]) is not int
+                       or node[key]["totalCount"] < 0
+                       for key in ("blockedBy", "blocking", "subIssues"))):
+            raise ValueError()
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError("work-graph-read-unverified") from None
 
 
 def select_workspace(rows, repo_id, issue, pr, workspace_id=None):
@@ -244,7 +268,7 @@ def create_native(record, metadata, issue, pr, sha, before):
     return value
 
 
-def authenticate_task(repo, record, issue, pr, sha):
+def authenticate_task(repo, issue, pr, sha):
     if issue is None and pr is None:
         raise RuntimeError("issue-or-pr-required")
     metadata = None
@@ -253,7 +277,7 @@ def authenticate_task(repo, record, issue, pr, sha):
             continue
         if type(number) is not int or number < 1:
             raise RuntimeError("task-number")
-        item = github(Path(record["path"]), kind, number, repo)
+        item = github(kind, number, repo)
         segment = "pull" if kind == "pr" else "issues"
         if (item["number"] != number or item["state"] != "OPEN"
                 or item["url"] != f"https://github.com/{repo}/{segment}/{number}"):
@@ -273,7 +297,7 @@ def ensure(repo, issue, pr, sha):
     admitted_api_base()
     record = repository(repo)
     with creation_lock() as stream:
-        metadata = authenticate_task(repo, record, issue, pr, sha)
+        metadata = authenticate_task(repo, issue, pr, sha)
         # Reconcile even a previous interrupted/ambiguous create before another
         # mutation. A registered but invalid/paused/shared row remains an error.
         raw = stream.read(4096)
@@ -376,6 +400,8 @@ def main(argv=None):
             print(path)
             return 0
         os.chdir(path)
+        if Path(command_args[0]).name == "git":
+            command_args[0] = str(GIT_BIN_DIR / "git")
         os.execvp(command_args[0], command_args)
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
         # Internal codes only, never raw GitHub/API/command output.
