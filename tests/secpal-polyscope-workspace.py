@@ -523,6 +523,28 @@ class FilesystemAdmissionTests(unittest.TestCase):
                         with patch.dict(workspace.os.environ, override):
                             self.assertEqual(workspace.workspace_result(
                                 "SecPal/.github", row, None)["workspace_id"], row["id"])
+                    foreign = root / "foreign-repository"
+                    subprocess.run(["git", "init", "--initial-branch=topic", str(foreign)],
+                                   check=True, capture_output=True)
+                    subprocess.run(["git", "-C", str(foreign), "remote", "add", "origin",
+                                    "https://github.com/SecPal/.github.git"], check=True)
+                    subprocess.run(["git", "-C", str(foreign), "config", "core.worktree",
+                                    str(clone)], check=True)
+                    saved_git = root / "saved-git"
+                    (clone / ".git").rename(saved_git)
+                    try:
+                        (clone / ".git").write_text("gitdir: " + str(foreign / ".git") + "\n")
+                        with self.assertRaisesRegex(RuntimeError, "workspace-git-directory"):
+                            workspace.workspace_result("SecPal/.github", row, None)
+                    finally:
+                        (clone / ".git").unlink()
+                        saved_git.rename(clone / ".git")
+                    (clone / ".git/commondir").write_text(str(foreign / ".git") + "\n")
+                    try:
+                        with self.assertRaisesRegex(RuntimeError, "workspace-git-directory"):
+                            workspace.workspace_result("SecPal/.github", row, None)
+                    finally:
+                        (clone / ".git/commondir").unlink()
                     foreign_tree = root / "foreign-worktree"
                     foreign_tree.mkdir()
                     subprocess.run(["git", "-C", str(clone), "config", "core.worktree",

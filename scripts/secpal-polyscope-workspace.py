@@ -28,9 +28,10 @@ GIT_BIN_DIR = Path(os.environ.get("POLYSCOPE_GIT_BIN_DIR", POLYSCOPE_HOME / ".lo
 STATE_ROOT = Path(os.environ.get("POLYSCOPE_HOME", POLYSCOPE_HOME / ".polyscope"))
 CLONE_ROOT = Path(os.environ.get("POLYSCOPE_CLONE_ROOT", STATE_ROOT / "clones"))
 API_BASE = os.environ.get("POLYSCOPE_API_BASE", "http://127.0.0.1:4321/api").rstrip("/")
+NODE_BIN = "/usr/bin/node"
 WS_CLIENT = Path(__file__).resolve().with_name("secpal-polyscope-workspace-ws.js")
 if not WS_CLIENT.is_file():
-    WS_CLIENT = Path("/usr/local/libexec/secpal-polyscope-workspace-ws.js")
+    WS_CLIENT = Path("/usr/local/libexec/secpal-polyscope-workspace-stdin.js")
 LOCK_PATH = POLYSCOPE_HOME / ".local/state/polyscope/workspace-create.lock"
 CREATE_ERRORS = frozenset({"polyscope-create-rejected", "polyscope-create-timeout",
                           "polyscope-bridge-unavailable", "polyscope-create-ambiguous",
@@ -173,6 +174,15 @@ def workspace_result(repo, row, sha, *, created=False):
             or path.resolve(strict=True) != path
             or path.parent != root / row["repo_id"]):
         raise RuntimeError("workspace-path")
+    expected_git = path / ".git"  # Native Polyscope workspaces are independent clones.
+    if not expected_git.is_dir() or expected_git.is_symlink():
+        raise RuntimeError("workspace-git-directory")
+    directories = command(
+        ["/usr/bin/git", "-C", str(path), "rev-parse", "--path-format=absolute",
+         "--absolute-git-dir", "--git-common-dir"],
+        operation="workspace-git-directory").splitlines()
+    if directories != [str(expected_git), str(expected_git)]:
+        raise RuntimeError("workspace-git-directory")
     top = command(["/usr/bin/git", "-C", str(path), "rev-parse", "--show-toplevel"],
                   operation="workspace-git-toplevel")
     if Path(top) != path:
@@ -270,7 +280,7 @@ def create_native(record, metadata, issue, pr, sha, before):
                    if key.lower() not in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")}
     environment.update(NO_PROXY="*", no_proxy="*")
     try:
-        result = subprocess.run(["node", str(WS_CLIENT)],
+        result = subprocess.run([NODE_BIN, str(WS_CLIENT)],
                                 input=json.dumps(payload, separators=(",", ":")),
                                 env=environment, capture_output=True, text=True, timeout=130)
         value = json.loads(result.stdout)

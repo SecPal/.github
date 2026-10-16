@@ -72,14 +72,38 @@ custom_node_dir="$WORKSPACE/user-node/bin"
 custom_node="$custom_node_dir/node"
 mkdir -p "$custom_node_dir"
 cat >"$custom_node" <<'STUB'
-#!/usr/bin/env bash
-exit 0
+#!/bin/sh
+/usr/bin/python3 -c 'import json,os,pathlib,sys; value=json.load(sys.stdin); pathlib.Path(os.environ["WORKSPACE_NODE_PROBE_MARKER"]).write_text(value["message"]["type"]); print(json.dumps({"error":"polyscope-create-rejected"}))'
+exit 2
 STUB
 chmod +x "$custom_node"
 REAL_ID_BIN="$real_id_bin" PATH="$fake_id_dir:$PATH" \
     DESTDIR="$WORKSPACE/node-stage" "$INSTALLER" --stage-only --node-bin "$custom_node"
 grep -q "^Environment=PATH=$custom_node_dir:" \
     "$WORKSPACE/node-stage/etc/systemd/system/polyscope-server.service.d/zz-secpal-runtime.conf"
+WORKSPACE_NODE_PROBE_MARKER="$WORKSPACE/node-probe" python3 - \
+    "$WORKSPACE/node-stage/usr/local/bin/secpal-polyscope-workspace" <<'PY'
+import importlib.machinery
+import importlib.util
+import os
+from pathlib import Path
+import sys
+loader = importlib.machinery.SourceFileLoader("staged_coordinator", sys.argv[1])
+spec = importlib.util.spec_from_loader(loader.name, loader)
+module = importlib.util.module_from_spec(spec)
+loader.exec_module(module)
+os.environ["PATH"] = "/no-node-runtime-here"
+try:
+    module.create_native({"id": "native-repo"},
+                         {"number": 1224, "title": "Work", "url": "issue", "body": "Scope"},
+                         1224, None, None, [])
+except RuntimeError as error:
+    assert str(error) == "polyscope-create-rejected", str(error)
+else:
+    raise AssertionError("fake native rejection was not observed")
+assert Path(os.environ["WORKSPACE_NODE_PROBE_MARKER"]).read_text() == "worktree.create_from_issue"
+PY
+
 if REAL_ID_BIN="$real_id_bin" PATH="$fake_id_dir:$PATH" \
     DESTDIR="$WORKSPACE/unsafe-node-stage" "$INSTALLER" --stage-only --node-bin relative/node \
     >"$WORKSPACE/unsafe-node.out" 2>"$WORKSPACE/unsafe-node.err"; then
@@ -97,7 +121,7 @@ dropin="$WORKSPACE/stage/etc/systemd/system/polyscope-server.service.d/zz-secpal
 
 test -x "$WORKSPACE/stage/usr/local/bin/secpal-polyscope-workspace"
 cmp "$REPO_ROOT/scripts/secpal-polyscope-workspace.py"     "$WORKSPACE/stage/usr/local/bin/secpal-polyscope-workspace"
-cmp "$REPO_ROOT/scripts/secpal-polyscope-workspace-ws.js"     "$WORKSPACE/stage/usr/local/libexec/secpal-polyscope-workspace-ws.js"
+cmp "$REPO_ROOT/scripts/secpal-polyscope-workspace-ws.js"     "$WORKSPACE/stage/usr/local/libexec/secpal-polyscope-workspace-stdin.js"
 
 test -x "$helper"
 test -f "$library"

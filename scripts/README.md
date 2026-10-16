@@ -464,8 +464,12 @@ mismatched ownership is a technical blocker, never permission to replace or rese
 a workspace. Native issue self-assignment retains its existing authority.
 
 The system installer maintains the existing `/usr/local/bin/secpal-polyscope-workspace`
-entry and WebSocket bridge; the user installer also exposes the same source in
-its bin directory. No new credentials, daemon, workspace registry or cleanup
+entry and WebSocket bridge, with the already selected `--node-bin` runtime
+pinned in the installed coordinator. There is one native entry, without a
+second user-checkout executable. The stdin bridge is installed before the
+coordinator at a distinct path, so in-flight legacy argv calls retain their old
+bridge during cutover. Its old inactive file can be removed only after live
+acceptance and confirmation that no old invocation still needs it. No new credentials, daemon, workspace registry or cleanup
 authority are introduced. Workspace setup reads parent/dependency facts directly through the authenticated
 GitHub API and executes no source from a registered repository path. Full work
 planning continues to use the existing read-only WorkGraph resolver. The existing `POLYSCOPE_HOME`,
