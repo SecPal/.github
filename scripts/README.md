@@ -470,7 +470,8 @@ authority are introduced. The read-only WorkGraph resolver is consumed from the
 existing registered governance checkout. The existing `POLYSCOPE_HOME`,
 `POLYSCOPE_CLONE_ROOT` and `POLYSCOPE_API_BASE` settings are consumed directly;
 the API/bridge remains restricted to the configured loopback origin. Dispatch
-retains the existing managed Git wrapper through `POLYSCOPE_GIT_BIN_DIR`. Issue
+requires the existing executable managed Git wrapper through
+`POLYSCOPE_GIT_BIN_DIR` before setup/execution; missing installation fails closed. Issue
 and PR metadata reach the bridge through stdin, never process arguments.
 
 A serialized create uses a durable in-flight fence in its lock file. After a

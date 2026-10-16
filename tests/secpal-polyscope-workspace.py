@@ -223,6 +223,27 @@ class CoordinatorTests(unittest.TestCase):
 
 
 class DispatchTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        directory = Path(temporary.name)
+        git = directory / "git"
+        git.write_text("#!/bin/sh\nexit 0\n")
+        git.chmod(0o755)
+        configured = patch.object(workspace, "GIT_BIN_DIR", directory)
+        configured.start()
+        self.addCleanup(configured.stop)
+
+    def test_missing_managed_wrapper_fails_before_setup_or_dispatch(self):
+        with (patch.object(workspace, "GIT_BIN_DIR", Path("/nonexistent/managed-git")),
+              patch.object(workspace, "ensure") as ensure,
+              patch.object(workspace.os, "execvp") as execute):
+            self.assertEqual(workspace.main([
+                "exec", "--repo", "SecPal/.github", "--issue", "1224",
+                "--", "git", "status"]), 2)
+            ensure.assert_not_called()
+            execute.assert_not_called()
+
     def test_issue_exec_ensures_context_before_dispatch_without_an_id(self):
         result = {"workspace_id": "73355d10", "path": "/authenticated/workspace"}
         with (patch.object(workspace, "ensure", return_value=result) as ensure,

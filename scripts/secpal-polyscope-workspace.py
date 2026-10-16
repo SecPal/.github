@@ -356,6 +356,10 @@ def main(argv=None):
             command_args = args.command[1:] if args.command[:1] == ["--"] else args.command
             if not command_args:
                 raise RuntimeError("exec-command-required")
+            wrapper = GIT_BIN_DIR / "git"
+            if (not GIT_BIN_DIR.is_absolute() or not wrapper.is_file()
+                    or not os.access(wrapper, os.X_OK)):
+                raise RuntimeError("managed-git-wrapper-unavailable")
         if args.action in ("ensure", "create"):
             print(json.dumps(ensure(args.repo, args.issue, args.pr, args.sha)))
             return 0
