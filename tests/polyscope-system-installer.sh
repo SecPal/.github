@@ -95,6 +95,10 @@ rollout="$WORKSPACE/stage/usr/local/libexec/polyscope-rollout.py"
 sudoers="$WORKSPACE/stage/etc/sudoers.d/secpal-polyscope-nginx"
 dropin="$WORKSPACE/stage/etc/systemd/system/polyscope-server.service.d/zz-secpal-runtime.conf"
 
+test -x "$WORKSPACE/stage/usr/local/bin/secpal-polyscope-workspace"
+cmp "$REPO_ROOT/scripts/secpal-polyscope-workspace.py"     "$WORKSPACE/stage/usr/local/bin/secpal-polyscope-workspace"
+cmp "$REPO_ROOT/scripts/secpal-polyscope-workspace-ws.js"     "$WORKSPACE/stage/usr/local/libexec/secpal-polyscope-workspace-ws.js"
+
 test -x "$helper"
 test -f "$library"
 test -f "$rollout"

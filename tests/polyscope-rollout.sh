@@ -6953,6 +6953,8 @@ test -L "$fake_bin_dir/polyscope-expose-wrapper.sh"
 test -x "$fake_bin_dir/polyscope-expose-wrapper.sh"
 test -L "$fake_bin_dir/polyscope-git-wrapper.sh"
 test -x "$fake_bin_dir/polyscope-git-wrapper.sh"
+test -L "$fake_bin_dir/secpal-polyscope-workspace"
+"$fake_bin_dir/secpal-polyscope-workspace" --help >/dev/null
 test -L "$fake_codex_home/AGENTS.md"
 test "$(readlink "$fake_codex_home/AGENTS.md")" = "$REPO_ROOT/templates/polyscope-codex-AGENTS.md"
 # shellcheck disable=SC2016 # Backticks are literal Markdown in the expected text.
@@ -8564,3 +8566,6 @@ grep -q 'share https://example.com:443' "$fake_expose_real_log"
 bash "$SCRIPT_DIR/polyscope-package-1-closure.sh"
 bash "$SCRIPT_DIR/polyscope-nginx-helper.sh"
 bash "$SCRIPT_DIR/polyscope-system-installer.sh"
+
+python3 "$SCRIPT_DIR/secpal-polyscope-workspace.py"
+node --test "$SCRIPT_DIR/secpal-polyscope-workspace-ws.test.mjs"

@@ -445,6 +445,34 @@ The rollout installer enables `polyscope-clone-reaper.timer`, which runs the
 reaper daily after startup. The reaper prints reclaimed bytes and supports
 `--json` for operational reporting.
 
+### `secpal-polyscope-workspace.py`
+
+The existing trusted coordinator uses `ensure --repo SecPal/<repo> --issue <n>`
+before dispatching an already authorized delivery. It reuses an exact active
+workspace, including pending source/evidence, or creates one through native
+Polyscope. No additional NEW approval is required. The native workspace ID
+returned by read-back is used for subsequent `exec --workspace-id <id>` calls.
+Issue-bound `exec` without an ID performs this setup automatically. Native
+creation supports an issue or a PR binding; combined selectors require an existing
+exact native mapping and fail before creation when that capability is unavailable.
+
+`resolve` never writes. Plan-only sessions use read-only resolution; setup belongs
+to the trusted coordinator outside that sandbox. Unknown, paused, shared or
+mismatched ownership is a technical blocker, never permission to replace or reset
+a workspace. Native issue self-assignment retains its existing authority.
+
+The system installer maintains the existing `/usr/local/bin/secpal-polyscope-workspace`
+entry and WebSocket bridge; the user installer also exposes the same source in
+its bin directory. No new credentials, daemon, workspace registry or cleanup
+authority are introduced. The read-only WorkGraph resolver is consumed from the
+existing registered governance checkout.
+
+A serialized create uses a durable in-flight fence in its lock file. After a
+lost/ambiguous response, native registration must establish the outcome before
+another create; do not delete the fence or retry blindly. Pending setup failures
+remain explicit technical blockers until native read-back establishes a usable
+workspace. No existing workspace is deleted or modified to recover setup.
+
 ### `install-polyscope-rollout.sh`
 
 Installs the unprivileged SecPal Polyscope rollout systemd units that keep
