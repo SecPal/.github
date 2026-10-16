@@ -139,6 +139,14 @@ class CoordinatorTests(unittest.TestCase):
             workspace.ensure("SecPal/.github", 1224, None, "a"*40)
         self.assertEqual(self.calls, 0)
 
+    def test_unsupported_pr_sha_pin_fails_before_native_creation(self):
+        metadata = {**self.metadata, "number": 1225, "headRefOid": "a"*40,
+                    "url": "https://github.com/SecPal/.github/pull/1225"}
+        with patch.object(workspace, "github", return_value=metadata):
+            with self.assertRaisesRegex(RuntimeError, "native-pr-sha-create-unavailable"):
+                workspace.ensure("SecPal/.github", None, 1225, "a"*40)
+        self.assertEqual(self.calls, 0)
+
     def test_returned_workspace_without_native_registration_is_not_trusted(self):
         self.mocks[-1].side_effect = lambda *args: self.row
         with self.assertRaisesRegex(RuntimeError, "create-outcome-unverified"):

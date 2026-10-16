@@ -304,8 +304,11 @@ def ensure(repo, issue, pr, sha):
         # Do not create a partial ownership mapping for combined selectors.
         if issue is not None and pr is not None:
             raise RuntimeError("native-combined-binding-unavailable")
-        if pr is None and sha is not None:
-            raise RuntimeError("native-issue-sha-create-unavailable")
+        if sha is not None:
+            # The native contract does not establish an immutable create pin.
+            # Never register a mutable branch and discover this limitation later.
+            raise RuntimeError("native-pr-sha-create-unavailable" if pr is not None
+                               else "native-issue-sha-create-unavailable")
         fence(stream, {"repo": repo, "issue": issue, "pr": pr, "sha": sha, "api_base": API_BASE})
         returned, failure = None, None
         try:

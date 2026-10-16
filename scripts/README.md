@@ -455,8 +455,8 @@ returned by read-back is used for subsequent `exec --workspace-id <id>` calls.
 Issue-bound `exec` without an ID performs this setup automatically. Native
 creation supports an issue or a PR binding; combined selectors require an existing
 exact native mapping and fail before creation when that capability is unavailable.
-A new issue-only workspace cannot pin a SHA through the native API; this
-combination is rejected before creation. Existing workspaces can be SHA-checked.
+Native creation has no authenticated immutable SHA-pin capability; an explicit
+SHA is therefore rejected before new issue or PR workspace creation. Existing workspaces can be SHA-checked.
 
 `resolve` never writes. Plan-only sessions use read-only resolution; setup belongs
 to the trusted coordinator outside that sandbox. Unknown, paused, shared or
