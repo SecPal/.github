@@ -21,42 +21,70 @@ import subprocess
 import sys
 import time
 import urllib.request
+from urllib.parse import quote, urlsplit, urlunsplit
 
 POLYSCOPE_HOME = Path(pwd.getpwuid(os.geteuid()).pw_dir)
-CLONE_ROOT = POLYSCOPE_HOME / ".polyscope" / "clones"
-API_BASE = "http://127.0.0.1:4321/api"
+STATE_ROOT = Path(os.environ.get("POLYSCOPE_HOME", POLYSCOPE_HOME / ".polyscope"))
+CLONE_ROOT = Path(os.environ.get("POLYSCOPE_CLONE_ROOT", STATE_ROOT / "clones"))
+API_BASE = os.environ.get("POLYSCOPE_API_BASE", "http://127.0.0.1:4321/api").rstrip("/")
 WS_CLIENT = Path(__file__).resolve().with_name("secpal-polyscope-workspace-ws.js")
 if not WS_CLIENT.is_file():
     WS_CLIENT = Path("/usr/local/libexec/secpal-polyscope-workspace-ws.js")
 LOCK_PATH = POLYSCOPE_HOME / ".local/state/polyscope/workspace-create.lock"
+CREATE_ERRORS = frozenset({"polyscope-create-rejected", "polyscope-create-timeout",
+                          "polyscope-bridge-unavailable", "polyscope-create-ambiguous",
+                          "polyscope-bridge-response", "polyscope-create-unverified"})
 
 
-def command(arguments, *, cwd=None, timeout=30):
+def command(arguments, *, operation, cwd=None, timeout=30):
     """Bounded, non-secret transport diagnostic; never forward provider stderr."""
     try:
         return subprocess.run(arguments, cwd=cwd, check=True, capture_output=True,
                               text=True, timeout=timeout).stdout.strip()
     except (OSError, subprocess.SubprocessError):
-        raise RuntimeError("command-unavailable") from None
+        raise RuntimeError(operation + "-unavailable") from None
+
+
+def admitted_api_base():
+    try:
+        value = urlsplit(API_BASE)
+        if (value.scheme not in ("http", "https")
+                or value.hostname not in ("127.0.0.1", "::1", "localhost")
+                or value.username is not None or value.password is not None
+                or value.path != "/api" or value.query or value.fragment
+                or (value.port is not None and not 1 <= value.port <= 65535)):
+            raise ValueError()
+    except ValueError:
+        raise RuntimeError("polyscope-api-configuration") from None
+    return API_BASE
+
+
+def native_workspaces(record):
+    return api_get("/repos/" + quote(record["id"], safe="") + "/worktrees")
 
 
 def api_get(path):
     try:
-        with urllib.request.urlopen(API_BASE + path, timeout=10) as response:
+        with urllib.request.urlopen(admitted_api_base() + path, timeout=10) as response:
             return json.load(response)
     except (OSError, ValueError):
         raise RuntimeError("polyscope-api-unavailable") from None
 
 
 def git_head(workspace):
-    return command(["git", "-C", str(workspace), "rev-parse", "HEAD"])
+    return command(["git", "-C", str(workspace), "rev-parse", "HEAD"], operation="workspace-git-head")
 
 
 def repository(repo):
     if not re.fullmatch(r"SecPal/[A-Za-z0-9._-]+", repo):
         raise RuntimeError("repository-identity")
     matches = [item for item in api_get("/repos") if item.get("name") == repo]
-    if len(matches) != 1 or not re.fullmatch(r"[a-f0-9-]{8,64}", matches[0]["id"]):
+    if len(matches) != 1:
+        raise RuntimeError("repository-registration")
+    identifier = matches[0].get("id")
+    if (type(identifier) is not str or not 1 <= len(identifier) <= 128
+            or identifier in (".", "..")
+            or any(char in identifier for char in ("/", chr(92), chr(0)))):
         raise RuntimeError("repository-registration")
     return matches[0]
 
@@ -66,7 +94,7 @@ def github(repo_path, kind, number, repo):
               if kind == "pr" else "number,title,url,body,state")
     return json.loads(command(
         ["gh", kind, "view", str(number), "--repo", repo, "--json", fields],
-        cwd=repo_path))
+        cwd=repo_path, operation="github-" + kind + "-read"))
 
 
 def read_work_graph(repo, issue):
@@ -76,7 +104,8 @@ def read_work_graph(repo, issue):
     # do not invent another workspace/repository catalog in the coordinator.
     root = Path(repository("SecPal/.github")["path"])
     resolver = root / "scripts/secpal-work-graph.py"
-    command([sys.executable, str(resolver), "show", f"{repo}#{issue}"], timeout=60)
+    command([sys.executable, str(resolver), "show", f"{repo}#{issue}"],
+            operation="work-graph-read", timeout=60)
 
 
 def select_workspace(rows, repo_id, issue, pr, workspace_id=None):
@@ -112,22 +141,22 @@ def workspace_result(repo, row, sha, *, created=False):
             or path.resolve(strict=True) != path
             or path.parent != root / row["repo_id"]):
         raise RuntimeError("workspace-path")
-    remote = command(["git", "-C", str(path), "remote", "get-url", "origin"])
+    remote = command(["git", "-C", str(path), "remote", "get-url", "origin"], operation="workspace-git-origin")
     if remote not in (f"https://github.com/{repo}.git", f"git@github.com:{repo}.git"):
         raise RuntimeError("workspace-git-origin")
-    branch = command(["git", "-C", str(path), "symbolic-ref", "--short", "HEAD"])
+    branch = command(["git", "-C", str(path), "symbolic-ref", "--short", "HEAD"], operation="workspace-git-branch")
     if branch != row["branch"] or branch in ("main", "master", "production"):
         raise RuntimeError("workspace-branch")
     head = git_head(path)
     if sha is not None and head != sha:
         raise RuntimeError("workspace-head")
-    dirty = bool(command(["git", "-C", str(path), "status", "--porcelain"]))
+    dirty = bool(command(["git", "-C", str(path), "status", "--porcelain"], operation="workspace-git-status"))
     return {"workspace_id": row["id"], "path": str(path), "head": head,
             "branch": branch, "dirty": dirty, "created": created}
 
 
 def lookup(repo_record, issue, pr, workspace_id=None):
-    rows = api_get(f"/repos/{repo_record['id']}/worktrees")
+    rows = native_workspaces(repo_record)
     return select_workspace(rows, repo_record["id"], issue, pr, workspace_id)
 
 
@@ -190,10 +219,27 @@ def create_native(record, metadata, issue, pr, sha, before):
     else:
         message = {"type": "worktree.create_from_issue", "repoId": repo_id,
                    "issue": {k: metadata[k] for k in ["number", "title", "url", "body"]}}
+    base = urlsplit(admitted_api_base())
+    socket_url = urlunsplit(("wss" if base.scheme == "https" else "ws",
+                            base.netloc, "/ws", "client=secpal-workspace-bridge", ""))
     payload = {"message": message, "beforeIds": [row["id"] for row in before],
-               "expectedPr": pr, "expectedIssue": issue, "timeoutMs": 120000}
-    return json.loads(command(["node", str(WS_CLIENT),
-                               json.dumps(payload, separators=(",", ":"))], timeout=130))
+               "expectedPr": pr, "expectedIssue": issue, "timeoutMs": 120000,
+               "socketUrl": socket_url}
+    try:
+        result = subprocess.run(["node", str(WS_CLIENT),
+                                 json.dumps(payload, separators=(",", ":"))],
+                                capture_output=True, text=True, timeout=130)
+        value = json.loads(result.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise RuntimeError("polyscope-bridge-unavailable") from None
+    if type(value) is not dict:
+        raise RuntimeError("polyscope-bridge-response")
+    if result.returncode != 0 or "error" in value:
+        code = value.get("error")
+        if code not in CREATE_ERRORS:
+            code = "polyscope-create-unverified"
+        raise RuntimeError(code)
+    return value
 
 
 def authenticate_task(repo, record, issue, pr, sha):
@@ -220,6 +266,9 @@ def authenticate_task(repo, record, issue, pr, sha):
 
 def ensure(repo, issue, pr, sha):
     """ADOPT_OR_CREATE, called by the trusted coordinator before task dispatch."""
+    if not CLONE_ROOT.is_absolute():
+        raise RuntimeError("workspace-clone-root-configuration")
+    admitted_api_base()
     record = repository(repo)
     with creation_lock() as stream:
         metadata = authenticate_task(repo, record, issue, pr, sha)
@@ -227,15 +276,18 @@ def ensure(repo, issue, pr, sha):
         # mutation. A registered but invalid/paused/shared row remains an error.
         raw = stream.read(4096)
         pending = json.loads(raw) if raw else None
-        before = api_get(f"/repos/{record['id']}/worktrees")
+        before = native_workspaces(record)
         row = select_workspace(before, record["id"], issue, pr)
         if row is not None:
             result = workspace_result(repo, row, sha)
             if (pending is not None
+                    and pending.get("api_base") == API_BASE
                     and (pending["repo"], pending["issue"], pending["pr"]) == (repo, issue, pr)):
                 fence(stream, None)
             return result
         if pending is not None:
+            if pending.get("api_base") != API_BASE:
+                raise RuntimeError("workspace-create-api-changed")
             prior_repo = repository(pending["repo"])
             prior = lookup(prior_repo, pending["issue"], pending["pr"])
             if prior is None:
@@ -243,7 +295,7 @@ def ensure(repo, issue, pr, sha):
             workspace_result(pending["repo"], prior, pending["sha"])
             fence(stream, None)
         # Re-read after reconciling another native creation.
-        before = api_get(f"/repos/{record['id']}/worktrees")
+        before = native_workspaces(record)
         row = select_workspace(before, record["id"], issue, pr)
         if row is not None:
             return workspace_result(repo, row, sha)
@@ -251,16 +303,16 @@ def ensure(repo, issue, pr, sha):
         # Do not create a partial ownership mapping for combined selectors.
         if issue is not None and pr is not None:
             raise RuntimeError("native-combined-binding-unavailable")
-        fence(stream, {"repo": repo, "issue": issue, "pr": pr, "sha": sha})
-        returned = None
+        fence(stream, {"repo": repo, "issue": issue, "pr": pr, "sha": sha, "api_base": API_BASE})
+        returned, failure = None, None
         try:
             returned = create_native(record, metadata, issue, pr, sha, before)
-        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
-            # Native API read-back, never a blind second create.
-            pass
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            # Preserve only a closed transport diagnostic, never raw stderr.
+            failure = str(error) if str(error) in CREATE_ERRORS else "polyscope-create-unverified"
         row = lookup(record, issue, pr)
         if row is None:
-            raise RuntimeError("create-outcome-unverified")
+            raise RuntimeError("create-outcome-unverified" + (":" + failure if failure else ""))
         if returned is not None and returned.get("id") != row["id"]:
             raise RuntimeError("create-readback-identity")
         result = workspace_result(repo, row, sha, created=True)

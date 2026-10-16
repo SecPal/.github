@@ -247,6 +247,74 @@ class RepositoryIdentityTests(unittest.TestCase):
                 workspace.repository("Untrusted/.github")
 
 
+class RuntimeConfigurationTests(unittest.TestCase):
+    def test_existing_configured_state_clone_root_and_api_are_consumed(self):
+        with tempfile.TemporaryDirectory() as raw:
+            with patch.dict(workspace.os.environ, {
+                    "POLYSCOPE_HOME": raw + "/state",
+                    "POLYSCOPE_CLONE_ROOT": raw + "/clones",
+                    "POLYSCOPE_API_BASE": "http://127.0.0.1:5432/api"}):
+                candidate = importlib.util.spec_from_file_location(
+                    "configured_workspace", ROOT / "scripts/secpal-polyscope-workspace.py")
+                module = importlib.util.module_from_spec(candidate)
+                candidate.loader.exec_module(module)
+                self.assertEqual(module.CLONE_ROOT, Path(raw + "/clones"))
+                self.assertEqual(module.API_BASE, "http://127.0.0.1:5432/api")
+
+    def test_opaque_repository_ids_are_path_safe_and_uri_encoded(self):
+        for identifier in ["api12345", "gh123456", "opaque #?"]:
+            row = {"id": identifier, "name": "SecPal/.github", "path": "/existing"}
+            with patch.object(workspace, "api_get", return_value=[row]) as api:
+                record = workspace.repository("SecPal/.github")
+            with patch.object(workspace, "api_get", return_value=[]) as api:
+                self.assertIsNone(workspace.lookup(record, 1224, None))
+                from urllib.parse import quote
+                api.assert_called_once_with("/repos/" + quote(identifier, safe="") + "/worktrees")
+        for identifier in ["", ".", "..", "../foreign", "two/parts", "x"*129, None]:
+            row = {"id": identifier, "name": "SecPal/.github"}
+            with patch.object(workspace, "api_get", return_value=[row]):
+                with self.assertRaises(RuntimeError):
+                    workspace.repository("SecPal/.github")
+
+
+class BridgeBoundaryTests(unittest.TestCase):
+    def test_configured_loopback_origin_reaches_native_bridge(self):
+        result = subprocess.CompletedProcess([], 0, stdout='{"id":"native-id"}', stderr="")
+        with (patch.object(workspace, "API_BASE", "http://127.0.0.1:5432/api"),
+              patch.object(workspace.subprocess, "run", return_value=result) as run):
+            row = workspace.create_native(
+                {"id": "opaque-id"}, {"number": 1224, "title": "Work", "url": "issue",
+                                     "body": "Authorized scope"}, 1224, None, None, [])
+            self.assertEqual(row["id"], "native-id")
+            payload = json.loads(run.call_args.args[0][-1])
+            self.assertEqual(payload["socketUrl"],
+                             "ws://127.0.0.1:5432/ws?client=secpal-workspace-bridge")
+
+    def test_closed_bridge_failure_survives_nonzero_process_exit(self):
+        result = subprocess.CompletedProcess(
+            [], 2, stdout='{"error":"polyscope-create-rejected"}',
+            stderr="untrusted server detail must not become a diagnostic")
+        def native(*args, **kwargs):
+            if kwargs.get("check"):
+                raise subprocess.CalledProcessError(2, args[0], output=result.stdout,
+                                                    stderr=result.stderr)
+            return result
+        with patch.object(workspace.subprocess, "run", side_effect=native):
+            with self.assertRaisesRegex(RuntimeError, "^polyscope-create-rejected$"):
+                workspace.create_native(
+                    {"id": "opaque-id"}, {"number": 1224, "title": "Work", "url": "issue",
+                                         "body": "Authorized scope"}, 1224, None, None, [])
+
+    def test_nonlocal_or_credentialed_api_configuration_fails_before_io(self):
+        for base in ["https://remote.invalid/api", "http://name:value@localhost/api",
+                     "http://localhost/api?target=other", "http://localhost/wrong"]:
+            with (self.subTest(base=base), patch.object(workspace, "API_BASE", base),
+                  patch.object(workspace.urllib.request, "urlopen") as request):
+                with self.assertRaisesRegex(RuntimeError, "polyscope-api-configuration"):
+                    workspace.api_get("/repos")
+                request.assert_not_called()
+
+
 class FilesystemAdmissionTests(unittest.TestCase):
     def test_native_git_workspace_view_and_dirty_files_are_preserved(self):
         with tempfile.TemporaryDirectory() as raw:

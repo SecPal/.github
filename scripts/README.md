@@ -465,7 +465,9 @@ The system installer maintains the existing `/usr/local/bin/secpal-polyscope-wor
 entry and WebSocket bridge; the user installer also exposes the same source in
 its bin directory. No new credentials, daemon, workspace registry or cleanup
 authority are introduced. The read-only WorkGraph resolver is consumed from the
-existing registered governance checkout.
+existing registered governance checkout. The existing `POLYSCOPE_HOME`,
+`POLYSCOPE_CLONE_ROOT` and `POLYSCOPE_API_BASE` settings are consumed directly;
+the API/bridge remains restricted to the configured loopback origin.
 
 A serialized create uses a durable in-flight fence in its lock file. After a
 lost/ambiguous response, native registration must establish the outcome before

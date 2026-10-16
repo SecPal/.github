@@ -9,7 +9,7 @@ const source = readFileSync(
   new URL("../scripts/secpal-polyscope-workspace-ws.js", import.meta.url),
   "utf8"
 );
-function client() {
+function client(socketUrl = "ws://127.0.0.1:4321/ws?client=secpal-workspace-bridge") {
   const handlers = new Map();
   const output = [];
   const sent = [];
@@ -24,10 +24,11 @@ function client() {
     expectedIssue: 1224,
     expectedPr: null,
     timeoutMs: 120000,
+    socketUrl,
   };
   class Socket {
     constructor(url) {
-      assert.equal(url, "ws://127.0.0.1:4321/ws?client=secpal-workspace-bridge");
+      assert.equal(url, socketUrl);
     }
     addEventListener(name, handler) {
       handlers.set(name, handler);
@@ -86,10 +87,17 @@ test("multiple new candidates and timeout are failures rather than retries", () 
     repoId: "832b2ca0",
     worktrees: ["one", "two"].map((id) => ({ id, issue_number: 1224, status: "active" })),
   });
-  assert.match(bridge.output[0].error, /multiple/);
+  assert.equal(bridge.output[0].error, "polyscope-create-ambiguous");
   const timed = client();
   timed.open();
   timed.timeout();
   assert.equal(timed.sent.length, 1);
-  assert.match(timed.output[0].error, /timed out/);
+  assert.equal(timed.output[0].error, "polyscope-create-timeout");
+});
+
+test("configured bridge uses its supplied origin and returns a closed rejection", () => {
+  const bridge = client("ws://127.0.0.1:5432/ws?client=secpal-workspace-bridge");
+  bridge.open();
+  bridge.message({ type: "worktree.create_error", error: "private server diagnostic" });
+  assert.deepEqual(bridge.output, [{ error: "polyscope-create-rejected" }]);
 });

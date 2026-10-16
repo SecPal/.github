@@ -9,11 +9,10 @@ const expectedIssue = payload.expectedIssue ?? null;
 const timeoutMs = payload.timeoutMs || 120000;
 
 let done = false;
-const socket = new WebSocket("ws://127.0.0.1:4321/ws?client=secpal-workspace-bridge");
-const timer = setTimeout(
-  () => finish(2, { error: "Polyscope workspace creation timed out" }),
-  timeoutMs
+const socket = new WebSocket(
+  payload.socketUrl || "ws://127.0.0.1:4321/ws?client=secpal-workspace-bridge"
 );
+const timer = setTimeout(() => finish(2, { error: "polyscope-create-timeout" }), timeoutMs);
 
 function finish(code, value) {
   if (done) return;
@@ -27,9 +26,7 @@ function finish(code, value) {
 }
 
 socket.addEventListener("open", () => socket.send(JSON.stringify(payload.message)));
-socket.addEventListener("error", () =>
-  finish(2, { error: "Polyscope WebSocket connection failed" })
-);
+socket.addEventListener("error", () => finish(2, { error: "polyscope-bridge-unavailable" }));
 socket.addEventListener("message", (event) => {
   let message;
   try {
@@ -38,7 +35,7 @@ socket.addEventListener("message", (event) => {
     return;
   }
   if (message.type === "worktree.create_error" || message.type === "error") {
-    finish(2, { error: message.error || message.message || "Polyscope creation failed" });
+    finish(2, { error: "polyscope-create-rejected" });
     return;
   }
   if (message.type !== "worktree.list" || message.repoId !== payload.message.repoId) return;
@@ -49,6 +46,5 @@ socket.addEventListener("message", (event) => {
     return workspace.status === "active";
   });
   if (matching.length === 1) finish(0, matching[0]);
-  if (matching.length > 1)
-    finish(2, { error: "Polyscope returned multiple new matching workspaces" });
+  if (matching.length > 1) finish(2, { error: "polyscope-create-ambiguous" });
 });
