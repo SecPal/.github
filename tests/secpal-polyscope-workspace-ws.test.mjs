@@ -39,9 +39,19 @@ function client(socketUrl = "ws://127.0.0.1:4321/ws?client=secpal-workspace-brid
     close() {}
   }
   const context = {
+    require(name) {
+      assert.equal(name, "node:fs");
+      return {
+        readFileSync(fd, encoding) {
+          assert.equal(fd, 0);
+          assert.equal(encoding, "utf8");
+          return JSON.stringify(payload);
+        },
+      };
+    },
     WebSocket: Socket,
     process: {
-      argv: ["node", "helper", JSON.stringify(payload)],
+      argv: ["node", "helper"],
       stdout: { write: (value) => output.push(JSON.parse(value)) },
       exit() {},
     },
@@ -98,6 +108,23 @@ test("multiple new candidates and timeout are failures rather than retries", () 
 test("configured bridge uses its supplied origin and returns a closed rejection", () => {
   const bridge = client("ws://127.0.0.1:5432/ws?client=secpal-workspace-bridge");
   bridge.open();
-  bridge.message({ type: "worktree.create_error", error: "private server diagnostic" });
+  bridge.message({
+    type: "worktree.create_error",
+    repoId: "832b2ca0",
+    error: "private server diagnostic",
+  });
   assert.deepEqual(bridge.output, [{ error: "polyscope-create-rejected" }]);
+});
+
+test("unscoped, foreign and generic errors never authorize a create retry", () => {
+  for (const message of [
+    { type: "worktree.create_error" },
+    { type: "worktree.create_error", repoId: "foreign" },
+    { type: "error", repoId: "832b2ca0" },
+  ]) {
+    const bridge = client();
+    bridge.open();
+    bridge.message(message);
+    assert.deepEqual(bridge.output, [{ error: "polyscope-create-unverified" }]);
+  }
 });

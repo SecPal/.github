@@ -7,6 +7,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import time
@@ -124,6 +125,20 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(self.calls, 0)
         self.assertEqual(json.loads((self.root / "create.lock").read_text()), pending)
 
+    def test_confirmed_rejection_with_no_native_registration_allows_corrected_retry(self):
+        self.mocks[-1].side_effect = RuntimeError("polyscope-create-rejected")
+        with self.assertRaisesRegex(RuntimeError, "polyscope-create-rejected"):
+            self.ensure()
+        self.assertEqual((self.root / "create.lock").read_text(), "")
+        self.mocks[-1].side_effect = self.create
+        self.assertTrue(self.ensure()["created"])
+        self.assertEqual(len(self.rows), 1)
+
+    def test_unsupported_issue_sha_pin_fails_before_native_creation(self):
+        with self.assertRaisesRegex(RuntimeError, "native-issue-sha-create-unavailable"):
+            workspace.ensure("SecPal/.github", 1224, None, "a"*40)
+        self.assertEqual(self.calls, 0)
+
     def test_returned_workspace_without_native_registration_is_not_trusted(self):
         self.mocks[-1].side_effect = lambda *args: self.row
         with self.assertRaisesRegex(RuntimeError, "create-outcome-unverified"):
@@ -213,6 +228,24 @@ class DispatchTests(unittest.TestCase):
             chdir.assert_called_once_with(Path(result["path"]))
             execute.assert_called_once_with("git", ["git", "status", "--short"])
 
+    def test_dispatch_resolves_git_through_existing_managed_wrapper(self):
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            git = directory / "git"
+            git.write_text("#!/bin/sh\nexit 0\n")
+            git.chmod(0o755)
+            def execute(*args):
+                self.assertEqual(shutil.which("git"), str(git))
+                raise SystemExit(0)
+            with (patch.object(workspace, "GIT_BIN_DIR", directory, create=True),
+                  patch.object(workspace, "ensure", return_value={"path": "/exact"}),
+                  patch.object(workspace.os, "chdir"),
+                  patch.object(workspace.os, "execvp", side_effect=execute),
+                  patch.dict(workspace.os.environ)):
+                with self.assertRaises(SystemExit):
+                    workspace.main(["exec", "--repo", "SecPal/.github", "--issue",
+                                    "1224", "--", "git", "status"])
+
     def test_missing_command_never_provisions_an_execution_context(self):
         with (patch.object(workspace, "ensure") as ensure,
               patch.object(workspace.os, "execvp") as execute):
@@ -286,7 +319,8 @@ class BridgeBoundaryTests(unittest.TestCase):
                 {"id": "opaque-id"}, {"number": 1224, "title": "Work", "url": "issue",
                                      "body": "Authorized scope"}, 1224, None, None, [])
             self.assertEqual(row["id"], "native-id")
-            payload = json.loads(run.call_args.args[0][-1])
+            self.assertEqual(len(run.call_args.args[0]), 2)
+            payload = json.loads(run.call_args.kwargs["input"])
             self.assertEqual(payload["socketUrl"],
                              "ws://127.0.0.1:5432/ws?client=secpal-workspace-bridge")
 

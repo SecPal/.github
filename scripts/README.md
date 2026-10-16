@@ -455,6 +455,8 @@ returned by read-back is used for subsequent `exec --workspace-id <id>` calls.
 Issue-bound `exec` without an ID performs this setup automatically. Native
 creation supports an issue or a PR binding; combined selectors require an existing
 exact native mapping and fail before creation when that capability is unavailable.
+A new issue-only workspace cannot pin a SHA through the native API; this
+combination is rejected before creation. Existing workspaces can be SHA-checked.
 
 `resolve` never writes. Plan-only sessions use read-only resolution; setup belongs
 to the trusted coordinator outside that sandbox. Unknown, paused, shared or
@@ -467,13 +469,16 @@ its bin directory. No new credentials, daemon, workspace registry or cleanup
 authority are introduced. The read-only WorkGraph resolver is consumed from the
 existing registered governance checkout. The existing `POLYSCOPE_HOME`,
 `POLYSCOPE_CLONE_ROOT` and `POLYSCOPE_API_BASE` settings are consumed directly;
-the API/bridge remains restricted to the configured loopback origin.
+the API/bridge remains restricted to the configured loopback origin. Dispatch
+retains the existing managed Git wrapper through `POLYSCOPE_GIT_BIN_DIR`. Issue
+and PR metadata reach the bridge through stdin, never process arguments.
 
 A serialized create uses a durable in-flight fence in its lock file. After a
 lost/ambiguous response, native registration must establish the outcome before
 another create; do not delete the fence or retry blindly. Pending setup failures
 remain explicit technical blockers until native read-back establishes a usable
-workspace. No existing workspace is deleted or modified to recover setup.
+workspace. A repository-scoped native rejection and independent absence read-back
+clear only that failed attempt, allowing a later corrected request. No existing workspace is deleted or modified to recover setup.
 
 ### `install-polyscope-rollout.sh`
 

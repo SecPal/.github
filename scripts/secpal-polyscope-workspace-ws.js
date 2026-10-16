@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 SecPal Contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-const payload = JSON.parse(process.argv[2]);
+const payload = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
 const before = new Set(payload.beforeIds || []);
 const expectedPr = payload.expectedPr ?? null;
 const expectedIssue = payload.expectedIssue ?? null;
@@ -35,7 +35,11 @@ socket.addEventListener("message", (event) => {
     return;
   }
   if (message.type === "worktree.create_error" || message.type === "error") {
-    finish(2, { error: "polyscope-create-rejected" });
+    const scopedRejection =
+      message.type === "worktree.create_error" && message.repoId === payload.message.repoId;
+    finish(2, {
+      error: scopedRejection ? "polyscope-create-rejected" : "polyscope-create-unverified",
+    });
     return;
   }
   if (message.type !== "worktree.list" || message.repoId !== payload.message.repoId) return;

@@ -24,6 +24,7 @@ import urllib.request
 from urllib.parse import quote, urlsplit, urlunsplit
 
 POLYSCOPE_HOME = Path(pwd.getpwuid(os.geteuid()).pw_dir)
+GIT_BIN_DIR = Path(os.environ.get("POLYSCOPE_GIT_BIN_DIR", POLYSCOPE_HOME / ".local/lib/polyscope/bin"))
 STATE_ROOT = Path(os.environ.get("POLYSCOPE_HOME", POLYSCOPE_HOME / ".polyscope"))
 CLONE_ROOT = Path(os.environ.get("POLYSCOPE_CLONE_ROOT", STATE_ROOT / "clones"))
 API_BASE = os.environ.get("POLYSCOPE_API_BASE", "http://127.0.0.1:4321/api").rstrip("/")
@@ -226,8 +227,8 @@ def create_native(record, metadata, issue, pr, sha, before):
                "expectedPr": pr, "expectedIssue": issue, "timeoutMs": 120000,
                "socketUrl": socket_url}
     try:
-        result = subprocess.run(["node", str(WS_CLIENT),
-                                 json.dumps(payload, separators=(",", ":"))],
+        result = subprocess.run(["node", str(WS_CLIENT)],
+                                input=json.dumps(payload, separators=(",", ":")),
                                 capture_output=True, text=True, timeout=130)
         value = json.loads(result.stdout)
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -303,6 +304,8 @@ def ensure(repo, issue, pr, sha):
         # Do not create a partial ownership mapping for combined selectors.
         if issue is not None and pr is not None:
             raise RuntimeError("native-combined-binding-unavailable")
+        if pr is None and sha is not None:
+            raise RuntimeError("native-issue-sha-create-unavailable")
         fence(stream, {"repo": repo, "issue": issue, "pr": pr, "sha": sha, "api_base": API_BASE})
         returned, failure = None, None
         try:
@@ -312,6 +315,12 @@ def ensure(repo, issue, pr, sha):
             failure = str(error) if str(error) in CREATE_ERRORS else "polyscope-create-unverified"
         row = lookup(record, issue, pr)
         if row is None:
+            # Only a scoped native rejection plus this independent absence
+            # read-back permits a later corrected attempt. Unknown transport
+            # results retain the fence; they must never cause a blind retry.
+            if failure == "polyscope-create-rejected":
+                fence(stream, None)
+                raise RuntimeError(failure)
             raise RuntimeError("create-outcome-unverified" + (":" + failure if failure else ""))
         if returned is not None and returned.get("id") != row["id"]:
             raise RuntimeError("create-readback-identity")
@@ -358,7 +367,7 @@ def main(argv=None):
         os.environ.update(HOME=str(POLYSCOPE_HOME),
                           LOGNAME=pwd.getpwuid(os.geteuid()).pw_name,
                           USER=pwd.getpwuid(os.geteuid()).pw_name,
-                          PATH=f"{POLYSCOPE_HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin")
+                          PATH=f"{GIT_BIN_DIR}:{POLYSCOPE_HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin")
         os.execvp(command_args[0], command_args)
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
         # Internal codes only, never raw GitHub/API/command output.
