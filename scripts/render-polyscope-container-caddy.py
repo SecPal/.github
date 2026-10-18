@@ -176,12 +176,30 @@ def render(
         repository_id = identifiers.get(repository_name)
         if repository_id is None:
             continue
-        for workspace, physical_workspace in active_workspaces(
+        workspaces = active_workspaces(
             db_path, repository_id, clone_root, document_root
-        ):
+        )
+        canonical_names = {workspace for workspace, _physical in workspaces}
+        for workspace, physical_workspace in workspaces:
+            if physical_workspace != workspace and physical_workspace in canonical_names:
+                raise RuntimeError(
+                    "physical preview hostname conflicts with a canonical workspace: "
+                    f"{repository_id}/{physical_workspace}"
+                )
             route_index += 1
             matcher = f"preview_{route_index}"
             root = container_root / repository_id / physical_workspace / document_root
+            if physical_workspace != workspace:
+                redirect_matcher = f"preview_redirect_{route_index}"
+                blocks.extend(
+                    [
+                        f"    @{redirect_matcher} host {host_prefix}-{physical_workspace}.preview.secpal.dev",
+                        f"    handle @{redirect_matcher} {{",
+                        f"        redir https://{host_prefix}-{workspace}.preview.secpal.dev{{uri}} 308",
+                        "    }",
+                        "",
+                    ]
+                )
             blocks.extend(
                 [
                     f"    @{matcher} host {host_prefix}-{workspace}.preview.secpal.dev",

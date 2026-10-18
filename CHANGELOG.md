@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-18 - Restore Native Polyscope Preview Links
+
+**Fixed:**
+
+- Redirect native Polyscope URLs containing physical clone names to the
+  canonical active workspace domains, preserving request paths and queries.
+- Keep preview content on canonical hosts and retain fail-closed checks for
+  inactive workspaces, ambiguous aliases and unsafe document roots.
+
 ## 2026-10-15 - Qualify Composer UNKNOWN Severity
 
 **Fixed:**

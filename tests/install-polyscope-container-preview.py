@@ -206,7 +206,9 @@ def main() -> None:
         assert f"-v '{clone_root}':'{clone_root}':ro" in php_wrapper
         assert "api-calm-otter.preview.secpal.dev" in caddyfile
         assert "frontend-calm-otter.preview.secpal.dev" in caddyfile
-        assert "calm-otter-a1b2c3d4.preview.secpal.dev" not in caddyfile
+        assert "@preview_redirect_1 host api-calm-otter-a1b2c3d4.preview.secpal.dev" in caddyfile
+        assert "redir https://api-calm-otter.preview.secpal.dev{uri} 308" in caddyfile
+        assert "@preview_redirect_2 host frontend-calm-otter-e5f6a7b8.preview.secpal.dev" in caddyfile
         assert "root * /workspaces/api-repo/calm-otter-a1b2c3d4/public" in caddyfile
         assert "root * /workspaces/frontend_repo/calm-otter-e5f6a7b8/dist" in caddyfile
         assert f"PathChanged={db_path}" in refresh_path
