@@ -191,6 +191,7 @@
             "NETWORK_FAILURE",
             "DATABASE_FAILURE",
             "SCANNER_FAILURE",
+            "DIAGNOSTIC_ADMISSION_FAILURE",
             "MALFORMED_OUTPUT",
             "POLICY_FAILURE"
           ]

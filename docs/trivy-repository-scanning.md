@@ -129,6 +129,25 @@ and one of these states:
 - `REVIEW_REQUIRED`
 - `UNKNOWN_STALE`
 
+Failure codes locate the rejected boundary without retaining native output.
+`SCANNER_FAILURE` identifies a nonzero native filesystem-scan process exit;
+`DIAGNOSTIC_ADMISSION_FAILURE` identifies rejection of private diagnostics
+after native execution succeeded. `MALFORMED_OUTPUT` identifies missing,
+truncated, malformed or unqualified native evidence. These outcomes all remain
+`UNKNOWN_STALE`; process success alone cannot establish healthy evidence.
+Database, target, scanner-identity and policy failures retain their existing codes.
+The additional diagnostic code extends the v2 closed enum; consumers must use
+the schema from the same pinned action revision. The historical v1 schema is
+unchanged.
+
+The Terraform parser's missing-variable warning is not qualified. A zero exit
+with this warning remains `DIAGNOSTIC_ADMISSION_FAILURE`, without publishing
+the warning or source. Runtime-only variables are not supplied by the scanner;
+the pinned parser substitutes unknown typed values before module evaluation.
+Absence of findings cannot establish complete evaluation of dependent resource
+relationships, such as a runtime-selected management source range. Earlier retained `SCANNER_FAILURE` results do not
+establish which boundary failed when private native evidence is unavailable.
+
 Native scanner JSON is temporary and is deleted before upload. Secret
 normalization allowlists only rule ID, severity, repository-relative path,
 line range, and independently observed `source_blob`; Trivy `Match` and `Code`

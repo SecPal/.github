@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-18 - Distinguish Repository Scanner Failure Boundaries
+
+**Fixed:**
+
+- Report rejected native diagnostics as `DIAGNOSTIC_ADMISSION_FAILURE`, distinct
+  from a nonzero scanner process exit. Preserve UNKNOWN_STALE, private cleanup,
+  source binding and the existing security policy.
+- Qualify successful native execution with rejected parser diagnostics and
+  interrupted execution without retaining native logs or secret captures.
+
 ## 2026-10-18 - Admit Native Grype SPDX Provenance
 
 **Fixed:**

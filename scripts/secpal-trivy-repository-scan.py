@@ -29,6 +29,7 @@ FAILURE_CODES = {
     "NETWORK_FAILURE",
     "DATABASE_FAILURE",
     "SCANNER_FAILURE",
+    "DIAGNOSTIC_ADMISSION_FAILURE",
     "MALFORMED_OUTPUT",
     "POLICY_FAILURE",
 }
@@ -1085,7 +1086,7 @@ def _evaluate(arguments: argparse.Namespace) -> int:
         except (ContractError, OSError, UnicodeError):
             _write(arguments.output, unknown_result(
                 repository=arguments.repository, commit=arguments.commit,
-                failure_code="SCANNER_FAILURE", completed_at=completed_at,
+                failure_code="DIAGNOSTIC_ADMISSION_FAILURE", completed_at=completed_at,
             ))
             return 1
         result = admit(observation, policy)
