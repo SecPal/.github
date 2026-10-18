@@ -116,8 +116,22 @@ def main() -> None:
         assert "secpal-app-calm-otter.preview.secpal.dev" in rendered
         assert "inactive-wolf" not in rendered
         assert "{re." not in rendered
-        assert "api-calm-otter-a1b2c3d4.preview.secpal.dev" not in rendered
-        assert "frontend-calm-otter-e5f6a7b8.preview.secpal.dev" not in rendered
+        # Native Polyscope links use physical clone names. Redirect those
+        # exact active aliases to the canonical host, preserving path/query.
+        for index, prefix, physical in (
+            (1, "api", "calm-otter-a1b2c3d4"),
+            (2, "frontend", "calm-otter-e5f6a7b8"),
+            (3, "secpal-app", "calm-otter-12345678"),
+        ):
+            redirect = (
+                f"    @preview_redirect_{index} host {prefix}-{physical}.preview.secpal.dev\n"
+                f"    handle @preview_redirect_{index} {{\n"
+                f"        redir https://{prefix}-calm-otter.preview.secpal.dev{{uri}} 308\n"
+                "    }"
+            )
+            assert redirect in rendered, redirect
+            assert rendered.index(redirect) < rendered.index(f"    @preview_{index} host")
+            assert f"    @preview_{index} host {prefix}-{physical}.preview.secpal.dev" not in rendered
         assert "root * /workspaces/api-repo_1/calm-otter-a1b2c3d4/public" in rendered
         assert "root * /workspaces/Frontend_2/calm-otter-e5f6a7b8/dist" in rendered
         assert "@non_front_controller_php_1 {" in rendered
@@ -125,6 +139,34 @@ def main() -> None:
         assert 'respond @non_front_controller_php_1 "Not found" 404' in rendered
         assert "rewrite * /index.php" in rendered
         assert "            php\n" in rendered
+
+        # A physical-name redirect must never shadow another active
+        # workspace's canonical hostname.
+        conflicting = clone_root / "api-repo_1/other-otter-11223344"
+        (conflicting / "public").mkdir(parents=True)
+        registry_path = clone_root / "api-repo_1/.polyscope-secpal-workspace-aliases.json"
+        registry_before = registry_path.read_text()
+        registry_path.write_text(json.dumps({
+            "version": 1,
+            "aliases": {
+                "calm-otter": "calm-otter-a1b2c3d4",
+                "calm-otter-a1b2c3d4": conflicting.name,
+            },
+        }))
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "insert into worktrees (id, repo_id, path, status) values (?, ?, ?, 'active')",
+                ("conflicting-api", "api-repo_1", str(conflicting)),
+            )
+        expect_runtime_error(
+            lambda: module.render(
+                db_path, pathlib.Path("/workspaces"), clone_root, repository_root
+            ),
+            "physical preview hostname conflicts with a canonical workspace",
+        )
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("delete from worktrees where id = 'conflicting-api'")
+        registry_path.write_text(registry_before)
 
         output = root / "config" / "Caddyfile"
         module.write_atomic(output, rendered)
@@ -188,6 +230,7 @@ def main() -> None:
         )
         assert "api-legacy-otter.preview.secpal.dev" in legacy_rendered
         assert "root * /workspaces/api-repo_1/legacy-otter/public" in legacy_rendered
+        assert "redir https://api-legacy-otter.preview.secpal.dev" not in legacy_rendered
 
         alias_registry.unlink()
         expect_runtime_error(
