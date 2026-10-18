@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-18 - Admit Native Grype SPDX Provenance
+
+**Fixed:**
+
+- Bind pinned Grype SBOM execution to verified Syft SPDX bytes, exact OCI
+  subject, executable and database identity before adapting native image-source
+  metadata. Preserve raw findings and fail-closed vulnerability policy.
+- Exercise native source admission in the frozen scanner replay.
+
 ## 2026-10-18 - Restore Native Polyscope Preview Links
 
 **Fixed:**
