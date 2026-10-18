@@ -113,11 +113,11 @@ captures never enter this fact transport.
 
 Each action invocation uploads one uniquely named normalized result for 14 days.
 Its schema is
-[`secpal-trivy-repository-scan-v2.schema.json`](schemas/secpal-trivy-repository-scan-v2.schema.json).
-The public result version is `secpal-trivy-repository-scan-v2`; every `SECRET`
-requires `source_blob`. The published closed v1 schema is preserved unchanged.
-Consumers adopting this action revision must select the v2 schema from the same
-reviewed governance revision; strict v1 consumers reject the new version rather
+[`secpal-trivy-repository-scan-v3.schema.json`](schemas/secpal-trivy-repository-scan-v3.schema.json).
+The public result version is `secpal-trivy-repository-scan-v3`; every `SECRET`
+requires `source_blob`. The published closed v1 and v2 schemas are preserved unchanged.
+Consumers adopting this action revision must select the v3 schema from the same
+reviewed governance revision; strict v1/v2 consumers reject the new version rather
 than silently interpreting an incompatible finding shape.
 It records the exact repository commit, scanner version and archive identity,
 vulnerability database identity and freshness, policy identity, deterministic
@@ -136,9 +136,9 @@ after native execution succeeded. `MALFORMED_OUTPUT` identifies missing,
 truncated, malformed or unqualified native evidence. These outcomes all remain
 `UNKNOWN_STALE`; process success alone cannot establish healthy evidence.
 Database, target, scanner-identity and policy failures retain their existing codes.
-The additional diagnostic code extends the v2 closed enum; consumers must use
-the schema from the same pinned action revision. The historical v1 schema is
-unchanged.
+The additional diagnostic code belongs to the v3 closed enum. Consumers must
+adopt the v3 schema and action from the same reviewed revision; older validators
+reject v3 explicitly instead of silently misinterpreting a changed v2 result.
 
 The Terraform parser's missing-variable warning is not qualified. A zero exit
 with this warning remains `DIAGNOSTIC_ADMISSION_FAILURE`, without publishing

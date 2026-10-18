@@ -198,7 +198,7 @@ def replay_source_binding(root: Path, action_path: Path, environment: dict) -> d
         evidence = Path(outputs["evidence-path"])
         result = json.loads((evidence / "result.json").read_text())
         import jsonschema
-        jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v2.schema.json").read_text()))
+        jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v3.schema.json").read_text()))
         if (result["gate_state"] != expected or result["operation"]["status"] != "SUCCEEDED"
                 or result["database"]["status"] != "FRESH" or result["summary"]["total"] != 1
                 or result["summary"]["excepted"] != (1 if expected == "CLEAN" else 0)
@@ -306,7 +306,7 @@ def replay_composer_unknown(root: Path, action_path: Path, environment: dict,
     evidence = Path(outputs["evidence-path"])
     result = json.loads((evidence / "result.json").read_text())
     import jsonschema
-    jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v2.schema.json").read_text()))
+    jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v3.schema.json").read_text()))
     findings = result["findings"]
     if (result["operation"]["status"] != "SUCCEEDED" or result["gate_state"] != "REVIEW_REQUIRED"
             or result["subject"] != {"repository": "SecPal/repository-scan-fixture", "commit": commit}
@@ -377,7 +377,7 @@ def replay_native_interruption(root: Path, script: str, environment: dict) -> di
     evidence = Path(outputs["evidence-path"])
     result = json.loads((evidence / "result.json").read_text())
     import jsonschema
-    jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v2.schema.json").read_text()))
+    jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v3.schema.json").read_text()))
     if (result["gate_state"] != "UNKNOWN_STALE"
             or result["operation"]["failure_code"] != "SCANNER_FAILURE"
             or result["findings"]):
@@ -645,7 +645,7 @@ def main() -> int:
         evidence_root = Path(outputs["evidence-path"])
         action_result = json.loads((evidence_root / "result.json").read_text())
         import jsonschema
-        jsonschema.validate(action_result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v2.schema.json").read_text()))
+        jsonschema.validate(action_result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v3.schema.json").read_text()))
         if (action_result["gate_state"] != "ACTIONABLE"
                 or {f["class"] for f in action_result["findings"]} != classes
                 or action_result["subject"] != {"repository": "SecPal/repository-scan-fixture", "commit": commit}
@@ -711,7 +711,7 @@ def main() -> int:
             "--completed-at", completed_at, "--output", str(rejected_path),
         ], capture_output=True, check=False)
         rejected = json.loads(rejected_path.read_text())
-        jsonschema.validate(rejected, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v2.schema.json").read_text()))
+        jsonschema.validate(rejected, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v3.schema.json").read_text()))
         if (evaluated.returncode == 0 or rejected["gate_state"] != "UNKNOWN_STALE"
                 or rejected["operation"]["failure_code"] != "DIAGNOSTIC_ADMISSION_FAILURE"
                 or failed.stderr in evaluated.stdout + evaluated.stderr + rejected_path.read_bytes()):

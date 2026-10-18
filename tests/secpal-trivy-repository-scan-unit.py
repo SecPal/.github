@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "secpal-trivy-repository-scan.py"
 POLICY = ROOT / "policies" / "trivy-repository-scan-v1.json"
-SCHEMA = ROOT / "docs" / "schemas" / "secpal-trivy-repository-scan-v2.schema.json"
+SCHEMA = ROOT / "docs" / "schemas" / "secpal-trivy-repository-scan-v3.schema.json"
 ACTION = ROOT / ".github" / "actions" / "trivy-repository-scan" / "action.yml"
 FIXTURES = ROOT / "tests" / "fixtures" / "trivy-repository-scan"
 COMMIT = "1" * 40
@@ -359,10 +359,20 @@ class RepositoryScanContractTests(unittest.TestCase):
             self.assertNotEqual(process.returncode, 0)
             self.assertEqual(rejected["gate_state"], "UNKNOWN_STALE")
             self.assertEqual(rejected["operation"]["failure_code"], "DIAGNOSTIC_ADMISSION_FAILURE")
+            self.assertEqual(rejected["schema_version"], "secpal-trivy-repository-scan-v3")
             public = process.stdout + process.stderr + json.dumps(rejected).encode()
             self.assertNotIn(diagnostic.encode(), public)
             self.assertNotIn(SYNTHETIC_SECRET.encode(), public)
         schema = json.loads(SCHEMA.read_text())
+        previous = json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v2.schema.json").read_text())
+        narrowed = copy.deepcopy(schema)
+        narrowed["$id"] = previous["$id"]
+        narrowed["title"] = previous["title"]
+        narrowed["properties"]["schema_version"] = previous["properties"]["schema_version"]
+        narrowed["$defs"]["operation"]["properties"]["failure_code"]["enum"].remove("DIAGNOSTIC_ADMISSION_FAILURE")
+        self.assertEqual(narrowed, previous)
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(rejected, previous)
         self.assertEqual(set(schema["$defs"]["operation"]["properties"]["failure_code"]["enum"]),
                          self.module.FAILURE_CODES)
         for code in ("SCANNER_FAILURE", "DIAGNOSTIC_ADMISSION_FAILURE"):
@@ -1051,11 +1061,13 @@ class RepositoryScanContractTests(unittest.TestCase):
                 self.assertEqual(error.exception.code, 2)
 
     def test_cli_returns_nonzero_unknown_for_malformed_native_output(self) -> None:
-        for content in (None, b'{"SchemaVersion":', (FIXTURES / "malformed.txt").read_bytes()):
+        for content in (None, b'{"SchemaVersion":', b'["invalid"]', b"[]", (FIXTURES / "malformed.txt").read_bytes()):
             with tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 native = root / "native.json"
                 output = root / "result.json"
+                database = root / "database.json"
+                database.write_text(json.dumps(valid_database()))
                 if content is not None:
                     native.write_bytes(content)
                 completed = subprocess.run(
@@ -1080,7 +1092,7 @@ class RepositoryScanContractTests(unittest.TestCase):
                         "--scanner-identity",
                         "sha256:" + "a" * 64,
                         "--database",
-                        str(root / "missing-database.json"),
+                        str(database),
                         "--completed-at",
                         "2026-09-16T10:10:00Z",
                         "--output",
@@ -1091,6 +1103,8 @@ class RepositoryScanContractTests(unittest.TestCase):
                     text=True,
                 )
                 self.assertNotEqual(completed.returncode, 0)
+                self.assertTrue(output.exists(), "malformed native output needs a bounded failure result")
+                self.assertNotIn("Traceback", completed.stdout + completed.stderr)
                 result = json.loads(output.read_text(encoding="utf-8"))
                 self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
                 self.assertEqual(result["operation"]["failure_code"], "MALFORMED_OUTPUT")
@@ -1911,7 +1925,7 @@ class SecretSourceBindingTests(unittest.TestCase):
         import jsonschema
 
         result = self.module.admit(self.observation(), self.policy)
-        self.assertEqual(result["schema_version"], "secpal-trivy-repository-scan-v2")
+        self.assertEqual(result["schema_version"], "secpal-trivy-repository-scan-v3")
         old = json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v1.schema.json").read_text())
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.validate(result, old)

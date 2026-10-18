@@ -19,7 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-SCHEMA_VERSION = "secpal-trivy-repository-scan-v2"
+SCHEMA_VERSION = "secpal-trivy-repository-scan-v3"
 OBSERVATION_VERSION = "secpal-trivy-repository-observation-v2"
 POLICY_ID = "secpal-trivy-repository-policy-v1"
 GATE_STATES = {"CLEAN", "ACTIONABLE", "REVIEW_REQUIRED", "UNKNOWN_STALE"}
@@ -1090,7 +1090,7 @@ def _evaluate(arguments: argparse.Namespace) -> int:
             ))
             return 1
         result = admit(observation, policy)
-    except (ContractError, KeyError, TypeError, UnicodeError, json.JSONDecodeError, OSError):
+    except (ContractError, KeyError, TypeError, ValueError, UnicodeError, json.JSONDecodeError, OSError):
         _write(
             arguments.output,
             unknown_result(
