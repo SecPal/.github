@@ -12,6 +12,7 @@ const source = readFileSync(
 const defaultSocketUrl = "ws://127.0.0.1:4321/ws?client=secpal-workspace-bridge";
 function client(socketUrl, expectedSocketUrl = socketUrl ?? defaultSocketUrl) {
   const handlers = new Map();
+  const inputHandlers = new Map();
   const output = [];
   const sent = [];
   const connections = [];
@@ -45,19 +46,20 @@ function client(socketUrl, expectedSocketUrl = socketUrl ?? defaultSocketUrl) {
   }
   const context = {
     require(name) {
-      assert.equal(name, "node:fs");
-      return {
-        readFileSync(fd, encoding) {
-          assert.equal(fd, 0);
-          assert.equal(encoding, "utf8");
-          return JSON.stringify(payload);
-        },
-      };
+      assert.fail(`unexpected module access: ${name}`);
     },
     URL,
     WebSocket: Socket,
     process: {
       argv: ["node", "helper"],
+      stdin: {
+        setEncoding(encoding) {
+          assert.equal(encoding, "utf8");
+        },
+        on(name, handler) {
+          inputHandlers.set(name, handler);
+        },
+      },
       stdout: { write: (value) => output.push(JSON.parse(value)) },
       exit(code) {
         exitCode = code;
@@ -70,11 +72,20 @@ function client(socketUrl, expectedSocketUrl = socketUrl ?? defaultSocketUrl) {
     },
     clearTimeout() {},
   };
-  try {
-    vm.runInNewContext(source, context);
-  } catch (error) {
-    if (error !== exitSignal) throw error;
+  function runWithExit(fn) {
+    try {
+      fn();
+    } catch (error) {
+      if (error !== exitSignal) throw error;
+    }
   }
+  runWithExit(() => vm.runInNewContext(source, context));
+  const input = JSON.stringify(payload);
+  runWithExit(() => {
+    inputHandlers.get("data")(input.slice(0, 17));
+    inputHandlers.get("data")(input.slice(17));
+    inputHandlers.get("end")();
+  });
   return {
     open: () => handlers.get("open")(),
     message: (message) => handlers.get("message")({ data: JSON.stringify(message) }),
