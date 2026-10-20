@@ -19,8 +19,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-SCHEMA_VERSION = "secpal-trivy-repository-scan-v3"
-OBSERVATION_VERSION = "secpal-trivy-repository-observation-v2"
+SCHEMA_VERSION = "secpal-trivy-repository-scan-v4"
+OBSERVATION_VERSION = "secpal-trivy-repository-observation-v3"
 POLICY_ID = "secpal-trivy-repository-policy-v1"
 GATE_STATES = {"CLEAN", "ACTIONABLE", "REVIEW_REQUIRED", "UNKNOWN_STALE"}
 FAILURE_CODES = {
@@ -47,6 +47,41 @@ SEVERITY_FALLBACK_DIAGNOSTIC = (
     "Using severities from other vendors for some vulnerabilities. Read "
     "https://trivy.dev/docs/v0.74/guide/scanner/vulnerability#severity-selection for details."
 )
+# Deployment#124 qualification owned by #1236: source facts, never caller inputs.
+# The named existing control path validates concrete values before operations.
+# Changes to any bound control/module or expiry require independent requalification.
+DEPLOYMENT_TERRAFORM_ID = "deployment-ephemeral-1236"
+DEPLOYMENT_TERRAFORM_EXPIRES = "2026-10-27T00:00:00Z"
+DEPLOYMENT_TERRAFORM_BINDINGS = {
+    "containers/phase-b-gateway/Containerfile": "7ddb40ddbd863f5150cfc261ff0049485ea3018d",
+    "config": "2d4766e35ebea3e8cab85c35e77db5ce09a52f49",
+    "infra/ci-cloud": "5a6905f320172fb5f6fc170c039a0bc8b7cf8684",
+    "schemas": "2a793d4d0773656f2cfea6b489a7d5149d97c2f8",
+    "scripts": "26a857dca06796c241fa155f36f513cc15a1bdd8",
+    ".github": "sha256:b381f2c30006ec46bbb6ff85ef18cfd3bc05c4751b6ba24e010c67fbaca63702"
+}
+DEPLOYMENT_TERRAFORM_PATHS = (
+    'infra/ci-cloud/digitalocean/versions.tf',
+    'infra/ci-cloud/gcp-rocky/main.tf',
+    'infra/ci-cloud/gcp-rocky/metadata.tf',
+    'infra/ci-cloud/gcp-rocky/outputs.tf',
+    'infra/ci-cloud/gcp-rocky/variables.tf',
+    'infra/ci-cloud/gcp-rocky/versions.tf',
+    'infra/ci-cloud/gcp/versions.tf',
+)
+DEPLOYMENT_TERRAFORM_VARIABLES = frozenset((
+    "project_id", "bootstrap_service_account", "trusted_control_sha", "target_sha",
+    "profile", "zone", "machine_type", "disk_type", "disk_size_gib",
+    "exact_image_self_link", "run_id", "run_attempt", "runner_ipv4",
+    "ssh_public_key", "created_at", "expires_at",
+))
+DEPLOYMENT_RUN_BOUND_CONTROLS = (
+    "actual-input-validation-and-metadata-admission",
+    "exact-peer-management-access",
+    "cloud-identity-removal-before-target",
+    "bounded-lifetime-and-exact-run-cleanup",
+)
+
 Timestamp = tuple[datetime, int]
 
 
@@ -227,10 +262,128 @@ def _verify_composer_severity_fallback(native: dict[str, Any] | None,
         raise ContractError("severity fallback vulnerability is unavailable")
 
 
+def github_source_fingerprint(identities: dict[str, str], quality: bytes) -> str:
+    """Pure source normalization; only this read-only caller's full-SHA pin varies.
+
+    Scanned bytes are never changed. Every other automation byte/mode remains
+    bound, including new workflows, local actions, permissions and commands.
+    """
+    caller = ".github/workflows/quality.yml"
+    if caller not in identities:
+        raise ContractError("repository security caller identity is unavailable")
+    pattern = rb"(?m)^(        uses: SecPal/\.github/\.github/actions/trivy-repository-scan@)[0-9a-f]{40}( # main)$"
+    normalized, count = re.subn(pattern, rb"\g<1>" + b"0" * 40 + rb"\g<2>", quality)
+    if count != 1:
+        raise ContractError("repository security caller pin representation is unqualified")
+    sources = dict(identities)
+    mode, kind, _ = sources[caller].split(" ", 2)
+    sources[caller] = mode + " " + kind + " " + _sha256(normalized)
+    return _sha256(sources)
+
+
+def observe_deployment_terraform(workspace: Path, commit: str) -> dict[str, Any]:
+    """Observe source identities only; no Terraform interpretation or execution."""
+    directories = {"infra/ci-cloud", "scripts", "config", "schemas"}
+    caller = ".github/workflows/quality.yml"
+    files = [path for path in DEPLOYMENT_TERRAFORM_BINDINGS
+             if path not in directories and path != ".github"]
+    # Reuse the existing raw-Git/byte observation owner for regular files.
+    facts = observe_secret_sources(workspace, commit, [*files, caller])
+    quality_blob = facts["blobs"].pop(caller)
+    bindings = dict(facts["blobs"])
+    for path in sorted(directories):
+        entry = _git(workspace, ["ls-tree", "-z", commit, "--", path]).split(b"\0")
+        if len(entry) != 2 or entry[-1]:
+            raise ContractError("control tree identity is unavailable")
+        metadata, name = entry[0].split(b"\t", 1)
+        mode, kind, identity = metadata.split(b" ")
+        if mode != b"040000" or kind != b"tree" or name != path.encode():
+            raise ContractError("control source is not a Git tree")
+        bindings[path] = _source_blob(identity.decode("ascii"))
+    terraform_paths = []
+    github_sources = {}
+    for record in _git(workspace, ["ls-tree", "-r", "-z", commit]).split(b"\0"):
+        if record:
+            metadata, path = record.split(b"\t", 1)
+            name = path.decode("utf-8")
+            if name.endswith((".tf", ".tf.json")):
+                terraform_paths.append(name)
+            if name.startswith(".github/"):
+                github_sources[name] = metadata.decode("ascii")
+    bindings[".github"] = github_source_fingerprint(
+        github_sources, _observe_blob(workspace, quality_blob))
+    return {"commit": commit, "bindings": bindings, "terraform_paths": sorted(terraform_paths)}
+
+
+def qualify_deployment_terraform(
+    facts: dict[str, Any], repository: str, commit: str, completed_at: str,
+) -> dict[str, Any]:
+    """Purely admit the reviewed source/control proof, never concrete run values."""
+    if (repository != "SecPal/deployment" or not COMMIT_RE.fullmatch(commit)
+            or not isinstance(facts, dict)
+            or set(facts) != {"commit", "bindings", "terraform_paths"}
+            or facts["commit"] != commit
+            or facts["bindings"] != DEPLOYMENT_TERRAFORM_BINDINGS
+            or facts["terraform_paths"] != list(DEPLOYMENT_TERRAFORM_PATHS)
+            or not _timestamp("2026-10-20T00:00:00Z") <= _timestamp(completed_at)
+            < _timestamp(DEPLOYMENT_TERRAFORM_EXPIRES)):
+        raise ContractError("Terraform source/run-bound qualification is unavailable")
+    return {
+        "qualification_id": DEPLOYMENT_TERRAFORM_ID,
+        "scope": "REPOSITORY_STATIC",
+        "run_bound_status": "REQUIRED_NOT_EXECUTED",
+        "source_commit": commit,
+        "source_bindings": dict(facts["bindings"]),
+        "terraform_paths": list(facts["terraform_paths"]),
+        "required_at_operation": list(DEPLOYMENT_RUN_BOUND_CONTROLS),
+        "expires_at": DEPLOYMENT_TERRAFORM_EXPIRES,
+    }
+
+
+def _validate_coverage(coverage: dict[str, Any], repository: str, commit: str,
+                       completed_at: str) -> dict[str, Any]:
+    if not isinstance(coverage, dict):
+        raise ContractError("Terraform coverage is malformed")
+    expected = qualify_deployment_terraform(
+        {"commit": coverage.get("source_commit"), "bindings": coverage.get("source_bindings"),
+         "terraform_paths": coverage.get("terraform_paths")},
+        repository, commit, completed_at,
+    )
+    if coverage != expected:
+        raise ContractError("Terraform coverage differs from the reviewed contract")
+    return expected
+
+
+def _verify_terraform_warning(message: str, coverage: dict[str, Any] | None,
+                              scanner: dict[str, Any] | None) -> None:
+    # The pinned parser uses typed unknowns. Acknowledging their scope requires
+    # the exact source/control proof and explicit unexecuted run-bound status.
+    if coverage is None or scanner is None:
+        raise ContractError("Terraform diagnostic coverage is unqualified")
+    identity = _validate_scanner(scanner)
+    if (identity["version"] != TRIVY_VERSION
+            or identity["immutable_id"] != TRIVY_ARCHIVE_ID
+            or coverage.get("qualification_id") != DEPLOYMENT_TERRAFORM_ID
+            or coverage.get("run_bound_status") != "REQUIRED_NOT_EXECUTED"):
+        raise ContractError("Terraform diagnostic identity is unqualified")
+    prefix = ("[terraform parser] Variable values were not found in the environment or "
+              'variable files. Evaluating may not work correctly.\tmodule="root" variables=')
+    if not message.startswith(prefix):
+        raise ContractError("Terraform diagnostic representation is unqualified")
+    names = json.loads(message[len(prefix):])
+    if not isinstance(names, str):
+        raise ContractError("Terraform diagnostic variables are malformed")
+    variables = names.split(", ")
+    if (len(variables) != len(DEPLOYMENT_TERRAFORM_VARIABLES)
+            or set(variables) != DEPLOYMENT_TERRAFORM_VARIABLES):
+        raise ContractError("Terraform diagnostic coverage differs from source proof")
+
+
 def verify_diagnostics(content: str, cache_directory: Path, *,
                        native: dict[str, Any] | None = None,
                        scanner: dict[str, Any] | None = None,
-                       workspace: str | None = None) -> None:
+                       workspace: str | None = None,
+                       coverage: dict[str, Any] | None = None) -> None:
     """Check pinned Trivy's private log framing without returning log material."""
     if not content.strip():
         raise ContractError("scanner diagnostics are unavailable")
@@ -245,6 +398,7 @@ def verify_diagnostics(content: str, cache_directory: Path, *,
     )
     fallbacks = 0
     advisories = 0
+    terraform_warnings = 0
     for line in content.splitlines():
         fields = line.split("\t", 2)
         if len(fields) != 3 or re.fullmatch(
@@ -255,10 +409,15 @@ def verify_diagnostics(content: str, cache_directory: Path, *,
             fallbacks += 1
         elif fields[1] == "WARN" and fields[2] == SEVERITY_FALLBACK_DIAGNOSTIC:
             advisories += 1
+        elif fields[1] == "WARN" and fields[2].startswith("[terraform parser]"):
+            _verify_terraform_warning(fields[2], coverage, scanner)
+            terraform_warnings += 1
         elif fields[1] not in {"INFO", "DEBUG"} or not fields[2]:
             raise ContractError("scanner diagnostics indicate unknown scan health")
     if fallbacks != 1:
         raise ContractError("pinned embedded check selection is unavailable")
+    if terraform_warnings != (1 if coverage is not None else 0):
+        raise ContractError("Terraform diagnostic count differs from qualified scope")
     if advisories:
         if advisories != 1:
             raise ContractError("severity fallback diagnostic count is unqualified")
@@ -808,6 +967,12 @@ def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any
         required = {"id", "repository", "class", "rule_id", "path", "disposition", "expires_at", "rationale"}
         if isinstance(exception, dict) and exception.get("class") == "SECRET":
             required.add("source_blob")
+        if isinstance(exception, dict) and "qualification_id" in exception:
+            required.add("qualification_id")
+            if (exception["qualification_id"] != DEPLOYMENT_TERRAFORM_ID
+                    or exception.get("repository") != "SecPal/deployment"
+                    or exception.get("class") != "MISCONFIGURATION"):
+                raise ContractError("exception qualification is not supported")
         if not isinstance(exception, dict) or set(exception) != required:
             raise ContractError("policy exception is malformed")
         exception_id = _string(exception["id"], "exception ID")
@@ -833,6 +998,9 @@ def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any
             raise ContractError("VEX NOT_AFFECTED applies only to vulnerabilities")
         if _timestamp(exception["expires_at"]) <= now:
             raise ContractError("policy exception is expired")
+        if ("qualification_id" in exception
+                and _timestamp(exception["expires_at"]) > _timestamp(DEPLOYMENT_TERRAFORM_EXPIRES)):
+            raise ContractError("exception outlives its source qualification")
         _string(exception["rationale"], "exception rationale")
     vex = policy.get("vex")
     if vex != {
@@ -845,7 +1013,8 @@ def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any
 
 
 def _apply_exception(
-    finding: dict[str, Any], exceptions: list[dict[str, Any]], repository: str
+    finding: dict[str, Any], exceptions: list[dict[str, Any]], repository: str,
+    coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     matches = [
         exception
@@ -861,6 +1030,9 @@ def _apply_exception(
     if matches and finding["class"] == "SECRET":
         blob = _source_blob(finding.get("source_blob"))
         matches = [exception for exception in matches if exception["source_blob"] == blob]
+    if matches and "qualification_id" in matches[0]:
+        matches = [exception for exception in matches if coverage is not None
+                   and exception["qualification_id"] == coverage["qualification_id"]]
     if matches:
         result["exception"] = {
             "id": matches[0]["id"],
@@ -875,6 +1047,12 @@ def admit(observation: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]
     if not isinstance(observation, dict) or observation.get("schema_version") != OBSERVATION_VERSION:
         raise ContractError("observation schema is invalid")
     policy_identity = _validate_policy(policy, observation["completed_at"])
+    coverage = None
+    if observation["subject"]["repository"] == "SecPal/deployment" and "coverage" not in observation:
+        raise ContractError("deployment source coverage is required")
+    if "coverage" in observation:
+        coverage = _validate_coverage(observation["coverage"], observation["subject"]["repository"],
+                                      observation["subject"]["commit"], observation["completed_at"])
     if observation.get("scanners") != policy["required_scanners"]:
         raise ContractError("required scanners were not explicitly observed")
     for finding in observation["findings"]:
@@ -884,7 +1062,7 @@ def admit(observation: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]
         {**exception, "path": _path(exception["path"])}
         for exception in policy["exceptions"]
     ]
-    findings = [_apply_exception(finding, exceptions, observation["subject"]["repository"]) for finding in observation["findings"]]
+    findings = [_apply_exception(finding, exceptions, observation["subject"]["repository"], coverage) for finding in observation["findings"]]
     active = [finding for finding in findings if "exception" not in finding]
     actions = [policy["actions"][finding["class"]][finding["severity"]] for finding in active]
     if observation["database"]["status"] != "FRESH":
@@ -929,6 +1107,7 @@ def admit(observation: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]
         "gate_state": gate_state,
         "summary": summary,
         "findings": findings,
+        **({"coverage": coverage} if coverage is not None else {}),
     }
 
 
@@ -1078,12 +1257,18 @@ def _evaluate(arguments: argparse.Namespace) -> int:
             ))
             return 1
         try:
+            coverage = None
+            if arguments.repository == "SecPal/deployment":
+                facts = observe_deployment_terraform(Path(observed_workspace), arguments.commit)
+                coverage = qualify_deployment_terraform(
+                    facts, arguments.repository, arguments.commit, completed_at)
+                observation["coverage"] = coverage
             verify_diagnostics(
                 arguments.diagnostics.read_text(encoding="utf-8"), arguments.cache_dir,
                 native=observed_native, scanner=observation["scanner"],
-                workspace=observed_workspace,
+                workspace=observed_workspace, coverage=coverage,
             )
-        except (ContractError, OSError, UnicodeError):
+        except (ContractError, OSError, UnicodeError, ValueError, TypeError):
             _write(arguments.output, unknown_result(
                 repository=arguments.repository, commit=arguments.commit,
                 failure_code="DIAGNOSTIC_ADMISSION_FAILURE", completed_at=completed_at,

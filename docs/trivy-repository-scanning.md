@@ -113,11 +113,11 @@ captures never enter this fact transport.
 
 Each action invocation uploads one uniquely named normalized result for 14 days.
 Its schema is
-[`secpal-trivy-repository-scan-v3.schema.json`](schemas/secpal-trivy-repository-scan-v3.schema.json).
-The public result version is `secpal-trivy-repository-scan-v3`; every `SECRET`
-requires `source_blob`. The published closed v1 and v2 schemas are preserved unchanged.
-Consumers adopting this action revision must select the v3 schema from the same
-reviewed governance revision; strict v1/v2 consumers reject the new version rather
+[`secpal-trivy-repository-scan-v4.schema.json`](schemas/secpal-trivy-repository-scan-v4.schema.json).
+The public result version is `secpal-trivy-repository-scan-v4`; every `SECRET`
+requires `source_blob`. The published closed v1, v2 and v3 schemas are preserved unchanged.
+Consumers adopting this action revision must select the v4 schema from the same
+reviewed governance revision; strict v1/v2/v3 consumers reject the new version rather
 than silently interpreting an incompatible finding shape.
 It records the exact repository commit, scanner version and archive identity,
 vulnerability database identity and freshness, policy identity, deterministic
@@ -136,12 +136,13 @@ after native execution succeeded. `MALFORMED_OUTPUT` identifies missing,
 truncated, malformed or unqualified native evidence. These outcomes all remain
 `UNKNOWN_STALE`; process success alone cannot establish healthy evidence.
 Database, target, scanner-identity and policy failures retain their existing codes.
-The additional diagnostic code belongs to the v3 closed enum. Consumers must
-adopt the v3 schema and action from the same reviewed revision; older validators
-reject v3 explicitly instead of silently misinterpreting a changed v2 result.
+The diagnostic distinction introduced in v3 is preserved in the v4 closed enum.
+Consumers must adopt the v4 schema and action from the same reviewed revision;
+older validators reject v4 explicitly instead of silently interpreting a changed result.
 
-The Terraform parser's missing-variable warning is not qualified. A zero exit
-with this warning remains `DIAGNOSTIC_ADMISSION_FAILURE`, without publishing
+The Terraform parser's missing-variable warning remains unqualified except for
+the exact source-bound deployment qualification described below. Otherwise a zero
+exit with this warning remains `DIAGNOSTIC_ADMISSION_FAILURE`, without publishing
 the warning or source. Runtime-only variables are not supplied by the scanner;
 the pinned parser substitutes unknown typed values before module evaluation.
 Absence of findings cannot establish complete evaluation of dependent resource
@@ -317,3 +318,140 @@ database changes its severity or advisory, the test fails with a requalification
 requirement; it never skips the case or fabricates continued UNKNOWN coverage.
 The original hosted API diagnostics/database were not retained, so this current
 qualification does not establish the historical record-level failure cause.
+
+## Exact deployment source qualification and run-bound controls
+
+Version 4 adds explicit coverage facts for the source-bound deployment
+qualification owned by [#1236](https://github.com/SecPal/.github/issues/1236).
+Published v1, v2 and v3 schemas remain unchanged. Consumers adopting this
+implementation must consume the v4 schema from the same immutable shared
+revision. Existing consumers pinned to earlier revisions retain their contracts.
+
+This is repository-static admission, never approval of a concrete cloud run.
+A qualified deployment result includes:
+
+- scope REPOSITORY_STATIC;
+- run_bound_status REQUIRED_NOT_EXECUTED;
+- the actual scanned commit, independently observed Git source identities and
+  complete Terraform file inventory;
+- four control obligations that remain mandatory at their operations;
+- an explicit qualification expiry, initially 2026-10-27 00:00 UTC.
+
+The action summary displays this limitation. CLEAN applies to the static
+repository result under its reviewed dispositions. It does not claim that a
+runner address, key, image, expiry, provider resource or target execution has
+been admitted. No tfvars, defaults, IPs, keys or plan values are fabricated for
+the repository scan. The qualification and dispositions require independent
+review and protected shared-main acceptance before consumer adoption.
+
+### Why this exact source can be qualified
+
+Pinned Trivy 0.74.0 creates typed unknowns for missing root variables in
+pkg/iac/scanners/terraform/parser/parser.go. Its native diagnostic has the
+exact module="root" variables="..." framing; variable order is immaterial,
+but the full set, multiplicity, diagnostic count and scanner identity matter.
+
+Only the actual deployment module and its existing enforcement sources qualify.
+All Terraform paths must match the reviewed inventory; the infrastructure,
+scripts, configuration and schema trees and gateway Containerfile must match
+their reviewed Git identities. The complete .github source inventory is bound
+by a SHA-256 fingerprint of Git identities, including file modes, workflows and
+local actions. To permit adoption without a self-referential shared commit,
+only the one full-SHA reference of the existing read-only scanner step in
+quality.yml is normalized in memory when computing that fingerprint. The
+scanned source is never rewritten. Every other caller byte, permission, command,
+path and automation identity remains bound. A mutable or duplicate caller pin
+is rejected; delivery independently verifies the accepted shared SHA. Changed guards, inputs,
+dependencies, schemas, extra modules, unexpected diagnostics, wrong scanner
+identity or expiry reject diagnostic admission. Caller/native JSON cannot
+supply these source observations.
+
+The source has a fixed resource graph: one network, subnet, disk, instance and
+closed firewall rules. No unknown input controls resource multiplicity, public
+access presence, flow-log presence, encryption-key choice, OS Login, protocols,
+ports, capability settings or the Quadlet health policy.
+
+| Properties                               | Repository-time facts                                                                             | Required concrete-value authority                                                                                                    |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Management SSH                           | TCP22, one source address with literal /32, matching instance/network tags                        | Actual global runner IPv4, fresh Ed25519 public key and exact run/source binding; existing request admission and access rotation     |
+| Source, run and image                    | Closed project/profile/type/disk/zone constraints, explicit identity fields                       | Existing trusted control derives actual GitHub run/SHA/time and authenticates exact image evidence                                   |
+| Metadata and optional qualification data | Canonical OpenTofu renderer, closed schema/size/provenance constraints and creation preconditions | Existing actual-variable metadata admission before provisioning credentials, then OpenTofu input/precondition checks before creation |
+| Target authority                         | Distinct uncredentialed target job, no target-controlled provider commands                        | Existing identity transition must succeed before preparation/handoff/target execution                                                |
+| Lifetime and cleanup                     | Maximum three-hour TTL, exact ownership selectors, no broad deletion path                         | Current time, exact continuation/run/instance and janitor/cleanup admission on every operation                                       |
+| Gateway health                           | One accepted HealthSpec/Quadlet/systemd owner, bounded probe and failure lifecycle                | Existing native integration validates generated configuration and failure/restart behavior                                           |
+
+[OpenTofu variable validation](https://opentofu.org/docs/language/values/variables/#custom-validation-rules)
+remains the language authority; the shared scanner does not reimplement it.
+The existing providerless native OpenTofu characterization rejects every missing
+required input and malformed security-relevant values before a usable plan.
+Existing control tests exercise wrong peer/key/run/target, access rotation,
+identity removal, metadata failure and pre-credential ordering. These tests
+prove enforcement behavior; they are not a claimed successful provider run.
+
+The qualification does not substitute the parser warning for a completed
+dynamic evaluation. It identifies which immutable source and operation guards
+own that evaluation. The real trusted-control path still obtains actual
+variables and performs those checks on every execution. A failed or absent
+check cannot authorize its relevant creation, access or target operation.
+
+### Maintained alternatives considered
+
+Trivy supports real --tf-vars and Terraform plan inputs. They remain useful
+when a real control run supplies them. They are not repository-time defaults:
+the source action intentionally accepts no caller input, snapshots only the
+exact commit and clears Terraform/scanner environment overrides.
+
+A real plan would require actual run/image/input provenance and admission of
+remaining unknown values. Trivy's pinned plan adapter consumes after values;
+a plan format or absence of this parser warning alone does not prove complete
+evaluation. Creating another renderer, mock plan or credentialed source-scan
+authority would add no needed property to the constrained operation path.
+This delivery therefore reuses existing OpenTofu/control guards.
+
+### Eight preserved architecture observations
+
+All are genuine configuration observations. None is relabelled NOT_AFFECTED
+or removed. The central policy retains each rule/path/class/severity/fingerprint
+and applies a separate, expiring IGNORED disposition only with the exact source
+qualification. Exceptions cannot suppress a diagnostic failure, stale database,
+secret or unrelated finding. There is no generic Terraform exception.
+
+| Rule     | Disposition responsibility and residual risk                                                                                                                                                                     |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DS-0026  | Image HEALTHCHECK is absent; the non-production fixture uses the single effective Quadlet/systemd health authority. This does not qualify a standalone image or production edge.                                 |
+| GCP-0031 | Actual public-IP exposure remains; temporary /32 SSH, run-specific key, credential separation, identity removal, TTL and cleanup bound its accepted test use.                                                    |
+| GCP-0036 | OS Login is explicitly disabled in favor of the existing temporary management identity. Enabling it changes IAM/login/key authority.                                                                             |
+| GCP-0033 | Boot attachment lacks customer-controlled key configuration; it references the separately managed qualification disk.                                                                                            |
+| GCP-0034 | Preserve the distinct disk observation. Google-managed at-rest encryption is the accepted disposable-state baseline; no claim of CMEK/CSEK is made.                                                              |
+| GCP-0029 | Packet-flow logging is absent. Existing run/resource/workload evidence is not packet-level audit. Collection, metadata privacy, retention/access and cost need a real logging requirement, not an invented sink. |
+| GCP-0076 | Preserve the second logging observation and severity under the same logging decision. The residual observability gap is explicitly retained.                                                                     |
+| GCP-0075 | PGA is disabled; the exact reviewed instance has external IPv4. This applicability disposition does not remove public exposure or grant Google-service access.                                                   |
+
+The qualification is restricted to non-production, closed ephemeral test
+construction without customer production-state inputs. It grants no new
+execution authority. A new packet-audit, customer-key-custody, private-transport,
+IAM-login or data-sensitivity requirement belongs to its actual owner;
+changing the bound source invalidates these dispositions.
+
+Primary platform contracts:
+[provider-managed disk encryption](https://docs.cloud.google.com/compute/docs/disks/disk-encryption),
+[OS Login identity effects](https://docs.cloud.google.com/compute/docs/oslogin/set-up-oslogin),
+[Private Google Access applicability](https://docs.cloud.google.com/vpc/docs/private-google-access)
+and [flow-log collection and billing](https://docs.cloud.google.com/vpc/docs/flow-logs).
+
+### Candidate evidence and adoption
+
+The pinned three-class replay of deployment commit
+b61cdeb03867a0fb2ac796fbdfddb109d4a2b325 preserves all eight observations and
+emits explicit static/run-bound coverage under the #1236 candidate policy.
+Database identity is
+sha256:814c9069394a8a57432a6e63046615db8681190671174d3949cf9188aceb232c;
+updated 2026-10-20 00:59:02 UTC, downloaded 19:56:41 UTC, next update
+2026-10-21 19:12:26 UTC. This is candidate qualification evidence, not accepted
+deployment security or a successful cloud run.
+
+Only after protected shared-main acceptance may deployment #124 adopt the
+new immutable action/schema revision and obtain its own fresh hosted result.
+Historical v3 UNKNOWN_STALE / DIAGNOSTIC_ADMISSION_FAILURE and the original
+unclassified native SCANNER_FAILURE remain unchanged. No cloud qualification
+or infrastructure operation is dispatched by this delivery.

@@ -170,6 +170,10 @@ runs:
         print()
         print(f"Gate state: `{result['gate_state']}`")
         print()
+        if "coverage" in result:
+            print("Scope: repository-static. Run-bound controls: REQUIRED_NOT_EXECUTED.")
+            print("This result does not authorize cloud/resource operations or target execution.")
+            print()
         print(
             "Findings: "
             f"{summary['total']} total, {summary['actionable']} actionable, "
