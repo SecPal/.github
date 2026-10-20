@@ -113,11 +113,11 @@ captures never enter this fact transport.
 
 Each action invocation uploads one uniquely named normalized result for 14 days.
 Its schema is
-[`secpal-trivy-repository-scan-v2.schema.json`](schemas/secpal-trivy-repository-scan-v2.schema.json).
-The public result version is `secpal-trivy-repository-scan-v2`; every `SECRET`
-requires `source_blob`. The published closed v1 schema is preserved unchanged.
-Consumers adopting this action revision must select the v2 schema from the same
-reviewed governance revision; strict v1 consumers reject the new version rather
+[`secpal-trivy-repository-scan-v3.schema.json`](schemas/secpal-trivy-repository-scan-v3.schema.json).
+The public result version is `secpal-trivy-repository-scan-v3`; every `SECRET`
+requires `source_blob`. The published closed v1 and v2 schemas are preserved unchanged.
+Consumers adopting this action revision must select the v3 schema from the same
+reviewed governance revision; strict v1/v2 consumers reject the new version rather
 than silently interpreting an incompatible finding shape.
 It records the exact repository commit, scanner version and archive identity,
 vulnerability database identity and freshness, policy identity, deterministic
@@ -128,6 +128,25 @@ and one of these states:
 - `ACTIONABLE`
 - `REVIEW_REQUIRED`
 - `UNKNOWN_STALE`
+
+Failure codes locate the rejected boundary without retaining native output.
+`SCANNER_FAILURE` identifies a nonzero native filesystem-scan process exit;
+`DIAGNOSTIC_ADMISSION_FAILURE` identifies rejection of private diagnostics
+after native execution succeeded. `MALFORMED_OUTPUT` identifies missing,
+truncated, malformed or unqualified native evidence. These outcomes all remain
+`UNKNOWN_STALE`; process success alone cannot establish healthy evidence.
+Database, target, scanner-identity and policy failures retain their existing codes.
+The additional diagnostic code belongs to the v3 closed enum. Consumers must
+adopt the v3 schema and action from the same reviewed revision; older validators
+reject v3 explicitly instead of silently misinterpreting a changed v2 result.
+
+The Terraform parser's missing-variable warning is not qualified. A zero exit
+with this warning remains `DIAGNOSTIC_ADMISSION_FAILURE`, without publishing
+the warning or source. Runtime-only variables are not supplied by the scanner;
+the pinned parser substitutes unknown typed values before module evaluation.
+Absence of findings cannot establish complete evaluation of dependent resource
+relationships, such as a runtime-selected management source range. Earlier retained `SCANNER_FAILURE` results do not
+establish which boundary failed when private native evidence is unavailable.
 
 Native scanner JSON is temporary and is deleted before upload. Secret
 normalization allowlists only rule ID, severity, repository-relative path,

@@ -198,7 +198,7 @@ def replay_source_binding(root: Path, action_path: Path, environment: dict) -> d
         evidence = Path(outputs["evidence-path"])
         result = json.loads((evidence / "result.json").read_text())
         import jsonschema
-        jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v2.schema.json").read_text()))
+        jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v3.schema.json").read_text()))
         if (result["gate_state"] != expected or result["operation"]["status"] != "SUCCEEDED"
                 or result["database"]["status"] != "FRESH" or result["summary"]["total"] != 1
                 or result["summary"]["excepted"] != (1 if expected == "CLEAN" else 0)
@@ -306,7 +306,7 @@ def replay_composer_unknown(root: Path, action_path: Path, environment: dict,
     evidence = Path(outputs["evidence-path"])
     result = json.loads((evidence / "result.json").read_text())
     import jsonschema
-    jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v2.schema.json").read_text()))
+    jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v3.schema.json").read_text()))
     findings = result["findings"]
     if (result["operation"]["status"] != "SUCCEEDED" or result["gate_state"] != "REVIEW_REQUIRED"
             or result["subject"] != {"repository": "SecPal/repository-scan-fixture", "commit": commit}
@@ -329,6 +329,68 @@ def replay_composer_unknown(root: Path, action_path: Path, environment: dict,
             "native_database": native_database,
             "database": result["database"], "scanner": result["scanner"],
             "policy": result["policy"], "cleanup": "PASS"}
+
+
+def replay_native_interruption(root: Path, script: str, environment: dict) -> dict:
+    """Interrupt only this action's actual pinned fs child; retain no native log."""
+    runner = root / "interrupted-runner"
+    runner.mkdir(mode=0o700)
+    environment = {**environment, "RUNNER_TEMP": str(runner),
+                   "GITHUB_OUTPUT": str(runner / "output"),
+                   "GITHUB_STEP_SUMMARY": str(runner / "summary")}
+    action = subprocess.Popen(["bash", "-c", script], env=environment,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    interrupted = False
+    deadline = time.monotonic() + 180
+    try:
+        while action.poll() is None and time.monotonic() < deadline:
+            children = Path(f"/proc/{action.pid}/task/{action.pid}/children").read_text().split()
+            for child in children:
+                descriptor = None
+                try:
+                    descriptor = os.pidfd_open(int(child))
+                    args = Path(f"/proc/{child}/cmdline").read_bytes().split(b"\0")
+                    executable = Path(os.fsdecode(args[0]))
+                    if (len(args) > 3 and args[3] == b"fs" and executable.name == "trivy"
+                            and executable.parent.parent == runner
+                            and executable.parent.name.startswith("secpal-trivy-tool-")):
+                        signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+                        interrupted = True
+                        break
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                finally:
+                    if descriptor is not None:
+                        os.close(descriptor)
+            if interrupted:
+                break
+            time.sleep(0.005)
+        public, errors = action.communicate(timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        if action.poll() is None:
+            os.killpg(action.pid, signal.SIGKILL)
+        action.communicate()
+        raise RuntimeError("native interruption replay did not complete; cleanup unqualified") from None
+    if not interrupted or action.returncode:
+        raise RuntimeError("actual pinned filesystem process was not qualified as interrupted")
+    outputs = dict(line.split("=", 1) for line in (runner / "output").read_text().splitlines())
+    evidence = Path(outputs["evidence-path"])
+    result = json.loads((evidence / "result.json").read_text())
+    import jsonschema
+    jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v3.schema.json").read_text()))
+    if (result["gate_state"] != "UNKNOWN_STALE"
+            or result["operation"]["failure_code"] != "SCANNER_FAILURE"
+            or result["findings"]):
+        raise RuntimeError("interrupted native process was not classified separately")
+    public += errors + (runner / "summary").read_bytes() + (runner / "output").read_bytes()
+    for path in evidence.iterdir():
+        public += path.read_bytes()
+    if (list(runner.glob("secpal-trivy-tool-*")) or list(runner.glob("secpal-trivy-cache-*"))
+            or {p.name for p in evidence.iterdir()} != {"result.json"}
+            or any(marker in public for marker in (SYNTHETIC_SECRET.encode(), b'"Match"', b'"Code"'))):
+        raise RuntimeError("interrupted execution exposed or retained private scanner material")
+    return {"native_process": "INTERRUPTED_NONZERO", "gate_state": result["gate_state"],
+            "failure_code": result["operation"]["failure_code"], "private_cleanup": "PASS"}
 
 
 def main() -> int:
@@ -583,7 +645,7 @@ def main() -> int:
         evidence_root = Path(outputs["evidence-path"])
         action_result = json.loads((evidence_root / "result.json").read_text())
         import jsonschema
-        jsonschema.validate(action_result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v2.schema.json").read_text()))
+        jsonschema.validate(action_result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v3.schema.json").read_text()))
         if (action_result["gate_state"] != "ACTIONABLE"
                 or {f["class"] for f in action_result["findings"]} != classes
                 or action_result["subject"] != {"repository": "SecPal/repository-scan-fixture", "commit": commit}
@@ -603,6 +665,7 @@ def main() -> int:
             root, action_path, action_environment, scan_command, cache, module,
         )
         source_binding = replay_source_binding(root, action_path, action_environment)
+        interrupted = replay_native_interruption(root, step_script, action_environment)
         # Inline source suppression is rejected from immutable source before
         # Trivy can omit ignored IaC findings from its native representation.
         terraform = workspace / "insecure.tf"
@@ -628,13 +691,31 @@ def main() -> int:
             "--skip-check-update", "--skip-version-check", "--cache-dir", str(cache),
             "--output", str(root / "failure.json"), str(workspace),
         ], env={"HOME": str(root)}, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=False)
-        if failed.returncode == 0:
-            try:
-                module.verify_diagnostics(failed.stderr.decode("utf-8"), cache)
-            except module.ContractError:
-                pass
-            else:
-                raise RuntimeError("parser failure fixture was admitted as healthy")
+        if failed.returncode != 0:
+            raise RuntimeError("parser replay did not exercise successful native execution")
+        diagnostic_path = root / "parser.stderr"
+        diagnostic_path.write_bytes(failed.stderr)
+        database_path = root / "parser-database.json"
+        database_path.write_text(json.dumps(database))
+        diagnostic_commit = subprocess.check_output(
+            ["git", "-C", str(workspace), "rev-parse", "HEAD"], text=True,
+        ).strip()
+        rejected_path = root / "parser-result.json"
+        evaluated = subprocess.run([
+            "python3", "-I", str(SCRIPT), "evaluate",
+            "--native", str(root / "failure.json"), "--diagnostics", str(diagnostic_path),
+            "--cache-dir", str(cache), "--database", str(database_path), "--policy", str(POLICY),
+            "--repository", "SecPal/repository-scan-fixture", "--commit", diagnostic_commit,
+            "--workspace", str(workspace), "--scanner-version", TRIVY_VERSION,
+            "--scanner-identity", "sha256:" + TRIVY_ARCHIVE_SHA256,
+            "--completed-at", completed_at, "--output", str(rejected_path),
+        ], capture_output=True, check=False)
+        rejected = json.loads(rejected_path.read_text())
+        jsonschema.validate(rejected, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v3.schema.json").read_text()))
+        if (evaluated.returncode == 0 or rejected["gate_state"] != "UNKNOWN_STALE"
+                or rejected["operation"]["failure_code"] != "DIAGNOSTIC_ADMISSION_FAILURE"
+                or failed.stderr in evaluated.stdout + evaluated.stderr + rejected_path.read_bytes()):
+            raise RuntimeError("successful native scan diagnostic rejection was not private and distinct")
         broken_command = list(scan_command)
         broken_command[broken_command.index("--cache-dir") + 1] = str(root / "missing-cache")
         broken = subprocess.run(broken_command, env={"HOME": str(root)},
@@ -664,6 +745,8 @@ def main() -> int:
                     "unknown_warning_fail_closed": True,
                     "parser_failure_fail_closed": True,
                     "process_failure_fail_closed": True,
+                    "native_interruption": interrupted,
+                    "diagnostic_rejection_code": rejected["operation"]["failure_code"],
                     "database_identity": database["identity"],
                     "scanner_classes": sorted(classes),
                     "secret_capture_retained": False,

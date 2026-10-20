@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "secpal-trivy-repository-scan.py"
 POLICY = ROOT / "policies" / "trivy-repository-scan-v1.json"
-SCHEMA = ROOT / "docs" / "schemas" / "secpal-trivy-repository-scan-v2.schema.json"
+SCHEMA = ROOT / "docs" / "schemas" / "secpal-trivy-repository-scan-v3.schema.json"
 ACTION = ROOT / ".github" / "actions" / "trivy-repository-scan" / "action.yml"
 FIXTURES = ROOT / "tests" / "fixtures" / "trivy-repository-scan"
 COMMIT = "1" * 40
@@ -347,6 +347,42 @@ class RepositoryScanContractTests(unittest.TestCase):
             with self.assertRaises(self.module.ContractError):
                 self.module.verify_diagnostics(healthy, cache)
 
+    def test_rejected_diagnostics_do_not_claim_native_process_failure(self) -> None:
+        import jsonschema
+
+        warning = (
+            "2026-10-18T12:00:00Z\tWARN\t[terraform parser] Variable values were not "
+            "found in the environment or variable files. Evaluating may not work correctly.\n"
+        )
+        for diagnostic in (warning, "2026-10-18T12:00:00Z\tERROR\t" + SYNTHETIC_SECRET + "\n"):
+            process, rejected = run_evaluate_fixture(native_result(), diagnostics=diagnostic)
+            self.assertNotEqual(process.returncode, 0)
+            self.assertEqual(rejected["gate_state"], "UNKNOWN_STALE")
+            self.assertEqual(rejected["operation"]["failure_code"], "DIAGNOSTIC_ADMISSION_FAILURE")
+            self.assertEqual(rejected["schema_version"], "secpal-trivy-repository-scan-v3")
+            public = process.stdout + process.stderr + json.dumps(rejected).encode()
+            self.assertNotIn(diagnostic.encode(), public)
+            self.assertNotIn(SYNTHETIC_SECRET.encode(), public)
+        schema = json.loads(SCHEMA.read_text())
+        previous = json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v2.schema.json").read_text())
+        narrowed = copy.deepcopy(schema)
+        narrowed["$id"] = previous["$id"]
+        narrowed["title"] = previous["title"]
+        narrowed["properties"]["schema_version"] = previous["properties"]["schema_version"]
+        narrowed["$defs"]["operation"]["properties"]["failure_code"]["enum"].remove("DIAGNOSTIC_ADMISSION_FAILURE")
+        self.assertEqual(narrowed, previous)
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate(rejected, previous)
+        self.assertEqual(set(schema["$defs"]["operation"]["properties"]["failure_code"]["enum"]),
+                         self.module.FAILURE_CODES)
+        for code in ("SCANNER_FAILURE", "DIAGNOSTIC_ADMISSION_FAILURE"):
+            result = self.module.unknown_result(
+                repository="SecPal/example", commit=COMMIT, failure_code=code,
+                completed_at="2026-09-16T10:10:00Z",
+            )
+            self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+            jsonschema.validate(result, schema)
+
     def test_composer_advisory_requires_pinned_native_fallback_context(self) -> None:
         native = json.loads((FIXTURES / "composer-0.74.0-native.json").read_text())
         scanner = {
@@ -442,7 +478,7 @@ class RepositoryScanContractTests(unittest.TestCase):
         process, failed = run_evaluate_fixture(native, diagnostics=advisory + '2026-10-04T12:00:00Z\tWARN\tparser failed\n')
         self.assertNotEqual(process.returncode, 0)
         self.assertEqual(failed["gate_state"], "UNKNOWN_STALE")
-        self.assertEqual(failed["operation"]["failure_code"], "SCANNER_FAILURE")
+        self.assertEqual(failed["operation"]["failure_code"], "DIAGNOSTIC_ADMISSION_FAILURE")
 
     def test_composer_unknown_advisory_requires_review_not_clean(self) -> None:
         native = json.loads((FIXTURES / "composer-unknown-0.74.0-native.json").read_text())
@@ -463,7 +499,7 @@ class RepositoryScanContractTests(unittest.TestCase):
             native, diagnostics=advisory + "2026-10-04T12:00:00Z\tWARN\tpartial scan\n",
         )
         self.assertNotEqual(process.returncode, 0)
-        self.assertEqual(failed["operation"]["failure_code"], "SCANNER_FAILURE")
+        self.assertEqual(failed["operation"]["failure_code"], "DIAGNOSTIC_ADMISSION_FAILURE")
 
     def test_composer_unknown_rejects_explicit_or_unqualified_provenance(self) -> None:
         native = json.loads((FIXTURES / "composer-unknown-0.74.0-native.json").read_text())
@@ -493,7 +529,7 @@ class RepositoryScanContractTests(unittest.TestCase):
                 process, failed = run_evaluate_fixture(changed, diagnostics=advisory)
                 self.assertNotEqual(process.returncode, 0)
                 self.assertEqual(failed["gate_state"], "UNKNOWN_STALE")
-                self.assertEqual(failed["operation"]["failure_code"], "SCANNER_FAILURE")
+                self.assertEqual(failed["operation"]["failure_code"], "DIAGNOSTIC_ADMISSION_FAILURE")
 
     def test_composer_unknown_preserves_database_and_surface_guards(self) -> None:
         native = json.loads((FIXTURES / "composer-unknown-0.74.0-native.json").read_text())
@@ -1025,48 +1061,123 @@ class RepositoryScanContractTests(unittest.TestCase):
                 self.assertEqual(error.exception.code, 2)
 
     def test_cli_returns_nonzero_unknown_for_malformed_native_output(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            native = root / "native.json"
-            output = root / "result.json"
-            native.write_bytes((FIXTURES / "malformed.txt").read_bytes())
-            completed = subprocess.run(
-                [
-                    "python3",
-                    str(SCRIPT),
-                    "evaluate",
-                    "--diagnostics", str(root / "native.stderr"),
-                    "--cache-dir", str(root),
-                    "--native",
-                    str(native),
-                    "--policy",
-                    str(POLICY),
-                    "--repository",
-                    "SecPal/example",
-                    "--commit",
-                    COMMIT,
-                    "--workspace",
-                    ".",
-                    "--scanner-version",
-                    "0.74.0",
-                    "--scanner-identity",
-                    "sha256:" + "a" * 64,
-                    "--database",
-                    str(root / "missing-database.json"),
-                    "--completed-at",
-                    "2026-09-16T10:10:00Z",
-                    "--output",
-                    str(output),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            self.assertNotEqual(completed.returncode, 0)
-            result = json.loads(output.read_text(encoding="utf-8"))
-            self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
-            self.assertEqual(result["operation"]["failure_code"], "MALFORMED_OUTPUT")
-            self.assertNotIn("{not-json", completed.stdout + completed.stderr)
+        for content in (None, b'{"SchemaVersion":', b'["invalid"]', b"[]", (FIXTURES / "malformed.txt").read_bytes()):
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                native = root / "native.json"
+                output = root / "result.json"
+                database = root / "database.json"
+                database.write_text(json.dumps(valid_database()))
+                if content is not None:
+                    native.write_bytes(content)
+                completed = subprocess.run(
+                    [
+                        "python3",
+                        str(SCRIPT),
+                        "evaluate",
+                        "--diagnostics", str(root / "native.stderr"),
+                        "--cache-dir", str(root),
+                        "--native",
+                        str(native),
+                        "--policy",
+                        str(POLICY),
+                        "--repository",
+                        "SecPal/example",
+                        "--commit",
+                        COMMIT,
+                        "--workspace",
+                        ".",
+                        "--scanner-version",
+                        "0.74.0",
+                        "--scanner-identity",
+                        "sha256:" + "a" * 64,
+                        "--database",
+                        str(database),
+                        "--completed-at",
+                        "2026-09-16T10:10:00Z",
+                        "--output",
+                        str(output),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertTrue(output.exists(), "malformed native output needs a bounded failure result")
+                self.assertNotIn("Traceback", completed.stdout + completed.stderr)
+                result = json.loads(output.read_text(encoding="utf-8"))
+                self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+                self.assertEqual(result["operation"]["failure_code"], "MALFORMED_OUTPUT")
+                self.assertNotIn("{not-json", completed.stdout + completed.stderr)
+
+    def test_cli_contains_json_decoder_value_errors(self) -> None:
+        import jsonschema
+
+        oversized = b'{"private":"' + SYNTHETIC_SECRET.encode() + b'","number":' + b"9" * 5000 + b"}"
+        for input_kind, failure_code in (
+            ("native", "MALFORMED_OUTPUT"),
+            ("database", "DATABASE_FAILURE"),
+            ("policy", "POLICY_FAILURE"),
+        ):
+            with self.subTest(input_kind=input_kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                contents = {
+                    "native": json.dumps(native_result()).encode(),
+                    "database": json.dumps(valid_database()).encode(),
+                    "policy": POLICY.read_bytes(),
+                }
+                contents[input_kind] = oversized
+                paths = {kind: root / (kind + ".json") for kind in contents}
+                for kind, content in contents.items():
+                    paths[kind].write_bytes(content)
+                output = root / "result.json"
+                completed = subprocess.run(
+                    [
+                        "python3", "-I", str(SCRIPT), "evaluate",
+                        "--native", str(paths["native"]),
+                        "--database", str(paths["database"]),
+                        "--policy", str(paths["policy"]),
+                        "--diagnostics", str(root / "native.stderr"),
+                        "--cache-dir", str(root),
+                        "--repository", "SecPal/example", "--commit", COMMIT,
+                        "--workspace", str(root), "--scanner-version", "0.74.0",
+                        "--scanner-identity", self.module.TRIVY_ARCHIVE_ID,
+                        "--completed-at", "2026-09-16T10:10:00Z",
+                        "--output", str(output),
+                    ],
+                    check=False,
+                    capture_output=True,
+                )
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertTrue(output.is_file(), "decoder errors need a direct bounded result")
+                self.assertTrue(completed.stdout == completed.stderr == b"", "decoder errors must not expose output or tracebacks")
+                public = output.read_bytes()
+                self.assertTrue(SYNTHETIC_SECRET.encode() not in public, "native content must remain private")
+                self.assertTrue(b"9" * 5000 not in public, "raw numeric input must remain private")
+                result = json.loads(public)
+                self.assertEqual(result["schema_version"], "secpal-trivy-repository-scan-v3")
+                self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+                self.assertEqual(result["operation"]["failure_code"], failure_code)
+                jsonschema.validate(result, json.loads(SCHEMA.read_text()))
+                if input_kind == "native":
+                    # The composite action verifies this same native input
+                    # after evaluate has written its bounded failure result.
+                    verified = subprocess.run(
+                        [
+                            "python3", "-I", str(SCRIPT), "verify-redaction",
+                            "--native", str(paths["native"]), "--candidate", str(output),
+                            "--workspace", str(root), "--repository", "SecPal/example",
+                            "--commit", COMMIT,
+                        ],
+                        check=False,
+                        capture_output=True,
+                    )
+                    self.assertNotEqual(verified.returncode, 0)
+                    self.assertTrue(verified.stdout == b"", "native content must remain private")
+                    self.assertTrue(
+                        verified.stderr == b"repository scan evidence verification failed\n",
+                        "verification must emit only its bounded diagnostic",
+                    )
 
     def test_cli_reports_invalid_policy_as_policy_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1883,7 +1994,7 @@ class SecretSourceBindingTests(unittest.TestCase):
         import jsonschema
 
         result = self.module.admit(self.observation(), self.policy)
-        self.assertEqual(result["schema_version"], "secpal-trivy-repository-scan-v2")
+        self.assertEqual(result["schema_version"], "secpal-trivy-repository-scan-v3")
         old = json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v1.schema.json").read_text())
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.validate(result, old)

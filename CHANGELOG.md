@@ -18,6 +18,19 @@ Log of notable changes to SecPal organization defaults (newest first).
   bridge route, preserving configured ports and TLS while rejecting remote,
   credentialed or malformed endpoints with a closed diagnostic.
 
+## 2026-10-18 - Distinguish Repository Scanner Failure Boundaries
+
+**Fixed:**
+
+- Version repository scan results as v3, preserving the published closed v1/v2
+  schemas unchanged. Report rejected native diagnostics as `DIAGNOSTIC_ADMISSION_FAILURE`, distinct
+  from a nonzero scanner process exit. Preserve UNKNOWN_STALE, private cleanup,
+  source binding and the existing security policy.
+- Keep malformed native JSON arrays inside the bounded failure envelope instead
+  of allowing a conversion traceback.
+- Qualify successful native execution with rejected parser diagnostics and
+  interrupted execution without retaining native logs or secret captures.
+
 ## 2026-10-18 - Admit Native Grype SPDX Provenance
 
 **Fixed:**

@@ -19,7 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-SCHEMA_VERSION = "secpal-trivy-repository-scan-v2"
+SCHEMA_VERSION = "secpal-trivy-repository-scan-v3"
 OBSERVATION_VERSION = "secpal-trivy-repository-observation-v2"
 POLICY_ID = "secpal-trivy-repository-policy-v1"
 GATE_STATES = {"CLEAN", "ACTIONABLE", "REVIEW_REQUIRED", "UNKNOWN_STALE"}
@@ -29,6 +29,7 @@ FAILURE_CODES = {
     "NETWORK_FAILURE",
     "DATABASE_FAILURE",
     "SCANNER_FAILURE",
+    "DIAGNOSTIC_ADMISSION_FAILURE",
     "MALFORMED_OUTPUT",
     "POLICY_FAILURE",
 }
@@ -1006,7 +1007,7 @@ def _evaluate(arguments: argparse.Namespace) -> int:
     completed_at = arguments.completed_at
     try:
         native = _load(arguments.native)
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
         _write(
             arguments.output,
             unknown_result(
@@ -1020,7 +1021,7 @@ def _evaluate(arguments: argparse.Namespace) -> int:
     try:
         database = _load(arguments.database)
         _validate_database(database, _timestamp(completed_at))
-    except (ContractError, KeyError, TypeError, OSError, UnicodeError, json.JSONDecodeError):
+    except (ContractError, KeyError, TypeError, OSError, UnicodeError, ValueError, json.JSONDecodeError):
         _write(
             arguments.output,
             unknown_result(
@@ -1034,7 +1035,7 @@ def _evaluate(arguments: argparse.Namespace) -> int:
     try:
         policy = _load(arguments.policy)
         _validate_policy(policy, completed_at)
-    except (ContractError, KeyError, TypeError, UnicodeError, json.JSONDecodeError, OSError):
+    except (ContractError, KeyError, TypeError, UnicodeError, ValueError, json.JSONDecodeError, OSError):
         _write(
             arguments.output,
             unknown_result(
@@ -1085,11 +1086,11 @@ def _evaluate(arguments: argparse.Namespace) -> int:
         except (ContractError, OSError, UnicodeError):
             _write(arguments.output, unknown_result(
                 repository=arguments.repository, commit=arguments.commit,
-                failure_code="SCANNER_FAILURE", completed_at=completed_at,
+                failure_code="DIAGNOSTIC_ADMISSION_FAILURE", completed_at=completed_at,
             ))
             return 1
         result = admit(observation, policy)
-    except (ContractError, KeyError, TypeError, UnicodeError, json.JSONDecodeError, OSError):
+    except (ContractError, KeyError, TypeError, ValueError, UnicodeError, json.JSONDecodeError, OSError):
         _write(
             arguments.output,
             unknown_result(
@@ -1190,7 +1191,7 @@ def main() -> int:
                     completed_at=arguments.completed_at,
                 ),
             )
-    except (ContractError, OSError, KeyError, TypeError, UnicodeError, json.JSONDecodeError):
+    except (ContractError, OSError, KeyError, TypeError, UnicodeError, ValueError, json.JSONDecodeError):
         print("repository scan evidence verification failed", file=sys.stderr)
         return 1
     return 0
