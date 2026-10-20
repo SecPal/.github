@@ -1007,7 +1007,7 @@ def _evaluate(arguments: argparse.Namespace) -> int:
     completed_at = arguments.completed_at
     try:
         native = _load(arguments.native)
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
         _write(
             arguments.output,
             unknown_result(
@@ -1021,7 +1021,7 @@ def _evaluate(arguments: argparse.Namespace) -> int:
     try:
         database = _load(arguments.database)
         _validate_database(database, _timestamp(completed_at))
-    except (ContractError, KeyError, TypeError, OSError, UnicodeError, json.JSONDecodeError):
+    except (ContractError, KeyError, TypeError, OSError, UnicodeError, ValueError, json.JSONDecodeError):
         _write(
             arguments.output,
             unknown_result(
@@ -1035,7 +1035,7 @@ def _evaluate(arguments: argparse.Namespace) -> int:
     try:
         policy = _load(arguments.policy)
         _validate_policy(policy, completed_at)
-    except (ContractError, KeyError, TypeError, UnicodeError, json.JSONDecodeError, OSError):
+    except (ContractError, KeyError, TypeError, UnicodeError, ValueError, json.JSONDecodeError, OSError):
         _write(
             arguments.output,
             unknown_result(
@@ -1191,7 +1191,7 @@ def main() -> int:
                     completed_at=arguments.completed_at,
                 ),
             )
-    except (ContractError, OSError, KeyError, TypeError, UnicodeError, json.JSONDecodeError):
+    except (ContractError, OSError, KeyError, TypeError, UnicodeError, ValueError, json.JSONDecodeError):
         print("repository scan evidence verification failed", file=sys.stderr)
         return 1
     return 0

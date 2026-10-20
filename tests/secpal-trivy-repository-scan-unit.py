@@ -1110,6 +1110,75 @@ class RepositoryScanContractTests(unittest.TestCase):
                 self.assertEqual(result["operation"]["failure_code"], "MALFORMED_OUTPUT")
                 self.assertNotIn("{not-json", completed.stdout + completed.stderr)
 
+    def test_cli_contains_json_decoder_value_errors(self) -> None:
+        import jsonschema
+
+        oversized = b'{"private":"' + SYNTHETIC_SECRET.encode() + b'","number":' + b"9" * 5000 + b"}"
+        for input_kind, failure_code in (
+            ("native", "MALFORMED_OUTPUT"),
+            ("database", "DATABASE_FAILURE"),
+            ("policy", "POLICY_FAILURE"),
+        ):
+            with self.subTest(input_kind=input_kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                contents = {
+                    "native": json.dumps(native_result()).encode(),
+                    "database": json.dumps(valid_database()).encode(),
+                    "policy": POLICY.read_bytes(),
+                }
+                contents[input_kind] = oversized
+                paths = {kind: root / (kind + ".json") for kind in contents}
+                for kind, content in contents.items():
+                    paths[kind].write_bytes(content)
+                output = root / "result.json"
+                completed = subprocess.run(
+                    [
+                        "python3", "-I", str(SCRIPT), "evaluate",
+                        "--native", str(paths["native"]),
+                        "--database", str(paths["database"]),
+                        "--policy", str(paths["policy"]),
+                        "--diagnostics", str(root / "native.stderr"),
+                        "--cache-dir", str(root),
+                        "--repository", "SecPal/example", "--commit", COMMIT,
+                        "--workspace", str(root), "--scanner-version", "0.74.0",
+                        "--scanner-identity", self.module.TRIVY_ARCHIVE_ID,
+                        "--completed-at", "2026-09-16T10:10:00Z",
+                        "--output", str(output),
+                    ],
+                    check=False,
+                    capture_output=True,
+                )
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertTrue(output.is_file(), "decoder errors need a direct bounded result")
+                self.assertTrue(completed.stdout == completed.stderr == b"", "decoder errors must not expose output or tracebacks")
+                public = output.read_bytes()
+                self.assertTrue(SYNTHETIC_SECRET.encode() not in public, "native content must remain private")
+                self.assertTrue(b"9" * 5000 not in public, "raw numeric input must remain private")
+                result = json.loads(public)
+                self.assertEqual(result["schema_version"], "secpal-trivy-repository-scan-v3")
+                self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
+                self.assertEqual(result["operation"]["failure_code"], failure_code)
+                jsonschema.validate(result, json.loads(SCHEMA.read_text()))
+                if input_kind == "native":
+                    # The composite action verifies this same native input
+                    # after evaluate has written its bounded failure result.
+                    verified = subprocess.run(
+                        [
+                            "python3", "-I", str(SCRIPT), "verify-redaction",
+                            "--native", str(paths["native"]), "--candidate", str(output),
+                            "--workspace", str(root), "--repository", "SecPal/example",
+                            "--commit", COMMIT,
+                        ],
+                        check=False,
+                        capture_output=True,
+                    )
+                    self.assertNotEqual(verified.returncode, 0)
+                    self.assertTrue(verified.stdout == b"", "native content must remain private")
+                    self.assertTrue(
+                        verified.stderr == b"repository scan evidence verification failed\n",
+                        "verification must emit only its bounded diagnostic",
+                    )
+
     def test_cli_reports_invalid_policy_as_policy_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
