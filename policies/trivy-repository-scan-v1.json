@@ -46,6 +46,94 @@
       "disposition": "IGNORED",
       "expires_at": "2026-10-27T00:00:00Z",
       "rationale": "Independently requalified under SecPal/.github#1199 on 2026-10-13 at Android cebff0f878e64d50f690635a3b23382b80986a9e and frontend pin 8c950220d8ae582a536135eed75c8ecb2a4858c8. The complete 9782-byte asset rebuilds identically using Android's pinned build settings; all 198 distinct static alpha-2 country codes match src/lib/iso3166CountryOptions.ts blob b3e8f72d92d280ffc1f0f3a569ea1c33cc23ccca. The sole Trivy 0.74.0 SendGrid match lies entirely inside the static country literal, without credential, environment or interpolated input. Fresh three-class action replay retains exactly this blob-bound finding. The two-week bridge ends at the explicit source-remediation and consumer-adoption review on 2026-10-27: prefer a separately reviewed frontend encoding correction that avoids the minifier's token-shaped literal, followed by Android pin/rebuild qualification. No such source correction is yet accepted. Before any renewal recheck source lineage, exact bytes, scanner necessity and static-data classification. Different bytes remain actionable and require independent review."
+    },
+    {
+      "id": "deployment-ds-0026-1236",
+      "repository": "SecPal/deployment",
+      "class": "MISCONFIGURATION",
+      "rule_id": "DS-0026",
+      "path": "containers/phase-b-gateway/Containerfile",
+      "disposition": "IGNORED",
+      "expires_at": "2026-10-27T00:00:00Z",
+      "rationale": "Disposition authority: SecPal/.github#1236. Source/control qualification deployment-ephemeral-1236 is mandatory. Accurate absence of an image HEALTHCHECK on the non-production Caddy gateway fixture. Accepted deployment#126 health authority is the single Quadlet HealthSpec/HealthCmd with Notify=healthy, HealthOnFailure=kill, bounded retries and timeout; native AMD64/ARM64 lifecycle and failure tests pass. Duplicating the probe in the image would introduce another authority. This reviewed use-specific IGNORED disposition does not claim the image has a HEALTHCHECK or qualify production edge health. Underlying fixture and effective health sources must match the exact source qualification.",
+      "qualification_id": "deployment-ephemeral-1236"
+    },
+    {
+      "id": "deployment-gcp-0031-1236",
+      "repository": "SecPal/deployment",
+      "class": "MISCONFIGURATION",
+      "rule_id": "GCP-0031",
+      "path": "infra/ci-cloud/gcp-rocky/main.tf",
+      "disposition": "IGNORED",
+      "expires_at": "2026-10-27T00:00:00Z",
+      "rationale": "Disposition authority: SecPal/.github#1236. Source/control qualification deployment-ephemeral-1236 is mandatory. The public address is real residual exposure, not a false positive. Accepted deployment#118/#123 control uses it only for actual-runner /32 TCP22, fresh run-bound Ed25519 authority, closed instance/run/source/image ownership, rotation, at-most-three-hour TTL and exact cleanup. Tested code receives no cloud control credential and cannot execute before cloud identity is removed. A different private transport/IAM architecture is not required by the accepted disposable qualification contract. Temporary exposure is accepted only for the exact bound control sources and requires reassessment on any access/topology/identity change.",
+      "qualification_id": "deployment-ephemeral-1236"
+    },
+    {
+      "id": "deployment-gcp-0033-1236",
+      "repository": "SecPal/deployment",
+      "class": "MISCONFIGURATION",
+      "rule_id": "GCP-0033",
+      "path": "infra/ci-cloud/gcp-rocky/main.tf",
+      "disposition": "IGNORED",
+      "expires_at": "2026-10-27T00:00:00Z",
+      "rationale": "Disposition authority: SecPal/.github#1236. Source/control qualification deployment-ephemeral-1236 is mandatory. Accurate absence of customer-controlled boot-disk keys; not absence of at-rest encryption. The boot attachment refers to the same separate qualification disk covered by GCP-0034. Accepted non-production test-resource baseline uses Google-managed default encryption, bounded TTL/exact cleanup and no customer production-state input. A separate KMS/key-custody/IAM availability lifecycle is not a required property of this contract. This is a time-bounded custody-risk disposition, not a claim of CMEK/CSEK or plaintext equivalence; do not introduce deprecated CSEK solely for the generic rule.",
+      "qualification_id": "deployment-ephemeral-1236"
+    },
+    {
+      "id": "deployment-gcp-0034-1236",
+      "repository": "SecPal/deployment",
+      "class": "MISCONFIGURATION",
+      "rule_id": "GCP-0034",
+      "path": "infra/ci-cloud/gcp-rocky/main.tf",
+      "disposition": "IGNORED",
+      "expires_at": "2026-10-27T00:00:00Z",
+      "rationale": "Disposition authority: SecPal/.github#1236. Source/control qualification deployment-ephemeral-1236 is mandatory. Accurate separate-resource observation on the same qualification disk attached as boot_disk (GCP-0033). Google-managed provider encryption is the accepted at-rest authority for disposable test state. Customer-controlled key custody is not required by that accepted baseline; TTL and cleanup bound retention but do not replace encryption. No customer production-state input, extra KMS identity or key-lifecycle authority is introduced. Retain this distinct observation and requalify any state, retention, encryption or custody change.",
+      "qualification_id": "deployment-ephemeral-1236"
+    },
+    {
+      "id": "deployment-gcp-0036-1236",
+      "repository": "SecPal/deployment",
+      "class": "MISCONFIGURATION",
+      "rule_id": "GCP-0036",
+      "path": "infra/ci-cloud/gcp-rocky/main.tf",
+      "disposition": "IGNORED",
+      "expires_at": "2026-10-27T00:00:00Z",
+      "rationale": "Disposition authority: SecPal/.github#1236. Source/control qualification deployment-ephemeral-1236 is mandatory. Accurate explicit enable-oslogin=FALSE. The accepted management contract uses controller-generated short-lived per-run Ed25519 keys, exact peer /32 ingress and validated key/run/instance rotation, followed by cloud-identity-free target execution. OS Login changes IAM-governed login and authorized_keys behavior and would replace that management authority. The existing credential and exposure risks remain documented; this disposition accepts the exact established temporary access path rather than declaring IAM-based login unnecessary in general.",
+      "qualification_id": "deployment-ephemeral-1236"
+    },
+    {
+      "id": "deployment-gcp-0075-1236",
+      "repository": "SecPal/deployment",
+      "class": "MISCONFIGURATION",
+      "rule_id": "GCP-0075",
+      "path": "infra/ci-cloud/gcp-rocky/main.tf",
+      "disposition": "IGNORED",
+      "expires_at": "2026-10-27T00:00:00Z",
+      "rationale": "Disposition authority: SecPal/.github#1236. Source/control qualification deployment-ephemeral-1236 is mandatory. Accurate false setting. This exact topology has an external IPv4 for its sole qualification instance. Google documents that Private Google Access has no effect on instances with external IP addresses; it serves internal-only instances. Enabling it would not remove public exposure, enforce egress or prove identity isolation. This precise applicability disposition depends on the unchanged topology and controlled egress; external-IP removal or a new Google-service dependency invalidates the source qualification.",
+      "qualification_id": "deployment-ephemeral-1236"
+    },
+    {
+      "id": "deployment-gcp-0029-1236",
+      "repository": "SecPal/deployment",
+      "class": "MISCONFIGURATION",
+      "rule_id": "GCP-0029",
+      "path": "infra/ci-cloud/gcp-rocky/main.tf",
+      "disposition": "IGNORED",
+      "expires_at": "2026-10-27T00:00:00Z",
+      "rationale": "Disposition authority: SecPal/.github#1236. Source/control qualification deployment-ephemeral-1236 is mandatory. Accurate lack of packet-flow logging on the isolated ephemeral qualification subnet. The accepted audit contract retains exact source/run/resource ownership, bounded preparation/workload/control evidence and cleanup; it does not claim packet-level audit coverage or accept customer production workloads/state. Source-bound /32 management ingress, controlled egress protocols and TTL remain enforced. Flow logging adds network metadata collection, access/retention obligations and cost without a required packet-audit property in the accepted baseline. Its residual observability gap is explicitly accepted for this bounded test use until review expiry, not dismissed because the resource is ephemeral. A new packet-audit requirement needs its real logging owner. Same decision as GCP-0076; keep both observations.",
+      "qualification_id": "deployment-ephemeral-1236"
+    },
+    {
+      "id": "deployment-gcp-0076-1236",
+      "repository": "SecPal/deployment",
+      "class": "MISCONFIGURATION",
+      "rule_id": "GCP-0076",
+      "path": "infra/ci-cloud/gcp-rocky/main.tf",
+      "disposition": "IGNORED",
+      "expires_at": "2026-10-27T00:00:00Z",
+      "rationale": "Disposition authority: SecPal/.github#1236. Source/control qualification deployment-ephemeral-1236 is mandatory. Retain this independent MEDIUM observation alongside GCP-0029. The same exact ephemeral subnet lacks flow logs. The accepted baseline has run/resource lifecycle and workload evidence, no customer production state, exact-peer temporary management access and bounded lifetime, but no claim of packet-flow audit. Do not invent a sink, retention/access policy or logging cost authority. This time-bounded risk disposition shares the GCP-0029 logging decision and must be reassessed if audit requirements, data sensitivity, topology or lifetime changes.",
+      "qualification_id": "deployment-ephemeral-1236"
     }
   ],
   "vex": {

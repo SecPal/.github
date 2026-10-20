@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-20 - Qualify Static Deployment Security and Run-Bound Controls
+
+**Changed:**
+
+- Publish repository scan v4 coverage for the exact source-bound deployment
+  qualification. Preserve v1/v2/v3 schemas, existing severity policy, pinned
+  three-class Trivy, database freshness and private cleanup.
+- Keep concrete run checks explicitly required and unexecuted by source scans;
+  reject changed controls, extra Terraform modules, unqualified diagnostics or
+  expired proof. Reuse OpenTofu and the existing trusted-control gates.
+- Retain eight deployment observations with central, source-qualified,
+  time-bounded architecture dispositions. No new cloud, health or key authority.
+
 ## 2026-10-20 - Restrict Workspace Bridge Destinations
 
 **Fixed:**
