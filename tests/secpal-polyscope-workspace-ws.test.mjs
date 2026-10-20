@@ -9,10 +9,14 @@ const source = readFileSync(
   new URL("../scripts/secpal-polyscope-workspace-ws.js", import.meta.url),
   "utf8"
 );
-function client(socketUrl = "ws://127.0.0.1:4321/ws?client=secpal-workspace-bridge") {
+const defaultSocketUrl = "ws://127.0.0.1:4321/ws?client=secpal-workspace-bridge";
+function client(socketUrl, expectedSocketUrl = socketUrl ?? defaultSocketUrl) {
   const handlers = new Map();
   const output = [];
   const sent = [];
+  const connections = [];
+  const exitSignal = {};
+  let exitCode;
   let timeout;
   const payload = {
     message: {
@@ -28,7 +32,8 @@ function client(socketUrl = "ws://127.0.0.1:4321/ws?client=secpal-workspace-brid
   };
   class Socket {
     constructor(url) {
-      assert.equal(url, socketUrl);
+      connections.push(url);
+      assert.equal(url, expectedSocketUrl);
     }
     addEventListener(name, handler) {
       handlers.set(name, handler);
@@ -49,11 +54,15 @@ function client(socketUrl = "ws://127.0.0.1:4321/ws?client=secpal-workspace-brid
         },
       };
     },
+    URL,
     WebSocket: Socket,
     process: {
       argv: ["node", "helper"],
       stdout: { write: (value) => output.push(JSON.parse(value)) },
-      exit() {},
+      exit(code) {
+        exitCode = code;
+        throw exitSignal;
+      },
     },
     setTimeout(fn, ms) {
       if (ms === 120000) timeout = fn;
@@ -61,15 +70,94 @@ function client(socketUrl = "ws://127.0.0.1:4321/ws?client=secpal-workspace-brid
     },
     clearTimeout() {},
   };
-  vm.runInNewContext(source, context);
+  try {
+    vm.runInNewContext(source, context);
+  } catch (error) {
+    if (error !== exitSignal) throw error;
+  }
   return {
     open: () => handlers.get("open")(),
     message: (message) => handlers.get("message")({ data: JSON.stringify(message) }),
     timeout: () => timeout(),
     output,
     sent,
+    connections,
+    exitCode,
   };
 }
+
+test("the default endpoint and configured loopback transports remain available", () => {
+  const bridge = client();
+  bridge.open();
+  assert.deepEqual(bridge.connections, [defaultSocketUrl]);
+  assert.equal(bridge.sent.length, 1);
+  for (const protocol of ["ws", "wss"]) {
+    for (const host of ["127.0.0.1", "localhost", "[::1]"]) {
+      for (const port of ["", ":1", ":5432", ":65535"]) {
+        const url = `${protocol}://${host}${port}/ws?client=secpal-workspace-bridge`;
+        const configured = client(url);
+        configured.open();
+        assert.deepEqual(configured.connections, [url]);
+        assert.equal(configured.sent.length, 1);
+      }
+    }
+  }
+});
+
+test("accepted endpoints are rebuilt as canonical loopback URLs", () => {
+  const suffix = "/ws?client=secpal-workspace-bridge";
+  for (const [input, expected] of [
+    [`WS://LOCALHOST:05432${suffix}`, `ws://localhost:5432${suffix}`],
+    [`ws://127.1:4321${suffix}`, defaultSocketUrl],
+    [`ws://[0:0:0:0:0:0:0:1]:4321${suffix}`, `ws://[::1]:4321${suffix}`],
+    [`ws://127.0.0.1:80${suffix}`, `ws://127.0.0.1${suffix}`],
+    [`wss://127.0.0.1:443${suffix}`, `wss://127.0.0.1${suffix}`],
+  ]) {
+    const bridge = client(input, expected);
+    bridge.open();
+    assert.deepEqual(bridge.connections, [expected]);
+    assert.equal(bridge.sent.length, 1);
+  }
+});
+
+test("unsafe stdin endpoints fail before opening a socket or sending file data", () => {
+  const suffix = "/ws?client=secpal-workspace-bridge";
+  for (const url of [
+    `ws://remote.invalid${suffix}`,
+    `wss://remote.invalid${suffix}`,
+    `ws://127.0.0.1.remote.invalid${suffix}`,
+    `ws://localhost.remote.invalid${suffix}`,
+    `ws://127.0.0.1@remote.invalid${suffix}`,
+    `ws://192.0.2.1${suffix}`,
+    `ws://0.0.0.0${suffix}`,
+    `ws://[::]${suffix}`,
+    `ws://[::ffff:192.0.2.1]${suffix}`,
+    `http://127.0.0.1:4321${suffix}`,
+    `https://127.0.0.1:4321${suffix}`,
+    `file://localhost${suffix}`,
+    `ws://user:private@127.0.0.1:4321${suffix}`,
+    `ws://127.0.0.1:0${suffix}`,
+    `ws://127.0.0.1:65536${suffix}`,
+    `ws://127.0.0.1:4321${suffix}#private`,
+    `ws://127.0.0.1:4321${suffix}&private=value`,
+    "ws://127.0.0.1:4321/other?client=secpal-workspace-bridge",
+    "ws://127.0.0.1:4321/ws?client=other",
+    "ws://127.0.0.1:4321/ws",
+    "private malformed input",
+    "",
+    null,
+    false,
+    4321,
+    {},
+    [defaultSocketUrl],
+  ]) {
+    const bridge = client(url);
+    assert.deepEqual(bridge.connections, [], `connected to ${JSON.stringify(url)}`);
+    assert.deepEqual(bridge.sent, []);
+    assert.deepEqual(bridge.output, [{ error: "polyscope-bridge-unavailable" }]);
+    assert.equal(bridge.exitCode, 2);
+  }
+});
 
 test("native creation binds repository, issue, active state and new ID", () => {
   const bridge = client();
