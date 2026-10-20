@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-20 - Restrict Workspace Bridge Destinations
+
+**Fixed:**
+
+- Validate stdin WebSocket destinations in the Polyscope workspace bridge before
+  opening a connection. Restrict destinations to loopback hosts and the native
+  bridge route, preserving configured ports and TLS while rejecting remote,
+  credentialed or malformed endpoints with a closed diagnostic.
+
 ## 2026-10-18 - Admit Native Grype SPDX Provenance
 
 **Fixed:**

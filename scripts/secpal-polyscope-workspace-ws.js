@@ -8,10 +8,38 @@ const expectedPr = payload.expectedPr ?? null;
 const expectedIssue = payload.expectedIssue ?? null;
 const timeoutMs = payload.timeoutMs || 120000;
 
+function admittedSocketUrl(value = "ws://127.0.0.1:4321/ws?client=secpal-workspace-bridge") {
+  if (typeof value !== "string") throw new Error("invalid bridge URL");
+  const url = new URL(value);
+  const hostname = ["127.0.0.1", "localhost", "[::1]"].find((host) => host === url.hostname);
+  if (
+    !hostname ||
+    !["ws:", "wss:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/ws" ||
+    url.search !== "?client=secpal-workspace-bridge" ||
+    url.hash ||
+    (url.port && Number(url.port) === 0)
+  ) {
+    throw new Error("invalid bridge URL");
+  }
+  // Build the destination from admitted host literals and a numeric port only.
+  const protocol = url.protocol === "wss:" ? "wss:" : "ws:";
+  const port = url.port ? `:${Number(url.port)}` : "";
+  return `${protocol}//${hostname}${port}/ws?client=secpal-workspace-bridge`;
+}
+
+let socketUrl;
+try {
+  socketUrl = admittedSocketUrl(payload.socketUrl);
+} catch (_) {
+  process.stdout.write(JSON.stringify({ error: "polyscope-bridge-unavailable" }) + "\n");
+  process.exit(2);
+}
+
 let done = false;
-const socket = new WebSocket(
-  payload.socketUrl || "ws://127.0.0.1:4321/ws?client=secpal-workspace-bridge"
-);
+const socket = new WebSocket(socketUrl);
 const timer = setTimeout(() => finish(2, { error: "polyscope-create-timeout" }), timeoutMs);
 
 function finish(code, value) {
