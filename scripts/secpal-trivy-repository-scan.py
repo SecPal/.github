@@ -58,7 +58,7 @@ DEPLOYMENT_TERRAFORM_BINDINGS = {
     "infra/ci-cloud": "5a6905f320172fb5f6fc170c039a0bc8b7cf8684",
     "schemas": "2a793d4d0773656f2cfea6b489a7d5149d97c2f8",
     "scripts": "26a857dca06796c241fa155f36f513cc15a1bdd8",
-    ".github": "sha256:b381f2c30006ec46bbb6ff85ef18cfd3bc05c4751b6ba24e010c67fbaca63702"
+    ".github": "sha256:7c8e7c0dde07427134b61729bcb8a2526c39ab72523661df76d195c54b01f2d0"
 }
 DEPLOYMENT_TERRAFORM_PATHS = (
     'infra/ci-cloud/digitalocean/versions.tf',
