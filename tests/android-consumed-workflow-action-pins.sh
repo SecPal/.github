@@ -21,7 +21,8 @@ is_documented_pin() {
   [[ ! "$revision" =~ $null_commit_sha ]] || return 1
 
   if [[ "${reference%@*}" == */.github/workflows/*.yml ]] ||
-    [[ "${reference%@*}" == */.github/workflows/*.yaml ]]; then
+    [[ "${reference%@*}" == */.github/workflows/*.yaml ]] ||
+    [[ "${reference%@*}" == "${GITHUB_REPOSITORY:-SecPal/.github}/.github/actions/"* ]]; then
     [[ "$version" =~ $documented_source ]] &&
       [[ ! "$version" =~ $full_commit_sha ]]
   else
@@ -40,8 +41,9 @@ is_accepted_action_pin() {
   fi
 
   if [[ "${reference%@*}" == */.github/workflows/*.yml ]] ||
-    [[ "${reference%@*}" == */.github/workflows/*.yaml ]]; then
-    verify_reusable_workflow_pin "$reference" "$version"
+    [[ "${reference%@*}" == */.github/workflows/*.yaml ]] ||
+    [[ "${reference%@*}" == "${GITHUB_REPOSITORY:-SecPal/.github}/.github/actions/"* ]]; then
+    verify_governance_pin "$reference" "$version"
   else
     verify_action_release_pin "$reference" "$version"
   fi
@@ -97,11 +99,11 @@ verify_action_release_pin() {
   verified_release_pins+=("$cache_key")
 }
 
-verify_reusable_workflow_pin() {
+verify_governance_pin() {
   local reference="$1"
   local branch="$2"
   local workflow_source="${reference%@*}"
-  local repository_source="${workflow_source%%/.github/workflows/*}"
+  local repository_source="${workflow_source%/.github/*}"
   local expected_repository="${GITHUB_REPOSITORY:-SecPal/.github}"
   local base_revision="${SECPAL_BASE_REVISION:-}"
   local candidate

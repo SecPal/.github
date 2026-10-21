@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-21 - Scan Governance Source Before Required Admission
+
+**Changed:**
+
+- Require successful CLEAN source-security evidence in the existing Evidence
+  Architecture PR Gate before candidate validation tooling runs. Execute the
+  separately accepted immutable scanner and policy; candidate scanner changes
+  remain untrusted source data. Preserve existing check identities and read-only
+  permissions.
+
 ## 2026-10-21 - Refresh Exact Deployment Automation Qualification
 
 **Changed:**

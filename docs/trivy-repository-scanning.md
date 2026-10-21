@@ -47,6 +47,30 @@ The shared action always fails for `UNKNOWN_STALE`. A repository adoption may
 make `ACTIONABLE` or `REVIEW_REQUIRED` blocking according to that repository's
 accepted contract; it must consume the output instead of copying scanner logic.
 
+## Governance repository admission
+
+SecPal/.github invokes the accepted action at
+`e89bf9b04bd90bd29b6909994bb7431b56ce5aa2` inside its existing required
+**Evidence Architecture PR Gate**, immediately after an exact `github.sha`
+checkout with persisted credentials disabled. Successful execution and exactly
+`CLEAN` are both required before candidate validation tooling runs. Missing,
+skipped, cancelled, failed and non-clean scans cannot admit that job.
+
+The action runtime, policy and v4 result contract come from the separately
+accepted immutable action archive. Candidate scanner and policy files are
+untrusted scan input; they are never the executing scanner's authority. The job
+uses only `contents: read` and retains bounded, secret-safe evidence for 14 days.
+This does not make the candidate-controlled workflow technically tamper-proof:
+normal protected checks, source inspection and the sole maintainer's manual
+merge authority still apply.
+
+The central policy validates every exception's expiry, including exceptions for
+other repositories. All ten current exceptions expire at
+`2026-10-27T00:00:00Z`; scans using this pinned policy fail closed after expiry,
+even if SecPal/.github has no matching findings. Reassessment belongs to the
+central policy owners recorded in those dispositions; this adoption does not
+renew, remove or relax them.
+
 ## Scanner and policy identity
 
 The action downloads Trivy `0.74.0`, verifies the archive against the reviewed
