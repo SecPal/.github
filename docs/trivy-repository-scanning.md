@@ -50,7 +50,7 @@ accepted contract; it must consume the output instead of copying scanner logic.
 ## Governance repository admission
 
 SecPal/.github invokes the accepted action at
-`e89bf9b04bd90bd29b6909994bb7431b56ce5aa2` inside its existing required
+`55bcdb6f00eb7d552da206f83fcdc87cf2c43375` inside its existing required
 **Evidence Architecture PR Gate**, immediately after an exact `github.sha`
 checkout with persisted credentials disabled. Successful execution and exactly
 `CLEAN` are both required before candidate validation tooling runs. Missing,
@@ -65,11 +65,14 @@ normal protected checks, source inspection and the sole maintainer's manual
 merge authority still apply.
 
 The central policy validates every exception's expiry, including exceptions for
-other repositories. All ten current exceptions expire at
-`2026-10-27T00:00:00Z`; scans using this pinned policy fail closed after expiry,
-even if SecPal/.github has no matching findings. Reassessment belongs to the
-central policy owners recorded in those dispositions; this adoption does not
-renew, remove or relax them.
+other repositories. The reviewed Frontend disposition and eight Deployment
+dispositions/source-control qualification expire at `2026-11-04T00:00:00Z`;
+the exact-blob Android disposition expires at `2026-11-20T00:00:00Z`.
+The earliest global deadline is therefore November 4, including scans of
+SecPal/.github with no matching findings. Central requalification is recorded
+under #1244, preserving completed #1199 and #1236. This consumer adoption does
+not renew or relax those entries; a later accepted policy and consumer pin
+adoption are needed before the next global deadline.
 
 ## Scanner and policy identity
 
