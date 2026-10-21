@@ -9,7 +9,7 @@ import { join } from "node:path";
 import test from "node:test";
 import * as yaml from "js-yaml";
 
-const trusted = "e89bf9b04bd90bd29b6909994bb7431b56ce5aa2";
+const trusted = "55bcdb6f00eb7d552da206f83fcdc87cf2c43375";
 const actionDirectory = ".github/actions/trivy-repository-scan";
 const workflow = yaml.load(readFileSync(".github/workflows/quality.yml", "utf8"));
 const job = workflow.jobs["evidence-architecture"];
@@ -194,7 +194,7 @@ test("vulnerable replay inputs retain exact bytes without active source manifest
   assert.equal(existsSync(fixtures + "package-lock.json"), false);
   assert.deepEqual(
     readFileSync(fixtures + "package-lock.json.in"),
-    execFileSync("git", ["show", trusted + ":" + fixtures + "package-lock.json"])
+    execFileSync("git", ["show", "d6abdad0b2fe45ab9224dd63f790d6dc5be8f3e5"])
   );
   assert.equal(existsSync(fixtures + "Containerfile"), false);
   assert.equal(existsSync(fixtures + "Containerfile.in"), false);
