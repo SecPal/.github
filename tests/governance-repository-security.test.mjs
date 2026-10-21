@@ -188,3 +188,15 @@ test("pin provenance admits accepted governance code, not caller or third-party 
     assert.equal(result.status === 0, accepted, pin);
   }
 });
+
+test("vulnerable replay manifests are unchanged non-active template inputs", () => {
+  const fixtures = "tests/fixtures/trivy-repository-scan/workspace/";
+  for (const name of ["package-lock.json", "Containerfile"]) {
+    assert.equal(existsSync(fixtures + name), false, "active fixture manifest: " + name);
+    assert.deepEqual(
+      readFileSync(fixtures + name + ".in"),
+      execFileSync("git", ["show", trusted + ":" + fixtures + name]),
+      "the positive scanner input must retain its reviewed vulnerable bytes"
+    );
+  }
+});

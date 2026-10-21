@@ -416,6 +416,8 @@ def main() -> int:
 
         workspace = root / "workspace"
         shutil.copytree(FIXTURE, workspace, ignore=shutil.ignore_patterns("*.license"))
+        for name in ("package-lock.json", "Containerfile"):
+            (workspace / (name + ".in")).rename(workspace / name)
         template = workspace / "synthetic-secret.txt.in"
         secret_path = workspace / "synthetic-secret.txt"
         secret_path.write_text(
@@ -571,6 +573,18 @@ def main() -> int:
             raise RuntimeError("generic scanner replay regressed")
         result = module.admit(observation, json.loads(POLICY.read_text(encoding="utf-8")))
         module.verify_redaction(native_value, result, workspace, "SecPal/repository-scan-fixture", commit)
+        positive_fixture_rules = {
+            (finding["path"], finding["rule_id"]) for finding in result["findings"]
+            if finding["class"] in {"VULNERABILITY", "MISCONFIGURATION"}
+        }
+        required_fixture_rules = {
+            ("package-lock.json", rule) for rule in (
+                "CVE-2026-2950", "CVE-2020-28500", "CVE-2026-4800",
+                "CVE-2021-23337", "CVE-2025-13465",
+            )
+        } | {("Containerfile", "DS-0002"), ("Containerfile", "DS-0026")}
+        if not required_fixture_rules <= positive_fixture_rules:
+            raise RuntimeError("materialized fixtures lost original positive detections")
         representations = {}
         for path in ("short-secret.js", "long-secret.js", "crlf-secret.js"):
             findings = [s for r in native_value["Results"] if r["Target"] == path
@@ -749,6 +763,7 @@ def main() -> int:
                     "diagnostic_rejection_code": rejected["operation"]["failure_code"],
                     "database_identity": database["identity"],
                     "scanner_classes": sorted(classes),
+                    "positive_fixture_rules": sorted(positive_fixture_rules),
                     "secret_capture_retained": False,
                     "gate_state": result["gate_state"],
                 },

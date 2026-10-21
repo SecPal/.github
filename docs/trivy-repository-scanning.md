@@ -194,10 +194,12 @@ runtime file exclusions, and unrelated exports fail qualification. This check
 runs in preflight and complete registered validation; it supplements the native
 replay and the required genuine external GitHub Actions invocation.
 
-`tests/fixtures/trivy-repository-scan/workspace` contains a vulnerable source
-lockfile, a rejected container configuration, and a secret template whose test
-value is assembled only in a temporary directory. The native replay runs the
-pinned scanner and proves all three result classes, database identity capture,
+`tests/fixtures/trivy-repository-scan/workspace` stores the unchanged vulnerable
+lockfile and rejected container configuration as explicit non-active
+`package-lock.json.in` and `Containerfile.in` inputs. The replay materializes
+their actual manifest names only in its disposable workspace, before committing
+and scanning it. The secret template's test value is likewise assembled only in
+that temporary directory. The native replay runs the pinned scanner and proves all three result classes, database identity capture,
 and removal of the synthetic secret value. Unit fixtures cover stale database,
 malformed output, network/failure envelopes, deterministic normalization, and
 closed exception semantics.
