@@ -47,6 +47,30 @@ The shared action always fails for `UNKNOWN_STALE`. A repository adoption may
 make `ACTIONABLE` or `REVIEW_REQUIRED` blocking according to that repository's
 accepted contract; it must consume the output instead of copying scanner logic.
 
+## Governance repository admission
+
+SecPal/.github invokes the accepted action at
+`e89bf9b04bd90bd29b6909994bb7431b56ce5aa2` inside its existing required
+**Evidence Architecture PR Gate**, immediately after an exact `github.sha`
+checkout with persisted credentials disabled. Successful execution and exactly
+`CLEAN` are both required before candidate validation tooling runs. Missing,
+skipped, cancelled, failed and non-clean scans cannot admit that job.
+
+The action runtime, policy and v4 result contract come from the separately
+accepted immutable action archive. Candidate scanner and policy files are
+untrusted scan input; they are never the executing scanner's authority. The job
+uses only `contents: read` and retains bounded, secret-safe evidence for 14 days.
+This does not make the candidate-controlled workflow technically tamper-proof:
+normal protected checks, source inspection and the sole maintainer's manual
+merge authority still apply.
+
+The central policy validates every exception's expiry, including exceptions for
+other repositories. All ten current exceptions expire at
+`2026-10-27T00:00:00Z`; scans using this pinned policy fail closed after expiry,
+even if SecPal/.github has no matching findings. Reassessment belongs to the
+central policy owners recorded in those dispositions; this adoption does not
+renew, remove or relax them.
+
 ## Scanner and policy identity
 
 The action downloads Trivy `0.74.0`, verifies the archive against the reviewed
@@ -170,11 +194,19 @@ runtime file exclusions, and unrelated exports fail qualification. This check
 runs in preflight and complete registered validation; it supplements the native
 replay and the required genuine external GitHub Actions invocation.
 
-`tests/fixtures/trivy-repository-scan/workspace` contains a vulnerable source
-lockfile, a rejected container configuration, and a secret template whose test
-value is assembled only in a temporary directory. The native replay runs the
-pinned scanner and proves all three result classes, database identity capture,
-and removal of the synthetic secret value. Unit fixtures cover stale database,
+`tests/fixtures/trivy-repository-scan/workspace` stores the unchanged vulnerable
+lockfile as a non-active `package-lock.json.in` input. The replay materializes
+its actual name only in its disposable workspace. It constructs the original
+Containerfile bytes there directly, including CC0 SPDX metadata, before committing
+and scanning. No container manifest or container template is tracked in this
+fixture directory. The focused regression executes the actual construction
+statement and compares the result with immutable Git blob
+`57c65dc80accc264edbb1c735300feb47adde2a5`.
+
+The secret template's test value is likewise assembled only in the temporary
+directory. The native replay proves all three scanner classes, all original
+Lodash and container misconfiguration detections, database identity capture,
+and removal of synthetic secret values. Unit fixtures cover stale databases,
 malformed output, network/failure envelopes, deterministic normalization, and
 closed exception semantics.
 

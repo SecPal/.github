@@ -98,6 +98,24 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Scan repository security
+        id: repository-security
+        # yamllint disable-line rule:line-length
+        uses: SecPal/.github/.github/actions/trivy-repository-scan@e89bf9b04bd90bd29b6909994bb7431b56ce5aa2 # main
+
+      - name: Require clean repository security
+        shell: bash
+        env:
+          SCAN_OUTCOME: ${{ steps.repository-security.outcome }}
+          GATE_STATE: ${{ steps.repository-security.outputs.gate-state }}
+        run: |
+          test "$SCAN_OUTCOME" = success
+          test "$GATE_STATE" = CLEAN
 
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -125,6 +143,7 @@ jobs:
           python3 tests/secpal-polyscope-workspace.py
           node --test tests/secpal-polyscope-workspace-ws.test.mjs
           python3 tests/evidence-architecture-governance.py
+          node --test tests/governance-repository-security.test.mjs
 
   vulnerability-policy:
     name: Vulnerability Policy
