@@ -416,8 +416,13 @@ def main() -> int:
 
         workspace = root / "workspace"
         shutil.copytree(FIXTURE, workspace, ignore=shutil.ignore_patterns("*.license"))
-        for name in ("package-lock.json", "Containerfile"):
-            (workspace / (name + ".in")).rename(workspace / name)
+        (workspace / "package-lock.json.in").rename(workspace / "package-lock.json")
+        # Construct the original CC0 container fixture only in this disposable target.
+        (workspace / "Containerfile").write_bytes(
+            b"# SPDX-" b"FileCopyrightText: 2026 SecPal Contributors\n"
+            b"# SPDX-" b"License-Identifier: CC0-1.0\n"
+            b"\nFROM alpine:3.20\n"
+        )
         template = workspace / "synthetic-secret.txt.in"
         secret_path = workspace / "synthetic-secret.txt"
         secret_path.write_text(

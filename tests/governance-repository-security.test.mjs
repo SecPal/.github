@@ -189,14 +189,43 @@ test("pin provenance admits accepted governance code, not caller or third-party 
   }
 });
 
-test("vulnerable replay manifests are unchanged non-active template inputs", () => {
+test("vulnerable replay inputs retain exact bytes without active source manifests", () => {
   const fixtures = "tests/fixtures/trivy-repository-scan/workspace/";
-  for (const name of ["package-lock.json", "Containerfile"]) {
-    assert.equal(existsSync(fixtures + name), false, "active fixture manifest: " + name);
+  assert.equal(existsSync(fixtures + "package-lock.json"), false);
+  assert.deepEqual(
+    readFileSync(fixtures + "package-lock.json.in"),
+    execFileSync("git", ["show", trusted + ":" + fixtures + "package-lock.json"])
+  );
+  assert.equal(existsSync(fixtures + "Containerfile"), false);
+  assert.equal(existsSync(fixtures + "Containerfile.in"), false);
+  const workspace = mkdtempSync(join(tmpdir(), "secpal-container-input-"));
+  try {
+    // Execute the replay's actual construction statement, without downloading
+    // scanners or duplicating the fixture bytes in this regression.
+    execFileSync("python3", [
+      "-I",
+      "-c",
+      [
+        "import ast, sys",
+        "from pathlib import Path",
+        "tree = ast.parse(Path('tests/secpal-trivy-repository-scan-replay.py').read_text())",
+        "calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)",
+        "  and isinstance(n.func, ast.Attribute) and n.func.attr == 'write_bytes'",
+        "  and isinstance(n.func.value, ast.BinOp)",
+        "  and isinstance(n.func.value.right, ast.Constant)",
+        "  and n.func.value.right.value == 'Containerfile']",
+        "assert len(calls) == 1",
+        "eval(compile(ast.Expression(calls[0]), '<replay-construction>', 'eval'),",
+        "     {'workspace': Path(sys.argv[1])})",
+      ].join("\n"),
+      workspace,
+    ]);
     assert.deepEqual(
-      readFileSync(fixtures + name + ".in"),
-      execFileSync("git", ["show", trusted + ":" + fixtures + name]),
-      "the positive scanner input must retain its reviewed vulnerable bytes"
+      readFileSync(join(workspace, "Containerfile")),
+      execFileSync("git", ["show", "57c65dc80accc264edbb1c735300feb47adde2a5"]),
+      "materialized Containerfile must match the original immutable Git blob"
     );
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
   }
 });

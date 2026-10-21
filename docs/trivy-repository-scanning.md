@@ -195,12 +195,18 @@ runs in preflight and complete registered validation; it supplements the native
 replay and the required genuine external GitHub Actions invocation.
 
 `tests/fixtures/trivy-repository-scan/workspace` stores the unchanged vulnerable
-lockfile and rejected container configuration as explicit non-active
-`package-lock.json.in` and `Containerfile.in` inputs. The replay materializes
-their actual manifest names only in its disposable workspace, before committing
-and scanning it. The secret template's test value is likewise assembled only in
-that temporary directory. The native replay runs the pinned scanner and proves all three result classes, database identity capture,
-and removal of the synthetic secret value. Unit fixtures cover stale database,
+lockfile as a non-active `package-lock.json.in` input. The replay materializes
+its actual name only in its disposable workspace. It constructs the original
+Containerfile bytes there directly, including CC0 SPDX metadata, before committing
+and scanning. No container manifest or container template is tracked in this
+fixture directory. The focused regression executes the actual construction
+statement and compares the result with immutable Git blob
+`57c65dc80accc264edbb1c735300feb47adde2a5`.
+
+The secret template's test value is likewise assembled only in the temporary
+directory. The native replay proves all three scanner classes, all original
+Lodash and container misconfiguration detections, database identity capture,
+and removal of synthetic secret values. Unit fixtures cover stale databases,
 malformed output, network/failure envelopes, deterministic normalization, and
 closed exception semantics.
 

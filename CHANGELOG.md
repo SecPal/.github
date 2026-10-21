@@ -18,9 +18,10 @@ Log of notable changes to SecPal organization defaults (newest first).
   separately accepted immutable scanner and policy; candidate scanner changes
   remain untrusted source data. Preserve existing check identities and read-only
   permissions.
-- Store intentional vulnerable scanner manifests as non-active test inputs and
-  materialize their unchanged contents in the disposable native replay target.
-  Preserve positive detection without scan exclusions or policy exceptions.
+- Keep the intentionally vulnerable lockfile as non-active test input and
+  construct the original Containerfile only in the disposable native replay.
+  Preserve exact fixture bytes and positive detection without scan exclusions
+  or policy exceptions.
 
 ## 2026-10-21 - Refresh Exact Deployment Automation Qualification
 
