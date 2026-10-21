@@ -47,11 +47,12 @@ SEVERITY_FALLBACK_DIAGNOSTIC = (
     "Using severities from other vendors for some vulnerabilities. Read "
     "https://trivy.dev/docs/v0.74/guide/scanner/vulnerability#severity-selection for details."
 )
-# Deployment#124 qualification owned by #1236: source facts, never caller inputs.
+# Deployment#124 proof: #1236, requalified by #1244 on 2026-10-21.
+# Exact source facts and unexecuted run obligations remain unchanged.
 # The named existing control path validates concrete values before operations.
 # Changes to any bound control/module or expiry require independent requalification.
 DEPLOYMENT_TERRAFORM_ID = "deployment-ephemeral-1236"
-DEPLOYMENT_TERRAFORM_EXPIRES = "2026-10-27T00:00:00Z"
+DEPLOYMENT_TERRAFORM_EXPIRES = "2026-11-04T00:00:00Z"
 DEPLOYMENT_TERRAFORM_BINDINGS = {
     "containers/phase-b-gateway/Containerfile": "7ddb40ddbd863f5150cfc261ff0049485ea3018d",
     "config": "2d4766e35ebea3e8cab85c35e77db5ce09a52f49",
