@@ -2066,6 +2066,23 @@ class DeploymentTerraformCoverageTests(unittest.TestCase):
         self.assertNotIn("values", c)
         self.assertEqual(len(c["required_at_operation"]), 4)
 
+    def test_requalified_automation_identity_is_exact(self):
+        facts = self.facts()
+        facts["bindings"][".github"] = (
+            "sha256:7c8e7c0dde07427134b61729bcb8a2526c39ab72523661df76d195c54b01f2d0"
+        )
+        self.module.qualify_deployment_terraform(
+            facts, "SecPal/deployment", self.commit, self.time
+        )
+        # The superseded automation identity is not an equivalence allowance.
+        facts["bindings"][".github"] = (
+            "sha256:b381f2c30006ec46bbb6ff85ef18cfd3bc05c4751b6ba24e010c67fbaca63702"
+        )
+        with self.assertRaises(self.module.ContractError):
+            self.module.qualify_deployment_terraform(
+                facts, "SecPal/deployment", self.commit, self.time
+            )
+
     def test_changed_source_added_module_expiry_and_wrong_identity_fail_closed(self):
         for changed in self.module.DEPLOYMENT_TERRAFORM_BINDINGS:
             facts = self.facts()

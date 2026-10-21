@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-21 - Refresh Exact Deployment Automation Qualification
+
+**Changed:**
+
+- Requalify the exact deployment automation identity after its accepted REUSE
+  workflow pin update; both immutable references contain the same workflow blob.
+  Preserve all control bindings, eight dispositions and their original expiry.
+  No generic pin equivalence or normalization rule is added.
+
 ## 2026-10-20 - Qualify Static Deployment Security and Run-Bound Controls
 
 **Changed:**
