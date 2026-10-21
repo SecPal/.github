@@ -1479,7 +1479,7 @@ class FrontendBracesDispositionTests(unittest.TestCase):
                 "rule_id": "CVE-2026-93687",
                 "path": "package-lock.json",
                 "disposition": "NOT_AFFECTED",
-                "expires_at": "2026-10-27T00:00:00Z",
+                "expires_at": "2026-11-04T00:00:00Z",
             },
         )
         self.assertTrue(exception["rationale"].strip())
@@ -1633,7 +1633,7 @@ class AndroidCountryDispositionTests(unittest.TestCase):
         self.assertEqual(result["findings"][0]["source_blob"], self.blob)
         self.assertEqual(result["findings"][0]["exception"], {
             "id": "android-country-reference-sendgrid-1199",
-            "disposition": "IGNORED", "expires_at": "2026-10-27T00:00:00Z",
+            "disposition": "IGNORED", "expires_at": "2026-11-20T00:00:00Z",
         })
         jsonschema.validate(result, json.loads(SCHEMA.read_text()))
         self.assertEqual(len([e for e in self.policy["exceptions"]
@@ -1676,7 +1676,7 @@ class AndroidCountryDispositionTests(unittest.TestCase):
                 policy["exceptions"][-1][field] = value
                 with self.assertRaises(self.module.ContractError):
                     self.module.admit(self.observation, policy)
-        self.observation["completed_at"] = "2026-10-27T00:00:00Z"
+        self.observation["completed_at"] = "2026-11-20T00:00:00Z"
         with self.assertRaisesRegex(self.module.ContractError, "expired"):
             self.module.admit(self.observation, self.policy)
 
@@ -1707,9 +1707,9 @@ class CompletePolicyValidityTests(unittest.TestCase):
         self.observations.append(unrelated)
 
     def test_complete_policy_remains_valid_through_review_window(self) -> None:
-        start = datetime(2026, 10, 13, tzinfo=timezone.utc)
+        start = datetime(2026, 10, 21, tzinfo=timezone.utc)
         times = [start + timedelta(days=day) for day in range(14)]
-        times.append(datetime(2026, 10, 26, 23, 59, 59, 999999, tzinfo=timezone.utc))
+        times.append(datetime(2026, 11, 3, 23, 59, 59, 999999, tzinfo=timezone.utc))
         for observation in self.observations:
             for timestamp in times:
                 with self.subTest(repository=observation["subject"]["repository"], timestamp=timestamp):
@@ -1739,7 +1739,7 @@ class CompletePolicyValidityTests(unittest.TestCase):
                         self.module.admit(observed, policy)
 
     def test_complete_policy_rejects_exact_new_expiry_and_later(self) -> None:
-        for now in ("2026-10-27T00:00:00Z", "2026-10-28T00:00:00Z"):
+        for now in ("2026-11-04T00:00:00Z", "2026-11-05T00:00:00Z"):
             for observation in self.observations:
                 with self.subTest(repository=observation["subject"]["repository"], timestamp=now):
                     observed = copy.deepcopy(observation)
@@ -2066,6 +2066,15 @@ class DeploymentTerraformCoverageTests(unittest.TestCase):
         self.assertNotIn("values", c)
         self.assertEqual(len(c["required_at_operation"]), 4)
 
+        # Requalification includes the source/control proof, not just policy JSON.
+        for now in ("2026-10-27T00:00:00Z", "2026-11-03T23:59:59.999999Z"):
+            with self.subTest(completed_at=now):
+                current = self.module.qualify_deployment_terraform(
+                    self.facts(), "SecPal/deployment", self.commit, now
+                )
+                self.assertEqual(current["run_bound_status"], "REQUIRED_NOT_EXECUTED")
+                self.assertEqual(current["source_bindings"], c["source_bindings"])
+
     def test_requalified_automation_identity_is_exact(self):
         facts = self.facts()
         facts["bindings"][".github"] = (
@@ -2096,7 +2105,7 @@ class DeploymentTerraformCoverageTests(unittest.TestCase):
         for repository, commit, time in (
             ("SecPal/other", self.commit, self.time),
             ("SecPal/deployment", "c" * 40, self.time),
-            ("SecPal/deployment", self.commit, "2026-10-27T00:00:00Z"),
+            ("SecPal/deployment", self.commit, self.module.DEPLOYMENT_TERRAFORM_EXPIRES),
         ):
             with self.subTest(repository=repository, commit=commit, time=time), self.assertRaises(self.module.ContractError):
                 self.module.qualify_deployment_terraform(self.facts(), repository, commit, time)
