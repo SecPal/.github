@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-22 - Separate Independent REUSE Pins from Terraform Qualification
+
+**Changed:**
+
+- Exclude only the independent immutable REUSE revision from Deployment's source
+  fingerprint. Keep its job, owner, permissions, execution and all security
+  controls bound; native protected delivery retains workflow provenance review.
+- Test source/control behavior and accepted-main provenance using existing
+  helpers, removing the obsolete duplicated current fingerprint assertion.
+  Preserve scanner coverage, dispositions, expiry and unexecuted run obligations.
+
 ## 2026-10-21 - Scan Governance Source Before Required Admission
 
 **Changed:**

@@ -2075,23 +2075,6 @@ class DeploymentTerraformCoverageTests(unittest.TestCase):
                 self.assertEqual(current["run_bound_status"], "REQUIRED_NOT_EXECUTED")
                 self.assertEqual(current["source_bindings"], c["source_bindings"])
 
-    def test_requalified_automation_identity_is_exact(self):
-        facts = self.facts()
-        facts["bindings"][".github"] = (
-            "sha256:7c8e7c0dde07427134b61729bcb8a2526c39ab72523661df76d195c54b01f2d0"
-        )
-        self.module.qualify_deployment_terraform(
-            facts, "SecPal/deployment", self.commit, self.time
-        )
-        # The superseded automation identity is not an equivalence allowance.
-        facts["bindings"][".github"] = (
-            "sha256:b381f2c30006ec46bbb6ff85ef18cfd3bc05c4751b6ba24e010c67fbaca63702"
-        )
-        with self.assertRaises(self.module.ContractError):
-            self.module.qualify_deployment_terraform(
-                facts, "SecPal/deployment", self.commit, self.time
-            )
-
     def test_changed_source_added_module_expiry_and_wrong_identity_fail_closed(self):
         for changed in self.module.DEPLOYMENT_TERRAFORM_BINDINGS:
             facts = self.facts()
@@ -2204,7 +2187,11 @@ class DeploymentTerraformCoverageTests(unittest.TestCase):
             quality = root / ".github/workflows/quality.yml"
             original = ("permissions: contents:read\n"
                         "        uses: SecPal/.github/.github/actions/trivy-repository-scan@"
-                        + "1" * 40 + " # main\n")
+                        + "1" * 40 + " # main\n"
+                        "  reuse:\n"
+                        "    name: REUSE Compliance\n"
+                        "    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@"
+                        + "3" * 40 + " # main\n")
             quality.write_text(original)
             def git(*args):
                 return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
@@ -2222,6 +2209,31 @@ class DeploymentTerraformCoverageTests(unittest.TestCase):
                 revision = commit()
                 facts = self.module.observe_deployment_terraform(root, revision)
                 self.module.qualify_deployment_terraform(facts, "SecPal/deployment", revision, self.time)
+                # Only the independent immutable revision may vary. Native
+                # provenance approval is exercised separately below.
+                quality.write_text(original.replace("3" * 40, "4" * 40))
+                revision = commit()
+                facts = self.module.observe_deployment_terraform(root, revision)
+                self.module.qualify_deployment_terraform(facts, "SecPal/deployment", revision, self.time)
+                for invalid in (
+                    original.replace("3" * 40, "main"),
+                    original.replace("3" * 40, "0" * 40),
+                    original.replace("SecPal/.github/.github/workflows/reusable-reuse.yml@",
+                                     "foreign/.github/.github/workflows/reusable-reuse.yml@"),
+                    original.replace("    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@"
+                                     + "3" * 40 + " # main\n", ""),
+                    original + "    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@"
+                    + "3" * 40 + " # main\n",
+                    original.replace("    name: REUSE Compliance", "    if: false\n    name: REUSE Compliance"),
+                    original.replace("  reuse:", "  other:"),
+                    original.replace("permissions: contents:read", "permissions: write-all"),
+                ):
+                    quality.write_text(invalid)
+                    revision = commit()
+                    with self.subTest(quality=invalid), self.assertRaises(self.module.ContractError):
+                        facts = self.module.observe_deployment_terraform(root, revision)
+                        self.module.qualify_deployment_terraform(facts, "SecPal/deployment", revision, self.time)
+                quality.write_text(original)
                 extra = root / ".github/workflows/unsafe.yml"
                 extra.write_text("permissions: id-token:write\n")
                 revision = commit()
@@ -2234,6 +2246,39 @@ class DeploymentTerraformCoverageTests(unittest.TestCase):
                 facts = self.module.observe_deployment_terraform(root, revision)
                 with self.assertRaises(self.module.ContractError):
                     self.module.qualify_deployment_terraform(facts, "SecPal/deployment", revision, self.time)
+
+    def test_independent_workflow_provenance_requires_accepted_repository_ancestry(self):
+        # Reuse the delivery provenance owner, not a second list of approved SHAs.
+        helper = ROOT / "tests/android-consumed-workflow-action-pins.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def git(*args):
+                return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+            def commit(message):
+                git("-c", "user.name=SecPal Test", "-c", "user.email=test@secpal.app",
+                    "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", message)
+                return git("rev-parse", "HEAD")
+            git("init", "--quiet")
+            accepted = commit("accepted provenance fixture")
+            unaccepted = commit("unaccepted candidate fixture")
+            source = "SecPal/.github/.github/workflows/reusable-reuse.yml@"
+            for reference, expected in (
+                (source + accepted, True),
+                (source + unaccepted, False),
+                (source + "f" * 40, False),
+                (source + "0" * 40, False),
+                (source + "main", False),
+                ("foreign/.github/.github/workflows/reusable-reuse.yml@" + accepted, False),
+            ):
+                observed = subprocess.run([
+                    "bash", "-c",
+                    'source "$1"; repo_root="$2"; GITHUB_REPOSITORY=SecPal/.github; '
+                    'SECPAL_BASE_REVISION="$3"; is_documented_pin "$4" main && '
+                    'verify_governance_pin "$4" main',
+                    "provenance-test", str(helper), str(root), accepted, reference,
+                ], capture_output=True, check=False)
+                with self.subTest(reference=reference):
+                    self.assertEqual(observed.returncode == 0, expected)
 
     def test_native_caller_cannot_supply_qualification(self):
         completed, result = run_evaluate_fixture({
