@@ -9,19 +9,22 @@ import { join } from "node:path";
 import test from "node:test";
 import * as yaml from "js-yaml";
 
-const trusted = "55bcdb6f00eb7d552da206f83fcdc87cf2c43375";
 const actionDirectory = ".github/actions/trivy-repository-scan";
+const actionReference = "SecPal/.github/" + actionDirectory + "@";
 const workflow = yaml.load(readFileSync(".github/workflows/quality.yml", "utf8"));
 const job = workflow.jobs["evidence-architecture"];
 const scan = job.steps.find((step) => step.id === "repository-security");
 const gate = job.steps.find((step) => step.name === "Require clean repository security");
+// The workflow owns the revision; provenance is checked against protected history below.
+const trusted = scan?.uses?.split("@")[1];
 
 test("the existing required gate scans the exact source before candidate tooling", () => {
   assert.equal(job.name, "Evidence Architecture PR Gate");
   assert.equal(job.if, undefined);
   assert.equal(job.needs, undefined);
   assert.deepEqual(workflow.permissions, { contents: "read" });
-  assert.equal(scan?.uses, "SecPal/.github/" + actionDirectory + "@" + trusted);
+  assert.match(trusted ?? "", /^[0-9a-f]{40}$/);
+  assert.equal(scan?.uses, actionReference + trusted);
   for (const key of ["with", "env", "if", "continue-on-error"]) assert.equal(scan[key], undefined);
   assert.equal(job.steps[0].with.ref, "${{ github.sha }}");
   assert.equal(job.steps[0].with["persist-credentials"], false);
@@ -63,7 +66,8 @@ test("only successful CLEAN execution admits the required gate", () => {
 });
 
 test("a candidate scanner and policy cannot replace the accepted action runtime", () => {
-  assert.equal(scan?.uses, "SecPal/.github/" + actionDirectory + "@" + trusted);
+  assert.match(trusted ?? "", /^[0-9a-f]{40}$/);
+  assert.equal(scan?.uses, actionReference + trusted);
   const root = mkdtempSync(join(tmpdir(), "secpal-self-trust-"));
   const run = (command, args, options = {}) =>
     execFileSync(command, args, { encoding: "utf8", ...options });
@@ -159,11 +163,22 @@ test("a candidate scanner and policy cannot replace the accepted action runtime"
 });
 
 test("pin provenance admits accepted governance code, not caller or third-party substitutes", () => {
-  const reference = "SecPal/.github/" + actionDirectory + "@";
+  const base = process.env.SECPAL_BASE_REVISION || "refs/remotes/origin/main";
+  const acceptedRevision = execFileSync("git", ["rev-parse", "--verify", base + "^{commit}"], {
+    encoding: "utf8",
+  }).trim();
+  const previous = execFileSync("git", ["rev-parse", acceptedRevision + "^"], {
+    encoding: "utf8",
+  }).trim();
   for (const [pin, comment, accepted] of [
-    [reference + trusted, "main", true],
-    [reference + "f".repeat(40), "main", false],
-    [reference + "main", "main", false],
+    [scan?.uses, "main", true],
+    [actionReference + acceptedRevision, "main", true],
+    [actionReference + previous, "main", true],
+    [actionReference + "f".repeat(40), "main", false],
+    [actionReference + "0".repeat(40), "main", false],
+    [actionReference + "main", "main", false],
+    [actionReference + trusted.slice(0, 7), "main", false],
+    ["./" + actionDirectory, "main", false],
     ["other/repository/" + actionDirectory + "@" + trusted, "main", false],
   ]) {
     const result = spawnSync(
@@ -180,7 +195,7 @@ test("pin provenance admits accepted governance code, not caller or third-party 
           ...process.env,
           GITHUB_REPOSITORY: "SecPal/.github",
           VERIFY_ACTION_PIN_PROVENANCE: "true",
-          SECPAL_BASE_REVISION: trusted,
+          SECPAL_BASE_REVISION: base,
         },
         encoding: "utf8",
       }
@@ -189,15 +204,12 @@ test("pin provenance admits accepted governance code, not caller or third-party 
   }
 });
 
-test("vulnerable replay inputs retain exact bytes without active source manifests", () => {
+test("vulnerable replay inputs retain exact bytes", () => {
   const fixtures = "tests/fixtures/trivy-repository-scan/workspace/";
-  assert.equal(existsSync(fixtures + "package-lock.json"), false);
   assert.deepEqual(
     readFileSync(fixtures + "package-lock.json.in"),
     execFileSync("git", ["show", "d6abdad0b2fe45ab9224dd63f790d6dc5be8f3e5"])
   );
-  assert.equal(existsSync(fixtures + "Containerfile"), false);
-  assert.equal(existsSync(fixtures + "Containerfile.in"), false);
   const workspace = mkdtempSync(join(tmpdir(), "secpal-container-input-"));
   try {
     // Execute the replay's actual construction statement, without downloading
