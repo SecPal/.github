@@ -391,13 +391,32 @@ All Terraform paths must match the reviewed inventory; the infrastructure,
 scripts, configuration and schema trees and gateway Containerfile must match
 their reviewed Git identities. The complete .github source inventory is bound
 by a SHA-256 fingerprint of Git identities, including file modes, workflows and
-local actions. To permit adoption without a self-referential shared commit,
-only the one full-SHA reference of the existing read-only scanner step in
-quality.yml is normalized in memory when computing that fingerprint. The
-scanned source is never rewritten. Every other caller byte, permission, command,
-path and automation identity remains bound. A mutable or duplicate caller pin
-is rejected; delivery independently verifies the accepted shared SHA. Changed guards, inputs,
-dependencies, schemas, extra modules, unexpected diagnostics, wrong scanner
+local actions. Two narrowly identified full-SHA references in quality.yml are
+normalized in memory: the existing read-only scanner step (avoiding a
+self-referential shared commit) and the independent REUSE workflow revision.
+The scanned source is never rewritten. The REUSE owner/path, job, permissions,
+conditions, commands and every other automation byte/mode remain bound.
+Missing, mutable, null or duplicate REUSE references fail closed.
+
+This fingerprint proves Terraform source/control identity; it does **not**
+approve a referenced workflow or claim that different Git commits have identical
+contents. Native protected delivery independently verifies that a REUSE revision
+belongs to accepted SecPal/.github main, using the existing
+verify_governance_pin helper in tests/android-consumed-workflow-action-pins.sh
+against an authenticated accepted base. That helper rejects foreign ownership,
+missing objects and unpublished candidates. Review also verifies the actual
+workflow and nested action provenance; the existing required REUSE check must
+genuinely execute. The consumer's workflow-action-pin contract owns immutable
+reference structure. A 40-character pattern alone is never provenance approval.
+
+This separates independent licensing CI delivery from the bounded Terraform
+qualification, without an approved-version list, new network authority, or
+general normalization framework. Any REUSE caller permission, execution or job
+change still changes the fingerprint. Changes inside the called REUSE workflow
+remain owned by central workflow security review, outside Terraform proof. Updating only its accepted immutable revision
+does not require renewing Terraform proof or the existing dispositions.
+Scanner adoption still independently verifies the accepted shared revision.
+Changed guards, inputs, dependencies, schemas, extra modules, unexpected diagnostics, wrong scanner
 identity or expiry reject diagnostic admission. Caller/native JSON cannot
 supply these source observations.
 
