@@ -48,6 +48,7 @@ SEVERITY_FALLBACK_DIAGNOSTIC = (
     "https://trivy.dev/docs/v0.74/guide/scanner/vulnerability#severity-selection for details."
 )
 # Deployment#124 proof: #1236, requalified by #1244 on 2026-10-21.
+# #1249 excludes only the independently provenance-approved REUSE revision.
 # Exact source facts and unexecuted run obligations remain unchanged.
 # The named existing control path validates concrete values before operations.
 # Changes to any bound control/module or expiry require independent requalification.
@@ -59,7 +60,7 @@ DEPLOYMENT_TERRAFORM_BINDINGS = {
     "infra/ci-cloud": "5a6905f320172fb5f6fc170c039a0bc8b7cf8684",
     "schemas": "2a793d4d0773656f2cfea6b489a7d5149d97c2f8",
     "scripts": "26a857dca06796c241fa155f36f513cc15a1bdd8",
-    ".github": "sha256:7c8e7c0dde07427134b61729bcb8a2526c39ab72523661df76d195c54b01f2d0"
+    ".github": "sha256:f6de216e2ff4934a36e9796bf8ab73d0fbdfd4778b857930c3dbd5a8f1afc0bb"
 }
 DEPLOYMENT_TERRAFORM_PATHS = (
     'infra/ci-cloud/digitalocean/versions.tf',
@@ -264,7 +265,7 @@ def _verify_composer_severity_fallback(native: dict[str, Any] | None,
 
 
 def github_source_fingerprint(identities: dict[str, str], quality: bytes) -> str:
-    """Pure source normalization; only this read-only caller's full-SHA pin varies.
+    """Bind automation semantics, excluding two independently approved revisions.
 
     Scanned bytes are never changed. Every other automation byte/mode remains
     bound, including new workflows, local actions, permissions and commands.
@@ -276,6 +277,15 @@ def github_source_fingerprint(identities: dict[str, str], quality: bytes) -> str
     normalized, count = re.subn(pattern, rb"\g<1>" + b"0" * 40 + rb"\g<2>", quality)
     if count != 1:
         raise ContractError("repository security caller pin representation is unqualified")
+    # REUSE is independent licensing CI. This removes only its immutable
+    # revision from the Terraform proof, not its job, owner, permissions or
+    # execution. Native protected delivery owns accepted-main provenance;
+    # normalization is not approval of a referenced workflow (see #1249).
+    reuse_pattern = rb"(?m)^(    uses: SecPal/\.github/\.github/workflows/reusable-reuse\.yml@)([0-9a-f]{40})( # main)$"
+    reuse_pins = re.findall(reuse_pattern, quality)
+    if len(reuse_pins) != 1 or reuse_pins[0][1] == b"0" * 40:
+        raise ContractError("independent REUSE pin representation is unqualified")
+    normalized = re.sub(reuse_pattern, rb"\g<1>" + b"0" * 40 + rb"\g<3>", normalized)
     sources = dict(identities)
     mode, kind, _ = sources[caller].split(" ", 2)
     sources[caller] = mode + " " + kind + " " + _sha256(normalized)
