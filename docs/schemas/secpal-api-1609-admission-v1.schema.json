@@ -63,9 +63,9 @@
     },
     "comparison": {
       "type": "object",
-      "required": ["head_commit", "status", "ahead_by"],
+      "required": ["merge_base_commit", "status", "ahead_by"],
       "properties": {
-        "head_commit": {
+        "merge_base_commit": {
           "type": "object",
           "required": ["sha"],
           "properties": {
