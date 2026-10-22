@@ -17,6 +17,7 @@ Log of notable changes to SecPal organization defaults (newest first).
   ACTIONABLE findings separate from any explicitly accepted residual risk.
   Require authenticated operator acceptance, independent security assessment,
   equivalent fresh scanner intelligence and a maximum seven-day UTC window.
+- Reject parent-directory symlink redirection when loading reviewed Git material.
 - Ship no active admission decision and change no publisher or deployment gate.
   Preserve policy 1.0.0, published v1 results and all raw findings.
 
