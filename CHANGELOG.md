@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-22 - Match Native GitHub Admission Comparisons
+
+**Fixed:**
+
+- Authenticate accepted source and central decision ancestry using the real
+  GitHub Compare response's `merge_base_commit` instead of a nonexistent
+  `head_commit` field. Align its input schema and regression fixtures.
+- Preserve current-decision revocation, exact evidence, risk visibility and
+  all existing approval, freshness and expiry requirements. Add no active grant.
+
 ## 2026-10-22 - Add Bounded API Security-Improvement Admission
 
 **Added:**
