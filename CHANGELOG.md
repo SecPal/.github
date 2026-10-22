@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-22 - Add Bounded API Security-Improvement Admission
+
+**Added:**
+
+- Add an opt-in, exact-evidence admission capability for API #1609 that keeps
+  ACTIONABLE findings separate from any explicitly accepted residual risk.
+  Require authenticated operator acceptance, independent security assessment,
+  equivalent fresh scanner intelligence and a maximum seven-day UTC window.
+- Ship no active admission decision and change no publisher or deployment gate.
+  Preserve policy 1.0.0, published v1 results and all raw findings.
+
 ## 2026-10-21 - Scan Governance Source Before Required Admission
 
 **Changed:**
