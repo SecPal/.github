@@ -15,7 +15,8 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - Replace the API-specific schema, baseline adapter, decision checkout and
   mandatory second artifact assessment with one exact-evidence native operator
-  decision. Verify its actual author and current repository administrator
+  decision with an explicit native comment locator and no fallback. Derive current
+  results from its bound inputs; verify its actual author and repository administrator
   permission; reject edits, revocation, expiry and subject/evidence mismatch.
 - Retain complete v1 findings in the separate known-findings receipt. Preserve
   dual scanning, current healthy evidence, protected publisher verification and
