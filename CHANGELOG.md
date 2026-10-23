@@ -9,6 +9,21 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-23 - Simplify Artifact Risk Acceptance
+
+**Changed:**
+
+- Replace the API-specific schema, baseline adapter, decision checkout and
+  mandatory second artifact assessment with one exact-evidence native operator
+  decision with an explicit native comment locator and no fallback. Derive current
+  results from its bound inputs; verify its actual author and repository administrator
+  permission; reject edits, revocation, expiry and subject/evidence mismatch.
+- Retain complete v1 findings in the separate known-findings receipt. Preserve
+  dual scanning, current healthy evidence, protected publisher verification and
+  ordinary CLEAN-only automatic acceptance. Read-only rescans of the same OCI
+  subjects require a new exact decision, without an image rebuild.
+- No risk decision, release acceptance or deployment is activated.
+
 ## 2026-10-22 - Match Native GitHub Admission Comparisons
 
 **Fixed:**
