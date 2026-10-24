@@ -62,6 +62,13 @@ DEPLOYMENT_TERRAFORM_BINDINGS = {
     "scripts": "26a857dca06796c241fa155f36f513cc15a1bdd8",
     ".github": "sha256:f6de216e2ff4934a36e9796bf8ab73d0fbdfd4778b857930c3dbd5a8f1afc0bb"
 }
+# #1258 independently qualifies deployment#361's public-only Phase-1 composition.
+# The five other bindings and all Terraform paths are identical to protected main.
+# Retain that main state only through the same existing qualification expiry.
+DEPLOYMENT_PHASE_ONE_BINDINGS = {
+    **DEPLOYMENT_TERRAFORM_BINDINGS,
+    "scripts": "0b3e423fb58643001b3332d543af8ccd73fa7cba",
+}
 DEPLOYMENT_TERRAFORM_PATHS = (
     'infra/ci-cloud/digitalocean/versions.tf',
     'infra/ci-cloud/gcp-rocky/main.tf',
@@ -334,7 +341,11 @@ def qualify_deployment_terraform(
             or not isinstance(facts, dict)
             or set(facts) != {"commit", "bindings", "terraform_paths"}
             or facts["commit"] != commit
-            or facts["bindings"] != DEPLOYMENT_TERRAFORM_BINDINGS
+            or not (
+                facts["bindings"] == DEPLOYMENT_TERRAFORM_BINDINGS
+                or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_BINDINGS
+                    and _timestamp(completed_at) >= _timestamp("2026-10-24T00:00:00Z"))
+            )
             or facts["terraform_paths"] != list(DEPLOYMENT_TERRAFORM_PATHS)
             or not _timestamp("2026-10-20T00:00:00Z") <= _timestamp(completed_at)
             < _timestamp(DEPLOYMENT_TERRAFORM_EXPIRES)):

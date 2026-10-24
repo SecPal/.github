@@ -2093,6 +2093,47 @@ class DeploymentTerraformCoverageTests(unittest.TestCase):
             with self.subTest(repository=repository, commit=commit, time=time), self.assertRaises(self.module.ContractError):
                 self.module.qualify_deployment_terraform(self.facts(), repository, commit, time)
 
+    def test_reviewed_phase_one_candidate_retains_exact_static_scope_and_expiry(self):
+        facts = self.facts()
+        facts["commit"] = "6c3f7d517526c34223065eba5d81f7924974ee35"
+        facts["bindings"]["scripts"] = "0b3e423fb58643001b3332d543af8ccd73fa7cba"
+        coverage = self.module.qualify_deployment_terraform(
+            facts, "SecPal/deployment", facts["commit"], "2026-10-24T18:00:00Z")
+        self.assertEqual(coverage["source_commit"], facts["commit"])
+        self.assertEqual(coverage["source_bindings"], facts["bindings"])
+        self.assertEqual(coverage["scope"], "REPOSITORY_STATIC")
+        self.assertEqual(coverage["run_bound_status"], "REQUIRED_NOT_EXECUTED")
+        self.assertEqual(coverage["expires_at"], "2026-11-04T00:00:00Z")
+        self.assertEqual(coverage["required_at_operation"],
+                         list(self.module.DEPLOYMENT_RUN_BOUND_CONTROLS))
+        # Main is still qualified during the bounded adoption transition.
+        self.coverage()
+
+    def test_phase_one_candidate_rejects_other_scripts_controls_identity_and_expiry(self):
+        facts = self.facts()
+        facts["commit"] = "6c3f7d517526c34223065eba5d81f7924974ee35"
+        facts["bindings"]["scripts"] = "0b3e423fb58643001b3332d543af8ccd73fa7cba"
+        for path in facts["bindings"]:
+            changed = copy.deepcopy(facts)
+            changed["bindings"][path] = "0" * 40
+            with self.subTest(path=path), self.assertRaises(self.module.ContractError):
+                self.module.qualify_deployment_terraform(
+                    changed, "SecPal/deployment", facts["commit"], "2026-10-24T18:00:00Z")
+        for repository, commit, now in (
+            ("SecPal/other", facts["commit"], "2026-10-24T18:00:00Z"),
+            ("SecPal/deployment", "a" * 40, "2026-10-24T18:00:00Z"),
+            ("SecPal/deployment", facts["commit"], "2026-10-23T23:59:59Z"),
+            ("SecPal/deployment", facts["commit"], "2026-11-04T00:00:00Z"),
+            ("SecPal/deployment", facts["commit"], "2026-11-05T00:00:00Z"),
+        ):
+            with self.subTest(repository=repository, commit=commit, now=now):
+                with self.assertRaises(self.module.ContractError):
+                    self.module.qualify_deployment_terraform(facts, repository, commit, now)
+        facts["terraform_paths"].append("unexpected/main.tf")
+        with self.assertRaises(self.module.ContractError):
+            self.module.qualify_deployment_terraform(
+                facts, "SecPal/deployment", facts["commit"], "2026-10-24T18:00:00Z")
+
     def diagnostics(self, cache, variables=None):
         fallback = '2026-10-20T18:00:00Z\tERROR\t[misconfig] Falling back to embedded checks\terr=' + json.dumps(
             'failed to check cache: cache does not exist at ' + json.dumps(str(cache / "policy/content"))
