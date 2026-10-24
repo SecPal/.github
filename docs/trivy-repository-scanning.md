@@ -448,6 +448,69 @@ own that evaluation. The real trusted-control path still obtains actual
 variables and performs those checks on every execution. A failed or absent
 check cannot authorize its relevant creation, access or target operation.
 
+### Phase-1 source requalification (#1258)
+
+The independently reviewed deployment PR [#361](https://github.com/SecPal/deployment/pull/361)
+has exact head `6c3f7d517526c34223065eba5d81f7924974ee35` and base
+`94de4099af88dabcd20065a06194f1550ae43d9c`. Raw Git observation confirms
+that only the `scripts` binding changes, from
+`26a857dca06796c241fa155f36f513cc15a1bdd8` to
+`0b3e423fb58643001b3332d543af8ccd73fa7cba`. The other five bindings
+(including the normalized complete automation inventory) and all seven Terraform
+paths are identical. The scanner admits exactly these two complete source
+profiles for the necessary main/candidate adoption transition. The candidate
+profile starts on 2026-10-24; both expire at the unchanged
+**2026-11-04 00:00 UTC** boundary. Any further script/control change, additional
+Terraform path, wrong subject or expiry still fails closed.
+
+The complete six-file diff was inspected for effects on the original proof:
+
+- `scripts/standard-installation.py` is a new, explicit administrator-invoked
+  public host-base composition. Existing trusted cloud entry points never call
+  or import it. It supplies no Terraform variables, credentials, resource
+  lifecycle or cloud identity operations.
+- `scripts/validate-production-contract.py` extracts the existing exact
+  single-root-owned-Quadlet-search-path predicate into a shared function; the
+  original validator calls that function with the same values and rejects the
+  same states. No cloud guard or metadata admission is changed.
+- `scripts/preflight.sh` adds the Phase-1 source regression command. The remaining
+  changes are its tests and installation documentation/README references.
+- Every other existing script, all infrastructure/configuration/schema sources,
+  the gateway Containerfile and automation source inventory retain their exact
+  identities. In particular actual-input admission, exact-peer management,
+  identity removal, TTL/cleanup and the single Quadlet health authority remain
+  unchanged.
+
+Thus the eight existing bounded IGNORED dispositions retain their original risk
+rationales and expiry; this additional source qualification neither renews them
+nor adds risk acceptance. The Phase-1 installation's own public-only, secret and
+premature-authority rejection tests and the existing production-contract
+regressions supplement the unchanged Terraform/trusted-control source proof.
+They do not demonstrate a native host installation.
+
+The maintained action's complete scan step was executed against that exact head
+with pinned Trivy 0.74.0 on 2026-10-24 at 18:10:35 UTC, including vulnerability, secret and
+misconfiguration scanning, both real database downloads, snapshot/source
+observation, diagnostic admission, redaction and private raw-data cleanup.
+The bounded v4 result is CLEAN with exactly eight MISCONFIGURATION findings,
+all under the existing scoped dispositions; no new diagnostic was exposed.
+Its database identity is
+`sha256:8ee3fe66a68149742d0de57f700a2eb43faccd3ace4fbf03269d8b571c38a4a3`
+(updated 2026-10-24 01:07:32 UTC; downloaded 18:10:32 UTC;
+next update 2026-10-25 13:07:23 UTC). This is dated candidate evidence,
+not a perpetual clean assertion. The unchanged scanner previously rejected
+the same head with UNKNOWN_STALE / DIAGNOSTIC_ADMISSION_FAILURE.
+Temporary raw scanner files and databases were cleaned by the unmodified action;
+only its bounded, redacted result remains as workspace evidence.
+
+A downstream consumer pinned to an older shared commit does not receive this
+change automatically. After independent review and protected shared-main
+acceptance, deployment must separately adopt the accepted immutable scanner and
+v4 schema revision and obtain a fresh hosted result for its actual PR commit.
+No deployment source or workflow is changed by this qualification.
+The result remains `REPOSITORY_STATIC` / `REQUIRED_NOT_EXECUTED`:
+neither native Host Enrollment readiness nor production or OCI-artifact approval.
+
 ### Maintained alternatives considered
 
 Trivy supports real --tf-vars and Terraform plan inputs. They remain useful
