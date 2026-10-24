@@ -76,12 +76,6 @@ printf '%s\n' "validate-ai-instructions" >> "$TEST_LOG"
 EOF
 chmod +x "$workspace/tests/validate-ai-instructions.sh"
 
-cat >"$workspace/tests/validate-copilot-instructions.sh" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "validate-copilot-instructions" >> "$TEST_LOG"
-EOF
-chmod +x "$workspace/tests/validate-copilot-instructions.sh"
-
 # Stand-ins for the unconditional unittest commands in scripts/preflight.sh.
 unit_suites=(
   secpal-work-graph-unit
@@ -373,10 +367,9 @@ if ! grep -Eq 'markdownlint.*(^|[[:space:]])README\.md($|[[:space:]])' "$log_fil
 fi
 
 if ! grep -Fxq 'validate-ai-instructions' "$test_log" \
-  || ! grep -Fxq 'validate-copilot-instructions' "$test_log" \
   || ! grep -Fxq 'evidence-architecture-governance' "$test_log" \
   || ! grep -Fxq 'postgresql-18-baseline-governance' "$test_log"; then
-  echo "Expected preflight to execute the selected fixture compatibility and advisory regression tests" >&2
+  echo "Expected preflight to execute the selected validation and advisory regression tests" >&2
   cat "$test_log" >&2
   exit 1
 fi

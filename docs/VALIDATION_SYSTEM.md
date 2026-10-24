@@ -102,11 +102,6 @@ the API policy unless the repository has the exact `secpal/api` manifest.
 Trusted `SecPal/deployment` identity is reported explicitly and uses the same
 strict plain-AGPL baseline as other migrated managed repositories.
 
-The compatibility entry point `validate-copilot-instructions.sh` always
-delegates to this canonical validator, including for repository-path arguments.
-It has no Copilot-only validation model, so a missing `AGENTS.md` or missing
-Copilot review profile fails through the same canonical contract.
-
 ## Regression Coverage
 
 `tests/validate-ai-instructions.sh` uses temporary repositories to prove that:
