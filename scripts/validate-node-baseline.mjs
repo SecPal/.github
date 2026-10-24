@@ -9,7 +9,6 @@ import { fileURLToPath } from "node:url";
 import * as yaml from "js-yaml";
 
 const SETUP_NODE_PREFIX = "actions/setup-node@";
-const LOCAL_SETUP_ACTION = "./.github/actions/setup-node-with-deps";
 const NODE_COMMAND = /(?:^|[;&|()\s])(?:node|npm|npx|pnpm|yarn)(?=$|\s)/m;
 const NODE_DOCUMENTATION_SELECTORS = [
   /\bnode(?:\.js)?(?:\*\*)?[^\n]{0,40}?\bv?(\d+)(?:\.x)?\b/gi,
@@ -77,16 +76,10 @@ function selectorIssue(selector, canonicalMajor, location, workflow) {
 }
 
 function nodeSetupStep(step) {
-  const uses = String(step?.uses ?? "");
-  return uses.startsWith(SETUP_NODE_PREFIX) || uses === LOCAL_SETUP_ACTION;
+  return String(step?.uses ?? "").startsWith(SETUP_NODE_PREFIX);
 }
 
-export function validateWorkflowDocument(
-  workflow,
-  canonicalMajor,
-  source,
-  { localSetupDefault } = {}
-) {
+export function validateWorkflowDocument(workflow, canonicalMajor, source) {
   const errors = [];
   const reusableDefault = workflowCallNodeDefault(workflow);
   if (reusableDefault !== undefined) {
@@ -120,52 +113,13 @@ export function validateWorkflowDocument(
 
     for (const setupIndex of setupIndexes) {
       const step = steps[setupIndex];
-      const usesLocalDefault =
-        step.uses === LOCAL_SETUP_ACTION && step?.with?.["node-version"] === undefined;
       const issue = selectorIssue(
-        usesLocalDefault ? localSetupDefault : step?.with?.["node-version"],
+        step?.with?.["node-version"],
         canonicalMajor,
         `${source} job ${jobName} setup step`,
         workflow
       );
       if (issue) errors.push(issue);
-    }
-  }
-  return errors;
-}
-
-export function validateCompositeDocument(action, canonicalMajor, source) {
-  const errors = [];
-  const defaultSelector = action?.inputs?.["node-version"]?.default;
-  const defaultIssue = selectorIssue(
-    defaultSelector,
-    canonicalMajor,
-    `${source} inputs.node-version.default`,
-    action
-  );
-  if (defaultIssue) errors.push(defaultIssue);
-
-  const steps = action?.runs?.steps ?? [];
-  const setupIndexes = steps.flatMap((step, index) => (nodeSetupStep(step) ? [index] : []));
-  const nodeCommandIndexes = steps.flatMap((step, index) =>
-    stepRunsNode(step, action, action?.runs) ? [index] : []
-  );
-
-  if (nodeCommandIndexes.length > 0 && setupIndexes.length === 0) {
-    errors.push(`${source} executes Node tooling without an explicit Node setup step`);
-  } else if (
-    nodeCommandIndexes.some(
-      (commandIndex) => !setupIndexes.some((setupIndex) => setupIndex < commandIndex)
-    )
-  ) {
-    errors.push(`${source} must set up Node before its Node tooling command`);
-  }
-
-  for (const [index, step] of steps.entries()) {
-    if (!nodeSetupStep(step)) continue;
-    const selector = step?.with?.["node-version"];
-    if (String(selector).trim() !== "${{ inputs.node-version }}") {
-      errors.push(`${source} setup step ${index + 1} must use inputs.node-version`);
     }
   }
   return errors;
@@ -207,19 +161,12 @@ export function validateRepository(root) {
   const canonicalMajor = parseCanonicalMajor(fs.readFileSync(path.join(root, ".nvmrc"), "utf8"));
   const errors = [];
   const workflowFiles = filesUnder(root, ".github/workflows", new Set([".yml", ".yaml"]));
-  const compositePath = ".github/actions/setup-node-with-deps/action.yml";
-  const compositeAction = loadYaml(root, compositePath);
-  const localSetupDefault = compositeAction?.inputs?.["node-version"]?.default;
 
   for (const relativePath of workflowFiles) {
     errors.push(
-      ...validateWorkflowDocument(loadYaml(root, relativePath), canonicalMajor, relativePath, {
-        localSetupDefault,
-      })
+      ...validateWorkflowDocument(loadYaml(root, relativePath), canonicalMajor, relativePath)
     );
   }
-
-  errors.push(...validateCompositeDocument(compositeAction, canonicalMajor, compositePath));
 
   const documentationFiles = [
     "README.md",

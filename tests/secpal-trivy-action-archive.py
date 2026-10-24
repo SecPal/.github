@@ -65,6 +65,12 @@ class TrivyActionArchiveTests(unittest.TestCase):
         # modifying the source index/object database or including untracked artifacts.
         git("add", "--all", "--force", "--pathspec-from-file=-", "--pathspec-file-nul",
             environment=self.environment, data=git("ls-files", "-z"))
+        # Keep the unrelated-action negative case independent of production helpers.
+        fixture = git("hash-object", "-w", "--stdin", environment=self.environment,
+                      data=b"archive exclusion fixture\n").decode().strip()
+        git("update-index", "--add", "--cacheinfo",
+            f"100644,{fixture},.github/actions/unrelated-fixture/fixture.txt",
+            environment=self.environment)
         self.tree = git("write-tree", environment=self.environment).decode().strip()
 
     def assert_archive_contract(self, tree: str) -> None:
@@ -108,7 +114,7 @@ class TrivyActionArchiveTests(unittest.TestCase):
             ".github/workflows -export-ignore\n",
             ".github/ISSUE_TEMPLATE -export-ignore\n",
             ".github/instructions -export-ignore\n",
-            ".github/actions/setup-node-with-deps -export-ignore\n",
+            ".github/actions/unrelated-fixture -export-ignore\n",
         )
         for mutation in mutations:
             with self.subTest(attribute=mutation.strip()):
@@ -131,7 +137,7 @@ class GitStateTests(unittest.TestCase):
                 target = source / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(ROOT / path, target)
-            for directory in ("workflows", "ISSUE_TEMPLATE", "instructions", "actions/setup-node-with-deps"):
+            for directory in ("workflows", "ISSUE_TEMPLATE", "instructions", "actions/unrelated-fixture"):
                 target = source / ".github" / directory / "fixture.txt"
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("archive exclusion fixture\n")

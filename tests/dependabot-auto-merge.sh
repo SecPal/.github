@@ -119,7 +119,7 @@ workflow_instruction_scope="$(
 )"
 IFS=',' read -r -a workflow_instruction_patterns <<< "$workflow_instruction_scope"
 for direct_fixture in \
-  .github/actions/setup-node-with-deps/action.yml \
+  .github/actions/trivy-repository-scan/action.yml \
   tests/android-consumed-workflow-action-pins.sh \
   tests/codeql-applicability.sh \
   tests/dependabot-auto-merge.sh \

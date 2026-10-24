@@ -151,21 +151,6 @@ jobs:
 
 ### Backend Workflows (PHP/Laravel)
 
-#### `reusable-php-test.yml`
-
-Runs PHP tests with PEST.
-
-**Usage:**
-
-```yaml
-jobs:
-  test:
-    uses: SecPal/.github/.github/workflows/reusable-php-test.yml@<trusted-commit-sha>
-    with:
-      php-version: "8.4" # optional, default: '8.4'
-      test-command: "./vendor/bin/pest" # optional
-```
-
 #### `reusable-php-lint.yml`
 
 Checks PHP code style with Laravel Pint.
@@ -195,32 +180,6 @@ jobs:
       php-version: "8.4" # optional, default: '8.4'
       phpstan-command: "./vendor/bin/phpstan analyse" # optional
 ```
-
-### Contracts Workflows (OpenAPI)
-
-#### `reusable-openapi-lint.yml`
-
-Validates OpenAPI specifications.
-
-When a repository has a `package.json`, the workflow uses `npm ci` by default and falls back to `npm install` with a warning if `package-lock.json` is missing. Set `require-lockfile: true` to make missing lock files fail the workflow.
-
-**Usage:**
-
-```yaml
-jobs:
-  openapi-lint:
-    uses: SecPal/.github/.github/workflows/reusable-openapi-lint.yml@<trusted-commit-sha>
-    with:
-      openapi-file: "openapi.yaml" # optional, default: 'openapi.yaml'
-      node-version: "26.x" # optional, default: '26.x'
-      require-lockfile: false # optional, default: false
-```
-
-## Internal Helper Actions
-
-### `setup-node-with-deps`
-
-Internal composite action used by the reusable Node-based validation workflows to keep Node setup, `jq` installation, and lockfile-aware npm installation behavior consistent.
 
 ## Example: Complete CI Workflow for Frontend
 
@@ -258,7 +217,7 @@ jobs:
     uses: SecPal/.github/.github/workflows/reusable-node-build.yml@<trusted-commit-sha>
 ```
 
-## Example: Complete CI Workflow for Backend
+## Example: Backend Quality Checks
 
 ```yaml
 name: CI
@@ -283,9 +242,6 @@ jobs:
 
   phpstan:
     uses: SecPal/.github/.github/workflows/reusable-php-stan.yml@<trusted-commit-sha>
-
-  test:
-    uses: SecPal/.github/.github/workflows/reusable-php-test.yml@<trusted-commit-sha>
 ```
 
 ### Workflow Linting
