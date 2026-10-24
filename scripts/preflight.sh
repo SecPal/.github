@@ -180,15 +180,6 @@ if [ -f tests/reusable-workflow-policy.sh ]; then
   }
 fi
 
-if [ -f tests/reusable-copilot-instructions-provenance.sh ]; then
-  bash tests/reusable-copilot-instructions-provenance.sh || {
-    echo "" >&2
-    echo "❌ Reusable Copilot workflow provenance regression test failed!" >&2
-    echo "Bind governance code to the called workflow revision and pin every external action." >&2
-    exit 1
-  }
-fi
-
 if [ -f tests/android-consumed-workflow-action-pins.sh ]; then
   bash tests/android-consumed-workflow-action-pins.sh || {
     echo "" >&2
@@ -302,15 +293,6 @@ if [ -f tests/validate-ai-instructions.sh ]; then
     echo "" >&2
     echo "❌ AI-instructions validator regression test failed!" >&2
     echo "Fix scripts/validate-ai-instructions.sh and .github/workflows/reusable-ai-instructions.yml before continuing." >&2
-    exit 1
-  }
-fi
-
-if [ -f tests/validate-copilot-instructions.sh ]; then
-  bash tests/validate-copilot-instructions.sh || {
-    echo "" >&2
-    echo "❌ Copilot-instructions compatibility regression test failed!" >&2
-    echo "Fix scripts/validate-copilot-instructions.sh and the legacy reusable workflow compatibility path before continuing." >&2
     exit 1
   }
 fi

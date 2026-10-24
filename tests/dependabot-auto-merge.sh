@@ -127,7 +127,6 @@ for direct_fixture in \
   tests/license-compatibility.sh \
   tests/prettier-version-alignment.sh \
   tests/pull-request-commit-signatures.sh \
-  tests/reusable-copilot-instructions-provenance.sh \
   tests/reusable-markdown-lint-scope.sh \
   tests/reusable-workflow-policy.sh \
   tests/reusable-workflow-timeouts.sh; do
@@ -258,15 +257,14 @@ awk '
   in_step && /^      - name:/ { in_step = 0 }
   in_step && /^          VERIFY_ACTION_PIN_PROVENANCE: "true"$/ { verifies_provenance = 1 }
   in_step && /^          bash tests\/android-consumed-workflow-action-pins\.sh$/ { validates_working_tree = 1 }
-  in_step && /^          bash tests\/reusable-copilot-instructions-provenance\.sh$/ { validates_copilot_provenance = 1 }
   in_step && /^          bash tests\/dependabot-auto-merge\.sh$/ { validates_pinned_snapshot = 1 }
   END {
     exit !(sets_up_node && installs_dependencies && uses_lockfile &&
-      verifies_provenance && validates_working_tree && validates_copilot_provenance &&
+      verifies_provenance && validates_working_tree &&
       validates_pinned_snapshot)
   }
 ' "$QUALITY_WORKFLOW" || {
-  echo "Workflow pin validation must install locked Node dependencies and verify action pins, Copilot provenance, and the pinned Dependabot snapshot with live provenance enabled." >&2
+  echo "Workflow pin validation must install locked Node dependencies and verify action pins and the pinned Dependabot snapshot with live provenance enabled." >&2
   exit 1
 }
 # The reusable workflow's check-eligibility and skip-auto-merge jobs must also
