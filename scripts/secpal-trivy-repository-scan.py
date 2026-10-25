@@ -69,6 +69,12 @@ DEPLOYMENT_PHASE_ONE_BINDINGS = {
     **DEPLOYMENT_TERRAFORM_BINDINGS,
     "scripts": "0b3e423fb58643001b3332d543af8ccd73fa7cba",
 }
+# #1260 qualifies deployment#362's reviewed rootless XDG correction only.
+# All other source/control identities, obligations and the original expiry hold.
+DEPLOYMENT_PHASE_ONE_XDG_BINDINGS = {
+    **DEPLOYMENT_TERRAFORM_BINDINGS,
+    "scripts": "4c6d4144cfc7849196e01e5c4204792f3355dfd2",
+}
 DEPLOYMENT_TERRAFORM_PATHS = (
     'infra/ci-cloud/digitalocean/versions.tf',
     'infra/ci-cloud/gcp-rocky/main.tf',
@@ -345,6 +351,8 @@ def qualify_deployment_terraform(
                 facts["bindings"] == DEPLOYMENT_TERRAFORM_BINDINGS
                 or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_BINDINGS
                     and _timestamp(completed_at) >= _timestamp("2026-10-24T00:00:00Z"))
+                or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_XDG_BINDINGS
+                    and _timestamp(completed_at) >= _timestamp("2026-10-25T00:00:00Z"))
             )
             or facts["terraform_paths"] != list(DEPLOYMENT_TERRAFORM_PATHS)
             or not _timestamp("2026-10-20T00:00:00Z") <= _timestamp(completed_at)
