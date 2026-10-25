@@ -123,7 +123,6 @@ for direct_fixture in \
   tests/android-consumed-workflow-action-pins.sh \
   tests/codeql-applicability.sh \
   tests/dependabot-auto-merge.sh \
-  tests/deploy-main-workflow.sh \
   tests/license-compatibility.sh \
   tests/prettier-version-alignment.sh \
   tests/pull-request-commit-signatures.sh \
