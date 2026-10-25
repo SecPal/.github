@@ -702,3 +702,73 @@ After independent protected central acceptance, deployment must adopt only
 that immutable scanner revision and obtain fresh hosted CLEAN security,
 contract and required checks plus exact-head integration review. This source
 proof cannot grant native host, OCI, READY_FOR_ENROLLMENT or production admission.
+
+### Native host-qualification source requalification (#1266)
+
+Deployment [PR #365](https://github.com/SecPal/deployment/pull/365) has independently
+reviewed code/architecture and security PASS at exact head
+`042ab9b5060763b78f36369ae549829eb14aed21`, based on accepted main
+`56e96e66edba1ad0b0de1682a5f231a7171ee8ae`. Raw Git observation binds the
+new complete seven-binding profile to:
+
+- `scripts`: `c17a475b7185349018086ca8683dcf751a339a5a`;
+- `.secpal`: `18745a3e7a93c9990e023b8ed5da4031025c631c`.
+
+The gateway Containerfile, configuration, infrastructure, schemas and normalized
+complete automation inventory retain their five existing identities; all seven
+Terraform paths are unchanged. This is one reviewed complete tuple, not a list
+of independently interchangeable hashes. The existing accepted profiles remain
+available for bounded adoption. The original **2026-11-04 00:00 UTC** expiry
+is unchanged; missing or changed controls, unknown scripts, wrong subjects,
+earlier qualification or expiry still fail closed.
+
+The source diff was inspected for effects on the existing Terraform/trusted
+control proof:
+
+- The new explicit operator composition stages only the existing canonical
+  nonsecret Alpine fixture rootlessly, runs the unchanged #80 harness and
+  independently reuses its RPM, SELinux and Quadlet owners. It does not create
+  provider resources, supply Terraform values, enroll a host, activate a
+  deployment or select/start product images.
+- `rocky-control.py` extracts the existing native qualification fact checks into
+  a shared function with the identical body. Its GCP entry point retains its
+  original schema and exact target/control/run checks. The separate operator
+  API scopes existing v4 invariants to independently authenticated bindings;
+  it is not a new GCP CLI acceptance option or readiness authority.
+- The GCP runner and preparer, historical target, schema file, fixture/RPM/
+  SELinux/Quadlet owners, existing public installer and harness bytes are
+  unchanged. The new preflight command and declaration supply executable
+  coverage for the limited native composition, not authority for other tools.
+- The four initial review findings were corrected before qualification:
+  protected observation ancestry, generated-authority admission before start
+  followed by live process observation, the existing complete explicit-message
+  classifier and TERM-first bounded cleanup. Thirteen relevant regressions and
+  all 34 existing installer tests pass. The unchanged Rocky architecture owner
+  passes; real canonical dispatch covers 151 operations. Independent review
+  includes the broader repository-specific ownership/agreement route.
+
+No actual-input, exact-peer, cloud-identity-removal, TTL/cleanup or Terraform
+admission boundary changes. The eight existing dispositions retain their
+rationales and original expiry without new acceptance. Scanner coverage,
+diagnostic/database/scanner admission and protected/redacted evidence are
+unchanged. `REPOSITORY_STATIC` / `REQUIRED_NOT_EXECUTED` remain explicit.
+
+This source qualification grants no native host, OCI, enrollment or production
+admission. After protected central merge the consumer must adopt the full
+accepted shared SHA and obtain fresh CLEAN security/contract/required CI plus
+exact-head independent integration review before native execution.
+
+On 2026-10-25 at 16:53:05 UTC, the unchanged maintained action scan step ran
+against this exact deployment commit with pinned Trivy 0.74.0, fresh real
+vulnerability/Java databases, all three scanner classes, exact snapshots,
+diagnostic admission and redaction. Actual result: **CLEAN**, eight existing
+dispositions, zero actionable/review-required findings. Database identity:
+
+`sha256:215de45e1dceca5b290d28017ac6546e59c8de900bb4fac14654e08c91e2ea21`
+
+Database update: 2026-10-25 00:59:20 UTC; download: 16:53:02 UTC; next update:
+2026-10-26 12:57:48 UTC. This is dated local full-scan evidence, not hosted CI
+or native admission. Unchanged action cleanup removed raw tools/databases and
+native scan output; only bounded redacted evidence remains. Real modified-source
+probes of scripts, declaration, configuration, Terraform and workflow all failed
+closed; the restored exact candidate re-admitted.
