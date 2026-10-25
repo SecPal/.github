@@ -82,6 +82,13 @@ DEPLOYMENT_PHASE_ONE_DISPATCH_BINDINGS = {
     "scripts": "ce6c93f9854ca2938509298f3120981ed992b069",
     ".secpal": "c9144f481e6148c42ecd8f8c73552bdbb137d66a",
 }
+# #1266 qualifies deployment#365's independently reviewed native #80 composition.
+# Keep all other source/control identities, dispositions and the original expiry.
+DEPLOYMENT_PHASE_ONE_NATIVE_BINDINGS = {
+    **DEPLOYMENT_PHASE_ONE_DISPATCH_BINDINGS,
+    "scripts": "c17a475b7185349018086ca8683dcf751a339a5a",
+    ".secpal": "18745a3e7a93c9990e023b8ed5da4031025c631c",
+}
 DEPLOYMENT_TERRAFORM_PATHS = (
     'infra/ci-cloud/digitalocean/versions.tf',
     'infra/ci-cloud/gcp-rocky/main.tf',
@@ -365,6 +372,8 @@ def qualify_deployment_terraform(
                 or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_XDG_BINDINGS
                     and _timestamp(completed_at) >= _timestamp("2026-10-25T00:00:00Z"))
                 or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_DISPATCH_BINDINGS
+                    and _timestamp(completed_at) >= _timestamp("2026-10-25T00:00:00Z"))
+                or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_NATIVE_BINDINGS
                     and _timestamp(completed_at) >= _timestamp("2026-10-25T00:00:00Z"))
             )
             or facts["terraform_paths"] != list(DEPLOYMENT_TERRAFORM_PATHS)
