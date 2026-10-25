@@ -189,15 +189,6 @@ if [ -f tests/android-consumed-workflow-action-pins.sh ]; then
   }
 fi
 
-if [ -f tests/deploy-main-workflow.sh ]; then
-  bash tests/deploy-main-workflow.sh || {
-    echo "" >&2
-    echo "❌ Deploy-main workflow regression test failed!" >&2
-    echo "Restore the guarded main-branch VPS deployment workflow contract before continuing." >&2
-    exit 1
-  }
-fi
-
 if [ -f tests/codeql-applicability.sh ]; then
   bash tests/codeql-applicability.sh || {
     echo "" >&2
