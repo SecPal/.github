@@ -458,8 +458,8 @@ that only the `scripts` binding changes, from
 `0b3e423fb58643001b3332d543af8ccd73fa7cba`. The other five bindings
 (including the normalized complete automation inventory) and all seven Terraform
 paths are identical. That delivery admitted these two complete source profiles for its necessary
-main/candidate adoption transition; the reviewed XDG extension below is the
-only subsequent addition. The candidate
+main/candidate adoption transition; separately reviewed source/control extensions
+are documented below. The candidate
 profile starts on 2026-10-24; both expire at the unchanged
 **2026-11-04 00:00 UTC** boundary. Any further script/control change, additional
 Terraform path, wrong subject or expiry still fails closed.
@@ -636,3 +636,69 @@ the accepted full scanner SHA and obtain fresh hosted security/contract checks.
 This static proof grants neither native CX33 execution authority nor
 `READY_FOR_ENROLLMENT` or production admission. Those remain under their existing
 independent owners and operator-approved procedures.
+
+### Architecture-dispatch source requalification (#1264)
+
+Deployment [PR #363](https://github.com/SecPal/deployment/pull/363), independently
+reviewed head `40de3c43774fef79652de780f636e087ec4c7391`, adds bounded Phase-1
+diagnostics and versioned architecture evidence to accepted base
+`27f8e01c138f97530d3dc7a2750934605f0702da`. The exact new complete profile binds:
+
+- `scripts`: `ce6c93f9854ca2938509298f3120981ed992b069`;
+- `.secpal`: `c9144f481e6148c42ecd8f8c73552bdbb137d66a`;
+
+All five existing other source/control identities and seven Terraform paths
+are unchanged. The observer reads the new control tree directly from raw Git
+when present and rejects a file or symlink masquerading as it. The candidate
+cannot omit or alter that tree. Existing accepted sources without it remain
+valid only through the same bounded transition. This named seven-binding
+profile is not an independent hash list; every profile retains the original
+**2026-11-04 00:00 UTC** expiry.
+
+The full deployment diff changes only its installer, regressions, current
+documentation and the declaration/license. Comparison of actual AST bodies,
+ignoring diagnostic decorators, confirms 18 existing policy/verification
+functions are unchanged, including protected ancestry/publication, runtime,
+account/sub-IDs/packages, SELinux, dormant authority, platform and readiness.
+Every existing Native run/change invocation has identical arguments. Public
+renderer equivalence, exact legacy repair and rootless safety tests still pass.
+
+The changes locate failures and do not add host commands, relax admission or
+alter provider/Terraform behavior. Runtime-user lookup now fails at its actual
+command boundary. An independently found parser-depth escape was reproduced
+through the real normalizer with a 200,001-byte JSON observation, then bounded
+by handling RecursionError. All 34 installer regressions pass. The real
+79-operation dispatch passes the unchanged canonical validator; its broader
+production-owner/agreement enforcement was explicitly included in independent
+review. Generic expression agreement execution remains truthfully empty.
+
+Therefore the eight existing dispositions retain their original rationales
+and expiry; there is no new risk acceptance, warning exemption, fabricated
+Terraform input or changed scanner policy. REPOSITORY_STATIC and
+REQUIRED_NOT_EXECUTED remain explicit and mandatory.
+
+On 2026-10-25 at 13:40:17 UTC, the unchanged action's full scan step evaluated
+that exact deployment head with pinned Trivy 0.74.0, fresh vulnerability/Java
+databases, all three scanners, diagnostics, snapshots and redaction. Result:
+**CLEAN**, eight existing dispositions, zero actionable/review-required findings,
+no new diagnostic. Database identity:
+
+`sha256:e78c2db6c9cf036770b5dea9c5997963948537cd8da60c90c32ee3489b0f29fb`
+
+Database update: 2026-10-25 00:59:20 UTC; download: 13:40:14 UTC;
+next update: 2026-10-26 12:57:48 UTC. Unmodified cleanup removes raw scanner,
+tool and database files; only bounded redacted evidence is retained privately.
+This is a dated local full-action execution, not a hosted CI or native receipt.
+
+Failing-first tests reproduce rejection of the new profile and missing control
+observation before implementation. Scanner regressions cover all seven changed
+or missing bindings, wrong subjects/time/extra Terraform paths, and raw-Git
+control-tree type checks. Separate real Git mutations of scripts, declaration,
+configuration, Terraform and workflow, plus removal of dispatch controls, are
+all rejected. The unchanged exact candidate re-admits; expiry at and after the
+original boundary fails closed.
+
+After independent protected central acceptance, deployment must adopt only
+that immutable scanner revision and obtain fresh hosted CLEAN security,
+contract and required checks plus exact-head integration review. This source
+proof cannot grant native host, OCI, READY_FOR_ENROLLMENT or production admission.

@@ -2182,6 +2182,59 @@ class DeploymentTerraformCoverageTests(unittest.TestCase):
             self.module.qualify_deployment_terraform(
                 facts, "SecPal/deployment", facts["commit"], now)
 
+    def dispatch_facts(self):
+        facts = self.facts()
+        facts["commit"] = "40de3c43774fef79652de780f636e087ec4c7391"
+        facts["bindings"].update({
+            "scripts": "ce6c93f9854ca2938509298f3120981ed992b069",
+            ".secpal": "c9144f481e6148c42ecd8f8c73552bdbb137d66a",
+        })
+        return facts
+
+    def test_reviewed_dispatch_source_binds_actual_architecture_controls(self):
+        facts = self.dispatch_facts()
+        coverage = self.module.qualify_deployment_terraform(
+            facts, "SecPal/deployment", facts["commit"], "2026-10-25T13:00:00Z")
+        self.assertEqual(coverage["source_bindings"], facts["bindings"])
+        self.assertEqual(len(coverage["source_bindings"]), 7)
+        self.assertEqual(coverage["scope"], "REPOSITORY_STATIC")
+        self.assertEqual(coverage["run_bound_status"], "REQUIRED_NOT_EXECUTED")
+        self.assertEqual(coverage["expires_at"], "2026-11-04T00:00:00Z")
+        self.assertEqual(coverage["required_at_operation"],
+                         list(self.module.DEPLOYMENT_RUN_BOUND_CONTROLS))
+        self.module._validate_coverage(coverage, "SecPal/deployment",
+                                      facts["commit"], "2026-10-25T13:00:00Z")
+        # Current protected main remains usable during bounded adoption.
+        self.module.qualify_deployment_terraform(
+            self.xdg_facts(), "SecPal/deployment", self.xdg_facts()["commit"],
+            "2026-10-25T13:00:00Z")
+
+    def test_dispatch_qualification_rejects_changed_missing_controls_and_expiry(self):
+        facts = self.dispatch_facts()
+        for path in facts["bindings"]:
+            for change in ("missing", "changed"):
+                changed = copy.deepcopy(facts)
+                if change == "missing":
+                    del changed["bindings"][path]
+                else:
+                    changed["bindings"][path] = "0" * 40
+                with self.subTest(path=path, change=change), self.assertRaises(self.module.ContractError):
+                    self.module.qualify_deployment_terraform(
+                        changed, "SecPal/deployment", facts["commit"], "2026-10-25T13:00:00Z")
+        for repo, subject, now in (
+            ("SecPal/other", facts["commit"], "2026-10-25T13:00:00Z"),
+            ("SecPal/deployment", "a" * 40, "2026-10-25T13:00:00Z"),
+            ("SecPal/deployment", facts["commit"], "2026-10-24T23:59:59Z"),
+            ("SecPal/deployment", facts["commit"], "2026-11-04T00:00:00Z"),
+            ("SecPal/deployment", facts["commit"], "2026-11-05T00:00:00Z"),
+        ):
+            with self.subTest(repo=repo, subject=subject, now=now), self.assertRaises(self.module.ContractError):
+                self.module.qualify_deployment_terraform(facts, repo, subject, now)
+        facts["terraform_paths"].append("unexpected/main.tf")
+        with self.assertRaises(self.module.ContractError):
+            self.module.qualify_deployment_terraform(
+                facts, "SecPal/deployment", facts["commit"], "2026-10-25T13:00:00Z")
+
     def diagnostics(self, cache, variables=None):
         fallback = '2026-10-20T18:00:00Z\tERROR\t[misconfig] Falling back to embedded checks\terr=' + json.dumps(
             'failed to check cache: cache does not exist at ' + json.dumps(str(cache / "policy/content"))
@@ -2330,6 +2383,29 @@ class DeploymentTerraformCoverageTests(unittest.TestCase):
                 with self.assertRaises(self.module.ContractError):
                     self.module.qualify_deployment_terraform(facts, "SecPal/deployment", revision, self.time)
                 extra.unlink()
+                # New dispatch evidence is a security control, not unbound
+                # documentation. Observe its Git tree and reject old profiles.
+                control = root / ".secpal/evidence-architecture.json"
+                control.parent.mkdir()
+                control.write_text('{"source-observation": "fixture"}\n')
+                revision = commit()
+                facts = self.module.observe_deployment_terraform(root, revision)
+                self.assertEqual(facts["bindings"][".secpal"], git("rev-parse", revision + ":.secpal"))
+                with self.assertRaises(self.module.ContractError):
+                    self.module.qualify_deployment_terraform(facts, "SecPal/deployment", revision, self.time)
+                control.unlink()
+                control.parent.rmdir()
+                # A file or symlink may not masquerade as the control tree.
+                (root / ".secpal").write_text("not a directory\n")
+                revision = commit()
+                with self.assertRaises(self.module.ContractError):
+                    self.module.observe_deployment_terraform(root, revision)
+                (root / ".secpal").unlink()
+                (root / ".secpal").symlink_to("config", target_is_directory=True)
+                revision = commit()
+                with self.assertRaises(self.module.ContractError):
+                    self.module.observe_deployment_terraform(root, revision)
+                (root / ".secpal").unlink()
                 quality.write_text(original + "permissions: id-token:write\n")
                 revision = commit()
                 facts = self.module.observe_deployment_terraform(root, revision)

@@ -75,6 +75,13 @@ DEPLOYMENT_PHASE_ONE_XDG_BINDINGS = {
     **DEPLOYMENT_TERRAFORM_BINDINGS,
     "scripts": "4c6d4144cfc7849196e01e5c4204792f3355dfd2",
 }
+# #1264 qualifies deployment#363's reviewed bounded diagnostics and dispatch
+# evidence. Bind the new versioned control tree as well as the exact scripts.
+DEPLOYMENT_PHASE_ONE_DISPATCH_BINDINGS = {
+    **DEPLOYMENT_TERRAFORM_BINDINGS,
+    "scripts": "ce6c93f9854ca2938509298f3120981ed992b069",
+    ".secpal": "c9144f481e6148c42ecd8f8c73552bdbb137d66a",
+}
 DEPLOYMENT_TERRAFORM_PATHS = (
     'infra/ci-cloud/digitalocean/versions.tf',
     'infra/ci-cloud/gcp-rocky/main.tf',
@@ -315,6 +322,10 @@ def observe_deployment_terraform(workspace: Path, commit: str) -> dict[str, Any]
     facts = observe_secret_sources(workspace, commit, [*files, caller])
     quality_blob = facts["blobs"].pop(caller)
     bindings = dict(facts["blobs"])
+    # Old accepted sources have no dispatch-control tree. When present, it is
+    # mandatory source evidence, and the existing type check rejects impostors.
+    if _git(workspace, ["ls-tree", "-z", commit, "--", ".secpal"]):
+        directories.add(".secpal")
     for path in sorted(directories):
         entry = _git(workspace, ["ls-tree", "-z", commit, "--", path]).split(b"\0")
         if len(entry) != 2 or entry[-1]:
@@ -352,6 +363,8 @@ def qualify_deployment_terraform(
                 or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_BINDINGS
                     and _timestamp(completed_at) >= _timestamp("2026-10-24T00:00:00Z"))
                 or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_XDG_BINDINGS
+                    and _timestamp(completed_at) >= _timestamp("2026-10-25T00:00:00Z"))
+                or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_DISPATCH_BINDINGS
                     and _timestamp(completed_at) >= _timestamp("2026-10-25T00:00:00Z"))
             )
             or facts["terraform_paths"] != list(DEPLOYMENT_TERRAFORM_PATHS)
