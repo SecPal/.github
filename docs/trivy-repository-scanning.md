@@ -457,8 +457,9 @@ that only the `scripts` binding changes, from
 `26a857dca06796c241fa155f36f513cc15a1bdd8` to
 `0b3e423fb58643001b3332d543af8ccd73fa7cba`. The other five bindings
 (including the normalized complete automation inventory) and all seven Terraform
-paths are identical. The scanner admits exactly these two complete source
-profiles for the necessary main/candidate adoption transition. The candidate
+paths are identical. That delivery admitted these two complete source profiles for its necessary
+main/candidate adoption transition; the reviewed XDG extension below is the
+only subsequent addition. The candidate
 profile starts on 2026-10-24; both expire at the unchanged
 **2026-11-04 00:00 UTC** boundary. Any further script/control change, additional
 Terraform path, wrong subject or expiry still fails closed.
@@ -572,3 +573,66 @@ new immutable action/schema revision and obtain its own fresh hosted result.
 Historical v3 UNKNOWN_STALE / DIAGNOSTIC_ADMISSION_FAILURE and the original
 unclassified native SCANNER_FAILURE remain unchanged. No cloud qualification
 or infrastructure operation is dispatched by this delivery.
+
+### Rootless XDG source requalification (#1260)
+
+Deployment PR [#362](https://github.com/SecPal/deployment/pull/362) has independently
+reviewed head `5ad1e5ba0f8a203745b6b709d8c5123f359e51df` and accepted base
+`f50333a57c49598584fddd7e3039953dade2e6fa`. Raw Git observation binds its scripts
+tree to `4c6d4144cfc7849196e01e5c4204792f3355dfd2`. All five other source
+bindings and all seven Terraform paths are identical to the accepted Phase-1
+source. This is one named complete profile, starting 2026-10-25; the two existing
+accepted profiles remain intact for the bounded adoption transition. Every
+profile still expires **2026-11-04 00:00 UTC**. There is no caller-supplied hash
+list, expiry extension or additional risk acceptance.
+
+The complete three-file diff changes only the explicit host-base installer,
+its regressions and its existing documentation:
+
+- Podman requires a user-owned XDG directory. The installer now keeps its one
+  administrative storage file under root-only ancestry and creates the native
+  per-user link/data directories through its existing unprivileged transport.
+  The home remains root-owned, service GID, mode 0750.
+- Repair recognizes only the exactly verified failed public layout. It preserves
+  the storage bytes at the protected location before removing that old public
+  file and transferring three explicit directories. Root writes finish before
+  the parent becomes user-writable; existing mask inodes are retained.
+- Source comparison confirms that `trusted`, `directory`, `publish`,
+  `public_file`, `runtime`, `admit_for_enrollment`, account/sub-ID/package,
+  dormant-service, SELinux-label and secret/premature-authority checks are
+  unchanged. Existing cloud entry points never call or import this installer.
+- No provider/Terraform input, metadata, actual-peer/run admission, identity
+  transition, lifetime/cleanup, resource multiplicity or Quadlet health authority
+  changes. Configuration, schemas, infrastructure, gateway and automation
+  identities are unchanged.
+
+Thus the eight existing dispositions retain their original rationales and
+expiry. This qualification changes neither native scanner scope nor the
+run-bound obligations: `REPOSITORY_STATIC` / `REQUIRED_NOT_EXECUTED` remain
+explicit. The 25 deployment regressions and independent code/security review
+support the bounded source change; they are not native host acceptance.
+
+On 2026-10-25 at 10:44:36 UTC the unchanged action's complete scan step evaluated
+that exact head with pinned Trivy 0.74.0, fresh vulnerability and Java databases,
+all three vulnerability/secret/misconfiguration scanners, diagnostic admission,
+source snapshots and redaction. It returned CLEAN: eight existing scoped
+MISCONFIGURATION dispositions, zero actionable/review-required findings and no
+new diagnostic. The database identity was
+`sha256:3155935f49d24e05cb296628f8537e2bdbe4438d5668793826bbe91bcd4600ab`
+(updated 2026-10-25 00:59:20 UTC; downloaded 10:44:33 UTC;
+next update 2026-10-26 07:10:41 UTC).
+The unmodified cleanup removed raw scanner/tool files and both database caches;
+only bounded redacted evidence remains in the owning workspace. This dated scan
+does not confer lasting CLEAN status.
+
+The failing-first candidate test, complete scanner regressions, all-six-binding
+negative cases, wrong-subject/time/extra-Terraform-path negatives, and real Git
+mutations of the installer, configuration, Terraform and workflow all exercise
+fail-closed admission. The exact candidate is re-admitted after restoring its
+bytes; expiry at and after the original boundary is rejected.
+
+After independent review and protected central acceptance, deployment must adopt
+the accepted full scanner SHA and obtain fresh hosted security/contract checks.
+This static proof grants neither native CX33 execution authority nor
+`READY_FOR_ENROLLMENT` or production admission. Those remain under their existing
+independent owners and operator-approved procedures.
