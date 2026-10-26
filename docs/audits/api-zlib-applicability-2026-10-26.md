@@ -5,10 +5,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Exact-subject API zlib applicability review
 
-Status: independent applicability decision PENDING for each CVE. This document
-records evidence submitted under [#1268](https://github.com/SecPal/.github/issues/1268);
-it is not reviewed OpenVEX, risk acceptance, or API release admission.
-The evidence author cannot approve their own applicability assertion.
+The separate read-only technical assessment returned **TECHNICAL_ACCEPT** for
+CVE-2023-45853 and **TECHNICAL_REJECT** of the nonapplicability claim for
+CVE-2026-85091. The [operator-transmitted outcome](https://github.com/SecPal/.github/issues/1268#issuecomment-6412073717)
+records these distinct results for the exact subjects/components below.
+
+The operator reports that the separate assessment independently checked the
+original sources and actual AMD64/ARM64 artifacts. Its original task URL/ID and
+reviewer task identity were not available. The linked record is the relayed
+outcome, not the original reviewer report or a generic bot receipt presented as
+an applicability decision. This document is non-operative evidence, not reviewed
+OpenVEX, risk acceptance, or API release admission.
 
 ## Existing authority and review scope
 
@@ -19,10 +26,13 @@ reviewers; #636 is coordination. Use the existing independent GitHub security
 review process and retain an explicit decision for each CVE. A generic
 no-code-findings receipt does not establish either applicability decision.
 
-Only after a positive authorized decision may the existing reviewed-OpenVEX
-path be used, with real reviewer/review provenance, bounded validity, exact
-subjects and components, independent review, and protected merge. Do not infer
-a validity period from an unrelated scanner exception or extend an old one.
+For a future OpenVEX statement, an expressly documented maintainer decision
+after independent technical assessment is sufficient under the existing trust
+and review contracts. No additional human-reviewer role or artificial identity
+is required. Retain genuine decision/review provenance, exact subjects/components,
+bounded validity, independent review and protected merge. Technical acceptance
+alone is not that formal authorization. No operative decision or validity period
+is created here; do not inherit or extend an unrelated exception.
 
 ## Immutable subjects and retained evidence
 
@@ -90,7 +100,7 @@ authenticated libminizip1 `1.1-8+deb12u1` .deb files for both architectures.
 They export the relevant MiniZip entrypoint, were never installed/executed, and
 are not asserted vulnerable. A single-byte alteration fails the libz hash check.
 
-## Separate question: CVE-2023-45853
+## CVE-2023-45853: narrow technical acceptance
 
 [Debian's record](https://security-tracker.debian.org/tracker/CVE-2023-45853)
 distinguishes the source tree from the binary build boundary. The CVE requires
@@ -113,54 +123,63 @@ Exact current policy components, one on each corresponding manifest:
 - `pkg:deb/debian/zlib1g@1.2.13.dfsg-1?arch=amd64&distro=debian-12.15&epoch=1`
 - `pkg:deb/debian/zlib1g@1.2.13.dfsg-1?arch=arm64&distro=debian-12.15&epoch=1`
 
-Decision requested: independently establish or reject the existing
-`vulnerable_code_not_present` justification for these exact components/subjects.
+**Independent result: TECHNICAL_ACCEPT** for
+`vulnerable_code_not_present`, as recorded in the operator-transmitted outcome.
+This applies exclusively to the two Debian-zlib1g components and corresponding
+exact OCI subjects above. It does not authorize a formal OpenVEX statement,
+classify other copies of MiniZip, or admit the API release.
 
-## Separate question: CVE-2026-85091
+## CVE-2026-85091: nonapplicability claim rejected
+
+**Independent result: TECHNICAL_REJECT** of the requested nonapplicability,
+as recorded in the operator-transmitted outcome. The previous argument that
+the old writer and its fatal Z_ERRNO returns exclude the reported failure is
+withdrawn. The finding remains in force.
 
 [Debian's record](https://security-tracker.debian.org/tracker/CVE-2026-85091)
-marks Bookworm vulnerable while describing a nonblocking writer introduced
-upstream in 1.3.1.2. The [introducing commit](https://github.com/madler/zlib/commit/81cc0bebedd935daeb81b0b6e475d8786b51af3d)
-adds retryable write-stall handling; the [fix](https://github.com/madler/zlib/commit/df84af25dc1942490e1d1c899a07619152a46148)
-resets retained external input after a write failure. This discrepancy must be
-resolved against actual code, not by preferring the more convenient tracker.
+and the upstream [introducing](https://github.com/madler/zlib/commit/81cc0bebedd935daeb81b0b6e475d8786b51af3d)
+and [fixing](https://github.com/madler/zlib/commit/df84af25dc1942490e1d1c899a07619152a46148)
+commits describe different writer generations. An upstream version-range
+comparison or absence of gz_vacate/state->again is insufficient to establish
+nonapplicability of the actual old binary.
 
-Authenticated 1.2.13 `gzwrite.c` SHA-256:
+The assessed 1.2.13 `gzwrite.c` remains identified by SHA-256
 `c7454689751c8f41ec63a1381a0053fb149095abe1c3b89c8a996b2d7ac8adce`.
-The authenticated gzwrite.c/gzguts.h/gzlib.c/gzread.c contain no gz_vacate,
-state->again or EAGAIN retry handling. Neither Debian patch backports this path.
+The rejected proof inspected immediate error returns without covering the full
+public-API lifecycle:
 
-The old control flow was inspected separately:
+- `gzclearerr` can clear the error checked by later write/formatting calls.
+  The `state->err != Z_OK` guard is therefore not a permanent barrier.
+- Clearing the reported error does not establish that retained external
+  `strm.next_in` pointers and remaining-input state have been reset to owned
+  storage after partial or failed writes.
+- Subsequent calls can pass the cleared-error guard. The audit did not prove
+  their pointer arithmetic, retained input and buffer movement safe across that
+  sequence.
 
-- gz_comp lines 89–92 and 119–122: write failure becomes fatal Z_ERRNO.
-- gzwrite lines 267–269 and gzvprintf lines 405–407 reject a stored error.
-- gzvprintf lines 454–456 returns on gz_comp failure before its later memmove.
-
-Positive source control: gzwrite.c at immutable introducing commit
-`81cc0bebedd935daeb81b0b6e475d8786b51af3d` contains the newer retryable path;
-its SHA-256 is `2e809d21020004df9de3192fd438984aa6dc4822f4e27a49f4e6ba6f27d07089`.
-Absence of the name gz_vacate alone is not the argument.
+The missing partial-write/error-clear/follow-up-call analysis invalidates the
+requested nonapplicability conclusion. It is not evidence that every possible
+calling sequence is exploitable. No NOT_AFFECTED claim, risk acceptance,
+suppression or disposition change is made for this CVE.
 
 Exact current policy components, separate from the MiniZip PURL representation:
 
 - `pkg:deb/debian/zlib1g@1%3A1.2.13.dfsg-1?arch=amd64&distro=debian-12.15&upstream=zlib`
 - `pkg:deb/debian/zlib1g@1%3A1.2.13.dfsg-1?arch=arm64&distro=debian-12.15&upstream=zlib`
 
-Decision requested: independently establish or reject nonapplicability of the
-reported retained-input/nonblocking writer failure in these exact old binaries.
-The MiniZip decision cannot classify this separate CVE.
+These exact findings remain REVIEW_REQUIRED under the existing policy.
+The narrow MiniZip technical acceptance does not classify this separate CVE.
 
-## Review acceptance and remaining limits
+## Effect on admission and remaining limits
 
-The reviewer must identify which original evidence they independently checked,
-give a separate result/justification for each CVE, and name any unresolved gap.
-A trusted review must be attributable to a real review record and identity.
-Neither the author nor an invented review label can provide that authority.
+The technical results are now separate and explicit; the unavailable original
+review-task locator remains a provenance limitation, not a reason to invent
+another reviewer role. Normal independent PR review validates this correction.
 
-No reviewed VEX manifest/document exists in this change. After an authorized
-positive decision, use the unchanged closed schema/trusted checkout contract;
-test exact subjects/components/CVEs, wrong subject/component, expiry and conflicts.
-Preserve raw observations and every unrelated API finding.
+No reviewed VEX manifest/document exists in this change. MiniZip technical
+acceptance has not been applied as a policy disposition; CVE-2026-85091 remains
+REVIEW_REQUIRED. The original 12 ACTIONABLE and 218 REVIEW_REQUIRED per platform,
+all raw observations and every unrelated API blocker remain unchanged.
 
 The API publisher pins SDK `57a1b7ce698a2ef7e253a05e6cf008b9fdab646c`.
 It cannot automatically discover a later central VEX commit. The existing
