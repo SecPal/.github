@@ -99,6 +99,10 @@ def main() -> None:
             'printf "systemctl:%s\\n" "$*" >>"$COMMAND_LOG"\n'
             'args="$*"; unit="${args##* }"\n'
             'case "$args" in\n'
+            '  "--user is-failed --quiet "*) [ -e "$SERVICE_STATE/$unit.failed" ]; exit $? ;;\n'
+            '  "--user reset-failed "*)\n'
+            '    if [ ! -e "$SERVICE_STATE/$unit.failed" ] || [ "${FAIL_RESET:-0}" = 1 ]; then exit 1; fi\n'
+            '    rm -f "$SERVICE_STATE/$unit.failed"; exit 0 ;;\n'
             '  "--user is-enabled --quiet "*) [ -e "$SERVICE_STATE/$unit.enabled" ]; exit $? ;;\n'
             '  "--user is-active --quiet "*) [ -e "$SERVICE_STATE/$unit.active" ]; exit $? ;;\n'
             '  "--user enable --now polyscope-preview.service")\n'
@@ -148,6 +152,25 @@ def main() -> None:
                     check=False,
                 )
                 assert result.returncode == 0, (result.stdout, result.stderr)
+
+            assert "systemctl:--user reset-failed " not in command_log.read_text()
+            failed_refresh = service_state / "polyscope-preview-refresh.service.failed"
+            failed_refresh.touch()
+            recovered = subprocess.run(
+                ["bash", str(INSTALLER)], env=env, text=True, capture_output=True, check=False
+            )
+            assert recovered.returncode == 0, (recovered.stdout, recovered.stderr)
+            assert not failed_refresh.exists()
+
+            failed_refresh.touch()
+            rejected_reset = subprocess.run(
+                ["bash", str(INSTALLER)], env=env | {"FAIL_RESET": "1"},
+                text=True, capture_output=True, check=False
+            )
+            assert rejected_reset.returncode != 0
+            assert "previous managed files were restored" in rejected_reset.stderr
+            assert failed_refresh.exists()
+            failed_refresh.unlink()
 
             foreign_env = env | {"FOREIGN_NETWORK": "1"}
             rejected_foreign = subprocess.run(
@@ -222,7 +245,7 @@ def main() -> None:
         assert home.joinpath("custom-libexec/cleanup-polyscope-container-preview.py").is_file()
         assert "Restart=" not in refresh_unit
         backups = list((home / ".local/state/polyscope/backups").iterdir())
-        assert len(backups) == 3, backups
+        assert len(backups) == 5, backups
 
         for state_path in service_state.iterdir():
             state_path.unlink()
@@ -247,8 +270,7 @@ def main() -> None:
         assert "systemctl:--user restart polyscope-preview.service" in commands
         assert "systemctl:--user enable --now polyscope-preview-refresh.path" in commands
         assert (
-            "systemctl:--user reset-failed polyscope-preview-refresh.path "
-            "polyscope-preview-refresh.service"
+            "systemctl:--user reset-failed polyscope-preview-refresh.service"
         ) in commands
 
         rejected = subprocess.run(

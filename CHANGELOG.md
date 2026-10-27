@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-28 - Fix First Container Preview Installation
+
+**Fixed:**
+
+- Clear failed refresh-unit states only when those managed units are actually
+  failed. Fresh installations no longer abort on valid but unloaded user units.
+- Model native unloaded-unit behavior and verify existing failed-state recovery
+  and rollback when a required reset fails.
+
 ## 2026-10-27 - Fix Polyscope Frontend Command Drift
 
 **Fixed:**

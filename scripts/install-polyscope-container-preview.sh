@@ -408,7 +408,11 @@ install_managed "$temporary_dir/polyscope-preview-refresh.service" "$refresh_uni
 install_managed "$temporary_dir/polyscope-preview-refresh.path" "$refresh_path_target" 0644
 
 systemctl --user daemon-reload
-systemctl --user reset-failed polyscope-preview-refresh.path polyscope-preview-refresh.service
+for refresh_unit in polyscope-preview-refresh.path polyscope-preview-refresh.service; do
+    if systemctl --user is-failed --quiet "$refresh_unit"; then
+        systemctl --user reset-failed "$refresh_unit"
+    fi
+done
 systemctl --user enable --now polyscope-postgresql-proxy.service
 systemctl --user enable --now polyscope-preview.service
 systemctl --user enable --now polyscope-preview-refresh.path
