@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-27 - Fix Polyscope Frontend Command Drift
+
+**Fixed:**
+
+- Remove the unavailable `test:preview:pwa-headers` run-menu action so the
+  Polyscope rollout validates against the current frontend command set.
+- Match the rollout regression fixture to the available commands and reject
+  generated references to that missing script. Preserve preview CSP policy,
+  existing validation gates, and the remaining frontend checks.
+
 ## 2026-10-23 - Simplify Artifact Risk Acceptance
 
 **Changed:**
