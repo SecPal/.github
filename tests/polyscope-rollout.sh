@@ -232,7 +232,6 @@ package_scripts = {
         "test:run:all": "vitest run --coverage",
         "test:watch": "vitest",
         "test:e2e:ci": "cross-env CI=true playwright test",
-        "test:preview:pwa-headers": "node ./scripts/check-workspace-preview-pwa-headers.mjs",
         "test:e2e:staging": "cross-env PLAYWRIGHT_BASE_URL=https://app.secpal.dev playwright test",
     },
     "contracts": {
@@ -2008,8 +2007,10 @@ grep -qF 'Watching frontend preview sources for changes...' "$workspace_root/fro
 grep -qF '"command": "npm run lint && npm run typecheck && npm run test:run:all && npm run build"' "$workspace_root/frontend/polyscope.local.json"
 assert_no_generated_preflight_action "$workspace_root/frontend/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/frontend/polyscope.local.json"
-grep -qF '"label": "Workspace Preview CSP Smoke"' "$workspace_root/frontend/polyscope.local.json"
-grep -qF '"command": "npm run test:preview:pwa-headers"' "$workspace_root/frontend/polyscope.local.json"
+if grep -qF 'test:preview:pwa-headers' "$workspace_root/frontend/polyscope.local.json"; then
+    echo "rollout must not reference an unavailable frontend npm script" >&2
+    exit 1
+fi
 if grep -qF "npx vite build --watch --mode preview" "$workspace_root/frontend/polyscope.local.json"; then
     echo "generated frontend Polyscope config must not rely on Vite watch mode for preview rebuilds" >&2
     exit 1

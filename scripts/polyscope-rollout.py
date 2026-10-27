@@ -2571,11 +2571,6 @@ REPO_SETTINGS: dict[str, dict[str, Any]] = {
                     {"label": "Typecheck", "command": "npm run typecheck", "runMode": "preserve"},
                     {"label": "Vitest", "command": "npm run test:watch", "runMode": "replace"},
                     {
-                        "label": "Workspace Preview CSP Smoke",
-                        "command": "npm run test:preview:pwa-headers",
-                        "runMode": "preserve",
-                    },
-                    {
                         "label": "Playwright Local Preview Smoke",
                         "command": "npm run test:e2e:ci",
                         "runMode": "preserve",
