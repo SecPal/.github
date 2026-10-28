@@ -832,3 +832,61 @@ Previous accepted tuples remain available for bounded adoption. Scanner identity
 coverage, diagnostic and database admission, redaction and policy severity do
 not change. `REPOSITORY_STATIC` and `REQUIRED_NOT_EXECUTED` remain explicit;
 a source-static result cannot execute or replace the four run-bound controls.
+
+### Google 8.8.1 provider source requalification (#1286)
+
+Deployment [#380](https://github.com/SecPal/deployment/issues/380) completes
+[PR #373](https://github.com/SecPal/deployment/pull/373) for the retained GCP cleanup
+module, then [PR #371](https://github.com/SecPal/deployment/pull/371) for Rocky.
+The two complete source tuples remain candidates until independent review and
+protected central acceptance. Their original expiry remains
+`2026-11-04T00:00:00Z`; previous accepted tuples and all eight dispositions stay
+unchanged.
+
+The corrected cleanup source `bd4789f49eed97bbaa25f8a817797cb125d5f70d` inherits
+the Certbot-refresh tuple and changes only the `infra/ci-cloud` binding to
+`5b7aa70eceb3b9dbc2903b95507b4e9a935ce5b1`. Relative to protected deployment/main
+`1ab5c535b4bad5e57af370f20e9e9254aca7c53b`, only the Google version and lockfile
+change. The manifest, lock version and lock constraint all select `8.8.1`.
+The cleanup-only module does not regain resources or dispatch authority.
+
+The combined Rocky source `c3bd77d12ac76a11cf3005067e911f630b7c6fef` includes
+that cleanup correction and changes three bindings:
+
+- `infra/ci-cloud`: `b2980196040355b883a77b5f1011dc4b890af3d0`;
+- `scripts`: `036dd0f359dacef017b32f32971cf106bf57e93f`;
+- `schemas`: `de6c64e49a24a017a12ed204285dbbc11c9d8d25`.
+
+The complete executable diff is the Rocky manifest/lock update, the transport
+version/schema agreement and the authenticated lock/executable identities.
+Documentation records the current version. Source review confirms no change to
+resources, inputs, metadata, IAM, network rules, exact-peer access, guest identity
+removal, TTL, cleanup, observer operations, timeouts or retries. All seven
+Terraform paths and the remaining source/control bindings stay unchanged.
+
+Real OpenTofu `1.12.5` readonly initialization verifies the developer-signed Google
+`8.8.1` package, key `0C0AF313E5FD9F80`, against the committed lock. Its Linux
+amd64 executable SHA-256 is
+`bb5ffc0706182cd99e712e09e6cc0d98540a9a2f935fc4e0a4999940ac09c32b`; the exact
+Rocky lock SHA-256 is
+`48f406706464cc1bd596bc79229069ce8365fd4399de9ea189118abc340c2300`.
+The required real producer regression passes in a loopback-only namespace:
+executable/process identity, owned socket correlation, inet_diag observations,
+unrelated connection exclusion and package-substitution rejection. This is local
+producer/package evidence, not a GCP API or cloud-conformance result.
+
+Fresh archive-pinned Trivy `0.74.0` scans use the unchanged three scanner classes
+and freshly admitted databases against clean, exact-commit snapshots of the
+baseline and both candidates. All eight normalized findings are identical.
+Before this qualification both candidates reject with
+`UNKNOWN_STALE / DIAGNOSTIC_ADMISSION_FAILURE`; candidate admission produces
+`CLEAN` only through the existing eight reviewed dispositions. No finding,
+warning, policy severity, database check or secret-redaction rule is removed.
+Positive and negative regressions bind each complete tuple, reject partial or
+hybrid tuples and preserve subject/date/expiry checks.
+
+`REPOSITORY_STATIC` and `REQUIRED_NOT_EXECUTED` remain explicit. Actual-input and
+metadata admission, exact-peer access, identity removal and exact-run lifetime
+and cleanup still require the existing trusted operation. No GCP resource,
+production endpoint or host service is changed by this qualification. Consumers
+may adopt the new immutable scanner revision only after protected acceptance.

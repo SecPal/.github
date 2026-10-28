@@ -97,6 +97,19 @@ DEPLOYMENT_CERTBOT_REFRESH_BINDINGS = {
     "config": "68bd29a7c4c159e9ae1f1c9f0b05fda8b95eb012",
     "schemas": "1f594b1bb40c9fa415204aa11fce78c3962e1bad",
 }
+# #1286 qualifies the exact Google 8.8.1 cleanup and combined Rocky sources.
+# Provider package/producer evidence does not replace concrete cloud-run controls.
+# Preserve prior tuples, existing dispositions and the original expiry.
+DEPLOYMENT_GOOGLE_CLEANUP_BINDINGS = {
+    **DEPLOYMENT_CERTBOT_REFRESH_BINDINGS,
+    "infra/ci-cloud": "5b7aa70eceb3b9dbc2903b95507b4e9a935ce5b1",
+}
+DEPLOYMENT_GOOGLE_ROCKY_BINDINGS = {
+    **DEPLOYMENT_GOOGLE_CLEANUP_BINDINGS,
+    "infra/ci-cloud": "b2980196040355b883a77b5f1011dc4b890af3d0",
+    "scripts": "036dd0f359dacef017b32f32971cf106bf57e93f",
+    "schemas": "de6c64e49a24a017a12ed204285dbbc11c9d8d25",
+}
 DEPLOYMENT_TERRAFORM_PATHS = (
     'infra/ci-cloud/digitalocean/versions.tf',
     'infra/ci-cloud/gcp-rocky/main.tf',
@@ -384,6 +397,9 @@ def qualify_deployment_terraform(
                 or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_NATIVE_BINDINGS
                     and _timestamp(completed_at) >= _timestamp("2026-10-25T00:00:00Z"))
                 or (facts["bindings"] == DEPLOYMENT_CERTBOT_REFRESH_BINDINGS
+                    and _timestamp(completed_at) >= _timestamp("2026-10-28T00:00:00Z"))
+                or (facts["bindings"] in (DEPLOYMENT_GOOGLE_CLEANUP_BINDINGS,
+                                          DEPLOYMENT_GOOGLE_ROCKY_BINDINGS)
                     and _timestamp(completed_at) >= _timestamp("2026-10-28T00:00:00Z"))
             )
             or facts["terraform_paths"] != list(DEPLOYMENT_TERRAFORM_PATHS)
