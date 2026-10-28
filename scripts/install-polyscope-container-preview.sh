@@ -11,6 +11,7 @@ RENDERER_SOURCE="$SCRIPT_DIR/render-polyscope-container-caddy.py"
 REFRESH_SOURCE="$SCRIPT_DIR/refresh-polyscope-container-preview.sh"
 RUNNER_SOURCE="$SCRIPT_DIR/run-polyscope-container-preview.py"
 CLEANUP_SOURCE="$SCRIPT_DIR/cleanup-polyscope-container-preview.py"
+ROLLOUT_SOURCE="$SCRIPT_DIR/polyscope-rollout.py"
 IMAGE="${POLYSCOPE_PREVIEW_IMAGE:-localhost/secpal-polyscope-api-toolchain:php84}"
 NETWORK="${POLYSCOPE_PREVIEW_NETWORK:-polyscope-preview-db}"
 PREVIEW_PORT="${POLYSCOPE_PREVIEW_PORT:-18080}"
@@ -64,7 +65,7 @@ if [[ ! "$PREVIEW_PORT" =~ ^[0-9]+$ || "$PREVIEW_PORT" -lt 1 || "$PREVIEW_PORT" 
     exit 1
 fi
 
-for required_file in "$PROXY_SOURCE" "$RENDERER_SOURCE" "$REFRESH_SOURCE" "$RUNNER_SOURCE" "$CLEANUP_SOURCE" "$POSTGRES_SOCKET" "$POLYSCOPE_DB_PATH"; do
+for required_file in "$ROLLOUT_SOURCE" "$PROXY_SOURCE" "$RENDERER_SOURCE" "$REFRESH_SOURCE" "$RUNNER_SOURCE" "$CLEANUP_SOURCE" "$POSTGRES_SOCKET" "$POLYSCOPE_DB_PATH"; do
     if [[ ! -e "$required_file" ]]; then
         echo "Error: required runtime input is missing: $required_file" >&2
         exit 1
@@ -138,8 +139,18 @@ if podman network exists "$NETWORK"; then
         case "$attached_container" in
             polyscope-postgresql-proxy|polyscope-preview) ;;
             *)
-                echo "Error: refusing preview network with foreign container: $attached_container" >&2
-                exit 1
+                if [[ ! -f "$temporary_dir/owned-runtime-members" ]]; then
+                    python3 "$RUNNER_SOURCE" --observe-runtime-members \
+                        --renderer "$RENDERER_SOURCE" --db-path "$POLYSCOPE_DB_PATH" \
+                        --clone-root "$CLONE_ROOT" --repository-root "$REPOSITORY_ROOT" \
+                        --caddyfile "$temporary_dir/Caddyfile" --image "$IMAGE" \
+                        --network "$NETWORK" --preview-port "$PREVIEW_PORT" \
+                        >"$temporary_dir/owned-runtime-members"
+                fi
+                if ! grep -Fxq -- "$attached_container" "$temporary_dir/owned-runtime-members"; then
+                    echo "Error: refusing preview network with foreign container: $attached_container" >&2
+                    exit 1
+                fi
                 ;;
         esac
     done <<<"$attached_containers"

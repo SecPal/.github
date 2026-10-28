@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import importlib.util
+import copy
 import json
 import pathlib
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -24,8 +26,52 @@ def load_module():
     return module
 
 
+def test_owned_runtime_members(module):
+    with tempfile.TemporaryDirectory() as temporary:
+        root = pathlib.Path(temporary)
+        monitor = root / "proc/42"
+        monitor.mkdir(parents=True)
+        (monitor / "exe").symlink_to("/usr/bin/conmon")
+        unit = "polyscope-api-worktree-calm-otter-123456789abc-queue.service"
+        (monitor / "cgroup").write_text(f"0::/user.slice/user-{os.getuid()}.slice/user@{os.getuid()}.service/app.slice/{unit}\n")
+        init = root / "proc/43"
+        init.mkdir()
+        (init / "cgroup").write_text(
+            f"0::/user.slice/user-{os.getuid()}.slice/user@{os.getuid()}.service/user.slice/libpod-{'b' * 64}.scope/container\n"
+        )
+        image = "a" * 64
+        worktree = root / "clones/api/calm-otter"
+        row = {
+            "Id": "b" * 64, "Name": "/native-worker", "Image": image,
+            "State": {"Pid": 43, "ConmonPid": 42, "Running": True},
+            "Config": {"Cmd": ["php", "artisan", "queue:work"], "WorkingDir": "/app"},
+            "NetworkSettings": {"Networks": {"preview-network": {}}},
+            "Mounts": [{"Source": str(worktree), "Destination": "/app"}],
+        }
+        arguments = dict(expected_images={image}, network="preview-network",
+            worktrees={worktree: ("calm-otter", "123456789abc")},
+            role_commands={"queue": ["php", "artisan", "queue:work"]},
+            proc_root=root / "proc")
+        assert module.owned_runtime_container_names([row], **arguments) == {"native-worker"}
+        for field, value in (
+            ("Id", "invalid"),
+            ("Image", "c" * 64),
+            ("Config", {"Cmd": ["php", "arbitrary.php"], "WorkingDir": "/app"}),
+            ("Mounts", [{"Source": str(root / "unregistered"), "Destination": "/app"}]),
+            ("NetworkSettings", {"Networks": {"foreign-network": {}}}),
+            ("State", {"ConmonPid": 9999, "Running": True}),
+        ):
+            rejected = copy.deepcopy(row)
+            rejected[field] = value
+            assert module.owned_runtime_container_names([rejected], **arguments) == set(), field
+        (monitor / "cgroup").write_text("0::/unrelated.service\n")
+        assert module.owned_runtime_container_names([row], **arguments) == set()
+
+
+
 def main() -> None:
     module = load_module()
+    test_owned_runtime_members(module)
     with tempfile.TemporaryDirectory(prefix="polyscope-preview-runner.") as temporary:
         root = pathlib.Path(temporary)
         repository_root = root / "repos/SecPal"
