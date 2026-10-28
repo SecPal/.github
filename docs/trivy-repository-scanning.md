@@ -344,15 +344,28 @@ present. Unit mutations reject explicit empty/null/malformed fields, unsupported
 vendor metadata or advisory provenance, substituted scan surfaces and stale
 databases through the maintained evaluator.
 
-The maintained live replay now also creates that two-file Composer development
-fixture, requires the actual native omissions and advisory, and runs the
-archived candidate action to produce schema-validated `REVIEW_REQUIRED` with
-exact subject/configuration/policy and fresh database identity. Its private
-material is removed. This is a date-bound live intelligence fixture: if a future
-database changes its severity or advisory, the test fails with a requalification
-requirement; it never skips the case or fabricates continued UNKNOWN coverage.
-The original hosted API diagnostics/database were not retained, so this current
-qualification does not establish the historical record-level failure cause.
+The historical live replay created that two-file Composer development fixture
+and required schema-validated `REVIEW_REQUIRED` with the actual native omissions
+and fresh database identity. On 2026-10-28, the live feed enriched the same
+`CVE-2026-108082` / `symfony/http-foundation v8.0.15` observation to `HIGH`,
+with omitted `SeveritySource` and exactly `VendorSeverity: {"ghsa": 3}`.
+The previous live UNKNOWN qualification therefore ended.
+
+The requalified live replay requires exactly that HIGH native representation,
+the same reviewed fallback advisory, and schema-validated `ACTIONABLE` with
+one actionable vulnerability and zero exceptions or review-required findings.
+Subject, archive, configuration, policy, fresh database identity and private-file
+cleanup remain mandatory. The existing Composer fallback evaluator already
+qualifies this representation; no production admission, severity override,
+policy exception or qualification expiry changes.
+
+The bounded historical UNKNOWN native fixture and its negative unit mutations
+remain as historical evidence and evaluator coverage. They do not establish
+current live UNKNOWN scanner coverage. Any later change to the live HIGH
+representation again fails closed and requires requalification; the test never
+skips the case or accepts arbitrary feed outcomes. The original hosted API
+diagnostics/database were not retained, so neither qualification establishes
+the historical record-level failure cause.
 
 ## Exact deployment source qualification and run-bound controls
 

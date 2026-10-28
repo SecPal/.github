@@ -243,7 +243,10 @@ sudo -u polyscope -H env \
 The installer requires the local preview image, initialized Polyscope database,
 PostgreSQL socket, and a clone root already labelled `container_file_t`. It
 creates a labelled dedicated rootless Podman network, rejects foreign network
-members, installs the PHP and Composer wrappers, and renders exact Caddy routes
+members except proven existing native API runtime containers. Those must match
+an active registered workspace, fixed role command, current or target image,
+container PID/cgroup and owning systemd conmon process; installation preserves
+these workers without stopping them. It installs the PHP and Composer wrappers, and renders exact Caddy routes
 only for active worktrees belonging to canonical repository paths. Preview
 document roots reject symbolic links, PHP requests execute only the front
 controller, and the shared clone mounts are read-only in the long-running
