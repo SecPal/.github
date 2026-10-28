@@ -110,6 +110,20 @@ DEPLOYMENT_GOOGLE_ROCKY_BINDINGS = {
     "scripts": "036dd0f359dacef017b32f32971cf106bf57e93f",
     "schemas": "de6c64e49a24a017a12ed204285dbbc11c9d8d25",
 }
+# #1288 qualifies only the reviewed Dependabot Python/Caddy inputs and their
+# composition; every other source identity, disposition and expiry is unchanged.
+DEPLOYMENT_DEPENDABOT_PYTHON_BINDINGS = {
+    **DEPLOYMENT_GOOGLE_ROCKY_BINDINGS,
+    ".github": "sha256:eabfd254fff92561be8559c0f03bc6aaec51c8b6e2733d8b98215e9396ccb8f5",
+}
+DEPLOYMENT_DEPENDABOT_CADDY_BINDINGS = {
+    **DEPLOYMENT_GOOGLE_ROCKY_BINDINGS,
+    "containers/phase-b-gateway/Containerfile": "5acb622fa60472f641fbc2b88dc3338665258a9e",
+}
+DEPLOYMENT_DEPENDABOT_COMBINED_BINDINGS = {
+    **DEPLOYMENT_DEPENDABOT_PYTHON_BINDINGS,
+    "containers/phase-b-gateway/Containerfile": "5acb622fa60472f641fbc2b88dc3338665258a9e",
+}
 DEPLOYMENT_TERRAFORM_PATHS = (
     'infra/ci-cloud/digitalocean/versions.tf',
     'infra/ci-cloud/gcp-rocky/main.tf',
@@ -399,7 +413,10 @@ def qualify_deployment_terraform(
                 or (facts["bindings"] == DEPLOYMENT_CERTBOT_REFRESH_BINDINGS
                     and _timestamp(completed_at) >= _timestamp("2026-10-28T00:00:00Z"))
                 or (facts["bindings"] in (DEPLOYMENT_GOOGLE_CLEANUP_BINDINGS,
-                                          DEPLOYMENT_GOOGLE_ROCKY_BINDINGS)
+                                          DEPLOYMENT_GOOGLE_ROCKY_BINDINGS,
+                                          DEPLOYMENT_DEPENDABOT_PYTHON_BINDINGS,
+                                          DEPLOYMENT_DEPENDABOT_CADDY_BINDINGS,
+                                          DEPLOYMENT_DEPENDABOT_COMBINED_BINDINGS)
                     and _timestamp(completed_at) >= _timestamp("2026-10-28T00:00:00Z"))
             )
             or facts["terraform_paths"] != list(DEPLOYMENT_TERRAFORM_PATHS)
