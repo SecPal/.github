@@ -1033,6 +1033,8 @@ def cli_arguments(
     ]
     if mode == "run_api_worktree":
         arguments.extend(["--shell-command", f"touch {shlex.quote(str(run_marker))}"])
+    elif mode == "run_api_runtime_worktree":
+        arguments.extend(["--runtime-role", "scheduler"])
     return arguments
 
 
@@ -1048,6 +1050,7 @@ modes = (
     "bootstrap_api_worktree",
     "refresh_api_worktree",
     "run_api_worktree",
+    "run_api_runtime_worktree",
 )
 failure_classes = tuple(itertools.product(("source", "target"), ("agents", "copilot")))
 
@@ -1064,7 +1067,7 @@ for mode in modes:
         unrelated.write_text("unchanged\n")
 
         env_path = target / ".env"
-        if mode == "run_api_worktree" or instruction_kind == "copilot":
+        if mode in {"run_api_worktree", "run_api_runtime_worktree"} or instruction_kind == "copilot":
             env_path.write_text(
                 "APP_ENV=local\n"
                 "APP_KEY=base64:existing-key\n"
@@ -1132,7 +1135,7 @@ for mode in modes:
     )
     if mode == "prepare_api_worktree":
         assert (positive_target / ".env").exists()
-    elif mode in {"bootstrap_api_worktree", "refresh_api_worktree"}:
+    elif mode in {"bootstrap_api_worktree", "refresh_api_worktree", "run_api_runtime_worktree"}:
         assert side_effect_log.exists()
         assert "php:" in side_effect_log.read_text()
     else:
@@ -1931,10 +1934,10 @@ if grep -qF -- '--prepare-api-worktree' "$workspace_root/api/polyscope.local.jso
     echo "generated API setup must enter the locked bootstrap boundary exactly once" >&2
     exit 1
 fi
-grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan queue:work --queue=activity-hash-chain,merkle,opentimestamp,default --sleep=3 --tries=3'" "$workspace_root/api/polyscope.local.json"
+grep -qF "python3 $PYTHON_SCRIPT --run-api-runtime-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --runtime-role queue" "$workspace_root/api/polyscope.local.json"
 grep -qF '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json"
-grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan schedule:work'" "$workspace_root/api/polyscope.local.json"
-grep -qF "python3 $PYTHON_SCRIPT --run-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --shell-command 'php artisan pail --timeout=0'" "$workspace_root/api/polyscope.local.json"
+grep -qF "python3 $PYTHON_SCRIPT --run-api-runtime-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --runtime-role scheduler" "$workspace_root/api/polyscope.local.json"
+grep -qF "python3 $PYTHON_SCRIPT --run-api-runtime-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --runtime-role pail" "$workspace_root/api/polyscope.local.json"
 if grep -A3 '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json" | grep -qF '"autostart": true'; then
     echo "preview API scheduler must have only the persistent systemd runtime owner" >&2
     exit 1
@@ -1975,7 +1978,7 @@ runtime_commands = [
     action["command"]
     for action in api_spec["local_config"]["scripts"]["run"][:3]
 ]
-assert all("--run-api-worktree" in command for command in runtime_commands), runtime_commands
+assert all("--run-api-runtime-worktree" in command for command in runtime_commands), runtime_commands
 PY
 grep -qF 'Preview Only: Refresh DB + E2E User' "$workspace_root/api/polyscope.local.json"
 grep -qF "python3 $PYTHON_SCRIPT --refresh-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"

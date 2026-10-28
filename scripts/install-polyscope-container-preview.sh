@@ -150,7 +150,7 @@ cat >"$temporary_dir/php" <<EOF
 set -eu
 export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="\${DBUS_SESSION_BUS_ADDRESS:-unix:path=\$XDG_RUNTIME_DIR/bus}"
-exec podman run --rm \\
+exec podman run --rm --interactive \\
   --network '$NETWORK' \\
   -e DB_HOST=polyscope-postgresql-proxy \\
   -e DB_PORT=5432 \\
@@ -166,7 +166,7 @@ cat >"$temporary_dir/composer" <<EOF
 set -eu
 export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="\${DBUS_SESSION_BUS_ADDRESS:-unix:path=\$XDG_RUNTIME_DIR/bus}"
-exec podman run --rm \\
+exec podman run --rm --interactive \\
   -v "\$PWD":/app:rw \\
   -v '$CLONE_ROOT':'$CLONE_ROOT':ro \\
   --workdir /app \\

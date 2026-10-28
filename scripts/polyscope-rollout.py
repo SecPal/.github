@@ -92,18 +92,18 @@ API_QUEUE_WORKER_COMMAND = (
 )
 API_SCHEDULER_COMMAND = "php artisan schedule:work"
 API_PAIL_COMMAND = "php artisan pail --timeout=0"
-API_RUNTIME_PREVIEW_COMMANDS = frozenset(
-    {
-        API_QUEUE_WORKER_COMMAND,
-        API_SCHEDULER_COMMAND,
-        API_PAIL_COMMAND,
-    }
-)
+API_RUNTIME_ROLE_COMMANDS = {
+    "scheduler": API_SCHEDULER_COMMAND,
+    "queue": API_QUEUE_WORKER_COMMAND,
+    "pail": API_PAIL_COMMAND,
+}
+API_RUNTIME_PREVIEW_COMMANDS = frozenset(API_RUNTIME_ROLE_COMMANDS.values())
 INSTRUCTION_DEPENDENT_DIRECT_API_MODES = (
     "prepare_api_worktree",
     "bootstrap_api_worktree",
     "refresh_api_worktree",
     "run_api_worktree",
+    "run_api_runtime_worktree",
 )
 VALIDATION_ONLY_DIRECT_MODE = "validate_instruction_worktree"
 
@@ -723,12 +723,14 @@ def build_fail_closed_setup_command(commands: list[str]) -> str:
 
 
 def build_api_preview_runtime_shell_command(command: str, source_repo_path: pathlib.Path) -> str:
+    role = next((role for role, owned in API_RUNTIME_ROLE_COMMANDS.items() if owned == command), None)
+    if role is None:
+        raise ValueError("native API runtime command is not an owned role")
     rollout_script = shlex.quote(str(ROLLOUT_SCRIPT_PATH))
     source_repo = shlex.quote(str(source_repo_path))
-    shell_command = shlex.quote(command)
     return (
-        f"python3 {rollout_script} --run-api-worktree \"$PWD\" "
-        f"--source-repo-path {source_repo} --shell-command {shell_command} "
+        f'python3 {rollout_script} --run-api-runtime-worktree "$PWD" '
+        f"--source-repo-path {source_repo} --runtime-role {role} "
         f"{architecture_scope_command(source_repo_path.parent)}"
     )
 
@@ -4745,23 +4747,19 @@ def build_api_runtime_unit_specs(
     resolved_source = source_repo_path.resolve()
     runtime_id = build_api_runtime_id(resolved_worktree)
     unit_base = f"{API_RUNTIME_UNIT_PREFIX}{workspace}-{runtime_id}"
-    roles = {
-        "scheduler": API_SCHEDULER_COMMAND,
-        "queue": API_QUEUE_WORKER_COMMAND,
-    }
     units: dict[str, str] = {}
-    for role, shell_command in roles.items():
+    for role in ("scheduler", "queue"):
         unit_name = f"{unit_base}-{role}.service"
         exec_start = " ".join(
             shlex.quote(argument)
             for argument in (
                 str(ROLLOUT_SCRIPT_PATH),
-                "--run-api-worktree",
+                "--run-api-runtime-worktree",
                 str(resolved_worktree),
                 "--source-repo-path",
                 str(resolved_source),
-                "--shell-command",
-                shell_command,
+                "--runtime-role",
+                role,
             )
         )
         units[unit_name] = textwrap.dedent(
@@ -6100,6 +6098,7 @@ def validate_direct_api_worktree_roots(
     source_repo_path: pathlib.Path,
     worktree_path: pathlib.Path,
     architecture_arguments: list[str] | None = None,
+    *, dispatch: bool = True,
 ) -> tuple[pathlib.Path, pathlib.Path]:
     """Validate and resolve the exact source and target roots consumed by a direct mode."""
     validated_instruction_roots: set[tuple[pathlib.Path, str]] = set()
@@ -6113,7 +6112,7 @@ def validate_direct_api_worktree_roots(
         worktree_path,
         validated_instruction_roots,
         "api",
-        architecture_arguments=architecture_arguments, active_worktree=True, dispatch=True,
+        architecture_arguments=architecture_arguments, active_worktree=True, dispatch=dispatch,
     )
     return resolved_source_repo, resolved_worktree
 
@@ -6137,11 +6136,27 @@ def dispatch_instruction_dependent_direct_api_mode(args: argparse.Namespace) -> 
     if mode == "run_api_worktree" and not args.shell_command:
         raise SystemExit("--shell-command is required with --run-api-worktree")
 
+    application_runtime = mode == "run_api_runtime_worktree"
+    if application_runtime:
+        role = getattr(args, "runtime_role", None)
+        if role not in API_RUNTIME_ROLE_COMMANDS or args.shell_command:
+            raise SystemExit("native API runtime requires one owned role and no shell command")
+
     source_repo_path, worktree_path = validate_direct_api_worktree_roots(
         args.source_repo_path,
         requested_worktree,
         architecture_scope_from_args(args),
+        dispatch=not application_runtime,
     )
+
+    if application_runtime:
+        # These fixed application services do not collect or grade external
+        # qualification evidence. Baseline and any declared architecture claims
+        # remain mandatory; arbitrary commands retain dispatch admission below.
+        run_api_worktree_shell_command(
+            worktree_path, source_repo_path, API_RUNTIME_ROLE_COMMANDS[role], db_path=args.db_path
+        )
+        return 0
 
     if mode == "prepare_api_worktree":
         ready, _preview_storage_target = prepare_api_worktree(
@@ -6225,6 +6240,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--architecture-workspace-root", type=pathlib.Path)
     parser.add_argument("--architecture-repository", action="append", default=[])
     parser.add_argument("--shell-command")
+    parser.add_argument("--runtime-role", choices=tuple(API_RUNTIME_ROLE_COMMANDS))
     parser.add_argument(
         "--workspace-root",
         type=pathlib.Path,

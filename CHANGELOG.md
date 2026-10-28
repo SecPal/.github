@@ -9,6 +9,19 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-28 - Restore Native Podman Preview Integration
+
+**Fixed:**
+
+- Admit native linked workspace roots only after complete registration, ownership,
+  membership and active-state reconciliation. Reject ambiguous, shared, changed
+  or independently bound groups; never dispatch directly into linked children.
+- Preserve piped stdin in both container PHP and Composer wrappers without
+  allocating a terminal.
+- Start fixed queue, scheduler and log-tail application roles through their own
+  validated runtime mode. Keep baseline and declared-architecture checks, and
+  retain dispatch admission for arbitrary commands and qualification operations.
+
 ## 2026-10-28 - Fix First Container Preview Installation
 
 **Fixed:**

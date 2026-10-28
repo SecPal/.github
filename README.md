@@ -420,3 +420,23 @@ All CLA signatures are stored centrally in a secure database (Azure Europe, GDPR
 ---
 
 For full license information, see the [LICENSES](LICENSES/) directory.
+
+### Native container preview admission
+
+The workspace coordinator supports Polyscope's native multi-repository groups
+by authenticating the entire registered group before admitting its issue/PR-bound
+root. Every child must reference that root, all membership lists must agree, all
+members must be active and exclusively owned by the group, and outside references
+or independent child issue/PR bindings reject admission. Linked children cannot
+be selected as independent execution roots. Existing creation fences are reconciled
+against native registration; never recreate a group to work around a failed receipt.
+
+PHP and Composer container wrappers preserve piped stdin without allocating a TTY.
+The fixed application roles `queue`, `scheduler` and `pail` use
+`--run-api-runtime-worktree --runtime-role <role>`. That entry point validates
+the actual source/worktree runtime baseline and every declared architecture claim,
+then derives the command from the owned role map. It accepts no arbitrary shell
+command. These ordinary application services do not collect or grade external
+qualification evidence and therefore do not assert dispatch qualification.
+Arbitrary `--run-api-worktree` commands and prepare/bootstrap/refresh qualification
+paths retain their existing Evidence Architecture dispatch requirements.
