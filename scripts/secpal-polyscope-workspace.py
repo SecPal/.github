@@ -141,7 +141,91 @@ def read_work_graph(repo, issue):
         raise RuntimeError("work-graph-read-unverified") from None
 
 
-def select_workspace(rows, repo_id, issue, pr, workspace_id=None):
+class NativeGroupObservationRequired(RuntimeError):
+    """The selected root needs authenticated native group facts."""
+
+
+def admit_native_group(root, repositories):
+    """Pure ownership admission for the reviewed native multi-repository group.
+
+    Only the issue/PR-bound root is executable. Children remain independently
+    non-executable selectors. No independently bound/shared member is admitted.
+    """
+    fields = ("id", "repo_id", "branch", "path", "status", "issue_number",
+              "pr_number", "is_repo_workspace", "linked_from_worktree_id",
+              "linked_worktree_ids")
+    if root.get("issue_number") is None and root.get("pr_number") is None:
+        raise RuntimeError("workspace-group-ownership")
+    linked = root.get("linked_worktree_ids")
+    if (type(linked) is not list or not 1 <= len(linked) <= 16
+            or any(type(value) is not str or not value for value in linked)
+            or len(set(linked)) != len(linked) or root["id"] in linked):
+        raise RuntimeError("workspace-group-ownership")
+    members = {root["id"], *linked}
+    observed, repo_names = {}, {}
+    if type(repositories) is not list or len(repositories) > 100:
+        raise RuntimeError("workspace-group-observation")
+    for repository in repositories:
+        identifier, name = repository["id"], repository["name"]
+        if identifier in repo_names or type(name) is not str:
+            raise RuntimeError("workspace-group-observation")
+        repo_names[identifier] = name
+        rows = repository["workspaces"]
+        if type(rows) is not list or len(rows) > 1000:
+            raise RuntimeError("workspace-group-observation")
+        for row in rows:
+            if row["id"] in observed or row.get("repo_id") != identifier:
+                raise RuntimeError("workspace-group-observation")
+            observed[row["id"]] = row
+    if not members <= observed.keys():
+        raise RuntimeError("workspace-group-ownership")
+    if any(observed[root["id"]].get(field) != root.get(field) for field in fields):
+        raise RuntimeError("workspace-group-changed")
+    member_repos = set()
+    for identifier in members:
+        row = observed[identifier]
+        peers = row.get("linked_worktree_ids")
+        if (row.get("status") != "active" or row.get("is_repo_workspace") is not False
+                or type(peers) is not list or any(type(peer) is not str for peer in peers)
+                or len(peers) != len(set(peers)) or set(peers) != members - {identifier}
+                or not repo_names[row["repo_id"]].startswith("SecPal/")
+                or row["repo_id"] in member_repos):
+            raise RuntimeError("workspace-group-ownership")
+        member_repos.add(row["repo_id"])
+        if identifier == root["id"]:
+            if row.get("linked_from_worktree_id") is not None:
+                raise RuntimeError("workspace-group-ownership")
+        elif (row.get("linked_from_worktree_id") != root["id"]
+              or row.get("issue_number") is not None or row.get("pr_number") is not None):
+            raise RuntimeError("workspace-group-shared")
+    for identifier, row in observed.items():
+        if identifier in members:
+            continue
+        peers = row.get("linked_worktree_ids", [])
+        if type(peers) is not list or any(type(peer) is not str for peer in peers):
+            raise RuntimeError("workspace-group-observation")
+        if row.get("linked_from_worktree_id") in members or members.intersection(peers):
+            raise RuntimeError("workspace-group-shared")
+
+
+def observe_native_groups():
+    """Read registration facts only; admission remains in the pure owner."""
+    try:
+        return [{"id": record["id"], "name": record["name"],
+                 "workspaces": native_workspaces(record)} for record in api_get("/repos")]
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError("workspace-group-observation") from None
+
+
+def select_native_workspace(rows, repo_id, issue, pr, workspace_id=None):
+    try:
+        return select_workspace(rows, repo_id, issue, pr, workspace_id)
+    except NativeGroupObservationRequired:
+        groups = observe_native_groups()
+        return select_workspace(rows, repo_id, issue, pr, workspace_id, native_groups=groups)
+
+
+def select_workspace(rows, repo_id, issue, pr, workspace_id=None, *, native_groups=None):
     """Pure exact scope admission over native API records, including paused rows."""
     if issue is None and pr is None and workspace_id is None:
         raise RuntimeError("workspace-selector-required")
@@ -162,8 +246,12 @@ def select_workspace(rows, repo_id, issue, pr, workspace_id=None):
             or (pr is not None and row.get("pr_number") != pr)):
         raise RuntimeError("workspace-ownership")
     if (row.get("status") != "active" or row.get("is_repo_workspace")
-            or row.get("linked_from_worktree_id") or row.get("linked_worktree_ids")):
+            or row.get("linked_from_worktree_id")):
         raise RuntimeError("workspace-unusable-or-shared")
+    if row.get("linked_worktree_ids"):
+        if native_groups is None:
+            raise NativeGroupObservationRequired("workspace-linked-group-unobserved")
+        admit_native_group(row, native_groups)
     return row
 
 
@@ -208,7 +296,7 @@ def workspace_result(repo, row, sha, *, created=False):
 
 def lookup(repo_record, issue, pr, workspace_id=None):
     rows = native_workspaces(repo_record)
-    return select_workspace(rows, repo_record["id"], issue, pr, workspace_id)
+    return select_native_workspace(rows, repo_record["id"], issue, pr, workspace_id)
 
 
 def resolve(repo, issue, pr, sha, workspace_id=None):
@@ -331,7 +419,7 @@ def ensure(repo, issue, pr, sha):
         raw = stream.read(4096)
         pending = json.loads(raw) if raw else None
         before = native_workspaces(record)
-        row = select_workspace(before, record["id"], issue, pr)
+        row = select_native_workspace(before, record["id"], issue, pr)
         if row is not None:
             result = workspace_result(repo, row, sha)
             if (pending is not None
@@ -350,7 +438,7 @@ def ensure(repo, issue, pr, sha):
             fence(stream, None)
         # Re-read after reconciling another native creation.
         before = native_workspaces(record)
-        row = select_workspace(before, record["id"], issue, pr)
+        row = select_native_workspace(before, record["id"], issue, pr)
         if row is not None:
             return workspace_result(repo, row, sha)
         # The supported create messages register either an Issue or a PR.

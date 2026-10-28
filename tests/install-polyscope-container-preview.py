@@ -80,6 +80,10 @@ def main() -> None:
             fake_bin / "podman",
             "#!/bin/sh\n"
             'printf "podman:%s\\n" "$*" >>"$COMMAND_LOG"\n'
+            'if [ "$1" = run ]; then\n'
+            '  case " $* " in *" --interactive "*|*" -i "*) cat ;; esac\n'
+            '  exit 0\n'
+            'fi\n'
             'if [ "$1 $2" = "image exists" ]; then exit 0; fi\n'
             'if [ "$1 $2" = "network exists" ]; then [ -e "$NETWORK_STATE" ]; exit $?; fi\n'
             'if [ "$1 $2" = "network create" ]; then : >"$NETWORK_STATE"; exit 0; fi\n'
@@ -212,6 +216,16 @@ def main() -> None:
         preview_unit = unit_dir.joinpath("polyscope-preview.service").read_text()
         refresh_unit = unit_dir.joinpath("polyscope-preview-refresh.service").read_text()
         refresh_path = unit_dir.joinpath("polyscope-preview-refresh.path").read_text()
+        payload = "SecPal stdin probe\nsecond line\n"
+        for tool in ("php", "composer"):
+            echoed = subprocess.run(
+                [str(home / ".local/bin" / tool), "--version"],
+                input=payload, text=True, capture_output=True, env=env,
+                cwd=clone_root / "api-repo/calm-otter-a1b2c3d4",
+            )
+            assert echoed.returncode == 0
+            assert echoed.stdout == payload, (tool, "piped stdin was lost")
+            assert "--tty" not in home.joinpath(".local/bin", tool).read_text()
         php_wrapper = home.joinpath(".local/bin/php").read_text()
         caddyfile = home.joinpath(".config/polyscope-preview/Caddyfile").read_text()
         assert "--security-opt label=disable" in proxy_unit

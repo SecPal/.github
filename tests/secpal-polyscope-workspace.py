@@ -594,5 +594,70 @@ class FilesystemAdmissionTests(unittest.TestCase):
                         workspace.workspace_result("SecPal/.github", row, "b" * 40)
 
 
+class NativeGroups(unittest.TestCase):
+    def setUp(self):
+        # Reviewed native Polyscope 0.29.0 representation: children reference
+        # their root and list every other member, rather than only siblings.
+        ids=['44b95196','208ca0ff','cf844f09','eb1bfcfd']
+        repos=['api','contracts','android','frontend']
+        self.root={'id':ids[0],'repo_id':'repo-api','branch':'wild-cat','path':'/clones/repo-api/wild-cat','status':'active','issue_number':2551,'pr_number':None,'is_repo_workspace':False,'linked_from_worktree_id':None,'linked_worktree_ids':ids[1:]}
+        self.groups=[]
+        for index,name in enumerate(repos):
+            row=dict(self.root,id=ids[index],repo_id='repo-'+name,linked_from_worktree_id=None if index==0 else ids[0],linked_worktree_ids=[value for value in ids if value!=ids[index]],issue_number=2551 if index==0 else None)
+            self.groups.append({'id':'repo-'+name,'name':'SecPal/'+name,'workspaces':[row]})
+
+    def select(self,groups=None):
+        return workspace.select_workspace([self.root],'repo-api',2551,None,native_groups=self.groups if groups is None else groups)
+
+    def test_reviewed_complete_group_admits_only_root(self):
+        self.assertIs(self.select(),self.root)
+        child=self.groups[1]['workspaces'][0]
+        with self.assertRaises(RuntimeError):
+            workspace.select_workspace([child],child['repo_id'],None,None,workspace_id=child['id'],native_groups=self.groups)
+
+    def test_mutated_ownership_representations_are_rejected(self):
+        changes=[('status','paused'),('is_repo_workspace',True),('linked_from_worktree_id','another-root'),('issue_number',77),('pr_number',88),('repo_id','foreign'),('linked_worktree_ids',['44b95196'])]
+        for field,value in changes:
+            with self.subTest(field=field):
+                groups=copy.deepcopy(self.groups);groups[1]['workspaces'][0][field]=value
+                with self.assertRaises(RuntimeError):self.select(groups)
+
+    def test_missing_duplicate_or_foreign_members_are_rejected(self):
+        cases=[]
+        cases.append(self.groups[:-1])
+        duplicate=copy.deepcopy(self.groups);duplicate[1]['workspaces'].append(copy.deepcopy(duplicate[1]['workspaces'][0]));cases.append(duplicate)
+        foreign=copy.deepcopy(self.groups);foreign[1]['name']='Other/contracts';cases.append(foreign)
+        extra=copy.deepcopy(self.groups);extra[1]['workspaces'].append(dict(extra[1]['workspaces'][0],id='outside'));cases.append(extra)
+        for groups in cases:
+            with self.subTest(groups=groups):
+                with self.assertRaises(RuntimeError):self.select(groups)
+
+    def test_unbound_group_root_is_not_an_issue_owned_workspace(self):
+        groups=copy.deepcopy(self.groups)
+        root=dict(self.root,issue_number=None,pr_number=None)
+        groups[0]["workspaces"][0]=root
+        with self.assertRaises(RuntimeError):
+            workspace.select_workspace([root],"repo-api",None,None,
+                                       workspace_id=root["id"],native_groups=groups)
+
+    def test_root_changed_between_observations_is_rejected(self):
+        groups=copy.deepcopy(self.groups);groups[0]['workspaces'][0]['branch']='different'
+        with self.assertRaisesRegex(RuntimeError,'changed'):self.select(groups)
+
+    def test_observation_failure_does_not_admit_or_create(self):
+        with patch.object(workspace,'api_get',side_effect=RuntimeError('polyscope-api-unavailable')):
+            with self.assertRaisesRegex(RuntimeError,'polyscope-api-unavailable'):
+                workspace.select_native_workspace([self.root],'repo-api',2551,None)
+
+    def test_unlinked_workspace_needs_no_group_api_observation(self):
+        root=dict(self.root,linked_worktree_ids=[])
+        with patch.object(workspace,'observe_native_groups',side_effect=AssertionError('unnecessary observation')):
+            self.assertIs(workspace.select_native_workspace([root],'repo-api',2551,None),root)
+
+    def test_lookup_reconciles_root_group_through_the_same_admission(self):
+        with patch.object(workspace,'native_workspaces',return_value=[self.root]),patch.object(workspace,'observe_native_groups',return_value=self.groups):
+            self.assertIs(workspace.lookup({'id':'repo-api'},2551,None),self.root)
+
+
 if __name__ == "__main__":
     unittest.main()

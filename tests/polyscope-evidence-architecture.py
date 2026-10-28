@@ -285,5 +285,48 @@ class PolyscopeArchitectureTests(unittest.TestCase):
             self.assertIn("DUPLICATE_INVARIANT_IDENTITY", result.stdout)
 
 
+class NativeApplicationRuntimeTests(unittest.TestCase):
+    def arguments(self, root, **changes):
+        values={name:None for name in rollout.INSTRUCTION_DEPENDENT_DIRECT_API_MODES}
+        values.update(run_api_runtime_worktree=root,source_repo_path=root,
+                      runtime_role='scheduler',shell_command=None,db_path=root/'db')
+        values.update(changes)
+        return Namespace(**values)
+
+    def test_fixed_application_roles_do_not_require_a_qualification_declaration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            (root/'AGENTS.md').write_text('`docs/work-graph-contract.md`\n')
+            validator=root/'ai-validator.sh';validator.write_text('#!/bin/sh\nexit 0\n');validator.chmod(0o755)
+            for role,command in [('scheduler',rollout.API_SCHEDULER_COMMAND),('queue',rollout.API_QUEUE_WORKER_COMMAND),('pail',rollout.API_PAIL_COMMAND)]:
+                with self.subTest(role=role),mock.patch.object(rollout,'CANONICAL_AI_INSTRUCTIONS_VALIDATOR',validator),mock.patch.object(rollout,'run_api_worktree_shell_command') as execute:
+                    self.assertEqual(rollout.dispatch_instruction_dependent_direct_api_mode(self.arguments(root,runtime_role=role)),0)
+                    self.assertEqual(execute.call_args.args,(root,root,command))
+
+    def test_fixed_role_path_rejects_arbitrary_shell_and_unknown_roles(self):
+        for changes in [{'runtime_role':'queue; touch /tmp/marker'},{'runtime_role':None},{'shell_command':'touch /tmp/marker'}]:
+            with self.subTest(changes=changes),mock.patch.object(rollout,'run_api_worktree_shell_command') as execute:
+                with self.assertRaises(SystemExit):
+                    rollout.dispatch_instruction_dependent_direct_api_mode(self.arguments(Path('/unused'),**changes))
+                execute.assert_not_called()
+
+    def test_fixed_runtime_still_rejects_missing_baseline_or_invalid_declaration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            validator=root/'ai-validator.sh';validator.write_text('#!/bin/sh\nexit 0\n');validator.chmod(0o755)
+            for baseline,declaration in [('Missing delegation',None),('`docs/work-graph-contract.md`','{"status":"passed"}')]:
+                (root/'AGENTS.md').write_text(baseline+'\n')
+                if declaration:
+                    (root/'.secpal').mkdir(exist_ok=True);(root/'.secpal/evidence-architecture.json').write_text(declaration)
+                with mock.patch.object(rollout,'CANONICAL_AI_INSTRUCTIONS_VALIDATOR',validator),mock.patch.object(rollout,'run_api_worktree_shell_command') as execute:
+                    with self.assertRaises(rollout.CanonicalInstructionValidationError):
+                        rollout.dispatch_instruction_dependent_direct_api_mode(self.arguments(root))
+                    execute.assert_not_called()
+
+    def test_runtime_rendering_cannot_introduce_an_arbitrary_command(self):
+        with self.assertRaises(ValueError):
+            rollout.build_api_preview_runtime_shell_command('php artisan schedule:work; touch /tmp/marker',Path('/source/api'))
+
+
 if __name__ == "__main__":
     unittest.main()
