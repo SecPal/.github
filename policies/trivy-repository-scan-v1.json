@@ -134,6 +134,16 @@
       "expires_at": "2026-11-04T00:00:00Z",
       "rationale": "Independently requalified 2026-10-21 under SecPal/.github#1244 against protected SecPal/deployment@b518ef86ca61e988bb9dcfaf7d079d2543439c50, preserving completed #1236. Fresh pinned Trivy 0.74.0 retains this exact rule/path observation. All six source/control bindings and all seven Terraform paths match deployment-ephemeral-1236 exactly. The distinct MEDIUM flow-log observation remains visible alongside GCP-0029. The same non-customer ephemeral subnet has exact-run evidence and independently verified cleanup, without packet-level audit. No new audit obligation has appeared; enabling telemetry would require justified privacy, retention and cost ownership. The source-static verdict never executes or substitutes concrete run controls: actual-input admission, exact-peer access, identity removal and exact-run lifetime/cleanup remain REQUIRED_NOT_EXECUTED until the existing trusted operation. Fourteen-day requalification ends 2026-11-04, bounded by the same renewed source/control qualification; any bound source/control change fails closed. This disposition is IGNORED with reviewed residual risk, never NOT_AFFECTED.",
       "qualification_id": "deployment-ephemeral-1236"
+    },
+    {
+      "id": "frontend-deepmerge-cve-2026-93753-not-affected-1288",
+      "repository": "SecPal/frontend",
+      "class": "VULNERABILITY",
+      "rule_id": "CVE-2026-93753",
+      "path": "package-lock.json",
+      "disposition": "NOT_AFFECTED",
+      "expires_at": "2026-11-04T00:00:00Z",
+      "rationale": "Reviewed 2026-10-28 under SecPal/.github#1288 against protected SecPal/frontend@25fd3ec47bb911a005652e0573c8eeaaa17650a0 and the pending dependency updates. Fresh pinned Trivy 0.74.0 reports deepmerge 4.3.1; npm and upstream GHSA-gcqx-w48m-w2h4 provide no fixed release. The lockfile has exactly one caller: development-only @rollup/plugin-node-resolve 16.0.3 through workbox-build 7.4.1. Integrity-authenticated package source and real module instrumentation show its sole deepMerge call clones an empty object and the package's static literal defaults at module initialization. nodeResolve(opts) uses object spread and does not pass caller options to deepmerge; adversarial options did not create another call. The production dependency closure and application sources contain no deepmerge import, and the static Nginx runtime contains no Node/npm toolchain. No application, HTTP or mutable user data reaches this vulnerable merge. NOT_AFFECTED describes this reviewed reachability, not absence of the component. Requalify on caller, input, dependency-graph or runtime-boundary changes; the bounded disposition expires 2026-11-04 and must yield to a qualified upstream fix/removal."
     }
   ],
   "vex": {

@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-28 - Qualify Dependabot Repository Security Inputs
+
+**Changed:**
+
+- Qualify the exact deployment Python/Caddy source tuples and their composition;
+  preserve prior tuples, eight dispositions, concrete run controls and expiry.
+- Record the bounded frontend deepmerge disposition after proving its sole merge
+  receives only static upstream defaults; keep the finding and scanner health,
+  and leave unrelated findings blocking.
+
 ## 2026-10-28 - Qualify the Exact Google 8.8.1 Provider Sources
 
 **Changed:**

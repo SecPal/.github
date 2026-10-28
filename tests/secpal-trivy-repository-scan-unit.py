@@ -1468,6 +1468,7 @@ class FrontendBracesDispositionTests(unittest.TestCase):
         self.assertEqual(len([
             entry for entry in self.policy["exceptions"]
             if entry["repository"] == "SecPal/frontend"
+            and entry["rule_id"] == "CVE-2026-93687"
         ]), 1)
         exception = self.policy["exceptions"][0]
         self.assertEqual(
@@ -1519,6 +1520,41 @@ class FrontendBracesDispositionTests(unittest.TestCase):
         for key in ("subject", "scanner", "database", "completed_at", "operation"):
             self.assertEqual(result[key], before[key])
         self.assertNotEqual(result["policy"]["sha256"], before["policy"]["sha256"])
+
+    def test_reviewed_deepmerge_disposition_preserves_finding_and_exact_scope(self) -> None:
+        native = native_result()
+        native["Results"] = native["Results"][:1]
+        native["Results"][0]["Vulnerabilities"] = [{
+            "VulnerabilityID": "CVE-2026-93753", "PkgName": "deepmerge",
+            "InstalledVersion": "4.3.1", "Severity": "LOW",
+            "Title": "deepmerge: Prototype Poisoning via mergeObject",
+        }]
+        observation = self.module.normalize_native(
+            native, repository="SecPal/frontend", commit=self.observation["subject"]["commit"],
+            workspace=".", scanner=self.observation["scanner"],
+            database=self.observation["database"], completed_at=self.observation["completed_at"])
+        baseline = copy.deepcopy(self.policy)
+        baseline["exceptions"] = [entry for entry in baseline["exceptions"]
+                                  if entry["rule_id"] != "CVE-2026-93753"]
+        before = admit_fixture(self.module, observation, baseline)
+        self.assertEqual(before["gate_state"], "REVIEW_REQUIRED")
+        result = admit_fixture(self.module, observation, self.policy)
+        self.assertEqual(result["gate_state"], "CLEAN")
+        self.assertEqual(result["summary"], {
+            "total": 1, "actionable": 0, "review_required": 0, "excepted": 1})
+        finding = result["findings"][0]
+        self.assertEqual({k: v for k, v in finding.items() if k != "exception"}, before["findings"][0])
+        self.assertEqual(finding["exception"], {
+            "id": "frontend-deepmerge-cve-2026-93753-not-affected-1288",
+            "disposition": "NOT_AFFECTED", "expires_at": "2026-11-04T00:00:00Z"})
+        for field, value in (("repository", "SecPal/other"), ("path", "nested/package-lock.json"),
+                             ("rule_id", "CVE-2026-93754")):
+            changed = copy.deepcopy(observation)
+            target = changed["subject"] if field == "repository" else changed["findings"][0]
+            target[field] = value
+            unexcepted = admit_fixture(self.module, changed, self.policy)
+            self.assertEqual(unexcepted["gate_state"], "REVIEW_REQUIRED")
+            self.assertNotIn("exception", unexcepted["findings"][0])
 
     def test_nonmatching_selectors_remain_actionable(self) -> None:
         for field, value in (
@@ -1637,7 +1673,7 @@ class AndroidCountryDispositionTests(unittest.TestCase):
         })
         jsonschema.validate(result, json.loads(SCHEMA.read_text()))
         self.assertEqual(len([e for e in self.policy["exceptions"]
-                              if e["repository"] in {"SecPal/frontend", "SecPal/android"}]), 2)
+                              if e["repository"] == "SecPal/android"]), 1)
 
     def test_substituted_blob_and_other_selectors_preserve_actionability(self) -> None:
         fingerprint = self.observation["findings"][0]["fingerprint"]
@@ -1673,7 +1709,8 @@ class AndroidCountryDispositionTests(unittest.TestCase):
                              ("disposition", "NOT_AFFECTED"), ("rationale", "")):
             with self.subTest(field=field, value=value):
                 policy = copy.deepcopy(self.policy)
-                policy["exceptions"][-1][field] = value
+                next(entry for entry in policy["exceptions"]
+                     if entry["id"] == "android-country-reference-sendgrid-1199")[field] = value
                 with self.assertRaises(self.module.ContractError):
                     self.module.admit(self.observation, policy)
         self.observation["completed_at"] = "2026-11-20T00:00:00Z"
@@ -2092,6 +2129,37 @@ class DeploymentTerraformCoverageTests(unittest.TestCase):
         ):
             with self.subTest(repository=repository, commit=commit, time=time), self.assertRaises(self.module.ContractError):
                 self.module.qualify_deployment_terraform(self.facts(), repository, commit, time)
+
+    def test_reviewed_dependabot_candidates_preserve_scope_and_fail_on_source_drift(self):
+        python_facts = self.facts()
+        python_facts["bindings"] = dict(self.module.DEPLOYMENT_GOOGLE_ROCKY_BINDINGS)
+        python_facts["bindings"][".github"] = "sha256:eabfd254fff92561be8559c0f03bc6aaec51c8b6e2733d8b98215e9396ccb8f5"
+        caddy_facts = self.facts()
+        caddy_facts["bindings"] = dict(self.module.DEPLOYMENT_GOOGLE_ROCKY_BINDINGS)
+        caddy_facts["bindings"]["containers/phase-b-gateway/Containerfile"] = "5acb622fa60472f641fbc2b88dc3338665258a9e"
+        combined = copy.deepcopy(python_facts)
+        combined["bindings"]["containers/phase-b-gateway/Containerfile"] = caddy_facts["bindings"]["containers/phase-b-gateway/Containerfile"]
+        now = "2026-10-28T19:00:00Z"
+        for facts in (python_facts, caddy_facts, combined):
+            coverage = self.module.qualify_deployment_terraform(
+                facts, "SecPal/deployment", self.commit, now)
+            self.assertEqual(coverage["source_bindings"], facts["bindings"])
+            self.assertEqual(coverage["scope"], "REPOSITORY_STATIC")
+            self.assertEqual(coverage["run_bound_status"], "REQUIRED_NOT_EXECUTED")
+            self.assertEqual(coverage["expires_at"], "2026-11-04T00:00:00Z")
+            self.assertEqual(coverage["required_at_operation"], list(self.module.DEPLOYMENT_RUN_BOUND_CONTROLS))
+            for field in facts["bindings"]:
+                drift = copy.deepcopy(facts)
+                drift["bindings"][field] = "0" * 40
+                with self.subTest(field=field), self.assertRaises(self.module.ContractError):
+                    self.module.qualify_deployment_terraform(drift, "SecPal/deployment", self.commit, now)
+            for invalid_time in ("2026-10-27T23:59:59Z", "2026-11-04T00:00:00Z"):
+                with self.assertRaises(self.module.ContractError):
+                    self.module.qualify_deployment_terraform(facts, "SecPal/deployment", self.commit, invalid_time)
+        hybrid = copy.deepcopy(combined)
+        hybrid["bindings"]["infra/ci-cloud"] = self.module.DEPLOYMENT_TERRAFORM_BINDINGS["infra/ci-cloud"]
+        with self.assertRaises(self.module.ContractError):
+            self.module.qualify_deployment_terraform(hybrid, "SecPal/deployment", self.commit, now)
 
     def test_reviewed_phase_one_candidate_retains_exact_static_scope_and_expiry(self):
         facts = self.facts()
