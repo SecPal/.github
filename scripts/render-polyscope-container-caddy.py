@@ -23,7 +23,24 @@ ROUTES = (
 REPOSITORY_ID_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$")
 WORKSPACE_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 PHYSICAL_SUFFIX_PATTERN = re.compile(r"^.+-[0-9a-f]{8}$")
+API_PREVIEW_ADMISSION_FILENAME = ".polyscope-secpal-container-ready"
 WORKSPACE_ALIAS_REGISTRY = ".polyscope-secpal-workspace-aliases.json"
+
+
+
+def api_preview_is_admitted(worktree: pathlib.Path) -> bool:
+    token = worktree / API_PREVIEW_ADMISSION_FILENAME
+    return not token.is_symlink() and token.is_file()
+
+
+def admit_api_preview(worktree: pathlib.Path) -> None:
+    """Publish only after the coordinator has proved persistent runtime readiness."""
+    write_atomic(worktree / API_PREVIEW_ADMISSION_FILENAME, "")
+
+
+def withdraw_api_preview(worktree: pathlib.Path) -> None:
+    """The running Caddy file matcher observes withdrawal without a reload."""
+    (worktree / API_PREVIEW_ADMISSION_FILENAME).unlink(missing_ok=True)
 
 
 def _resolved(path: pathlib.Path) -> pathlib.Path:
@@ -74,6 +91,8 @@ def active_workspaces(
     repository_id: str,
     clone_root: pathlib.Path,
     document_root: str,
+    *,
+    require_runtime_admission: bool = False,
 ) -> list[tuple[str, str]]:
     uri = f"{db_path.resolve().as_uri()}?mode=ro"
     with sqlite3.connect(uri, uri=True) as connection:
@@ -125,6 +144,8 @@ def active_workspaces(
         physical_worktree = _resolved(registered_path)
         if physical_worktree.parent != repository_clone_root:
             raise RuntimeError(f"active worktree escapes its clone root: {registered_path}")
+        if require_runtime_admission and not api_preview_is_admitted(physical_worktree):
+            continue
         host_document_root = physical_worktree / document_root
         if not host_document_root.is_dir():
             raise RuntimeError(f"active preview document root is unavailable: {host_document_root}")
@@ -177,7 +198,8 @@ def render(
         if repository_id is None:
             continue
         workspaces = active_workspaces(
-            db_path, repository_id, clone_root, document_root
+            db_path, repository_id, clone_root, document_root,
+            require_runtime_admission=route_type == "php",
         )
         canonical_names = {workspace for workspace, _physical in workspaces}
         for workspace, physical_workspace in workspaces:
@@ -213,6 +235,15 @@ def render(
                 blocks.extend(
                     [
                         "        route {",
+                        f"            @api_not_ready_{route_index} {{",
+                        "                not {",
+                        "                    file {",
+                        f"                        root {root.parent}",
+                        f"                        try_files {API_PREVIEW_ADMISSION_FILENAME}",
+                        "                    }",
+                        "                }",
+                        "            }",
+                        f'            respond @api_not_ready_{route_index} "Preview not ready" 503',
                         f"            @{non_front_controller} {{",
                         "                path *.php",
                         "                not path /index.php",

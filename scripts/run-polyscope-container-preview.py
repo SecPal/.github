@@ -62,10 +62,11 @@ def build_command(
         f"{clone_root}:{clone_root}:ro",
     ]
     if api_repository_id is not None:
-        repository_clone_root = renderer._resolved(clone_root / api_repository_id)
         for _logical_workspace, physical_workspace in renderer.active_workspaces(
-            db_path, api_repository_id, clone_root, "public"
+            db_path, api_repository_id, clone_root, "public",
+            require_runtime_admission=True,
         ):
+            repository_clone_root = renderer._resolved(clone_root / api_repository_id)
             physical_worktree = renderer._resolved(
                 clone_root / api_repository_id / physical_workspace
             )

@@ -10,6 +10,7 @@ import contextlib
 import copy
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import pathlib
@@ -3969,9 +3970,24 @@ def run_setup_commands(worktree_path: pathlib.Path, commands: list[str], *, db_p
         )
 
 
-def sync_worktree_local_config(worktree_path: pathlib.Path, config_text: str) -> None:
+def container_preview_admission():
+    renderer_path = ROLLOUT_SCRIPT_PATH.with_name("render-polyscope-container-caddy.py")
+    spec = importlib.util.spec_from_file_location("polyscope_preview_admission", renderer_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("container-preview-admission-unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def sync_worktree_local_config(
+    worktree_path: pathlib.Path, config_text: str, *, container_preview: bool = False
+) -> None:
     (worktree_path / POLYSCOPE_LOCAL_CONFIG_NAME).write_text(config_text)
-    ensure_exclude(worktree_path, {POLYSCOPE_LOCAL_CONFIG_NAME, PROVISION_MARKER_FILENAME})
+    excluded = {POLYSCOPE_LOCAL_CONFIG_NAME, PROVISION_MARKER_FILENAME}
+    if container_preview:
+        excluded.add(container_preview_admission().API_PREVIEW_ADMISSION_FILENAME)
+    ensure_exclude(worktree_path, excluded)
 
 
 def workspace_alias_registry_path(repo_clone_root: pathlib.Path) -> pathlib.Path:
@@ -5064,6 +5080,21 @@ def provision_worktrees(
         repo_state,
         clone_root,
     )
+    admission = container_preview_admission() if container_preview else None
+
+    def withdraw_if_api(repo_name: str, worktree: pathlib.Path) -> None:
+        if admission is not None and repo_name == "api":
+            admission.withdraw_api_preview(worktree)
+
+    # Remove only our managed token from inactive physical API directories.
+    if admission is not None and "api" in repo_state:
+        api_root = clone_root / str(repo_state["api"]["id"])
+        active_api_paths = set(registered_worktrees.get("api", []))
+        if api_root.is_dir() and not api_root.is_symlink():
+            for candidate in api_root.iterdir():
+                if candidate.is_dir() and not candidate.is_symlink() and candidate not in active_api_paths:
+                    admission.withdraw_api_preview(candidate)
+
     unreconciled_api_runtime_ids = (
         {
             build_api_runtime_id(worktree_path)
@@ -5135,8 +5166,10 @@ def provision_worktrees(
                     validated_instruction_roots=validation_cache,
                     architecture_arguments=spec.get(EVIDENCE_VALIDATION_ARGUMENTS_SPEC_KEY),
                 ):
+                    withdraw_if_api(repo_name, worktree_path)
                     continue
             except CanonicalInstructionValidationError as error:
+                withdraw_if_api(repo_name, worktree_path)
                 canonical_validation_failed = True
                 error_message = str(error)
                 print(
@@ -5154,6 +5187,7 @@ def provision_worktrees(
                 )
                 continue
             except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+                withdraw_if_api(repo_name, worktree_path)
                 error_message = str(error)
                 print(
                     f"Failed to provision {repo_name} worktree {worktree_path.name} at "
@@ -5202,7 +5236,7 @@ def provision_worktrees(
         try:
             preserve_registered_workspace_physical_path(worktree_path, db_path=db_path)
             config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
-            sync_worktree_local_config(worktree_path, config_text)
+            sync_worktree_local_config(worktree_path, config_text, container_preview=container_preview)
             ensure_workspace_alias(worktree_path, db_path=db_path)
             sync_worktree_auxiliary_files(repo_name, worktree_path)
             ensure_worktree_hooks(worktree_path)
@@ -5232,6 +5266,7 @@ def provision_worktrees(
                         db_path=db_path,
                     )
                     if not ready:
+                        withdraw_if_api(repo_name, locked_worktree_path)
                         continue
                     preview_storage_reset_required = (
                         load_env_assignments(locked_worktree_path / ".env")
@@ -5259,10 +5294,13 @@ def provision_worktrees(
                             unreconciled_api_runtime_ids.discard(
                                 build_api_runtime_id(locked_worktree_path)
                             )
+                        if admission is not None and repo_name == "api" and manage_api_runtimes:
+                            admission.admit_api_preview(locked_worktree_path)
                         if preview_enabled:
                             ensure_preview_nginx_access(clone_root, locked_worktree_path)
                         continue
 
+                withdraw_if_api(repo_name, locked_worktree_path)
                 if setup_commands:
                     print(
                         f"Provisioning {repo_name} worktree {locked_worktree_path.name} "
@@ -5319,8 +5357,11 @@ def provision_worktrees(
                         raise
                 else:
                     write_provision_marker(marker_path, marker_payload)
+                if admission is not None and repo_name == "api" and manage_api_runtimes:
+                    admission.admit_api_preview(locked_worktree_path)
                 provisioned_worktrees.append(f"{repo_name}:{workspace}")
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+            withdraw_if_api(repo_name, worktree_path)
             error_message = str(error)
             print(
                 f"Failed to provision {repo_name} worktree {worktree_path.name} at {worktree_path}: {error_message}",
@@ -6299,8 +6340,8 @@ def refresh_container_preview() -> None:
     environment.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={runtime}/bus")
     try:
         subprocess.run(
-            ["systemctl", "--user", "start", "polyscope-preview-refresh.service"],
-            env=environment, check=True, timeout=120,
+            ["systemctl", "--user", "start", "--no-block", "polyscope-preview-refresh.service"],
+            env=environment, check=True, timeout=30,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):

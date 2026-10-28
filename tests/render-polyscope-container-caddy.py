@@ -103,6 +103,16 @@ def main() -> None:
                 ("inactive", "api-repo_1", str(inactive.parent)),
             )
 
+        api_worktree = clone_root / "api-repo_1/calm-otter-a1b2c3d4"
+        unready = module.render(db_path, pathlib.Path("/workspaces"), clone_root, repository_root)
+        assert "api-calm-otter.preview.secpal.dev" not in unready
+        assert "frontend-calm-otter.preview.secpal.dev" in unready
+        module.admit_api_preview(api_worktree)
+        assert module.api_preview_is_admitted(api_worktree)
+        module.withdraw_api_preview(api_worktree)
+        assert not module.api_preview_is_admitted(api_worktree)
+        module.admit_api_preview(api_worktree)
+
         rendered = module.render(
             db_path,
             pathlib.Path("/workspaces"),
@@ -137,6 +147,9 @@ def main() -> None:
         assert "@non_front_controller_php_1 {" in rendered
         assert "not path /index.php" in rendered
         assert 'respond @non_front_controller_php_1 "Not found" 404' in rendered
+        assert "try_files .polyscope-secpal-container-ready" in rendered
+        assert 'respond @api_not_ready_1 "Preview not ready" 503' in rendered
+        assert rendered.index("respond @api_not_ready_1") < rendered.index("file_server @static_file_1")
         assert "rewrite * /index.php" in rendered
         assert "            php\n" in rendered
 
@@ -144,6 +157,7 @@ def main() -> None:
         # workspace's canonical hostname.
         conflicting = clone_root / "api-repo_1/other-otter-11223344"
         (conflicting / "public").mkdir(parents=True)
+        module.admit_api_preview(conflicting)
         registry_path = clone_root / "api-repo_1/.polyscope-secpal-workspace-aliases.json"
         registry_before = registry_path.read_text()
         registry_path.write_text(json.dumps({
@@ -220,6 +234,7 @@ def main() -> None:
 
         legacy_path = clone_root / "api-repo_1/legacy-otter"
         (legacy_path / "public").mkdir(parents=True)
+        module.admit_api_preview(legacy_path)
         with sqlite3.connect(db_path) as connection:
             connection.execute(
                 "insert into worktrees (id, repo_id, path, status) values (?, ?, ?, 'active')",

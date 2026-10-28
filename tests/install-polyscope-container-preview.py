@@ -31,6 +31,7 @@ def main() -> None:
         for repository in ("api", "frontend"):
             (repository_root / repository).mkdir(parents=True)
         (clone_root / "api-repo/calm-otter-a1b2c3d4/public").mkdir(parents=True)
+        (clone_root / "api-repo/calm-otter-a1b2c3d4/.polyscope-secpal-container-ready").touch()
         (clone_root / "frontend_repo/calm-otter-e5f6a7b8/dist").mkdir(parents=True)
         (clone_root / "api-repo/.polyscope-secpal-workspace-aliases.json").write_text(
             json.dumps({"version": 1, "aliases": {"calm-otter": "calm-otter-a1b2c3d4"}})

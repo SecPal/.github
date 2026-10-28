@@ -255,6 +255,17 @@ the dedicated container network. Workspace containers retain normal SELinux
 labels. Existing managed files and each service's enabled/active state are
 backed up before atomic replacement and restored if activation fails.
 
+For automatic reconciliation on these container hosts, pass
+`--container-preview` to `polyscope-rollout.py --provision-worktrees`.
+This backend keeps native setup and persistent API scheduler readiness checks
+while omitting host nginx rendering and ACL changes. API routes and writable
+storage mounts require the coordinator's local readiness token; registration
+alone does not grant access. Failed setup or readiness withdraws the token, and
+the running Caddy route immediately returns HTTP 503 before configuration
+refresh. Inactive API worktrees lose their token during reconciliation.
+The refresh request is queued without blocking; the dedicated refresh service
+owns its existing retry window and reports convergence failures independently.
+
 Every generated workspace setup is one fail-closed shell unit: canonical
 instruction validation must succeed before the complete native setup sequence,
 and any later setup failure stops all remaining commands. The external
