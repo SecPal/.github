@@ -785,3 +785,50 @@ or native admission. Unchanged action cleanup removed raw tools/databases and
 native scan output; only bounded redacted evidence remains. Real modified-source
 probes of scripts, declaration, configuration, Terraform and workflow all failed
 closed; the restored exact candidate re-admitted.
+
+### Certbot security-closure source requalification (#1284)
+
+Deployment [PR #376](https://github.com/SecPal/deployment/pull/376), tracked by
+[#375](https://github.com/SecPal/deployment/issues/375), refreshes the exact
+Certbot closure after ordinary Rocky 10.2 security updates. This additional
+source tuple is a candidate until independent native GitHub review and protected
+central acceptance. Its seven bindings inherit the accepted native Phase-1
+profile, replacing only:
+
+- `config`: `68bd29a7c4c159e9ae1f1c9f0b05fda8b95eb012`;
+- `schemas`: `1f594b1bb40c9fa415204aa11fce78c3962e1bad`.
+
+Raw Git comparison with protected deployment/main
+`b4b0500b74ee879d548b9add95797235d19065a7` establishes that the source changes
+only the Certbot package policy, its exact policy-ID schema constraint and
+provenance/TLS documentation. The strong closure stays at 106 packages per
+architecture, including precisely nine EPEL packages. Eight ordinary Rocky
+identities advance; Certbot, EPEL keys and package authority do not change.
+The qualifier, native and GCP control code, all seven Terraform paths, complete
+normalized automation inventory, gateway Containerfile and dispatch declaration
+remain byte-identical to the accepted native Phase-1 qualification. Thus the
+actual-input, exact-peer, guest-identity-removal and bounded-lifetime/cleanup
+controls retain their reviewed meanings. The package-policy schema amendment
+neither supplies Terraform values nor grants provider execution authority.
+
+On 2026-10-28, independently authenticated existing CX23 and CAX21 hosts ran real
+native x86_64 and aarch64 transactions and unprivileged client/runtime probes at
+signed candidate `017082a85d7fee5a7577927fc7e002ee6a036652`. All 106 exact
+installed headers and protected payloads match their authenticated RPM inputs.
+Each transaction added 16 packages, without removal, upgrade or downgrade;
+required scriptlets and signatures ran with transaction-local signing authority.
+EPEL remains disabled and absent from the global keyring. Python 3.12.15 imports
+and the Certbot 4.2.0 standalone plugin pass natively on both architectures.
+The packaged renewal timer remains disabled/inactive with no service execution
+or ACME state. These are package/client results, not full #80 host admission,
+certificate-lifecycle activation, production enrollment or permission to execute
+a cloud run. Final source and protected-main observations remain consumer duties.
+
+The existing eight dispositions, their residual risks and original
+**2026-11-04 00:00 UTC** expiry remain unchanged. The new tuple is admitted only
+from 2026-10-28. Missing/changed bindings, half-refreshed tuples, changed Terraform
+inventory, wrong subject/repository, earlier qualification and expiry fail closed.
+Previous accepted tuples remain available for bounded adoption. Scanner identity,
+coverage, diagnostic and database admission, redaction and policy severity do
+not change. `REPOSITORY_STATIC` and `REQUIRED_NOT_EXECUTED` remain explicit;
+a source-static result cannot execute or replace the four run-bound controls.

@@ -89,6 +89,14 @@ DEPLOYMENT_PHASE_ONE_NATIVE_BINDINGS = {
     "scripts": "c17a475b7185349018086ca8683dcf751a339a5a",
     ".secpal": "18745a3e7a93c9990e023b8ed5da4031025c631c",
 }
+# #1284 qualifies only deployment#376's exact Certbot security-closure refresh.
+# Native package evidence is separate from the unchanged source-static scope.
+# The existing Terraform controls, dispositions and expiry remain authoritative.
+DEPLOYMENT_CERTBOT_REFRESH_BINDINGS = {
+    **DEPLOYMENT_PHASE_ONE_NATIVE_BINDINGS,
+    "config": "68bd29a7c4c159e9ae1f1c9f0b05fda8b95eb012",
+    "schemas": "1f594b1bb40c9fa415204aa11fce78c3962e1bad",
+}
 DEPLOYMENT_TERRAFORM_PATHS = (
     'infra/ci-cloud/digitalocean/versions.tf',
     'infra/ci-cloud/gcp-rocky/main.tf',
@@ -375,6 +383,8 @@ def qualify_deployment_terraform(
                     and _timestamp(completed_at) >= _timestamp("2026-10-25T00:00:00Z"))
                 or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_NATIVE_BINDINGS
                     and _timestamp(completed_at) >= _timestamp("2026-10-25T00:00:00Z"))
+                or (facts["bindings"] == DEPLOYMENT_CERTBOT_REFRESH_BINDINGS
+                    and _timestamp(completed_at) >= _timestamp("2026-10-28T00:00:00Z"))
             )
             or facts["terraform_paths"] != list(DEPLOYMENT_TERRAFORM_PATHS)
             or not _timestamp("2026-10-20T00:00:00Z") <= _timestamp(completed_at)
