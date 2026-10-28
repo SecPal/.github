@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-28 - Qualify the Exact Google 8.8.1 Provider Sources
+
+**Changed:**
+
+- Qualify the corrected GCP cleanup and combined Rocky provider source tuples
+  after signed package, isolated real-producer and fresh Trivy comparison.
+- Preserve all prior tuples, eight existing dispositions, run-bound controls and
+  the original expiry; reject incomplete or hybrid provider/control bindings.
+
 ## 2026-10-28 - Qualify the Exact Certbot Refresh Sources
 
 **Changed:**

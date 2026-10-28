@@ -2342,6 +2342,69 @@ class DeploymentTerraformCoverageTests(unittest.TestCase):
         with self.assertRaises(self.module.ContractError):
             self.module.qualify_deployment_terraform(facts, "SecPal/deployment", facts["commit"], "2026-10-28T00:00:00Z")
 
+
+    def google_provider_refresh_facts(self):
+        cleanup = self.certbot_refresh_facts()
+        cleanup["commit"] = "bd4789f49eed97bbaa25f8a817797cb125d5f70d"
+        cleanup["bindings"]["infra/ci-cloud"] = "5b7aa70eceb3b9dbc2903b95507b4e9a935ce5b1"
+        rocky = copy.deepcopy(cleanup)
+        rocky["commit"] = "c3bd77d12ac76a11cf3005067e911f630b7c6fef"
+        rocky["bindings"].update({
+            "infra/ci-cloud": "b2980196040355b883a77b5f1011dc4b890af3d0",
+            "scripts": "036dd0f359dacef017b32f32971cf106bf57e93f",
+            "schemas": "de6c64e49a24a017a12ed204285dbbc11c9d8d25",
+        })
+        return cleanup, rocky
+
+    def test_google_provider_refresh_preserves_static_scope_and_prior_sources(self):
+        for facts in self.google_provider_refresh_facts():
+            with self.subTest(commit=facts["commit"]):
+                coverage = self.module.qualify_deployment_terraform(
+                    facts, "SecPal/deployment", facts["commit"], "2026-10-28T14:00:00Z")
+                self.assertEqual(facts["bindings"], coverage["source_bindings"])
+                self.assertEqual("REPOSITORY_STATIC", coverage["scope"])
+                self.assertEqual("REQUIRED_NOT_EXECUTED", coverage["run_bound_status"])
+                self.assertEqual("2026-11-04T00:00:00Z", coverage["expires_at"])
+                self.assertEqual(list(self.module.DEPLOYMENT_RUN_BOUND_CONTROLS),
+                                 coverage["required_at_operation"])
+                self.module._validate_coverage(
+                    coverage, "SecPal/deployment", facts["commit"], "2026-10-28T14:00:00Z")
+        previous = self.certbot_refresh_facts()
+        self.module.qualify_deployment_terraform(
+            previous, "SecPal/deployment", previous["commit"], "2026-10-28T14:00:00Z")
+
+    def test_google_provider_refresh_rejects_partial_hybrid_subject_and_expiry(self):
+        for facts in self.google_provider_refresh_facts():
+            for path in facts["bindings"]:
+                for replacement in (None, "0" * 40):
+                    changed = copy.deepcopy(facts)
+                    if replacement is None:
+                        del changed["bindings"][path]
+                    else:
+                        changed["bindings"][path] = replacement
+                    with self.subTest(path=path, replacement=replacement), self.assertRaises(self.module.ContractError):
+                        self.module.qualify_deployment_terraform(
+                            changed, "SecPal/deployment", facts["commit"], "2026-10-28T14:00:00Z")
+            for repository, subject, now in (
+                ("SecPal/other", facts["commit"], "2026-10-28T14:00:00Z"),
+                ("SecPal/deployment", "a" * 40, "2026-10-28T14:00:00Z"),
+                ("SecPal/deployment", facts["commit"], "2026-10-27T23:59:59Z"),
+                ("SecPal/deployment", facts["commit"], "2026-11-04T00:00:00Z"),
+            ):
+                with self.subTest(repository=repository, subject=subject, now=now), self.assertRaises(self.module.ContractError):
+                    self.module.qualify_deployment_terraform(facts, repository, subject, now)
+        cleanup, rocky = self.google_provider_refresh_facts()
+        for base, path, other in (
+            (cleanup, "schemas", rocky),
+            (rocky, "scripts", cleanup),
+            (rocky, "infra/ci-cloud", cleanup),
+        ):
+            changed = copy.deepcopy(base)
+            changed["bindings"][path] = other["bindings"][path]
+            with self.subTest(hybrid=path), self.assertRaises(self.module.ContractError):
+                self.module.qualify_deployment_terraform(
+                    changed, "SecPal/deployment", changed["commit"], "2026-10-28T14:00:00Z")
+
     def diagnostics(self, cache, variables=None):
         fallback = '2026-10-20T18:00:00Z\tERROR\t[misconfig] Falling back to embedded checks\terr=' + json.dumps(
             'failed to check cache: cache does not exist at ' + json.dumps(str(cache / "policy/content"))
