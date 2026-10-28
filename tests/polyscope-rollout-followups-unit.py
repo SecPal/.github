@@ -1656,5 +1656,132 @@ class PolyscopeRolloutFollowupTests(TestCase):
             provision.assert_not_called()
 
 
+class ContainerPreviewReconcileTests(TestCase):
+    def test_explicit_container_mode_preserves_complete_reconciliation_without_nginx(self):
+        args=SimpleNamespace(provision_worktrees=True,container_preview=True,refresh_nginx=False,install_nginx=False)
+        rollout.apply_canonical_reconcile_mode(args)
+        self.assertFalse(args.refresh_nginx)
+        for option in ('refresh_nginx','install_nginx'):
+            with self.subTest(option=option):
+                values=vars(args)|{option:True}
+                with self.assertRaises(SystemExit):
+                    rollout.apply_canonical_reconcile_mode(SimpleNamespace(**values))
+
+    def test_container_rollout_refreshes_its_owner_without_rendering_or_probing_nginx(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            args=SimpleNamespace(container_preview=True,clone_root=root/'clones',db_path=root/'db',
+                workspace_root=root,install_nginx=False,refresh_nginx=False,provision_worktrees=True,
+                nginx_http2_syntax='auto',nginx_output=root/'unused-nginx.conf',
+                repo_state_file=root/'state.json',skip_db_sync=True,skip_local_configs=True,
+                summary_output=None)
+            provision=mock.Mock(return_value=([],[],[]));refresh=mock.Mock()
+            with mock.patch.multiple(rollout,
+                    build_repo_specs=mock.Mock(return_value={}),validate_repo_instruction_files=mock.Mock(),
+                    validate_repo_local_configs=mock.Mock(),load_repo_state=mock.Mock(return_value={}),
+                    provision_worktrees=provision,refresh_container_preview=refresh,
+                    detect_nginx_http2_syntax=mock.Mock(side_effect=AssertionError('native nginx probe')),
+                    render_nginx_config=mock.Mock(side_effect=AssertionError('legacy renderer')),
+                    install_nginx_config=mock.Mock(side_effect=AssertionError('nginx activation'))):
+                self.assertEqual(rollout.run_rollout(args),0)
+            self.assertFalse(args.nginx_output.exists())
+            self.assertTrue(provision.call_args.kwargs['container_preview'])
+            refresh.assert_called_once_with()
+
+    def test_container_provisioning_never_requires_a_host_nginx_acl_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.multiple(rollout,
+                    should_manage_api_runtime_units=mock.Mock(return_value=False),
+                    load_registered_worktree_paths=mock.Mock(return_value={'api':[]}),
+                    cleanup_removed_workspace_aliases=mock.Mock(return_value=[]),
+                    cleanup_removed_api_preview_databases=mock.Mock(return_value=[]),
+                    revoke_unregistered_preview_nginx_access=mock.Mock(side_effect=AssertionError('nginx ACL'))):
+                result=rollout.provision_worktrees({}, {}, Path(directory),container_preview=True)
+            self.assertEqual(result,([],[],[]))
+
+    def test_container_runtime_readiness_failure_remains_blocking_without_nginx_revocation(self):
+        with mock.patch.object(rollout,'wait_for_api_scheduler_readiness',side_effect=RuntimeError('not ready')),mock.patch.object(rollout,'deny_preview_nginx_access') as revoke:
+            with self.assertRaisesRegex(RuntimeError,'not ready'):
+                rollout.wait_for_api_scheduler_readiness_or_revoke_access(Path('/clones'),Path('/worktree'),Path('/source'),preview_enabled=False)
+            revoke.assert_not_called()
+
+    def test_container_refresh_queues_without_truncating_the_service_retry_window(self):
+        with mock.patch.object(rollout.subprocess, "run") as run:
+            rollout.refresh_container_preview()
+        self.assertIn("--no-block", run.call_args.args[0])
+        self.assertLessEqual(run.call_args.kwargs["timeout"], 30)
+
+    def test_admission_is_withdrawn_when_registered_api_validation_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            worktree = root / "api-repo/calm-otter"
+            worktree.mkdir(parents=True)
+            admission = rollout.container_preview_admission()
+            admission.admit_api_preview(worktree)
+            with mock.patch.multiple(rollout,
+                should_manage_api_runtime_units=mock.Mock(return_value=False),
+                load_registered_worktree_paths=mock.Mock(return_value={"api": [worktree]}),
+                is_workspace_automation_enabled=mock.Mock(return_value=True),
+                is_provisionable_worktree=mock.Mock(side_effect=RuntimeError("readiness unavailable")),
+                cleanup_removed_workspace_aliases=mock.Mock(return_value=[]),
+                cleanup_removed_api_preview_databases=mock.Mock(return_value=[])):
+                result = rollout.provision_worktrees({}, {"api": {rollout.NATIVE_SETUP_COMMANDS_KEY: []}}, root, container_preview=True)
+            self.assertFalse(admission.api_preview_is_admitted(worktree))
+            self.assertEqual(len(result[2]), 1)
+
+    def test_only_successful_persistent_runtime_readiness_publishes_api_routes(self):
+        for outcome in ("ready", "scheduler-failed", "bootstrap-failed", "not-ready"):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                worktree = root / "api-id/current-otter"
+                healthy = root / "api-id/healthy-otter"
+                inactive = root / "api-id/retired-otter"
+                for path in (worktree, healthy, inactive):
+                    path.mkdir(parents=True)
+                    (path / ".env").write_text("")
+                admission = rollout.container_preview_admission()
+                for path in (worktree, healthy, inactive):
+                    admission.admit_api_preview(path)
+                runtime = mock.Mock(return_value={})
+                if outcome == "scheduler-failed":
+                    runtime.side_effect = RuntimeError("scheduler readiness failed")
+                bootstrap = mock.Mock(return_value=(True, "database:preview"))
+                if outcome == "bootstrap-failed":
+                    bootstrap.side_effect = RuntimeError("bootstrap failed")
+                marker = {"setup_hash": "same", "preview_storage_target": "database:preview"}
+                with mock.patch.multiple(rollout,
+                    should_manage_api_runtime_units=mock.Mock(return_value=True),
+                    load_registered_worktree_paths=mock.Mock(return_value={"api": [worktree, healthy]}),
+                    is_workspace_automation_enabled=mock.Mock(return_value=True),
+                    is_provisionable_worktree=mock.Mock(return_value=True),
+                    cleanup_removed_workspace_aliases=mock.Mock(return_value=[]),
+                    cleanup_removed_api_preview_databases=mock.Mock(return_value=[]),
+                    preserve_registered_workspace_physical_path=mock.Mock(),
+                    render_worktree_local_config=mock.Mock(return_value="{}"),
+                    sync_worktree_local_config=mock.Mock(), ensure_workspace_alias=mock.Mock(),
+                    sync_worktree_auxiliary_files=mock.Mock(), ensure_worktree_hooks=mock.Mock(),
+                    acquire_api_worktree_bootstrap_lock=mock.Mock(side_effect=contextlib.nullcontext),
+                    collect_linked_setup_context=mock.Mock(return_value={}),
+                    resolve_current_workspace_name=mock.Mock(side_effect=lambda path, **kwargs: path.name),
+                    build_setup_hash=mock.Mock(return_value="same"),
+                    ensure_api_worktree_ready=mock.Mock(side_effect=lambda path, *args, **kwargs: (outcome != "not-ready" or path == healthy, "database:preview")),
+                    load_provision_marker=mock.Mock(side_effect=lambda path: None if outcome == "bootstrap-failed" and path.parent == worktree else marker),
+                    _bootstrap_api_worktree_locked=bootstrap,
+                    ensure_api_runtime_owner=mock.Mock(side_effect=lambda clone, path, *args, **kwargs: {} if path == healthy else runtime()),
+                    reconcile_api_runtime_units=mock.Mock()):
+                    rollout.provision_worktrees(
+                        {"api": {"id": "api-id"}},
+                        {"api": {rollout.NATIVE_SETUP_COMMANDS_KEY: ["bootstrap-api"], "path": root / "source"}},
+                        root, container_preview=True)
+                self.assertEqual(admission.api_preview_is_admitted(worktree), outcome == "ready")
+                self.assertTrue(admission.api_preview_is_admitted(healthy))
+                self.assertFalse(admission.api_preview_is_admitted(inactive))
+
+    def test_failed_container_refresh_is_a_named_error(self):
+        with mock.patch.object(rollout.subprocess,'run',side_effect=subprocess.CalledProcessError(1,['systemctl'])):
+            with self.assertRaisesRegex(RuntimeError,'container-preview-refresh-failed'):
+                rollout.refresh_container_preview()
+
+
 if __name__ == "__main__":
     main()

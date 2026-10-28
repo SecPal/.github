@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-28 - Select Container Preview Reconciliation Explicitly
+
+**Fixed:**
+
+- Add `--container-preview` to routine provisioning so container hosts converge
+  through their own preview service without probing or activating host nginx.
+- Preserve persistent API readiness and worktree setup while omitting nginx ACL
+  grants and revocations. Reject conflicting backend activation and fail with a
+  named diagnostic when container preview refresh fails.
+- Keep the default legacy nginx reconciliation unchanged.
+
 ## 2026-10-28 - Restore Native Podman Preview Integration
 
 **Fixed:**

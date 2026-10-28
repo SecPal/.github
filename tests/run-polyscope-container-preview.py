@@ -7,6 +7,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
+import shutil
 import sqlite3
 import tempfile
 
@@ -55,6 +56,16 @@ def main() -> None:
 
         caddyfile = root / "Caddyfile"
         caddyfile.write_text(":18080 {}\n")
+        renderer = module.load_renderer(REPO_ROOT / "scripts/render-polyscope-container-caddy.py")
+        # An active registration alone must not receive writable runtime storage.
+        unready_command = module.build_command(
+            renderer_path=REPO_ROOT / "scripts/render-polyscope-container-caddy.py",
+            db_path=db_path, clone_root=clone_root, repository_root=repository_root,
+            caddyfile=caddyfile, image="localhost/preview:latest",
+            network="preview-network", preview_port=18080,
+        )
+        assert not any(argument.endswith("/storage:rw") for argument in unready_command)
+        renderer.admit_api_preview(physical_worktree)
         command = module.build_command(
             renderer_path=REPO_ROOT / "scripts/render-polyscope-container-caddy.py",
             db_path=db_path,
@@ -90,6 +101,18 @@ def main() -> None:
             assert "writable API runtime directory is unavailable" in str(error)
         else:
             raise AssertionError("missing API storage directory must fail closed")
+
+        # A newly registered API repository may have no active clone directory yet.
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("delete from worktrees")
+        shutil.rmtree(clone_root / "api-repo")
+        empty_command = module.build_command(
+            renderer_path=REPO_ROOT / "scripts/render-polyscope-container-caddy.py",
+            db_path=db_path, clone_root=clone_root, repository_root=repository_root,
+            caddyfile=caddyfile, image="localhost/preview:latest",
+            network="preview-network", preview_port=18080,
+        )
+        assert not any(argument.endswith("/storage:rw") for argument in empty_command)
 
 
 if __name__ == "__main__":
