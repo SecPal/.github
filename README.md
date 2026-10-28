@@ -440,3 +440,11 @@ command. These ordinary application services do not collect or grade external
 qualification evidence and therefore do not assert dispatch qualification.
 Arbitrary `--run-api-worktree` commands and prepare/bootstrap/refresh qualification
 paths retain their existing Evidence Architecture dispatch requirements.
+
+Run the routine provisioner with `--container-preview` on container-preview hosts.
+That explicit backend selection preserves worktree setup and persistent API
+readiness reconciliation, skips host nginx probing/rendering/ACL activation, and
+refreshes `polyscope-preview-refresh.service` through the user service manager.
+It cannot be combined with nginx activation flags. The default remains the
+legacy nginx backend; omitting a refresh flag does not disable its canonical
+reconciliation.

@@ -5051,6 +5051,7 @@ def provision_worktrees(
     *,
     db_path: pathlib.Path | None = None,
     validated_instruction_roots: set[tuple[pathlib.Path, str]] | None = None,
+    container_preview: bool = False,
 ) -> tuple[list[str], list[str], list[dict[str, str]]]:
     validation_cache = validated_instruction_roots if validated_instruction_roots is not None else set()
     resolved_db_path = db_path or default_polyscope_db_path()
@@ -5092,21 +5093,22 @@ def provision_worktrees(
                 }
             )
 
-    try:
-        revoke_unregistered_preview_nginx_access(clone_root, registered_worktrees)
-    except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
-        error_message = f"failed to reconcile preview access: {error}"
-        print(error_message, file=sys.stderr)
-        failed_provision_worktrees.append(
-            {
-                "repo": "preview",
-                "workspace": "access-reconciliation",
-                "path": str(clone_root),
-                "error": error_message,
-            }
-        )
-        prune_api_runtime_units_after_blocking_failure()
-        return [], [], failed_provision_worktrees
+    if not container_preview:
+        try:
+            revoke_unregistered_preview_nginx_access(clone_root, registered_worktrees)
+        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+            error_message = f"failed to reconcile preview access: {error}"
+            print(error_message, file=sys.stderr)
+            failed_provision_worktrees.append(
+                {
+                    "repo": "preview",
+                    "workspace": "access-reconciliation",
+                    "path": str(clone_root),
+                    "error": error_message,
+                }
+            )
+            prune_api_runtime_units_after_blocking_failure()
+            return [], [], failed_provision_worktrees
 
     provisionable_worktrees: list[
         tuple[str, dict[str, Any], pathlib.Path, list[str], list[str]]
@@ -5196,7 +5198,7 @@ def provision_worktrees(
 
     for repo_name, spec, worktree_path, _validation_commands, setup_commands in provisionable_worktrees:
         preview_prefix = spec.get("preview_prefix")
-        preview_enabled = isinstance(preview_prefix, str) and bool(preview_prefix)
+        preview_enabled = isinstance(preview_prefix, str) and bool(preview_prefix) and not container_preview
         try:
             preserve_registered_workspace_physical_path(worktree_path, db_path=db_path)
             config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
@@ -5936,14 +5938,14 @@ def build_summary(
     repo_state: dict[str, dict[str, Any]],
     repo_specs: dict[str, dict[str, Any]],
     db_backup: pathlib.Path | None,
-    nginx_output: pathlib.Path,
+    nginx_output: pathlib.Path | None,
     provisioned_worktrees: list[str],
     cleaned_preview_storage_targets: list[str],
     failed_provision_worktrees: list[dict[str, str]],
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "db_backup": str(db_backup) if db_backup is not None else None,
-        "rendered_nginx_config": str(nginx_output),
+        "rendered_nginx_config": str(nginx_output) if nginx_output is not None else None,
         "provisioned_worktrees": provisioned_worktrees,
         "cleaned_preview_storage_targets": cleaned_preview_storage_targets,
         "failed_provision_worktrees": failed_provision_worktrees,
@@ -6278,15 +6280,39 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--install-nginx", action="store_true")
     parser.add_argument("--provision-worktrees", action="store_true")
     parser.add_argument("--refresh-nginx", action="store_true")
+    parser.add_argument("--container-preview", action="store_true", help="Reconcile the rootless container preview service instead of host nginx.")
     parser.add_argument("--skip-if-provision-locked", action="store_true")
     return parser.parse_args()
 
 
+def validate_preview_backend(args: argparse.Namespace) -> bool:
+    container = getattr(args, "container_preview", False)
+    if container and (getattr(args, "install_nginx", False) or getattr(args, "refresh_nginx", False)):
+        raise SystemExit("--container-preview cannot be combined with nginx activation")
+    return container
+
+
+def refresh_container_preview() -> None:
+    environment = os.environ.copy()
+    runtime = pathlib.Path(f"/run/user/{os.getuid()}")
+    environment.setdefault("XDG_RUNTIME_DIR", str(runtime))
+    environment.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={runtime}/bus")
+    try:
+        subprocess.run(
+            ["systemctl", "--user", "start", "polyscope-preview-refresh.service"],
+            env=environment, check=True, timeout=120,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise RuntimeError("container-preview-refresh-failed") from None
+
+
 def apply_canonical_reconcile_mode(args: argparse.Namespace) -> None:
     """Make the production provisioner a complete reconcile regardless of unit drift."""
+    container = validate_preview_backend(args)
     clone_root = getattr(args, "clone_root", None)
     db_path = getattr(args, "db_path", None)
-    if args.provision_worktrees and (
+    if not container and args.provision_worktrees and (
         clone_root is None
         or db_path is None
         or (
@@ -6303,7 +6329,7 @@ def main() -> int:
 
     skip_if_provision_locked = getattr(args, "skip_if_provision_locked", False)
     if skip_if_provision_locked and (
-        not args.refresh_nginx or args.provision_worktrees or args.install_nginx
+        not (args.refresh_nginx or getattr(args, "container_preview", False)) or args.provision_worktrees or args.install_nginx
     ):
         raise SystemExit(
             "--skip-if-provision-locked requires refresh-only mode and cannot be used "
@@ -6326,7 +6352,7 @@ def main() -> int:
             args.provision_lock_path,
             blocking=not skip_if_provision_locked,
         )
-        if args.provision_worktrees or args.install_nginx or args.refresh_nginx
+        if args.provision_worktrees or args.install_nginx or args.refresh_nginx or getattr(args, "container_preview", False)
         else contextlib.nullcontext()
     )
     with lock_context as lock_acquired:
@@ -6337,6 +6363,7 @@ def main() -> int:
 
 
 def run_rollout(args: argparse.Namespace) -> int:
+    container = validate_preview_backend(args)
     repo_specs = build_repo_specs(args.workspace_root)
     validated_instruction_roots: set[tuple[pathlib.Path, str]] = set()
 
@@ -6358,21 +6385,22 @@ def run_rollout(args: argparse.Namespace) -> int:
     if not args.skip_db_sync:
         db_backup = sync_repository_metadata(args.db_path, repo_state, repo_specs)
 
-    nginx_http2_syntax = args.nginx_http2_syntax
-    if args.install_nginx or args.refresh_nginx or nginx_http2_syntax == "auto":
-        nginx_http2_syntax = detect_nginx_http2_syntax()
+    if not container:
+        nginx_http2_syntax = args.nginx_http2_syntax
+        if args.install_nginx or args.refresh_nginx or nginx_http2_syntax == "auto":
+            nginx_http2_syntax = detect_nginx_http2_syntax()
 
-    initial_workspace_redirects = build_preview_workspace_redirects(
-        repo_state,
-        args.clone_root,
-    )
-    args.nginx_output.write_text(
-        render_nginx_config(
+        initial_workspace_redirects = build_preview_workspace_redirects(
             repo_state,
-            nginx_http2_syntax=nginx_http2_syntax,
-            workspace_redirects=initial_workspace_redirects,
+            args.clone_root,
         )
-    )
+        args.nginx_output.write_text(
+            render_nginx_config(
+                repo_state,
+                nginx_http2_syntax=nginx_http2_syntax,
+                workspace_redirects=initial_workspace_redirects,
+            )
+        )
 
     provisioned_worktrees: list[str] = []
     cleaned_preview_storage_targets: list[str] = []
@@ -6395,16 +6423,18 @@ def run_rollout(args: argparse.Namespace) -> int:
             args.clone_root,
             db_path=args.db_path,
             validated_instruction_roots=validated_instruction_roots,
+            container_preview=container,
         )
 
-    workspace_redirects = build_preview_workspace_redirects(repo_state, args.clone_root)
-    args.nginx_output.write_text(
-        render_nginx_config(
-            repo_state,
-            nginx_http2_syntax=nginx_http2_syntax,
-            workspace_redirects=workspace_redirects,
+    if not container:
+        workspace_redirects = build_preview_workspace_redirects(repo_state, args.clone_root)
+        args.nginx_output.write_text(
+            render_nginx_config(
+                repo_state,
+                nginx_http2_syntax=nginx_http2_syntax,
+                workspace_redirects=workspace_redirects,
+            )
         )
-    )
 
     if args.install_nginx or args.refresh_nginx:
         try:
@@ -6425,11 +6455,14 @@ def run_rollout(args: argparse.Namespace) -> int:
         )
         install_nginx_config(args.nginx_manifest_output)
 
+    if container:
+        refresh_container_preview()
+
     summary = build_summary(
         repo_state,
         repo_specs,
         db_backup,
-        args.nginx_output,
+        None if container else args.nginx_output,
         provisioned_worktrees,
         cleaned_preview_storage_targets,
         failed_provision_worktrees,
