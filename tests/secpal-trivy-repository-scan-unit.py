@@ -2289,6 +2289,59 @@ class DeploymentTerraformCoverageTests(unittest.TestCase):
             self.module.qualify_deployment_terraform(
                 facts, "SecPal/deployment", facts["commit"], "2026-10-25T16:48:00Z")
 
+    def certbot_refresh_facts(self):
+        facts = self.operator_native_facts()
+        facts["commit"] = "017082a85d7fee5a7577927fc7e002ee6a036652"
+        facts["bindings"].update({
+            "config": "68bd29a7c4c159e9ae1f1c9f0b05fda8b95eb012",
+            "schemas": "1f594b1bb40c9fa415204aa11fce78c3962e1bad",
+        })
+        return facts
+
+    def test_certbot_refresh_preserves_static_scope_obligations_and_previous_sources(self):
+        facts = self.certbot_refresh_facts()
+        now = "2026-10-28T00:00:00Z"
+        coverage = self.module.qualify_deployment_terraform(
+            facts, "SecPal/deployment", facts["commit"], now)
+        self.assertEqual(facts["bindings"], coverage["source_bindings"])
+        self.assertEqual("REPOSITORY_STATIC", coverage["scope"])
+        self.assertEqual("REQUIRED_NOT_EXECUTED", coverage["run_bound_status"])
+        self.assertEqual("2026-11-04T00:00:00Z", coverage["expires_at"])
+        self.assertEqual(list(self.module.DEPLOYMENT_RUN_BOUND_CONTROLS),
+                         coverage["required_at_operation"])
+        self.module._validate_coverage(coverage, "SecPal/deployment", facts["commit"], now)
+        for previous in (self.facts(), self.xdg_facts(), self.dispatch_facts(), self.operator_native_facts()):
+            self.module.qualify_deployment_terraform(previous, "SecPal/deployment", previous["commit"], now)
+
+    def test_certbot_refresh_rejects_partial_bindings_other_subjects_and_expiry(self):
+        facts = self.certbot_refresh_facts()
+        for path in facts["bindings"]:
+            for replacement in (None, "0" * 40):
+                changed = copy.deepcopy(facts)
+                if replacement is None:
+                    del changed["bindings"][path]
+                else:
+                    changed["bindings"][path] = replacement
+                with self.subTest(path=path, replacement=replacement), self.assertRaises(self.module.ContractError):
+                    self.module.qualify_deployment_terraform(changed, "SecPal/deployment", facts["commit"], "2026-10-28T00:00:00Z")
+        # Neither half of the refreshed tuple is independently interchangeable.
+        for path in ("config", "schemas"):
+            changed = copy.deepcopy(facts)
+            changed["bindings"][path] = self.operator_native_facts()["bindings"][path]
+            with self.subTest(hybrid=path), self.assertRaises(self.module.ContractError):
+                self.module.qualify_deployment_terraform(changed, "SecPal/deployment", facts["commit"], "2026-10-28T00:00:00Z")
+        for repo, subject, now in (
+            ("SecPal/other", facts["commit"], "2026-10-28T00:00:00Z"),
+            ("SecPal/deployment", "a" * 40, "2026-10-28T00:00:00Z"),
+            ("SecPal/deployment", facts["commit"], "2026-10-27T23:59:59Z"),
+            ("SecPal/deployment", facts["commit"], "2026-11-04T00:00:00Z"),
+        ):
+            with self.subTest(repo=repo, subject=subject, now=now), self.assertRaises(self.module.ContractError):
+                self.module.qualify_deployment_terraform(facts, repo, subject, now)
+        facts["terraform_paths"].append("unexpected/main.tf")
+        with self.assertRaises(self.module.ContractError):
+            self.module.qualify_deployment_terraform(facts, "SecPal/deployment", facts["commit"], "2026-10-28T00:00:00Z")
+
     def diagnostics(self, cache, variables=None):
         fallback = '2026-10-20T18:00:00Z\tERROR\t[misconfig] Falling back to embedded checks\terr=' + json.dumps(
             'failed to check cache: cache does not exist at ' + json.dumps(str(cache / "policy/content"))
