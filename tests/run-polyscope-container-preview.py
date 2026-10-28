@@ -57,6 +57,8 @@ def test_owned_runtime_members(module):
             ("Id", "invalid"),
             ("Image", "c" * 64),
             ("Config", {"Cmd": ["php", "arbitrary.php"], "WorkingDir": "/app"}),
+            ("Config", {"Cmd": row["Config"]["Cmd"], "WorkingDir": "/app", "Entrypoint": ["/bin/sh"]}),
+            ("NetworkSettings", {"Networks": {"preview-network": {}, "foreign-network": {}}}),
             ("Mounts", [{"Source": str(root / "unregistered"), "Destination": "/app"}]),
             ("NetworkSettings", {"Networks": {"foreign-network": {}}}),
             ("State", {"ConmonPid": 9999, "Running": True}),

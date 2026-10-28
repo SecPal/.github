@@ -42,7 +42,8 @@ def owned_runtime_container_names(
                      if command == row.get("Config", {}).get("Cmd")), None)
         if (role is None or row.get("Image", "").removeprefix("sha256:") not in expected_images
                 or not row.get("State", {}).get("Running")
-                or network not in row.get("NetworkSettings", {}).get("Networks", {})
+                or set(row.get("NetworkSettings", {}).get("Networks", {})) != {network}
+                or row.get("Config", {}).get("Entrypoint") not in (None, [])
                 or row.get("Config", {}).get("WorkingDir") != "/app"):
             continue
         mounted = [pathlib.Path(mount["Source"]) for mount in row.get("Mounts", [])
@@ -106,7 +107,7 @@ def observe_runtime_members(args) -> set[str]:
     template = (
         '{"Id":"{{.Id}}","Name":"{{.Name}}","Image":"{{.Image}}",'
         '"State":{"Pid":{{.State.Pid}},"ConmonPid":{{.State.ConmonPid}},"Running":{{.State.Running}}},'
-        '"Config":{"Cmd":{{json .Config.Cmd}},"WorkingDir":{{json .Config.WorkingDir}}},'
+        '"Config":{"Cmd":{{json .Config.Cmd}},"WorkingDir":{{json .Config.WorkingDir}},"Entrypoint":{{json .Config.Entrypoint}}},'
         '"NetworkSettings":{"Networks":{{json .NetworkSettings.Networks}}},"Mounts":{{json .Mounts}}}'
     )
     raw = subprocess.check_output(
