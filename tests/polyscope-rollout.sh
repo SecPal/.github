@@ -5523,6 +5523,8 @@ chmod +x .git/hooks/pre-commit
 exit 0
 STUB
 chmod +x "$home_dir/.local/bin/pre-commit"
+# Keep the provisioning double ahead of pre-commit installed on the test host.
+ln -s "$home_dir/.local/bin/pre-commit" "$fake_exec_dir/pre-commit"
 
 cat >"$workspace_root/api/.env" <<'EOF'
 APP_URL=https://api.secpal.dev

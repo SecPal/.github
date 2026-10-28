@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-10-28 - Qualify the Exact Certbot Refresh Sources
+
+**Changed:**
+
+- Add the complete deployment Certbot-refresh source tuple to repository-static
+  qualification after native package evidence on x86 and ARM. Preserve previous
+  tuples, all run-bound controls, the existing dispositions and their expiry.
+- Reject partial or altered source bindings and retain separate native-host,
+  certificate-lifecycle and production acceptance boundaries.
+
 ## 2026-10-28 - Select Container Preview Reconciliation Explicitly
 
 **Fixed:**
