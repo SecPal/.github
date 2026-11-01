@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-01 - Patch Markdown Tooling Glob Matching
+
+**Security:**
+
+- Patch development-tooling denial-of-service vulnerabilities with scoped
+  minimatch 11.0.3 overrides (refs #1292).
+
 ## 2026-10-28 - Qualify Dependabot Repository Security Inputs
 
 **Changed:**
