@@ -6,12 +6,10 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
-import os
 import pathlib
 import subprocess
 import tempfile
-import unittest
-from unittest import mock
+from unittest import TestCase, main, mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("api_tests", ROOT / "scripts/run-polyscope-api-tests.py")
@@ -19,7 +17,7 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
 
-class IsolatedApiTests(unittest.TestCase):
+class IsolatedApiTests(TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -80,6 +78,9 @@ class IsolatedApiTests(unittest.TestCase):
         self.assertEqual(self.execute("--parallel", "--processes=2"), 0)
         network = next(c for c in self.commands if c[:2] == ["network", "create"])
         self.assertIn("--internal", network)
+        application = [c for c in self.commands if c[:1] == ["create"]][-1]
+        self.assertIn("--userns=keep-id:uid=1000,gid=1000", application)
+        self.assertIn("--no-healthcheck", application)
         self.assertTrue(all("-p" not in c and "--publish" not in c and "polyscope-postgresql-proxy" not in c for c in self.commands))
         self.assertTrue(all(mode == 0o600 for _, _, mode in self.environments))
         app_env = self.environments[1][1]
@@ -123,4 +124,4 @@ class IsolatedApiTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    main()

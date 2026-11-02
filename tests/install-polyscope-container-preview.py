@@ -226,7 +226,10 @@ def main() -> None:
             )
             assert echoed.returncode == 0
             assert echoed.stdout == payload, (tool, "piped stdin was lost")
-            assert "--tty" not in home.joinpath(".local/bin", tool).read_text()
+            wrapper = home.joinpath(".local/bin", tool).read_text()
+            assert "--tty" not in wrapper
+            assert "--userns=keep-id:uid=1000,gid=1000" in wrapper
+            assert "--no-healthcheck" in wrapper
         php_wrapper = home.joinpath(".local/bin/php").read_text()
         test_wrapper = home.joinpath(".local/bin/polyscope-api-test").read_text()
         assert "run-polyscope-api-tests.py" in test_wrapper
@@ -235,6 +238,8 @@ def main() -> None:
         caddyfile = home.joinpath(".config/polyscope-preview/Caddyfile").read_text()
         assert "--security-opt label=disable" in proxy_unit
         assert "--cap-drop=all" in proxy_unit
+        assert "--userns=keep-id:uid=1000,gid=1000" in proxy_unit
+        assert "--health-cmd" in proxy_unit
         assert " -p " not in proxy_unit
         assert str(home / "custom-libexec/polyscope-postgresql-socket-proxy.py") in proxy_unit
         assert "label=disable" not in preview_unit

@@ -90,14 +90,14 @@ def run_tests(image: str, arguments: list[str]) -> int:
             ), stdout=subprocess.DEVNULL, timeout=15)
             command = ["composer", "test"] if arguments == ["--full"] else ["php", "artisan", "test", *arguments]
             application = podman([
-                "create", "--interactive", "--name", name + "-php", "--network", network,
+                "create", "--interactive", "--userns=keep-id:uid=1000,gid=1000", "--no-healthcheck", "--name", name + "-php", "--network", network,
                 "--security-opt", "no-new-privileges", "--cap-drop=all",
                 "--env-file", str(app_env), "--volume", f"{workspace}:/app:rw,z",
                 "--volume", f"{common}:{common}:ro,z", "--workdir", "/app",
                 "--entrypoint", "/bin/sh", image, "-ec",
-                'umask 077; mkdir -p /tmp/secpal-tests; '
-                'php -r \'file_put_contents(getenv("KEK_PATH"), sodium_crypto_secretbox_keygen());\'; '
-                'exec "$@"', "test", *command,
+                ('umask 077; mkdir -p /tmp/secpal-tests; '
+                 + 'php -r \'file_put_contents(getenv("KEK_PATH"), sodium_crypto_secretbox_keygen());\'; '
+                 + 'exec "$@"'), "test", *command,
             ], capture_output=True).stdout.strip()
             resources.append(("container", application))
             result = subprocess.run(["podman", "start", "--attach", "--interactive", application])

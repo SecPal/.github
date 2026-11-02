@@ -22,9 +22,12 @@ def parse_args() -> argparse.Namespace:
     listen_group.add_argument("--listen-host")
     parser.add_argument("--listen-port", type=int)
     parser.add_argument("--upstream", required=True, type=pathlib.Path)
+    parser.add_argument("--check", action="store_true", help="check the TCP relay and PostgreSQL upstream")
     args = parser.parse_args()
     if (args.listen_host is None) != (args.listen_port is None):
         parser.error("--listen-host and --listen-port must be supplied together")
+    if args.check and args.listen_host is None:
+        parser.error("--check requires the TCP listener")
     return args
 
 
@@ -104,9 +107,20 @@ def serve_tcp(listen_host: str, listen_port: int, upstream_path: pathlib.Path) -
         accept_connections(listener, upstream_path)
 
 
+def check_postgresql(host: str, port: int) -> None:
+    # PostgreSQL SSLRequest: both a TLS-capable server (S) and a plain local
+    # server (N) establish that the complete relay reached PostgreSQL.
+    with socket.create_connection((host, port), timeout=3) as connection:
+        connection.sendall(bytes.fromhex("0000000804d2162f"))
+        if connection.recv(1) not in (b"S", b"N"):
+            raise RuntimeError("PostgreSQL transport did not answer SSLRequest")
+
+
 def main() -> int:
     args = parse_args()
-    if args.listen is not None:
+    if args.check:
+        check_postgresql(args.listen_host, args.listen_port)
+    elif args.listen is not None:
         serve_unix(args.listen, args.upstream)
     else:
         serve_tcp(args.listen_host, args.listen_port, args.upstream)

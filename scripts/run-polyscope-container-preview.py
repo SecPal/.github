@@ -154,6 +154,7 @@ def build_command(
         "--rm",
         "--name",
         "polyscope-preview",
+        "--userns=keep-id:uid=1000,gid=1000",
         "--network",
         network,
         "-e",

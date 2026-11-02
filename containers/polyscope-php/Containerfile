@@ -15,6 +15,9 @@ RUN install-php-extensions bcmath gettext intl pcntl pdo_pgsql pgsql zip \
     && pip3 install --break-system-packages --no-cache-dir --only-binary=:all: \
         --require-hashes -r /tmp/opentimestamps-requirements.txt \
     && rm /tmp/opentimestamps-requirements.txt \
+    && addgroup -g 1000 developer \
+    && adduser -D -u 1000 -G developer developer \
+    && chown -R developer:developer /app /config /data \
     && cp "$PHP_INI_DIR/php.ini-development" "$PHP_INI_DIR/php.ini" \
     && printf 'memory_limit=512M\n' > "$PHP_INI_DIR/conf.d/zz-secpal-development.ini" \
     && rm -rf /usr/local/include/php /usr/src/php* \
@@ -23,7 +26,12 @@ RUN install-php-extensions bcmath gettext intl pcntl pdo_pgsql pgsql zip \
         /usr/local/bin/install-php-extensions \
     && if [ -n "$(getcap /usr/local/bin/frankenphp)" ]; then setcap -r /usr/local/bin/frankenphp; fi
 COPY --from=composer /usr/bin/composer /usr/local/bin/composer
-ENV APP_ENV=local APP_DEBUG=false COMPOSER_ALLOW_SUPERUSER=1
+ENV APP_ENV=local APP_DEBUG=false HOME=/home/developer
+USER 1000:1000
+# The preview catch-all returns 404 for this unregistered loopback host.
+# CLI callers disable service health; the socket proxy overrides it.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD test "$(curl --silent --show-error --max-time 3 --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18080/)" = 404
 WORKDIR /app
 ENTRYPOINT []
 CMD ["php", "--version"]

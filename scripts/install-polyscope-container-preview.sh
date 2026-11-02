@@ -163,7 +163,7 @@ set -eu
 export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="\${DBUS_SESSION_BUS_ADDRESS:-unix:path=\$XDG_RUNTIME_DIR/bus}"
 git_common="\$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || pwd)"
-exec podman run --rm --interactive \\
+exec podman run --rm --interactive --userns=keep-id:uid=1000,gid=1000 --no-healthcheck \\
   --network '$NETWORK' \\
   -e DB_HOST=polyscope-postgresql-proxy \\
   -e DB_PORT=5432 \\
@@ -180,7 +180,7 @@ set -eu
 export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="\${DBUS_SESSION_BUS_ADDRESS:-unix:path=\$XDG_RUNTIME_DIR/bus}"
 git_common="\$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || pwd)"
-exec podman run --rm --interactive \\
+exec podman run --rm --interactive --userns=keep-id:uid=1000,gid=1000 --no-healthcheck \\
   -v "\$PWD":/app:rw,z \\
   -v "\$git_common":"\$git_common":ro,z \\
   --workdir /app \\
@@ -203,7 +203,7 @@ ConditionPathIsSocket=$POSTGRES_SOCKET
 Type=simple
 Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
-ExecStart=/usr/bin/podman run --replace --rm --name polyscope-postgresql-proxy --network $NETWORK --read-only --cap-drop=all --security-opt no-new-privileges --security-opt label=disable -v $LIBEXEC_DIR/polyscope-postgresql-socket-proxy.py:/usr/local/bin/polyscope-postgresql-socket-proxy.py:ro -v ${POSTGRES_SOCKET%/*}:${POSTGRES_SOCKET%/*}:ro --entrypoint python3 $IMAGE /usr/local/bin/polyscope-postgresql-socket-proxy.py --listen-host 0.0.0.0 --listen-port 5432 --upstream $POSTGRES_SOCKET
+ExecStart=/usr/bin/podman run --replace --rm --name polyscope-postgresql-proxy --userns=keep-id:uid=1000,gid=1000 --health-cmd "python3 /usr/local/bin/polyscope-postgresql-socket-proxy.py --check --listen-host 127.0.0.1 --listen-port 5432 --upstream $POSTGRES_SOCKET" --network $NETWORK --read-only --cap-drop=all --security-opt no-new-privileges --security-opt label=disable -v $LIBEXEC_DIR/polyscope-postgresql-socket-proxy.py:/usr/local/bin/polyscope-postgresql-socket-proxy.py:ro -v ${POSTGRES_SOCKET%/*}:${POSTGRES_SOCKET%/*}:ro --entrypoint python3 $IMAGE /usr/local/bin/polyscope-postgresql-socket-proxy.py --listen-host 0.0.0.0 --listen-port 5432 --upstream $POSTGRES_SOCKET
 ExecStop=/usr/bin/podman stop -t 10 polyscope-postgresql-proxy
 Restart=on-failure
 RestartSec=3

@@ -17,7 +17,7 @@ requirements; no application source or second Python lockfile is copied.
 
 ```bash
 export SECPAL_API_SOURCE=/absolute/path/to/your/api-workspace
-podman build --no-cache \
+podman build --no-cache --format docker \
   --file "$PWD/containers/polyscope-php/Containerfile" \
   --tag localhost/secpal-polyscope-api-toolchain:php84 \
   "$SECPAL_API_SOURCE/docker/python"
@@ -31,6 +31,25 @@ prerequisites are a boundary to report; do not install host packages or elevate.
 The existing `scripts/install-polyscope-container-preview.sh` consumes this image
 and installs PHP, Composer and `polyscope-api-test`. Updating an already running
 preview remains separately authorized. An image build alone does not restart it.
+
+## Runtime identity and health
+
+The final image runs as developer (1000:1000), without Composer's root bypass.
+Native Podman invocations use `--userns=keep-id:uid=1000,gid=1000` to map this
+identity to the existing unprivileged development account. Bind-mounted source
+retains host ownership; no host UID mappings or broad Git trust are changed.
+The image owns its home and Caddy data/config directories.
+
+Build with Docker schema 2 metadata as shown above: Podman's default OCI format
+discards HEALTHCHECK. Inspect the built image's user and healthcheck metadata.
+The preview check requests its existing loopback HTTP catch-all and requires
+the expected 404 response. It fails if the HTTP server is unavailable; workspace
+readiness and public routes retain their existing behavior. The proxy overrides
+that check with a PostgreSQL SSLRequest through its TCP listener to the Unix
+upstream. This checks forwarding without authenticating or changing data.
+Short-lived PHP/Composer/test invocations disable service healthchecks; native
+queue and scheduler commands use the same PHP wrapper. The proxy alone retains
+its existing narrow SELinux socket exception.
 
 ## Workspace commands
 
