@@ -59,16 +59,18 @@ def run_tests(image: str, arguments: list[str]) -> int:
         )
         app_env.chmod(0o600)
         try:
-            network = podman([
-                "network", "create", "--internal", "--label", f"test.secpal.dev/workspace={workspace}", name
-            ], capture_output=True).stdout.strip()
+            network = name
             resources.append(("network", network))
-            database = podman([
-                "create", "--name", name + "-db", "--network", network, "--network-alias", "database",
+            podman([
+                "network", "create", "--internal", "--label", f"test.secpal.dev/workspace={workspace}", network
+            ], stdout=subprocess.DEVNULL)
+            database = name + "-db"
+            resources.append(("container", database))
+            podman([
+                "create", "--name", database, "--network", network, "--network-alias", "database",
                 "--user", "postgres", "--security-opt", "no-new-privileges", "--cap-drop=all",
                 "--env-file", str(database_env), POSTGRES_IMAGE,
-            ], capture_output=True).stdout.strip()
-            resources.append(("container", database))
+            ], stdout=subprocess.DEVNULL)
             podman(["start", database], stdout=subprocess.DEVNULL)
             deadline = time.monotonic() + 90
             while True:
@@ -89,8 +91,10 @@ def run_tests(image: str, arguments: list[str]) -> int:
                 "CREATE DATABASE testing OWNER testing;\n"
             ), stdout=subprocess.DEVNULL, timeout=15)
             command = ["composer", "test"] if arguments == ["--full"] else ["php", "artisan", "test", *arguments]
-            application = podman([
-                "create", "--interactive", "--userns=keep-id:uid=1000,gid=1000", "--no-healthcheck", "--name", name + "-php", "--network", network,
+            application = name + "-php"
+            resources.append(("container", application))
+            podman([
+                "create", "--interactive", "--userns=keep-id:uid=1000,gid=1000", "--no-healthcheck", "--name", application, "--network", network,
                 "--security-opt", "no-new-privileges", "--cap-drop=all",
                 "--env-file", str(app_env), "--volume", f"{workspace}:/app:rw,z",
                 "--volume", f"{common}:{common}:ro,z", "--workdir", "/app",
@@ -98,8 +102,7 @@ def run_tests(image: str, arguments: list[str]) -> int:
                 ('umask 077; mkdir -p /tmp/secpal-tests; '
                  + 'php -r \'file_put_contents(getenv("KEK_PATH"), sodium_crypto_secretbox_keygen());\'; '
                  + 'exec "$@"'), "test", *command,
-            ], capture_output=True).stdout.strip()
-            resources.append(("container", application))
+            ], stdout=subprocess.DEVNULL)
             result = subprocess.run(["podman", "start", "--attach", "--interactive", application])
             return result.returncode
         finally:
@@ -108,6 +111,12 @@ def run_tests(image: str, arguments: list[str]) -> int:
                 command = (["network", "rm", identity] if kind == "network"
                            else ["rm", "--force", "--volumes", identity])
                 try:
+                    exists = subprocess.run(["podman", kind, "exists", identity], capture_output=True, timeout=30)
+                    if exists.returncode == 1:
+                        continue
+                    if exists.returncode:
+                        failed.append(f"{kind} {identity}")
+                        continue
                     result = subprocess.run(["podman", *command], capture_output=True, text=True, timeout=30)
                     if result.returncode:
                         failed.append(f"{kind} {identity}")

@@ -68,10 +68,13 @@ class IsolatedApiTests(TestCase):
     def execute(self, *arguments):
         return runner.run_tests("localhost/test-image:qualified", list(arguments))
 
-    def assert_cleaned(self, application=True):
-        expected = ([["rm", "--force", "--volumes", "application"]] if application else []) + [
-            ["rm", "--force", "--volumes", "database"], ["network", "rm", "isolated-network"]]
-        self.assertEqual(self.commands[-len(expected):], expected)
+    def assert_cleaned(self):
+        network = next(c[-1] for c in self.commands if c[:2] == ["network", "create"])
+        names = [c[c.index("--name") + 1] for c in self.commands if c[:1] == ["create"]]
+        expected = [["rm", "--force", "--volumes", name] for name in reversed(names)]
+        expected.append(["network", "rm", network])
+        actual = [c for c in self.commands if c[:1] == ["rm"] or c[:2] == ["network", "rm"]]
+        self.assertEqual(actual, expected)
         self.assertTrue(all(not path.exists() for path, _, _ in self.environments))
 
     def test_success_is_private_and_uses_a_non_superuser_test_identity(self):
@@ -106,15 +109,54 @@ class IsolatedApiTests(TestCase):
         self.fail_initialization = True
         with self.assertRaises(subprocess.CalledProcessError):
             self.execute()
-        self.assertNotIn(["start", "--attach", "--interactive", "application"], self.commands)
-        self.assert_cleaned(application=False)
+        self.assertFalse(any(c[:3] == ["start", "--attach", "--interactive"] for c in self.commands))
+        self.assert_cleaned()
 
     def test_unreachable_database_fails_closed_and_cleans_up(self):
         self.ready = False
         with mock.patch.object(runner.time, "monotonic", side_effect=[0, 100]):
             with self.assertRaisesRegex(RuntimeError, "no preview fallback"):
                 self.execute()
-        self.assert_cleaned(application=False)
+        self.assert_cleaned()
+
+    def test_interruption_after_each_successful_create_still_cleans_that_resource(self):
+        for boundary in (1, 2, 3):
+            with self.subTest(boundary=boundary):
+                self.commands.clear()
+                created = []
+
+                def interrupted_create(arguments, **kwargs):
+                    result = self.podman(arguments, **kwargs)
+                    if arguments[:2] == ["network", "create"] or arguments[:1] == ["create"]:
+                        kind = "network" if arguments[:1] == ["network"] else "container"
+                        name = arguments[-1] if kind == "network" else arguments[arguments.index("--name") + 1]
+                        created.append((kind, name, result.stdout.strip()))
+                        if len(created) == boundary:
+                            raise SystemExit(143)
+                    return result
+
+                with mock.patch.object(runner, "podman", side_effect=interrupted_create):
+                    with self.assertRaises(SystemExit):
+                        self.execute()
+                kind, name, identity = created[-1]
+                removals = ([["network", "rm", key] for key in (name, identity)] if kind == "network"
+                            else [["rm", "--force", "--volumes", key] for key in (name, identity)])
+                self.assertTrue(any(command in self.commands for command in removals))
+
+    def test_failed_create_tolerates_an_absent_resource_during_cleanup(self):
+        original = self.podman
+
+        def failed_create(arguments, **kwargs):
+            if arguments[:2] == ["network", "create"]:
+                self.commands.append(arguments)
+                raise subprocess.CalledProcessError(125, arguments)
+            return original(arguments, **kwargs)
+
+        with mock.patch.object(runner, "podman", side_effect=failed_create):
+            with mock.patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    self.execute()
+        self.assertFalse(any(c[:1] == ["rm"] for c in self.commands))
 
     def test_interruption_cleans_application_database_network_and_credentials(self):
         self.interrupt = True
