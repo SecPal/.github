@@ -101,6 +101,36 @@ def main() -> None:
             raise AssertionError("non-socket path was accepted")
         assert unsafe_path.read_text() == "preserve me"
 
+        # Check the actual transport, not just the existence of a listening PID.
+        for response in (b"N", b"S", b"X", b""):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as backend:
+                backend.bind(("127.0.0.1", 0))
+                backend.listen(1)
+                port = backend.getsockname()[1]
+
+                def answer():
+                    connection, _ = backend.accept()
+                    with connection:
+                        assert connection.recv(8) == bytes.fromhex("0000000804d2162f")
+                        connection.sendall(response)
+
+                thread = threading.Thread(target=answer, daemon=True)
+                thread.start()
+                try:
+                    module.check_postgresql("127.0.0.1", port)
+                    assert response in (b"N", b"S")
+                except RuntimeError:
+                    assert response not in (b"N", b"S")
+                finally:
+                    thread.join(timeout=2)
+                assert not thread.is_alive()
+        try:
+            module.check_postgresql("127.0.0.1", reserve_tcp_port())
+        except OSError:
+            pass
+        else:
+            raise AssertionError("unreachable PostgreSQL transport was healthy")
+
         tcp_upstream_path = root / "tcp-upstream.sock"
         tcp_port = reserve_tcp_port()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as upstream:
@@ -134,6 +164,27 @@ def main() -> None:
                     assert client.recv(4096) == b"POSTGRES-NETWORK-TEST"
                 echo_thread.join(timeout=2)
                 assert not echo_thread.is_alive()
+
+                def ssl_response():
+                    connection, _ = upstream.accept()
+                    with connection:
+                        assert connection.recv(8) == bytes.fromhex("0000000804d2162f")
+                        connection.sendall(b"N")
+
+                health_thread = threading.Thread(target=ssl_response, daemon=True)
+                health_thread.start()
+                module.check_postgresql("127.0.0.1", tcp_port)
+                health_thread.join(timeout=2)
+                assert not health_thread.is_alive()
+                upstream.close()
+                # The listener is still up, but a broken upstream must fail.
+                assert proxy.poll() is None
+                try:
+                    module.check_postgresql("127.0.0.1", tcp_port)
+                except (OSError, RuntimeError):
+                    pass
+                else:
+                    raise AssertionError("proxy with unavailable upstream was healthy")
             finally:
                 proxy.terminate()
                 proxy.wait(timeout=2)

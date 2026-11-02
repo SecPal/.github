@@ -9,6 +9,20 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-02 - Reproducible Polyscope PHP Development
+
+**Fixed:**
+
+- Define the pinned rootless PHP development image with Git, Bash and the API's
+  existing PHP/Python test requirements, without changing production images.
+- Run development processes as a non-root identity mapped to the existing
+  rootless account, with meaningful preview and PostgreSQL-relay healthchecks.
+- Run API tests against disposable private PostgreSQL 18 instances with a
+  non-superuser test role; wire the explicit test path into container workspace
+  actions and preserve preview routing and installer rollback.
+- Mount only the current worktree and its actual Git metadata for CLI tools,
+  removing unnecessary read access to other workspaces (refs #1295).
+
 ## 2026-11-01 - Patch Markdown Tooling Glob Matching
 
 **Security:**

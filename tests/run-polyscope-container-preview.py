@@ -124,6 +124,7 @@ def main() -> None:
             network="preview-network",
             preview_port=18080,
         )
+        assert "--userns=keep-id:uid=1000,gid=1000" in command
         assert f"{clone_root}:/workspaces:ro" in command
         assert f"{clone_root}:{clone_root}:ro" in command
         storage_mount = f"{physical_worktree / 'storage'}:/workspaces/api-repo/{physical_worktree.name}/storage:rw"

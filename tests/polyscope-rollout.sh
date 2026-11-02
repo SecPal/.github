@@ -75,6 +75,14 @@ assert_no_generated_preflight_action() {
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-rollout.XXXXXX")"
 trap 'rm -rf "$workspace"' EXIT
 
+
+# These disposable fixture repositories use normal Git semantics, including
+# explicitly disabled signing; account-level commit wrappers do not belong here.
+fixture_git_bin="$workspace/fixture-git-bin"
+mkdir -p "$fixture_git_bin"
+ln -s "$(command -p -v git)" "$fixture_git_bin/git"
+export PATH="$fixture_git_bin:$PATH"
+
 instruction_hash_fixture="$workspace/instruction-hash"
 mkdir -p "$instruction_hash_fixture/.github"
 printf '# Runtime instructions\n' >"$instruction_hash_fixture/AGENTS.md"

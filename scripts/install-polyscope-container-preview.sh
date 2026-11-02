@@ -11,6 +11,7 @@ RENDERER_SOURCE="$SCRIPT_DIR/render-polyscope-container-caddy.py"
 REFRESH_SOURCE="$SCRIPT_DIR/refresh-polyscope-container-preview.sh"
 RUNNER_SOURCE="$SCRIPT_DIR/run-polyscope-container-preview.py"
 CLEANUP_SOURCE="$SCRIPT_DIR/cleanup-polyscope-container-preview.py"
+TEST_SOURCE="$SCRIPT_DIR/run-polyscope-api-tests.py"
 ROLLOUT_SOURCE="$SCRIPT_DIR/polyscope-rollout.py"
 IMAGE="${POLYSCOPE_PREVIEW_IMAGE:-localhost/secpal-polyscope-api-toolchain:php84}"
 NETWORK="${POLYSCOPE_PREVIEW_NETWORK:-polyscope-preview-db}"
@@ -65,7 +66,7 @@ if [[ ! "$PREVIEW_PORT" =~ ^[0-9]+$ || "$PREVIEW_PORT" -lt 1 || "$PREVIEW_PORT" 
     exit 1
 fi
 
-for required_file in "$ROLLOUT_SOURCE" "$PROXY_SOURCE" "$RENDERER_SOURCE" "$REFRESH_SOURCE" "$RUNNER_SOURCE" "$CLEANUP_SOURCE" "$POSTGRES_SOCKET" "$POLYSCOPE_DB_PATH"; do
+for required_file in "$ROLLOUT_SOURCE" "$PROXY_SOURCE" "$RENDERER_SOURCE" "$REFRESH_SOURCE" "$RUNNER_SOURCE" "$CLEANUP_SOURCE" "$TEST_SOURCE" "$POSTGRES_SOCKET" "$POLYSCOPE_DB_PATH"; do
     if [[ ! -e "$required_file" ]]; then
         echo "Error: required runtime input is missing: $required_file" >&2
         exit 1
@@ -161,13 +162,14 @@ cat >"$temporary_dir/php" <<EOF
 set -eu
 export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="\${DBUS_SESSION_BUS_ADDRESS:-unix:path=\$XDG_RUNTIME_DIR/bus}"
-exec podman run --rm --interactive \\
+git_common="\$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || pwd)"
+exec podman run --rm --interactive --userns=keep-id:uid=1000,gid=1000 --no-healthcheck \\
   --network '$NETWORK' \\
   -e DB_HOST=polyscope-postgresql-proxy \\
   -e DB_PORT=5432 \\
   -e KEK_PATH=/app/storage/app/keys/kek.key \\
-  -v "\$PWD":/app:rw \\
-  -v '$CLONE_ROOT':'$CLONE_ROOT':ro \\
+  -v "\$PWD":/app:rw,z \\
+  -v "\$git_common":"\$git_common":ro,z \\
   --workdir /app \\
   '$IMAGE' php "\$@"
 EOF
@@ -177,12 +179,19 @@ cat >"$temporary_dir/composer" <<EOF
 set -eu
 export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="\${DBUS_SESSION_BUS_ADDRESS:-unix:path=\$XDG_RUNTIME_DIR/bus}"
-exec podman run --rm --interactive \\
-  -v "\$PWD":/app:rw \\
-  -v '$CLONE_ROOT':'$CLONE_ROOT':ro \\
+git_common="\$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || pwd)"
+exec podman run --rm --interactive --userns=keep-id:uid=1000,gid=1000 --no-healthcheck \\
+  -v "\$PWD":/app:rw,z \\
+  -v "\$git_common":"\$git_common":ro,z \\
   --workdir /app \\
   --entrypoint composer \\
   '$IMAGE' "\$@"
+EOF
+
+cat >"$temporary_dir/polyscope-api-test" <<EOF
+#!/bin/sh
+set -eu
+exec python3 '$LIBEXEC_DIR/run-polyscope-api-tests.py' --image '$IMAGE' -- "\$@"
 EOF
 
 cat >"$temporary_dir/polyscope-postgresql-proxy.service" <<EOF
@@ -194,7 +203,7 @@ ConditionPathIsSocket=$POSTGRES_SOCKET
 Type=simple
 Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
-ExecStart=/usr/bin/podman run --replace --rm --name polyscope-postgresql-proxy --network $NETWORK --read-only --cap-drop=all --security-opt no-new-privileges --security-opt label=disable -v $LIBEXEC_DIR/polyscope-postgresql-socket-proxy.py:/usr/local/bin/polyscope-postgresql-socket-proxy.py:ro -v ${POSTGRES_SOCKET%/*}:${POSTGRES_SOCKET%/*}:ro --entrypoint python3 $IMAGE /usr/local/bin/polyscope-postgresql-socket-proxy.py --listen-host 0.0.0.0 --listen-port 5432 --upstream $POSTGRES_SOCKET
+ExecStart=/usr/bin/podman run --replace --rm --name polyscope-postgresql-proxy --userns=keep-id:uid=1000,gid=1000 --health-cmd "python3 /usr/local/bin/polyscope-postgresql-socket-proxy.py --check --listen-host 127.0.0.1 --listen-port 5432 --upstream $POSTGRES_SOCKET" --network $NETWORK --read-only --cap-drop=all --security-opt no-new-privileges --security-opt label=disable -v $LIBEXEC_DIR/polyscope-postgresql-socket-proxy.py:/usr/local/bin/polyscope-postgresql-socket-proxy.py:ro -v ${POSTGRES_SOCKET%/*}:${POSTGRES_SOCKET%/*}:ro --entrypoint python3 $IMAGE /usr/local/bin/polyscope-postgresql-socket-proxy.py --listen-host 0.0.0.0 --listen-port 5432 --upstream $POSTGRES_SOCKET
 ExecStop=/usr/bin/podman stop -t 10 polyscope-postgresql-proxy
 Restart=on-failure
 RestartSec=3
@@ -302,6 +311,8 @@ runner_target="$LIBEXEC_DIR/run-polyscope-container-preview.py"
 cleanup_target="$LIBEXEC_DIR/cleanup-polyscope-container-preview.py"
 php_target="$BIN_DIR/php"
 composer_target="$BIN_DIR/composer"
+test_target="$BIN_DIR/polyscope-api-test"
+test_source_target="$LIBEXEC_DIR/run-polyscope-api-tests.py"
 proxy_unit_target="$UNIT_DIR/polyscope-postgresql-proxy.service"
 preview_unit_target="$UNIT_DIR/polyscope-preview.service"
 refresh_unit_target="$UNIT_DIR/polyscope-preview-refresh.service"
@@ -340,6 +351,8 @@ backup_target "$runner_target" runner.py
 backup_target "$cleanup_target" cleanup.py
 backup_target "$php_target" php
 backup_target "$composer_target" composer
+backup_target "$test_target" api-test
+backup_target "$test_source_target" api-test.py
 backup_target "$proxy_unit_target" postgresql-proxy.service
 backup_target "$preview_unit_target" preview.service
 backup_target "$refresh_unit_target" preview-refresh.service
@@ -356,6 +369,8 @@ rollback() {
     restore_target "$cleanup_target" cleanup.py
     restore_target "$php_target" php
     restore_target "$composer_target" composer
+    restore_target "$test_target" api-test
+    restore_target "$test_source_target" api-test.py
     restore_target "$proxy_unit_target" postgresql-proxy.service
     restore_target "$preview_unit_target" preview.service
     restore_target "$refresh_unit_target" preview-refresh.service
@@ -413,6 +428,8 @@ install_managed "$CLEANUP_SOURCE" "$cleanup_target" 0755
 install_managed "$temporary_dir/Caddyfile" "$caddyfile_target" 0600
 install_managed "$temporary_dir/php" "$php_target" 0755
 install_managed "$temporary_dir/composer" "$composer_target" 0755
+install_managed "$temporary_dir/polyscope-api-test" "$test_target" 0755
+install_managed "$TEST_SOURCE" "$test_source_target" 0755
 install_managed "$temporary_dir/polyscope-postgresql-proxy.service" "$proxy_unit_target" 0644
 install_managed "$temporary_dir/polyscope-preview.service" "$preview_unit_target" 0644
 install_managed "$temporary_dir/polyscope-preview-refresh.service" "$refresh_unit_target" 0644
