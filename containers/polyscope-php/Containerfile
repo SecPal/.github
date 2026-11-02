@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: MIT
+
+FROM docker.io/library/composer:2.10.2@sha256:5946476338742b200bb9ff88f8be56275ddae4b3949c72305cb0dbf10cfcb760 AS composer
+FROM docker.io/dunglas/frankenphp:1.13.3-php8.4.27-alpine@sha256:0a7f02a9694dec87d705dbe1967567cc97cf20c80cbf0d32b911ab621cdd7ce5
+
+# The API owns these hash-locked Python runtime requirements. Build with its
+# docker/python directory as the context; do not maintain a second lockfile.
+COPY opentimestamps-requirements.txt /tmp/opentimestamps-requirements.txt
+RUN install-php-extensions bcmath gettext intl pcntl pdo_pgsql pgsql zip \
+    && apk add --no-cache \
+        git=2.54.0-r0 bash=5.3.9-r1 gettext=1.0-r0 ripgrep=15.1.0-r0 \
+        python3=3.14.10-r1 py3-pip=26.1.2-r0 \
+        curl=8.23.0-r0 libcurl=8.23.0-r0 brotli-libs=1.2.1-r0 \
+    && pip3 install --break-system-packages --no-cache-dir --only-binary=:all: \
+        --require-hashes -r /tmp/opentimestamps-requirements.txt \
+    && rm /tmp/opentimestamps-requirements.txt \
+    && cp "$PHP_INI_DIR/php.ini-development" "$PHP_INI_DIR/php.ini" \
+    && printf 'memory_limit=512M\n' > "$PHP_INI_DIR/conf.d/zz-secpal-development.ini" \
+    && rm -rf /usr/local/include/php /usr/src/php* \
+    && rm -f /usr/local/bin/phpize /usr/local/bin/php-config \
+        /usr/local/bin/docker-php-ext-* /usr/local/bin/docker-php-source \
+        /usr/local/bin/install-php-extensions \
+    && if [ -n "$(getcap /usr/local/bin/frankenphp)" ]; then setcap -r /usr/local/bin/frankenphp; fi
+COPY --from=composer /usr/bin/composer /usr/local/bin/composer
+ENV APP_ENV=local APP_DEBUG=false COMPOSER_ALLOW_SUPERUSER=1
+WORKDIR /app
+ENTRYPOINT []
+CMD ["php", "--version"]

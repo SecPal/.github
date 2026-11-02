@@ -228,6 +228,10 @@ def main() -> None:
             assert echoed.stdout == payload, (tool, "piped stdin was lost")
             assert "--tty" not in home.joinpath(".local/bin", tool).read_text()
         php_wrapper = home.joinpath(".local/bin/php").read_text()
+        test_wrapper = home.joinpath(".local/bin/polyscope-api-test").read_text()
+        assert "run-polyscope-api-tests.py" in test_wrapper
+        assert "polyscope-postgresql-proxy" not in test_wrapper
+        assert home.joinpath("custom-libexec/run-polyscope-api-tests.py").is_file()
         caddyfile = home.joinpath(".config/polyscope-preview/Caddyfile").read_text()
         assert "--security-opt label=disable" in proxy_unit
         assert "--cap-drop=all" in proxy_unit
@@ -240,8 +244,10 @@ def main() -> None:
         assert home.joinpath("custom-libexec/run-polyscope-container-preview.py").is_file()
         assert "DB_HOST=polyscope-postgresql-proxy" in php_wrapper
         assert "KEK_PATH=/app/storage/app/keys/kek.key" in php_wrapper
-        assert '-v "$PWD":/app:rw' in php_wrapper
-        assert f"-v '{clone_root}':'{clone_root}':ro" in php_wrapper
+        assert '-v "$PWD":/app:rw,z' in php_wrapper
+        assert 'git rev-parse --path-format=absolute --git-common-dir' in php_wrapper
+        assert '-v "$git_common":"$git_common":ro,z' in php_wrapper
+        assert f"-v '{clone_root}':'{clone_root}':ro" not in php_wrapper
         assert "api-calm-otter.preview.secpal.dev" in caddyfile
         assert "frontend-calm-otter.preview.secpal.dev" in caddyfile
         assert "@preview_redirect_1 host api-calm-otter-a1b2c3d4.preview.secpal.dev" in caddyfile
@@ -264,6 +270,10 @@ def main() -> None:
 
         for state_path in service_state.iterdir():
             state_path.unlink()
+        previous_test_wrapper = home / ".local/bin/polyscope-api-test"
+        previous_test_source = home / "custom-libexec/run-polyscope-api-tests.py"
+        previous_test_wrapper.write_text("previous test wrapper\n")
+        previous_test_source.write_text("previous test source\n")
         rollback_env = env | {"FAIL_PREVIEW_ENABLE": "1"}
         rolled_back = subprocess.run(
             ["bash", str(INSTALLER)],
@@ -275,6 +285,9 @@ def main() -> None:
         assert rolled_back.returncode != 0
         assert "previous managed files were restored" in rolled_back.stderr
         assert list(service_state.iterdir()) == []
+        assert previous_test_wrapper.read_text() == "previous test wrapper\n"
+        assert previous_test_source.read_text() == "previous test source\n"
+
 
         commands = command_log.read_text()
         assert "podman:image exists localhost/secpal-polyscope-api-toolchain:php84" in commands

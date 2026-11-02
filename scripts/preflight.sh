@@ -329,6 +329,7 @@ python3 -m unittest tests/secpal-trivy-repository-scan-unit.py
 python3 -m unittest tests/secpal-trivy-action-archive.py
 
 for preview_test in \
+  tests/run-polyscope-api-tests.py \
   tests/polyscope-postgresql-socket-proxy.py \
   tests/cleanup-polyscope-container-preview.py \
   tests/render-polyscope-container-caddy.py \

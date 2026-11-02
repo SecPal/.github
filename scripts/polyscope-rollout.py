@@ -3855,6 +3855,7 @@ def render_worktree_local_config(
     worktree_path: pathlib.Path,
     *,
     db_path: pathlib.Path | None = None,
+    container_preview: bool = False,
 ) -> str:
     config = render_local_config(spec)
     if spec["path"].name == "api":
@@ -3862,7 +3863,14 @@ def render_worktree_local_config(
             worktree_path.parent.parent,
             db_path or default_polyscope_db_path(),
         )
+        container_commands = {
+            "All Checks": "polyscope-api-test --full && php vendor/bin/pint --dirty && php vendor/bin/phpstan analyse --no-progress",
+            "Pest": "polyscope-api-test",
+            "Pint (dirty)": "php vendor/bin/pint --dirty",
+        }
         for action in config.get("scripts", {}).get("run", []):
+            if container_preview and action.get("label") in container_commands:
+                action["command"] = container_commands[action["label"]]
             if action.get("label") in {"Queue Worker", "Scheduler"}:
                 action["autostart"] = not manages_runtime_units
     preview = config.get("preview")
@@ -5235,7 +5243,9 @@ def provision_worktrees(
         preview_enabled = isinstance(preview_prefix, str) and bool(preview_prefix) and not container_preview
         try:
             preserve_registered_workspace_physical_path(worktree_path, db_path=db_path)
-            config_text = render_worktree_local_config(spec, worktree_path, db_path=db_path)
+            config_text = render_worktree_local_config(
+                spec, worktree_path, db_path=db_path, container_preview=container_preview
+            )
             sync_worktree_local_config(worktree_path, config_text, container_preview=container_preview)
             ensure_workspace_alias(worktree_path, db_path=db_path)
             sync_worktree_auxiliary_files(repo_name, worktree_path)

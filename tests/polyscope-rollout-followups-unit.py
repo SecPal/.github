@@ -39,6 +39,28 @@ rollout = load_rollout_module()
 
 
 class PolyscopeRolloutFollowupTests(TestCase):
+    def test_container_api_checks_use_the_isolated_test_entrypoint(self) -> None:
+        spec = {"path": Path("/source/api"), "preview_prefix": "api"}
+        config = {"scripts": {"run": [
+            {"label": "All Checks", "command": rollout.build_repo_all_checks_command("api")},
+            {"label": "Pest", "command": "php artisan test"},
+            {"label": "Pint (dirty)", "command": "vendor/bin/pint --dirty"},
+            {"label": "Queue Worker", "command": "php artisan queue:work"},
+        ]}, "preview": {"url": "https://api.preview.secpal.dev"}}
+        with mock.patch.object(rollout, "render_local_config", side_effect=lambda _: __import__("copy").deepcopy(config)), \
+             mock.patch.object(rollout, "should_manage_api_runtime_units", return_value=True), \
+             mock.patch.object(rollout, "resolve_current_workspace_name", return_value="otter"):
+            native = json.loads(rollout.render_worktree_local_config(spec, Path("/clones/api/otter")))
+            container = json.loads(rollout.render_worktree_local_config(
+                spec, Path("/clones/api/otter"), container_preview=True))
+        commands = {item["label"]: item["command"] for item in container["scripts"]["run"]}
+        self.assertEqual(commands["Pest"], "polyscope-api-test")
+        self.assertEqual(commands["All Checks"], "polyscope-api-test --full && php vendor/bin/pint --dirty && php vendor/bin/phpstan analyse --no-progress")
+        self.assertEqual(commands["Pint (dirty)"], "php vendor/bin/pint --dirty")
+        self.assertEqual(commands["Queue Worker"], "php artisan queue:work")
+        self.assertEqual(container["preview"], native["preview"])
+        self.assertEqual(native["scripts"]["run"][0]["command"], config["scripts"]["run"][0]["command"])
+
     def test_governance_workspace_commands_use_the_real_package_scripts(self) -> None:
         config = rollout.REPO_SETTINGS[".github"]["local_config"]["scripts"]
         package_scripts = rollout.load_package_scripts(REPO_ROOT)
