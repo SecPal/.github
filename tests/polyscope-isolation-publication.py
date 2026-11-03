@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 """Administrative publication regression; use a disposable root-owned directory."""
-import importlib.util,json,os,sys,tempfile,unittest
+import importlib.util,os,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 spec=importlib.util.spec_from_file_location("publication",Path(__file__).resolve().parents[1]/"scripts/polyscope-isolation.py")

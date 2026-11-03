@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
-import importlib.util,unittest,sys,copy,tempfile,subprocess
+import importlib.util,unittest,copy,tempfile,subprocess
 from unittest.mock import patch
 from types import SimpleNamespace
 from pathlib import Path

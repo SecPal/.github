@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 """Controller boundary regressions; native registration is tested separately."""
-import importlib.util,sys,tempfile,json,unittest,copy,subprocess,os
+import importlib.util,sys,tempfile,unittest,copy,subprocess,os
 from pathlib import Path
 from unittest.mock import Mock,patch
 root=Path(__file__).resolve().parents[1]
@@ -28,7 +28,7 @@ class ReconcileTests(unittest.TestCase):
    m.ensure_api_runtime_owner=Mock(side_effect=AssertionError('worker start'))
    m.run_setup_commands=Mock(side_effect=AssertionError('setup ran'))
    m.reconcile_api_runtime_units=Mock()
-   result=m.provision_worktrees({'api':{'id':'api'}},{'api':{'path':Path(tmp),'_native_setup_commands':['false']}},clone)
+   m.provision_worktrees({'api':{'id':'api'}},{'api':{'path':Path(tmp),'_native_setup_commands':['false']}},clone)
    self.assertEqual(m.is_provisionable_worktree.call_count,1)
    self.assertEqual(m.is_provisionable_worktree.call_args.args[1],ordinary)
    m.cleanup_removed_api_preview_databases.assert_not_called()
