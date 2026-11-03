@@ -78,6 +78,12 @@ def isolation_blocked_paths():
     return {row["path"] for repo in records for row in repo["workspaces"]
             if isolation_path_blocked(row["path"])}
 
+def withdraw_isolated_host_previews(clone_root, paths):
+    for raw in sorted(paths):
+        path = pathlib.Path(raw)
+        if path.is_dir() and not path.is_symlink():
+            deny_preview_nginx_access(clone_root, path)
+
 def isolation_require_execution(path):
     if isolation_path_blocked(path):
         raise RuntimeError("workspace-isolation-quarantined")
@@ -3497,7 +3503,14 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def render_local_config(spec: dict[str, Any]) -> dict[str, Any]:
+def guard_rendered_config(config: dict[str, Any]) -> dict[str, Any]:
+    policy = os.environ.get("SECPAL_WORKSPACE_ISOLATION_POLICY")
+    if not policy and isolation_state() is not None:
+        policy = "/etc/secpal/workspace-isolation.json"
+    return isolation_module().wrap_config(config, policy) if policy else config
+
+
+def render_local_config(spec: dict[str, Any], *, guard: bool = True) -> dict[str, Any]:
     require_repo_instruction_files(spec)
     config = copy.deepcopy(spec["local_config"])
     config = enrich_local_config(spec["path"].name, config)
@@ -3507,7 +3520,7 @@ def render_local_config(spec: dict[str, Any]) -> dict[str, Any]:
     )
     for task in config.get("tasks", []):
         task["prompt"] = collapse_spaces(f"{preamble} {task['prompt']}")
-    return config
+    return guard_rendered_config(config) if guard else config
 
 
 def prefix_first_line(prefix: str, text: str) -> str:
@@ -3669,7 +3682,7 @@ def validate_repo_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
         repo_path = pathlib.Path(spec["path"])
         if not is_workspace_automation_enabled(spec):
             continue
-        config = render_local_config(spec)
+        config = render_local_config(spec, guard=False)
         package_scripts = load_package_scripts(repo_path)
         composer_scripts = load_composer_scripts(repo_path)
 
@@ -3913,7 +3926,7 @@ def render_worktree_local_config(
     db_path: pathlib.Path | None = None,
     container_preview: bool = False,
 ) -> str:
-    config = render_local_config(spec)
+    config = render_local_config(spec, guard=False)
     if spec["path"].name == "api":
         manages_runtime_units = should_manage_api_runtime_units(
             worktree_path.parent.parent,
@@ -3937,7 +3950,7 @@ def render_worktree_local_config(
             preview["url"] = f"https://{preview_prefix}-{workspace}.preview.secpal.dev"
         else:
             preview["url"] = f"https://{workspace}.preview.secpal.dev"
-    return render_pretty_json(config) + "\n"
+    return render_pretty_json(guard_rendered_config(config)) + "\n"
 
 
 def collect_setup_inputs(worktree_path: pathlib.Path, setup_commands: list[str]) -> dict[str, str]:
@@ -4306,6 +4319,8 @@ def build_preview_workspace_redirects(
             # until the provisioner's normal stale-alias cleanup runs. It must
             # not prevent active workspaces from receiving their own aliases.
             if not physical_path.exists():
+                continue
+            if isolation_path_blocked(physical_path):
                 continue
             if not canonical_path.is_symlink() or os.readlink(canonical_path) != physical_workspace:
                 raise RuntimeError(f"workspace alias no longer points to its registered physical clone: {canonical_path}")
@@ -5194,6 +5209,7 @@ def provision_worktrees(
 
     if not container_preview:
         try:
+            withdraw_isolated_host_previews(clone_root, blocked_paths)
             revoke_unregistered_preview_nginx_access(clone_root, registered_worktrees)
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
             error_message = f"failed to reconcile preview access: {error}"
@@ -6501,13 +6517,6 @@ def run_rollout(args: argparse.Namespace) -> int:
         print(error, file=sys.stderr)
         return 1
     validate_repo_local_configs(repo_specs)
-    policy = os.environ.get("SECPAL_WORKSPACE_ISOLATION_POLICY")
-    if not policy and isolation_state() is not None:
-        policy = "/etc/secpal/workspace-isolation.json"
-    if policy:
-        for spec in repo_specs.values():
-            if spec.get("local_config") is not None:
-                spec["local_config"] = isolation_module().wrap_config(spec["local_config"], policy)
     if not args.skip_local_configs:
         write_local_configs(repo_specs)
 
@@ -6521,6 +6530,11 @@ def run_rollout(args: argparse.Namespace) -> int:
         db_backup = sync_repository_metadata(args.db_path, repo_state, repo_specs)
 
     if not container:
+        try:
+            withdraw_isolated_host_previews(args.clone_root, isolation_blocked_paths())
+        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+            print(f"Failed to withdraw isolated host previews: {error}", file=sys.stderr)
+            return 1
         nginx_http2_syntax = args.nginx_http2_syntax
         if args.install_nginx or args.refresh_nginx or nginx_http2_syntax == "auto":
             nginx_http2_syntax = detect_nginx_http2_syntax()

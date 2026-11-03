@@ -140,6 +140,9 @@ jobs:
           python3 tests/secpal-evidence-architecture.py
           python3 tests/polyscope-evidence-architecture.py
           python3 tests/secpal-polyscope-workspace.py
+          python3 tests/polyscope-isolation.py
+          python3 tests/polyscope-isolation-regressions.py
+          python3 tests/secpal-codex-workspace.py
           node --test tests/secpal-polyscope-workspace-ws.test.mjs
           python3 tests/evidence-architecture-governance.py
           node --test tests/governance-repository-security.test.mjs

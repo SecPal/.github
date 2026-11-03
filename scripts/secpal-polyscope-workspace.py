@@ -376,10 +376,7 @@ def create_native(record, metadata, issue, pr, sha, before):
             if (not isinstance(model, str) or not model or model.startswith("claude-")
                     or record.get("github_assign_self_enabled") is not False):
                 raise RuntimeError("isolated-create-preflight")
-            import hashlib
-            if (policy.get("server_sha256") != isolation.QUALIFIED_SERVER_SHA256
-                    or isolation.QUALIFIED_SERVER_SHA256 != hashlib.sha256(Path("/opt/secpal/tools/bin/polyscope-server").read_bytes()).hexdigest()):
-                raise RuntimeError("native-version-unqualified")
+            isolation.validate_server(policy)
             message["model"] = model
     base = urlsplit(admitted_api_base())
     socket_url = urlunsplit(("wss" if base.scheme == "https" else "ws",

@@ -9,6 +9,7 @@ import contextlib
 import fcntl
 import functools
 import importlib.util
+import importlib.machinery
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,8 @@ import tempfile
 
 QUALIFIED_SERVER_SHA256 = "a9d6865ab8e7789a0914b1d3d1aaf62f61f864f29b02c4ff55547a58da48f886"
 
+COORDINATOR_PATH = Path("/usr/local/bin/secpal-polyscope-workspace")
+
 class IsolationError(RuntimeError):
     pass
 
@@ -27,8 +30,9 @@ class IsolationError(RuntimeError):
 def coordinator():
     path = Path(__file__).with_name("secpal-polyscope-workspace.py")
     if not path.is_file():
-        path = Path("/usr/local/bin/secpal-polyscope-workspace")
-    spec = importlib.util.spec_from_file_location("_secpal_workspace_owner", path)
+        path = COORDINATOR_PATH
+    name = "_secpal_workspace_owner"
+    spec = importlib.util.spec_from_loader(name, importlib.machinery.SourceFileLoader(name, str(path)))
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -183,20 +187,28 @@ def native_fence(owner):
     finally:
         os.close(fd)
 
-@functools.lru_cache(maxsize=1)
-def server_digest(mtime_ns):
+def server_digest(path):
     import hashlib
-    return hashlib.sha256(Path("/opt/secpal/tools/bin/polyscope-server").read_bytes()).hexdigest()
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def validate_server(policy):
+    try:
+        path = Path(policy["server_bin"])
+        if (not path.is_absolute() or path.resolve(strict=True) != path
+                or policy["server_sha256"] != QUALIFIED_SERVER_SHA256
+                or server_digest(path) != QUALIFIED_SERVER_SHA256):
+            raise IsolationError("native-version-unqualified")
+        return path
+    except (KeyError, TypeError, OSError):
+        raise IsolationError("native-version-unqualified") from None
 
 
 class Gate:
     def __init__(self, policy_path, owner=None):
         self.policy = load_policy(policy_path)
-        import hashlib
-        binary = Path("/opt/secpal/tools/bin/polyscope-server")
-        if (self.policy.get("server_sha256") != QUALIFIED_SERVER_SHA256
-                or QUALIFIED_SERVER_SHA256 != server_digest(binary.stat().st_mtime_ns)):
-            raise IsolationError("native-version-unqualified")
+        # Rehash current bytes: deployment tools can preserve timestamps.
+        validate_server(self.policy)
         self.owner = owner or coordinator()
 
     @contextlib.contextmanager
@@ -257,7 +269,7 @@ def publish_policy(path, data):
         temporary.unlink(missing_ok=True)
 
 
-def arm(policy_path, model):
+def arm(policy_path, model, server_bin):
     """Administrative reservation before creation; no generated-ID assignment."""
     if os.geteuid() != 0 or not re.fullmatch(r"[a-z0-9._:-]{1,128}", model) or model.startswith("claude-"):
         raise IsolationError("arm-authority-or-model")
@@ -272,11 +284,9 @@ def arm(policy_path, model):
         if os.read(fd, 4096).strip():
             raise IsolationError("creation-outcome-unresolved")
         data = reservation(snapshot(owner), "SecPal/api", 2639, "/home/secpal/.polyscope/clones")
-        import hashlib
-        digest = hashlib.sha256(Path("/opt/secpal/tools/bin/polyscope-server").read_bytes()).hexdigest()
-        if digest != QUALIFIED_SERVER_SHA256:
-            raise IsolationError("native-version-unqualified")
-        data.update(model=model, server_sha256=digest)
+        binary = Path(server_bin).resolve(strict=True)
+        data.update(model=model, server_bin=str(binary), server_sha256=QUALIFIED_SERVER_SHA256)
+        validate_server(data)
         publish_policy(policy_path, data)
     finally:
         os.close(fd)
@@ -288,14 +298,15 @@ def main():
     parser.add_argument("--command-base64")
     parser.add_argument("--arm", action="store_true")
     parser.add_argument("--model")
+    parser.add_argument("--server-bin")
     args = parser.parse_args()
     try:
         if args.arm:
-            if args.command_base64 or not args.model:
+            if args.command_base64 or not args.model or not args.server_bin:
                 raise IsolationError("arm-arguments")
-            arm(args.policy, args.model)
+            arm(args.policy, args.model, args.server_bin)
             return 0
-        if args.model or not args.command_base64:
+        if args.model or args.server_bin or not args.command_base64:
             raise IsolationError("command-arguments")
         command = base64.b64decode(args.command_base64, validate=True).decode()
         return guarded_command(args.policy, ["/bin/bash", "-c", command])

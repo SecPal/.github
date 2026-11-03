@@ -47,7 +47,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
             {"label": "Pint (dirty)", "command": "vendor/bin/pint --dirty"},
             {"label": "Queue Worker", "command": "php artisan queue:work"},
         ]}, "preview": {"url": "https://api.preview.secpal.dev"}}
-        with mock.patch.object(rollout, "render_local_config", side_effect=lambda _: __import__("copy").deepcopy(config)), \
+        with mock.patch.object(rollout, "render_local_config", side_effect=lambda _, **_kwargs: __import__("copy").deepcopy(config)), \
              mock.patch.object(rollout, "should_manage_api_runtime_units", return_value=True), \
              mock.patch.object(rollout, "resolve_current_workspace_name", return_value="otter"):
             native = json.loads(rollout.render_worktree_local_config(spec, Path("/clones/api/otter")))

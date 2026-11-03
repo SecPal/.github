@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 """Controller boundary regressions; native registration is tested separately."""
-import importlib.util,sys,tempfile,unittest,copy,subprocess,os
+import importlib.util,sys,tempfile,unittest,copy,subprocess,os,json,hashlib,base64,shlex
 from pathlib import Path
 from unittest.mock import Mock,patch
 root=Path(__file__).resolve().parents[1]
@@ -28,10 +28,12 @@ class ReconcileTests(unittest.TestCase):
    m.ensure_api_runtime_owner=Mock(side_effect=AssertionError('worker start'))
    m.run_setup_commands=Mock(side_effect=AssertionError('setup ran'))
    m.reconcile_api_runtime_units=Mock()
+   m.deny_preview_nginx_access=Mock()
    m.provision_worktrees({'api':{'id':'api'}},{'api':{'path':Path(tmp),'_native_setup_commands':['false']}},clone)
    self.assertEqual(m.is_provisionable_worktree.call_count,1)
    self.assertEqual(m.is_provisionable_worktree.call_args.args[1],ordinary)
    m.cleanup_removed_api_preview_databases.assert_not_called()
+   m.deny_preview_nginx_access.assert_called_once_with(clone,target)
    m.ensure_api_runtime_owner.assert_not_called()
    m.run_setup_commands.assert_not_called()
    self.assertIn(m.build_api_runtime_id(target),m.reconcile_api_runtime_units.call_args.kwargs['preserve_runtime_ids'])
@@ -48,7 +50,7 @@ class ReconcileTests(unittest.TestCase):
    self.assertEqual(before,m.build_setup_hash(path,commands,linked_context={}))
  def test_sync_cannot_unwrap_hooks_when_default_policy_is_armed(self):
   m=load('rollout_default_authority','polyscope-rollout.py')
-  specs={'api':{'local_config':{'scripts':{'setup':['echo never-unwrapped']}}}}
+  specs={'api':{'path':Path('/fixture/api'),'local_config':{'scripts':{'setup':['echo never-unwrapped']}}}}
   m._isolation_context=({},[],False)
   m.validate_preview_backend=lambda args:False
   m.build_repo_specs=lambda root:specs
@@ -57,8 +59,10 @@ class ReconcileTests(unittest.TestCase):
   class Captured(Exception):pass
   captured=[]
   def write(values):
-   captured.append(copy.deepcopy(values))
+   captured.append({'api':{'local_config':m.render_local_config(values['api'])}})
    raise Captured()
+  m.require_repo_instruction_files=lambda spec:None
+  m.instruction_reference=lambda spec:'AGENTS.md'
   m.write_local_configs=write
   from types import SimpleNamespace
   args=SimpleNamespace(workspace_root=Path('/fixture'),skip_local_configs=False)
@@ -100,6 +104,106 @@ class CreateScopeTests(unittest.TestCase):
      m.create_native({'id':'api','name':'SecPal/api','github_assign_self_enabled':False},
       {'number':2639,'title':'unit','url':'https://github.com/SecPal/api/issues/2639','body':''},2639,None,None,[])
     dispatch.assert_not_called()
+
+
+class NativeExecutableTests(unittest.TestCase):
+ def test_native_create_uses_the_reservations_configured_executable(self):
+  from types import SimpleNamespace
+  m=load('native_executable','secpal-polyscope-workspace.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   binary=Path(tmp)/'server';binary.write_bytes(b'qualified fixture')
+   digest=hashlib.sha256(binary.read_bytes()).hexdigest()
+   policy={'repo_id':'api','issue':2639,'repo':'SecPal/api','model':'gpt-5.3-codex','server_bin':str(binary),'server_sha256':digest}
+   original_spec=importlib.util.spec_from_file_location
+   def fixture_spec(name,path):
+    spec=original_spec(name,path);execute=spec.loader.exec_module
+    def execute_fixture(module):
+     execute(module);module.load_policy=lambda path:policy
+     module.validate_policy=lambda *args:None;module.snapshot=lambda *args:[]
+     module.QUALIFIED_SERVER_SHA256=digest
+    spec.loader.exec_module=execute_fixture
+    return spec
+   with patch.dict(os.environ,{'SECPAL_WORKSPACE_ISOLATION_POLICY':'/trusted-fixture'}),patch.object(importlib.util,'spec_from_file_location',side_effect=fixture_spec),patch.object(m.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout='{"id":"native-fixture"}')) as dispatch:
+    result=m.create_native({'id':'api','name':'SecPal/api','github_assign_self_enabled':False},{'number':2639,'title':'unit','url':'https://github.com/SecPal/api/issues/2639','body':''},2639,None,None,[])
+    self.assertEqual(result['id'],'native-fixture')
+    self.assertEqual(json.loads(dispatch.call_args.kwargs['input'])['message']['model'],'gpt-5.3-codex')
+
+class RenderBoundaryTests(unittest.TestCase):
+ def test_final_repo_and_container_actions_are_guarded_after_enrichment(self):
+  m=load('final_render','polyscope-rollout.py')
+  m._isolation_context=({},[],False)
+  m.require_repo_instruction_files=lambda spec:None
+  m.instruction_reference=lambda spec:'AGENTS.md'
+  m.should_manage_api_runtime_units=lambda *args:True
+  spec={'path':Path('/fixture/api'),'local_config':{'scripts':{'setup':['echo setup'],'run':[{'label':'Pest','command':'old'}]}}}
+  with patch.dict(os.environ,{},clear=True):
+   repo=m.render_local_config(spec)
+   tree=json.loads(m.render_worktree_local_config(spec,Path('/fixture/clones/api/new'),container_preview=True))
+  for config in [repo,tree]:
+   for action in config['scripts']['run']:
+    self.assertIn('--command-base64',action['command'])
+  pest=next(a for a in tree['scripts']['run'] if a['label']=='Pest')
+  self.assertEqual(base64.b64decode(shlex.split(pest['command'])[-1]).decode(),'polyscope-api-test')
+  self.assertEqual(spec['local_config']['scripts']['setup'],['echo setup'])
+ def test_refresh_only_withdraws_protected_acl_before_rendering(self):
+  from types import SimpleNamespace
+  m=load('refresh_only_acl','polyscope-rollout.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   clone=Path(tmp);target=clone/'api'/'protected';target.mkdir(parents=True)
+   m.validate_preview_backend=lambda args:False
+   m.build_repo_specs=lambda root:{}
+   m.validate_repo_instruction_files=lambda *args:set()
+   m.validate_repo_local_configs=lambda *args:None
+   m.load_repo_state=lambda path:{}
+   m.detect_nginx_http2_syntax=lambda:'modern'
+   m.isolation_blocked_paths=lambda:{str(target)}
+   m.deny_preview_nginx_access=Mock()
+   class Captured(Exception):pass
+   m.build_preview_workspace_redirects=Mock(side_effect=Captured)
+   args=SimpleNamespace(workspace_root=clone,skip_local_configs=True,repo_state_file=clone/'state',skip_db_sync=True,nginx_http2_syntax='modern',install_nginx=False,refresh_nginx=True,clone_root=clone)
+   with self.assertRaises(Captured):m.run_rollout(args)
+   m.deny_preview_nginx_access.assert_called_once_with(clone,target)
+ def test_host_redirects_exclude_protected_members_but_preserve_ordinary_aliases(self):
+  m=load('host_routes','polyscope-rollout.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   clone=Path(tmp);base=clone/'api';base.mkdir()
+   for canonical,physical in [('ordinary','ordinary-old'),('protected','protected-new')]:
+    (base/physical).mkdir();(base/canonical).symlink_to(physical)
+   (base/'.polyscope-secpal-workspace-aliases.json').write_text(json.dumps({'version':1,'aliases':{'ordinary':'ordinary-old','protected':'protected-new'}}))
+   m.isolation_path_blocked=lambda path:path.name=='protected-new'
+   self.assertEqual(m.build_preview_workspace_redirects({'api':{'id':'api'}},clone),{'api':{'ordinary-old':'ordinary'}})
+
+class ExecutableTests(unittest.TestCase):
+ def test_configured_qualified_executable_is_accepted(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   binary=Path(tmp)/'server';binary.write_bytes(b'qualified fixture')
+   digest=hashlib.sha256(binary.read_bytes()).hexdigest()
+   with patch.object(iso,'QUALIFIED_SERVER_SHA256',digest),patch.object(iso,'load_policy',return_value={'server_bin':str(binary),'server_sha256':digest}):
+    iso.Gate('/authority',owner=Mock())
+ def test_replacement_retaining_mtime_cannot_reuse_a_qualified_digest(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   binary=Path(tmp)/'server';binary.write_bytes(b'qualified fixture')
+   digest=hashlib.sha256(binary.read_bytes()).hexdigest();before=binary.stat()
+   real_path=Path
+   def fixture_path(value):
+    return binary if str(value)=='/opt/secpal/tools/bin/polyscope-server' else real_path(value)
+   clear=getattr(iso.server_digest,'cache_clear',lambda:None);clear()
+   try:
+    with patch.object(iso,'Path',side_effect=fixture_path),patch.object(iso,'QUALIFIED_SERVER_SHA256',digest),patch.object(iso,'load_policy',return_value={'server_bin':str(binary),'server_sha256':digest}):
+     iso.Gate('/authority',owner=Mock())
+     replacement=real_path(tmp)/'replacement';replacement.write_bytes(b'unqualified fixture')
+     os.utime(replacement,ns=(before.st_atime_ns,before.st_mtime_ns));os.replace(replacement,binary)
+     with self.assertRaises(iso.IsolationError):iso.Gate('/authority',owner=Mock())
+   finally:clear()
+ def test_extensionless_installed_coordinator_remains_the_mapping_owner(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   directory=Path(tmp);installed=directory/'secpal-polyscope-workspace'
+   installed.write_bytes((root/'scripts/secpal-polyscope-workspace.py').read_bytes())
+   iso.coordinator.cache_clear()
+   try:
+    with patch.object(iso,'__file__',str(directory/'polyscope-isolation.py')),patch.object(iso,'COORDINATOR_PATH',installed,create=True):
+     self.assertTrue(callable(iso.coordinator().admit_native_group))
+   finally:iso.coordinator.cache_clear()
 
 class StandaloneTests(unittest.TestCase):
  def test_missing_helper_allowed_only_when_no_isolation_authority_is_armed(self):

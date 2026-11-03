@@ -10,7 +10,7 @@ The reservation is a single immutable before-ID fence, not another registry.
 
 ## Source and operating boundaries
 
-The guard qualifies Polyscope 0.29.0 by its executable digest and the native
+The guard qualifies Polyscope 0.29.0 by its current executable contents and the native
 repository/group contract. A different binary, missing authority, changed linked
 repositories, ambiguous identity or incomplete new group fails closed. Requalify
 the native contract before changing the executable pin.
@@ -30,7 +30,10 @@ must not trigger automatic re-provisioning.
 
 Before any native creation, an administrator arms
 `/etc/secpal/workspace-isolation.json` using the versioned guard's `--arm --model`
-operation. It accepts only the fixed API issue, the qualified executable, an empty
+operation with an explicit `--server-bin` matching the configured service executable.
+The reservation stores its canonical path and qualified digest. Every admission
+rehashes the current bytes, including after replacement with preserved timestamps.
+It accepts only the fixed API issue, the qualified executable, an empty
 creation fence and a non-Claude model. It publishes complete, root-owned authority
 atomically and exclusively; an existing reservation is never overwritten. The
 coordinator reads the same reservation and rejects another task's reservation
@@ -40,7 +43,9 @@ The required marker `/etc/secpal/workspace-isolation.required` makes loss of the
 policy fail closed. Once armed, the default authority also applies when a service
 loses its optional environment file. Every effective native repository/workspace
 setup and run command must be wrapped before opening the creation window,
-including commands inherited by the three linked repositories. Wrapping joins the
+including commands inherited by the three linked repositories. Apply wrapping to
+final rendered output after generated actions and container overrides, so later
+enrichment cannot introduce an unguarded command. Wrapping joins the
 entire setup sequence inside one guard; it does not merely disable autostart.
 
 The guard uses the existing coordinator's native observation and shared creation
@@ -54,7 +59,9 @@ Rollout, worktree bootstrap and runtime creation reject protected paths before
 setup or readiness checks. Runtime reconciliation preserves their identities
 rather than pruning them. While a reservation is active, orphan preview-database
 collection is deferred; reconcile that housekeeping separately after the
-reservation's lifetime. Preview rendering excludes protected members even if they
+reservation's lifetime. Both container and host preview rendering exclude protected members. Host refresh
+also revokes only their old Nginx traversal grant before rendering, including
+refresh-only passes. Container rendering excludes protected members even if they
 contain old readiness tokens. Cleanup and refresh must not remove their files or
 restart preview services solely because they were registered.
 
@@ -118,6 +125,9 @@ The following is an ordering contract, not a live activation approval:
    cgroups and released locks. On timeout, failure or unexplained work, abort.
    Do not force-kill old live services.
 4. Install the pinned guard/coordinator/dependencies and wrapper-capable sources;
+   the system-component installer stages, installs and rolls back the root-owned
+   guard at `/usr/local/libexec/secpal/polyscope-isolation.py`. Its lazy loader
+   imports the existing extensionless coordinator rather than another copy;
    preserve every existing restricted-sudo and management-network denial. Existing
    installers can restart services: their invocation needs separate authorization.
 5. Under the closed creation window, make required authority effective, arm the
