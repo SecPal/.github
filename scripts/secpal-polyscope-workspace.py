@@ -358,6 +358,29 @@ def create_native(record, metadata, issue, pr, sha, before):
     else:
         message = {"type": "worktree.create_from_issue", "repoId": repo_id,
                    "issue": {k: metadata[k] for k in ["number", "title", "url", "body"]}}
+    policy_path = os.environ.get("SECPAL_WORKSPACE_ISOLATION_POLICY")
+    isolated_target = record.get("name") == "SecPal/api" and issue == 2639 and pr is None
+    if isolated_target:
+        policy_path = policy_path or "/etc/secpal/workspace-isolation.json"
+    if policy_path:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_isolation", (Path(__file__).with_name("polyscope-isolation.py") if Path(__file__).with_name("polyscope-isolation.py").is_file() else Path("/usr/local/libexec/secpal/polyscope-isolation.py")))
+        isolation = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(isolation)
+        policy = isolation.load_policy(policy_path)
+        isolation.validate_policy(policy, isolation.snapshot(sys.modules[__name__]))
+        if isolated_target and (repo_id, issue, pr) != (policy["repo_id"], policy["issue"], None):
+            raise RuntimeError("isolated-create-policy-scope")
+        if (repo_id, issue, pr) == (policy["repo_id"], policy["issue"], None):
+            model = policy.get("model")
+            if (not isinstance(model, str) or not model or model.startswith("claude-")
+                    or record.get("github_assign_self_enabled") is not False):
+                raise RuntimeError("isolated-create-preflight")
+            import hashlib
+            if (policy.get("server_sha256") != isolation.QUALIFIED_SERVER_SHA256
+                    or isolation.QUALIFIED_SERVER_SHA256 != hashlib.sha256(Path("/opt/secpal/tools/bin/polyscope-server").read_bytes()).hexdigest()):
+                raise RuntimeError("native-version-unqualified")
+            message["model"] = model
     base = urlsplit(admitted_api_base())
     socket_url = urlunsplit(("wss" if base.scheme == "https" else "ws",
                             base.netloc, "/ws", "client=secpal-workspace-bridge", ""))
@@ -473,6 +496,38 @@ def ensure(repo, issue, pr, sha):
         return result
 
 
+def attest(repo, issue, pr=None, sha=None, workspace_id=None):
+    record = repository(repo)
+    row = lookup(record, issue, pr, workspace_id)
+    if row is None:
+        raise RuntimeError("workspace-not-found")
+    result = workspace_result(repo, row, sha)
+    source = Path(result["path"])
+    before = source.stat(follow_symlinks=False)
+    groups = observe_native_groups()
+    observed = next(r for r in groups if r["id"] == record["id"])
+    current = next(w for w in observed["workspaces"] if w["id"] == row["id"])
+    # Reuse the sole coordinator's native ownership contract.
+    if current != row:
+        raise RuntimeError("workspace-group-changed")
+    if row.get("linked_worktree_ids"):
+        admit_native_group(row, groups)
+    members = {row["id"], *row.get("linked_worktree_ids", [])}
+    actual_repos = {w["repo_id"] for r in groups for w in r["workspaces"] if w["id"] in members}
+    if actual_repos != {record["id"], *record.get("linked_repo_ids", [])}:
+        raise RuntimeError("workspace-configured-group-incomplete")
+    after = source.stat(follow_symlinks=False)
+    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+        raise RuntimeError("workspace-filesystem-changed")
+    filesystem = dict(device=after.st_dev, inode=after.st_ino, uid=after.st_uid, gid=after.st_gid)
+    return dict(version=1, repo=repo, repo_id=record["id"], issue=issue,
+                **result, filesystem=filesystem, members=[
+                    dict(id=w["id"], repo_id=w["repo_id"], path=w["path"],
+                         linked_from_worktree_id=w.get("linked_from_worktree_id"),
+                         linked_worktree_ids=w.get("linked_worktree_ids", []))
+                    for r in groups for w in r["workspaces"] if w["id"] in members])
+
+
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     subcommands = result.add_subparsers(dest="action", required=True)
@@ -518,7 +573,12 @@ def main(argv=None):
         else:
             path = resolve(args.repo, args.issue, args.pr, args.sha, args.workspace_id)
         if args.action == "resolve":
-            print(path)
+            if os.environ.get("SUDO_USER") == "codex":
+                if (args.repo, args.issue, args.pr, args.sha, args.workspace_id) != ("SecPal/api", 2639, None, None, None):
+                    raise RuntimeError("codex-task-scope")
+                print(json.dumps(attest(args.repo, args.issue)))
+            else:
+                print(path)
             return 0
         os.chdir(path)
         if Path(command_args[0]).name == "git":

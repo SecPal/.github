@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-03 - Isolate Native Workspace Provisioning
+
+**Security:**
+
+- Fence the authorized linked workspace group before native registration and
+  preserve that fence through setup, rollout, timers and preview reconciliation.
+- Add a restricted UID-separated development runner with fresh native identity
+  checks, hardlink separation and a narrow idmapped filesystem grant.
+- Qualify interrupted registration and resource cleanup without broadening
+  restricted sudo or management access. Live activation remains separate
+  (refs #1297).
+
 ## 2026-11-02 - Reproducible Polyscope PHP Development
 
 **Fixed:**

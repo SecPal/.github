@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import functools
 import json
 import os
 import pathlib
@@ -14,6 +16,22 @@ import re
 import sqlite3
 import tempfile
 
+
+@functools.lru_cache(maxsize=1)
+def isolation_module():
+    path = pathlib.Path(__file__).with_name("polyscope-isolation.py")
+    if not path.is_file():
+        path = pathlib.Path("/usr/local/libexec/secpal/polyscope-isolation.py")
+    if (not path.is_file()
+            and not os.environ.get("SECPAL_WORKSPACE_ISOLATION_POLICY")
+            and not pathlib.Path("/etc/secpal/workspace-isolation.json").exists()
+            and not pathlib.Path("/etc/secpal/workspace-isolation.required").exists()):
+        from types import SimpleNamespace
+        return SimpleNamespace(from_environment=lambda: None)
+    spec = importlib.util.spec_from_file_location("_secpal_isolation", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 ROUTES = (
     ("SecPal/api", "api", "api", "public", "php"),
@@ -129,8 +147,21 @@ def active_workspaces(
         ):
             raise RuntimeError(f"unsafe Polyscope workspace alias in {registry_path}")
 
+    gate = isolation_module().from_environment()
+    observed = None
+    if gate:
+        with gate.observation() as (records, pending):
+            observed = records, pending
     workspaces: list[tuple[str, str]] = []
     for (raw_path,) in rows:
+        if observed:
+            records, pending = observed
+            try:
+                blocked = isolation_module().classify(gate.policy, records, str(raw_path), pending=pending)
+            except isolation_module().IsolationError:
+                blocked = True
+            if blocked:
+                continue
         registered_path = pathlib.Path(str(raw_path))
         if not registered_path.is_absolute() or registered_path.parent != clone_root / repository_id:
             raise RuntimeError(

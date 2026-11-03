@@ -9,6 +9,7 @@ import base64
 import contextlib
 import copy
 import fcntl
+import functools
 import hashlib
 import importlib.util
 import json
@@ -30,6 +31,56 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
+
+@functools.lru_cache(maxsize=1)
+def isolation_module():
+    path = pathlib.Path(__file__).with_name("polyscope-isolation.py")
+    if not path.is_file():
+        path = pathlib.Path("/usr/local/libexec/secpal/polyscope-isolation.py")
+    if (not path.is_file()
+            and not os.environ.get("SECPAL_WORKSPACE_ISOLATION_POLICY")
+            and not pathlib.Path("/etc/secpal/workspace-isolation.json").exists()
+            and not pathlib.Path("/etc/secpal/workspace-isolation.required").exists()):
+        from types import SimpleNamespace
+        return SimpleNamespace(from_environment=lambda: None)
+    spec = importlib.util.spec_from_file_location("_secpal_isolation", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+_isolation_context = None
+
+def isolation_state():
+    if _isolation_context is not None:
+        return _isolation_context
+    gate = isolation_module().from_environment()
+    if gate:
+        with gate.observation() as (records, pending):
+            return gate.policy, records, pending
+    return None
+
+def isolation_path_blocked(path):
+    state = isolation_state()
+    if state is None:
+        return False
+    policy, records, pending = state
+    try:
+        return isolation_module().classify(policy, records, str(pathlib.Path(path).resolve()), pending=pending)
+    except isolation_module().IsolationError:
+        # A row created after this pass's snapshot waits for the next pass.
+        return True
+
+def isolation_blocked_paths():
+    state = isolation_state()
+    if state is None:
+        return set()
+    policy, records, pending = state
+    return {row["path"] for repo in records for row in repo["workspaces"]
+            if isolation_path_blocked(row["path"])}
+
+def isolation_require_execution(path):
+    if isolation_path_blocked(path):
+        raise RuntimeError("workspace-isolation-quarantined")
 
 ROLLOUT_SCRIPT_PATH = pathlib.Path(__file__).resolve()
 
@@ -1421,6 +1472,7 @@ def _bootstrap_api_worktree_locked(
     allow_schema_drift_recovery: bool = True,
 ) -> tuple[bool, str | None]:
     """Run the API mutation pipeline while the caller holds its worktree lock."""
+    isolation_require_execution(worktree_path)
     env_path = worktree_path / ".env"
     env_values = load_env_assignments(env_path)
     if preview_storage_target is None:
@@ -1575,6 +1627,7 @@ def prepare_api_worktree(
     *,
     db_path: pathlib.Path | None = None,
 ) -> tuple[bool, str | None]:
+    isolation_require_execution(worktree_path)
     with acquire_api_worktree_bootstrap_lock(worktree_path) as locked_worktree_path:
         return ensure_api_worktree_ready(
             locked_worktree_path,
@@ -1593,6 +1646,7 @@ def bootstrap_api_worktree(
     allow_tenant_key_recovery: bool = True,
     allow_schema_drift_recovery: bool = True,
 ) -> tuple[bool, str | None]:
+    isolation_require_execution(worktree_path)
     with acquire_api_worktree_bootstrap_lock(worktree_path) as locked_worktree_path:
         ready, preview_storage_target = ensure_api_worktree_ready(
             locked_worktree_path,
@@ -1619,6 +1673,7 @@ def refresh_api_worktree(
     *,
     db_path: pathlib.Path | None = None,
 ) -> tuple[bool, str | None]:
+    isolation_require_execution(worktree_path)
     return bootstrap_api_worktree(
         worktree_path,
         source_repo_path,
@@ -1635,6 +1690,7 @@ def run_api_worktree_shell_command(
     *,
     db_path: pathlib.Path | None = None,
 ) -> None:
+    isolation_require_execution(worktree_path)
     env_path = worktree_path / ".env"
     if not env_path.exists():
         raise SystemExit(f"api worktree {worktree_path} is missing .env")
@@ -5037,6 +5093,7 @@ def ensure_api_runtime_owner(
     preview_enabled: bool,
 ) -> dict[str, str]:
     """Converge one persistent API runtime owner before allowing preview access."""
+    isolation_require_execution(worktree_path)
     try:
         runtime_units = build_api_runtime_unit_specs(
             worktree_path,
@@ -5088,6 +5145,9 @@ def provision_worktrees(
         repo_state,
         clone_root,
     )
+    blocked_paths = {str(path) for paths in registered_worktrees.values() for path in paths
+                     if isolation_path_blocked(path)}
+    isolation_active = isolation_state() is not None
     admission = container_preview_admission() if container_preview else None
 
     def withdraw_if_api(repo_name: str, worktree: pathlib.Path) -> None:
@@ -5161,6 +5221,8 @@ def provision_worktrees(
         setup_commands = validation_commands
 
         for worktree_path in registered_worktrees[repo_name]:
+            if str(worktree_path) in blocked_paths:
+                continue
             if not worktree_path.is_dir() or worktree_path.is_symlink():
                 print(
                     f"Skipping registered {repo_name} worktree at {worktree_path}: path is missing or not a real directory"
@@ -5228,7 +5290,7 @@ def provision_worktrees(
     for removed_alias in removed_workspace_aliases:
         print(f"Removed stale managed workspace alias {removed_alias}")
 
-    cleaned_preview_storage_targets = cleanup_removed_api_preview_databases(
+    cleaned_preview_storage_targets = [] if isolation_active else cleanup_removed_api_preview_databases(
         repo_state,
         repo_specs,
         clone_root,
@@ -6189,6 +6251,9 @@ def dispatch_instruction_dependent_direct_api_mode(args: argparse.Namespace) -> 
     if mode == "run_api_worktree" and not args.shell_command:
         raise SystemExit("--shell-command is required with --run-api-worktree")
 
+    if isolation_path_blocked(requested_worktree):
+        return 0
+
     application_runtime = mode == "run_api_runtime_worktree"
     if application_runtime:
         role = getattr(args, "runtime_role", None)
@@ -6375,6 +6440,18 @@ def apply_canonical_reconcile_mode(args: argparse.Namespace) -> None:
 
 
 def main() -> int:
+    global _isolation_context
+    gate = isolation_module().from_environment()
+    if gate:
+        with gate.observation() as (records, pending):
+            _isolation_context = gate.policy, records, pending
+        try:
+            return isolated_main()
+        finally:
+            _isolation_context = None
+    return isolated_main()
+
+def isolated_main() -> int:
     args = parse_args()
     apply_canonical_reconcile_mode(args)
 
@@ -6424,6 +6501,13 @@ def run_rollout(args: argparse.Namespace) -> int:
         print(error, file=sys.stderr)
         return 1
     validate_repo_local_configs(repo_specs)
+    policy = os.environ.get("SECPAL_WORKSPACE_ISOLATION_POLICY")
+    if not policy and isolation_state() is not None:
+        policy = "/etc/secpal/workspace-isolation.json"
+    if policy:
+        for spec in repo_specs.values():
+            if spec.get("local_config") is not None:
+                spec["local_config"] = isolation_module().wrap_config(spec["local_config"], policy)
     if not args.skip_local_configs:
         write_local_configs(repo_specs)
 

@@ -4,6 +4,10 @@
 
 set -euo pipefail
 
+if [[ -n "${SECPAL_WORKSPACE_ISOLATION_POLICY:-}" ]]; then
+    python3 -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location("isolation",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.load_policy(sys.argv[2])' "$(dirname -- "${BASH_SOURCE[0]}")/polyscope-isolation.py" "$SECPAL_WORKSPACE_ISOLATION_POLICY"
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_SCRIPT="$SCRIPT_DIR/polyscope-rollout.py"
 REAPER_SOURCE="$SCRIPT_DIR/reap-polyscope-clones.py"
@@ -430,6 +434,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+${SECPAL_WORKSPACE_ISOLATION_POLICY:+Environment=SECPAL_WORKSPACE_ISOLATION_POLICY=$SECPAL_WORKSPACE_ISOLATION_POLICY}
 Type=simple
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
@@ -456,6 +461,7 @@ Description=Sync Polyscope prompts and preview config for SecPal
 $rollout_sync_after
 
 [Service]
+${SECPAL_WORKSPACE_ISOLATION_POLICY:+Environment=SECPAL_WORKSPACE_ISOLATION_POLICY=$SECPAL_WORKSPACE_ISOLATION_POLICY}
 Type=oneshot
 WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
@@ -546,6 +552,7 @@ StartLimitIntervalSec=10
 StartLimitBurst=5
 
 [Service]
+${SECPAL_WORKSPACE_ISOLATION_POLICY:+Environment=SECPAL_WORKSPACE_ISOLATION_POLICY=$SECPAL_WORKSPACE_ISOLATION_POLICY}
 Type=oneshot
 TimeoutStartSec=15min
 WorkingDirectory=$WORKSPACE_ROOT/.github
@@ -602,6 +609,7 @@ Description=Reap orphaned SecPal Polyscope clone roots
 After=polyscope-worktree-provision.service
 
 [Service]
+${SECPAL_WORKSPACE_ISOLATION_POLICY:+Environment=SECPAL_WORKSPACE_ISOLATION_POLICY=$SECPAL_WORKSPACE_ISOLATION_POLICY}
 Type=oneshot
 Environment=PATH=$SERVICE_PATH
 ExecStart=$REAPER_TARGET --polyscope-home $POLYSCOPE_HOME --clone-root $POLYSCOPE_CLONE_ROOT --grace-period 7d
