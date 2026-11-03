@@ -268,18 +268,20 @@ class Launcher:
             raise IsolationError("task-scope")
         label="label=secpal.development.scope="+self.scope_label()
         resources = []
-        for kind, listing in [("network", ["network", "ls", "-q"]),
-                              ("volume", ["volume", "ls", "-q"]),
-                              ("container", ["ps", "-aq"])]:
-            ids = self.podman(receipt, [*listing, "--filter", label], capture=True).stdout.split()
-            resources.extend((kind, ident) for ident in ids)
-        self.remove_resources(receipt, resources)
-        for directory in Path("/home/codex").glob("secpal-test-*"):
-            if directory.is_symlink() or not directory.is_dir() or directory.stat().st_uid!=1001:
-                continue
-            marker=directory/".scope"
-            if marker.is_file() and not marker.is_symlink() and marker.read_text()==self.scope_label():
-                shutil.rmtree(directory)
+        try:
+            for kind, listing in [("network", ["network", "ls", "-q"]),
+                                  ("volume", ["volume", "ls", "-q"]),
+                                  ("container", ["ps", "-aq"])]:
+                ids = self.podman(receipt, [*listing, "--filter", label], capture=True, timeout=30).stdout.split()
+                resources.extend((kind, ident) for ident in ids)
+            self.remove_resources(receipt, resources)
+        finally:
+            for directory in Path("/home/codex").glob("secpal-test-*"):
+                if directory.is_symlink() or not directory.is_dir() or directory.stat().st_uid!=1001:
+                    continue
+                marker=directory/".scope"
+                if marker.is_file() and not marker.is_symlink() and marker.read_text()==self.scope_label():
+                    shutil.rmtree(directory)
 
     def test(self, command):
         with interruptible():
@@ -290,14 +292,15 @@ class Launcher:
         ident="secpal-codex-test-"+secrets.token_hex(8)
         network,volume=ident+"-net",ident+"-data"
         resources = []
-        directory=Path(tempfile.mkdtemp(prefix="secpal-test-",dir="/home/codex"))
-        (directory/".scope").write_text(self.scope_label())
-        password=secrets.token_urlsafe(36)
-        secret=directory/"password";secret.write_text(password);secret.chmod(0o600)
-        envfile=directory/"test.env"
-        envfile.write_text("DB_CONNECTION=pgsql\nDB_HOST=fixture-db\nDB_PORT=5432\nDB_DATABASE=qualification\nDB_USERNAME=fixture\nDB_PASSWORD="+password+"\n")
-        envfile.chmod(0o600)
+        directory = None
         try:
+            directory=Path(tempfile.mkdtemp(prefix="secpal-test-",dir="/home/codex"))
+            (directory/".scope").write_text(self.scope_label())
+            password=secrets.token_urlsafe(36)
+            secret=directory/"password";secret.write_text(password);secret.chmod(0o600)
+            envfile=directory/"test.env"
+            envfile.write_text("DB_CONNECTION=pgsql\nDB_HOST=fixture-db\nDB_PORT=5432\nDB_DATABASE=qualification\nDB_USERNAME=fixture\nDB_PASSWORD="+password+"\n")
+            envfile.chmod(0o600)
             resources.append(("network", network))
             self.podman(receipt,["network","create","--internal","--label","secpal.development.scope="+self.scope_label(),network],capture=True)
             resources.append(("volume", volume))
@@ -326,7 +329,8 @@ class Launcher:
             try:
                 self.remove_resources(receipt, resources)
             finally:
-                shutil.rmtree(directory)
+                if directory is not None:
+                    shutil.rmtree(directory)
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)

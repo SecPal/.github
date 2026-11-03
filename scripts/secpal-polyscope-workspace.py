@@ -23,16 +23,22 @@ import time
 import urllib.request
 from urllib.parse import quote, urlsplit, urlunsplit
 
-POLYSCOPE_HOME = Path(pwd.getpwuid(os.geteuid()).pw_dir)
-GIT_BIN_DIR = Path(os.environ.get("POLYSCOPE_GIT_BIN_DIR", POLYSCOPE_HOME / ".local/lib/polyscope/bin"))
-STATE_ROOT = Path(os.environ.get("POLYSCOPE_HOME", POLYSCOPE_HOME / ".polyscope"))
-CLONE_ROOT = Path(os.environ.get("POLYSCOPE_CLONE_ROOT", STATE_ROOT / "clones"))
+def configure_paths(identity_uid):
+    """Use the same service path contract for dispatch and root-only arming."""
+    global POLYSCOPE_HOME, GIT_BIN_DIR, STATE_ROOT, CLONE_ROOT, LOCK_PATH
+    POLYSCOPE_HOME = Path(pwd.getpwuid(identity_uid).pw_dir)
+    GIT_BIN_DIR = Path(os.environ.get("POLYSCOPE_GIT_BIN_DIR", POLYSCOPE_HOME / ".local/lib/polyscope/bin"))
+    STATE_ROOT = Path(os.environ.get("POLYSCOPE_HOME", POLYSCOPE_HOME / ".polyscope"))
+    CLONE_ROOT = Path(os.environ.get("POLYSCOPE_CLONE_ROOT", STATE_ROOT / "clones"))
+    LOCK_PATH = POLYSCOPE_HOME / ".local/state/polyscope/workspace-create.lock"
+
+
+configure_paths(os.geteuid())
 API_BASE = os.environ.get("POLYSCOPE_API_BASE", "http://127.0.0.1:4321/api").rstrip("/")
 NODE_BIN = "/usr/bin/node"
 WS_CLIENT = Path(__file__).resolve().with_name("secpal-polyscope-workspace-ws.js")
 if not WS_CLIENT.is_file():
     WS_CLIENT = Path("/usr/local/libexec/secpal-polyscope-workspace-stdin.js")
-LOCK_PATH = POLYSCOPE_HOME / ".local/state/polyscope/workspace-create.lock"
 CREATE_ERRORS = frozenset({"polyscope-create-rejected", "polyscope-create-timeout",
                           "polyscope-bridge-unavailable", "polyscope-create-ambiguous",
                           "polyscope-bridge-response", "polyscope-create-unverified"})

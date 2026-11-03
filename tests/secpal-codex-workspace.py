@@ -56,6 +56,44 @@ class PreparationTests(unittest.TestCase):
     root=self.tree(tmp);(root/name).symlink_to("payload")
     with self.assertRaises(m.IsolationError):m.prepare_tree(root,source_uid=os.getuid(),source_gid=os.getgid())
 
+class CredentialCleanupTests(unittest.TestCase):
+ def test_partial_credential_initialization_is_always_removed(self):
+  for failing in [".scope","password","test.env"]:
+   with self.subTest(failing=failing),tempfile.TemporaryDirectory() as tmp:
+    directory=Path(tmp)/"credentials";directory.mkdir()
+    launcher=m.Launcher();launcher.authorize=lambda:({"postgres_image":"fixture"},Path(tmp))
+    launcher.podman=lambda *a,**k:self.fail("OCI creation before credential setup")
+    original=Path.write_text
+    def write(path,*args,**kwargs):
+     if path.name==failing:
+      original(path,"partial fixture")
+      raise OSError("fixture disk exhaustion")
+     return original(path,*args,**kwargs)
+    with patch.object(m.tempfile,"mkdtemp",return_value=str(directory)),patch.object(Path,"write_text",autospec=True,side_effect=write):
+     with self.assertRaises(OSError):launcher._test(["true"])
+    self.assertFalse(directory.exists())
+ def test_manual_cleanup_removes_credentials_even_when_oci_removal_fails(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   home=Path(tmp);directory=home/"secpal-test-fixture";directory.mkdir()
+   (directory/".scope").write_text("SecPal/api#2639");(directory/"password").write_text("fixture")
+   launcher=m.Launcher()
+   launcher.remove_resources=lambda *args:(_ for _ in ()).throw(m.IsolationError("fixture OCI cleanup failure"))
+   launcher.podman=lambda *a,**k:SimpleNamespace(stdout="",returncode=0)
+   original=Path.glob
+   def directories(path,pattern):
+    return iter([directory]) if str(path)=="/home/codex" else original(path,pattern)
+   with patch.object(m.os,"getuid",return_value=1001),patch.object(m.os,"geteuid",return_value=1001),patch.object(m.isolation,"load_policy",return_value={"native":{"repo":"SecPal/api","issue":2639}}),patch.object(Path,"glob",autospec=True,side_effect=directories):
+    # The real fixture owner is used only for this disposable directory check.
+    actual_stat=Path.stat
+    def owned(path,*args,**kwargs):
+     result=actual_stat(path,*args,**kwargs)
+     if path==directory:
+      values=list(result);values[4]=1001;return os.stat_result(values)
+     return result
+    with patch.object(Path,"stat",autospec=True,side_effect=owned):
+     with self.assertRaises(m.IsolationError):launcher.cleanup()
+   self.assertFalse(directory.exists())
+
 class InterruptedCreationTests(unittest.TestCase):
  def test_interruption_inside_network_creation_still_removes_resource_intent(self):
   with tempfile.TemporaryDirectory() as tmp:

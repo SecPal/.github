@@ -31,7 +31,8 @@ must not trigger automatic re-provisioning.
 Before any native creation, an administrator arms
 `/etc/secpal/workspace-isolation.json` using the versioned guard's `--arm --model`
 operation with an explicit `--server-bin` matching the configured service executable.
-The reservation stores its canonical path and qualified digest. Every admission
+The reservation stores its canonical path and qualified digest and uses the
+existing coordinator's configured clone root and creation lock. Every admission
 rehashes the current bytes, including after replacement with preserved timestamps.
 It accepts only the fixed API issue, the qualified executable, an empty
 creation fence and a non-Claude model. It publishes complete, root-owned authority
@@ -39,8 +40,10 @@ atomically and exclusively; an existing reservation is never overwritten. The
 coordinator reads the same reservation and rejects another task's reservation
 before dispatching API#2639 creation.
 
-The required marker `/etc/secpal/workspace-isolation.required` makes loss of the
-policy fail closed. Once armed, the default authority also applies when a service
+Arming atomically publishes the root-owned required marker
+`/etc/secpal/workspace-isolation.required` before publishing authority and retains
+it if policy publication fails. An existing marker must pass the root-ownership
+check. The marker makes loss of the policy fail closed. Once armed, the default authority also applies when a service
 loses its optional environment file. Every effective native repository/workspace
 setup and run command must be wrapped before opening the creation window,
 including commands inherited by the three linked repositories. Apply wrapping to
@@ -103,7 +106,8 @@ clean environment. It grants no Polyscope management token, secpal socket or hos
 credential. PHP 8.4, Composer, Git and Podman's Buildah backend remain available.
 Tests get a private PostgreSQL 18 instance, fresh credentials, volume and internal
 network. Resource intent is recorded before creation so interrupted clients cannot
-lose cleanup ownership; credential cleanup runs even if OCI removal fails.
+lose cleanup ownership; credential cleanup covers partial initialization and runs even if OCI listing or
+removal fails.
 SIGKILL requires explicit scope-labeled cleanup, which needs no management API.
 
 The launcher is not the Unix access-control boundary: UID 1001 already controls
@@ -145,7 +149,9 @@ On an uncertain creation result, retain the reservation and pending fence and us
 native read-back before retrying. Do not delete database rows or invent IDs.
 Rollback must first close creation and quiesce the changed execution paths, revoke
 only the new view and retire only its scoped disposable resources, then reconcile
-any new group through the native interface. Restore only known safe source and
+any new group through the native interface. Remove the required marker only
+after native read-back proves the protected group is absent and guarded consumers
+are quiescent; retain it on interrupted arming or uncertain rollback. Restore only known safe source and
 configuration snapshots. Keep deny guards effective while a protected group
 exists; restoring an old unguarded provisioner could activate it. Never restore the
 previous arbitrary coordinator execution or direct management access for codex.

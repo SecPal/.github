@@ -22,6 +22,8 @@ import tempfile
 QUALIFIED_SERVER_SHA256 = "a9d6865ab8e7789a0914b1d3d1aaf62f61f864f29b02c4ff55547a58da48f886"
 
 COORDINATOR_PATH = Path("/usr/local/bin/secpal-polyscope-workspace")
+DEFAULT_POLICY_PATH = Path("/etc/secpal/workspace-isolation.json")
+REQUIRED_MARKER_PATH = Path("/etc/secpal/workspace-isolation.required")
 
 class IsolationError(RuntimeError):
     pass
@@ -274,7 +276,9 @@ def arm(policy_path, model, server_bin):
     if os.geteuid() != 0 or not re.fullmatch(r"[a-z0-9._:-]{1,128}", model) or model.startswith("claude-"):
         raise IsolationError("arm-authority-or-model")
     owner = coordinator()
-    lock = Path("/home/secpal/.local/state/polyscope/workspace-create.lock")
+    # Root publishes authority for secpal; it must not inherit root's home.
+    owner.configure_paths(1003)
+    lock = owner.LOCK_PATH
     fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         info = os.fstat(fd)
@@ -283,10 +287,16 @@ def arm(policy_path, model, server_bin):
         fcntl.flock(fd, fcntl.LOCK_EX)
         if os.read(fd, 4096).strip():
             raise IsolationError("creation-outcome-unresolved")
-        data = reservation(snapshot(owner), "SecPal/api", 2639, "/home/secpal/.polyscope/clones")
+        data = reservation(snapshot(owner), "SecPal/api", 2639, str(owner.CLONE_ROOT))
         binary = Path(server_bin).resolve(strict=True)
         data.update(model=model, server_bin=str(binary), server_sha256=QUALIFIED_SERVER_SHA256)
         validate_server(data)
+        # A missing JSON must never silently disarm already guarded consumers.
+        # Publish the durable fail-closed marker first, and retain it on failure.
+        if REQUIRED_MARKER_PATH.exists() or REQUIRED_MARKER_PATH.is_symlink():
+            trusted_bytes(REQUIRED_MARKER_PATH)
+        else:
+            publish_policy(REQUIRED_MARKER_PATH, {"version": 1})
         publish_policy(policy_path, data)
     finally:
         os.close(fd)
@@ -317,8 +327,9 @@ def main():
 
 def from_environment():
     path = os.environ.get("SECPAL_WORKSPACE_ISOLATION_POLICY")
-    default = Path("/etc/secpal/workspace-isolation.json")
-    if not path and (default.exists() or Path("/etc/secpal/workspace-isolation.required").exists()):
+    default = DEFAULT_POLICY_PATH
+    if not path and (default.exists() or REQUIRED_MARKER_PATH.exists()
+                     or REQUIRED_MARKER_PATH.is_symlink()):
         path = str(default)
     return Gate(path) if path else None
 

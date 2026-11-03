@@ -697,6 +697,23 @@ class NativeGroups(unittest.TestCase):
             self.assertIs(workspace.lookup({'id':'repo-api'},2551,None),self.root)
 
 
+class ServiceConfiguration(unittest.TestCase):
+    def test_administrative_import_uses_the_existing_service_path_configuration(self):
+        from types import SimpleNamespace
+        names=["POLYSCOPE_HOME","GIT_BIN_DIR","STATE_ROOT","CLONE_ROOT","LOCK_PATH"]
+        before={name:getattr(workspace,name) for name in names}
+        try:
+            with patch.dict(os.environ,{"POLYSCOPE_HOME":"/fixture/data","POLYSCOPE_CLONE_ROOT":"/fixture/custom-clones"},clear=True), \
+                    patch.object(workspace.pwd,"getpwuid",return_value=SimpleNamespace(pw_dir="/fixture/service-home")) as lookup:
+                workspace.configure_paths(1003)
+                lookup.assert_called_once_with(1003)
+                self.assertEqual(workspace.POLYSCOPE_HOME,Path("/fixture/service-home"))
+                self.assertEqual(workspace.STATE_ROOT,Path("/fixture/data"))
+                self.assertEqual(workspace.CLONE_ROOT,Path("/fixture/custom-clones"))
+                self.assertEqual(workspace.LOCK_PATH,Path("/fixture/service-home/.local/state/polyscope/workspace-create.lock"))
+        finally:
+            for name,value in before.items():setattr(workspace,name,value)
+
 class RestrictedResolve(unittest.TestCase):
     def call(self, repo="SecPal/api", issue=2639, sudo_user="codex"):
         output, error = io.StringIO(), io.StringIO()
