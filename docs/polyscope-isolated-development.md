@@ -75,7 +75,8 @@ an administrator prepare the API root. The other three repositories receive no
 grant. Audit the source tree, split every multiply-linked regular inode atomically,
 preserve content/ownership/mode/extended attributes, and run Git fsck. Reject shared
 Git stores, external symlinks, nested mounts, special files, set-ID/capability
-files, mixed ownership and known credential filenames.
+files, mixed UID/GID ownership across files, directories and symlinks, writable
+directory authority and known credential filenames on every entry type.
 
 The administrator creates one root-controlled idmapped bind view with
 `nosuid,nodev`, mapping source UID/GID 1003 to 1001 for this tree only. Preserve
@@ -93,7 +94,8 @@ The fixed CLI accepts `exec -- command...`, `test -- command...`, `build` and
 `cleanup`. It accepts no host mount, privilege, task selector or workspace path.
 Before execution it refreshes the exact existing read-only coordinator resolve,
 checks the complete native identity and filesystem binding, then audits the view.
-A replacement native directory at the same path is rejected. Development commits
+Source device/inode is captured before Git inspection and checked again after all
+native/group checks. A replacement native directory at the same path is rejected. Development commits
 can change HEAD without changing the authorized branch or group.
 
 All OCI execution uses UID 1001's explicit local storage/runroot, empty hooks and

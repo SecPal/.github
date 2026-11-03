@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 """Controller boundary regressions; native registration is tested separately."""
-import importlib.util,sys,tempfile,unittest,copy,subprocess,os,json,hashlib,base64,shlex
+import importlib.util,sys,tempfile,unittest,subprocess,os,json,hashlib,base64,shlex
 from pathlib import Path
 from unittest.mock import Mock,patch
 root=Path(__file__).resolve().parents[1]

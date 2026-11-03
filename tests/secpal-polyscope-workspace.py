@@ -636,6 +636,23 @@ class NativeGroups(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,"workspace-filesystem-changed"):
                     workspace.attest("SecPal/api",2551)
 
+    def test_attestation_rejects_replacement_after_git_inspection(self):
+        from types import SimpleNamespace
+        record=dict(self.groups[0], linked_repo_ids=[g["id"] for g in self.groups[1:]])
+        result=dict(workspace_id=self.root["id"], path=self.root["path"],
+                    branch=self.root["branch"], head="a"*40)
+        current=[SimpleNamespace(st_dev=1,st_ino=2,st_uid=1003,st_gid=1003)]
+        def inspect(*args,**kwargs):
+            current[0]=SimpleNamespace(st_dev=1,st_ino=3,st_uid=1003,st_gid=1003)
+            return result
+        with patch.object(workspace,"repository",return_value=record), \
+                patch.object(workspace,"lookup",return_value=self.root), \
+                patch.object(workspace,"workspace_result",side_effect=inspect), \
+                patch.object(workspace,"observe_native_groups",return_value=self.groups), \
+                patch.object(Path,"stat",side_effect=lambda **kwargs:current[0]):
+            with self.assertRaisesRegex(RuntimeError,"workspace-filesystem-changed"):
+                workspace.attest("SecPal/api",2551)
+
     def test_mutated_ownership_representations_are_rejected(self):
         changes=[('status','paused'),('is_repo_workspace',True),('linked_from_worktree_id','another-root'),('issue_number',77),('pr_number',88),('repo_id','foreign'),('linked_worktree_ids',['44b95196'])]
         for field,value in changes:

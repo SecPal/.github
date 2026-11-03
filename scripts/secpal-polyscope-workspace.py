@@ -498,9 +498,11 @@ def attest(repo, issue, pr=None, sha=None, workspace_id=None):
     row = lookup(record, issue, pr, workspace_id)
     if row is None:
         raise RuntimeError("workspace-not-found")
-    result = workspace_result(repo, row, sha)
-    source = Path(result["path"])
+    source = Path(row["path"])
     before = source.stat(follow_symlinks=False)
+    result = workspace_result(repo, row, sha)
+    if Path(result["path"]) != source:
+        raise RuntimeError("workspace-filesystem-changed")
     groups = observe_native_groups()
     observed = next(r for r in groups if r["id"] == record["id"])
     current = next(w for w in observed["workspaces"] if w["id"] == row["id"])

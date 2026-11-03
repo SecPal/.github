@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
-import importlib.util,unittest,copy,tempfile,subprocess
+import importlib.util,unittest,copy,tempfile,subprocess,os
 from unittest.mock import patch
 from types import SimpleNamespace
 from pathlib import Path
@@ -23,6 +23,39 @@ class AttestationTests(unittest.TestCase):
    with self.assertRaises(m.IsolationError):m.check_attestation(q,self.proof)
   q=copy.deepcopy(self.proof);q["members"].pop()
   with self.assertRaises(m.IsolationError):m.check_attestation(q,self.proof)
+class PreparationTests(unittest.TestCase):
+ def tree(self,tmp):
+  root=Path(tmp)/"workspace";root.mkdir()
+  subprocess.run(["git","init","--quiet",str(root)],check=True)
+  (root/"nested").mkdir()
+  (root/"payload").write_text("fixture")
+  return root
+ def test_clean_tree_keeps_development_ownership(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=self.tree(tmp)
+   self.assertEqual(m.prepare_tree(root,source_uid=os.getuid(),source_gid=os.getgid()),0)
+ def test_nested_directory_uid_and_gid_must_match_the_source_owner(self):
+  for field in [4,5]:
+   with self.subTest(field=field),tempfile.TemporaryDirectory() as tmp:
+    root=self.tree(tmp);foreign=root/"nested";original=Path.lstat
+    def changed(path,*args,**kwargs):
+     info=original(path,*args,**kwargs)
+     if path==foreign:
+      values=list(info);values[field]+=1
+      return os.stat_result(values)
+     return info
+    with patch.object(Path,"lstat",autospec=True,side_effect=changed):
+     with self.assertRaises(m.IsolationError):m.prepare_tree(root,source_uid=os.getuid(),source_gid=os.getgid())
+ def test_writable_nested_directory_is_rejected_before_grant(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=self.tree(tmp);(root/"nested").chmod(0o777)
+   with self.assertRaises(m.IsolationError):m.prepare_tree(root,source_uid=os.getuid(),source_gid=os.getgid())
+ def test_internal_credential_named_symlinks_are_rejected_before_grant(self):
+  for name in [".env",".npmrc","auth.json",".git-credentials"]:
+   with self.subTest(name=name),tempfile.TemporaryDirectory() as tmp:
+    root=self.tree(tmp);(root/name).symlink_to("payload")
+    with self.assertRaises(m.IsolationError):m.prepare_tree(root,source_uid=os.getuid(),source_gid=os.getgid())
+
 class InterruptedCreationTests(unittest.TestCase):
  def test_interruption_inside_network_creation_still_removes_resource_intent(self):
   with tempfile.TemporaryDirectory() as tmp:

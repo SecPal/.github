@@ -101,18 +101,28 @@ def audit_tree(root, *, shared_ok=False):
                 raise IsolationError("special-file")
     return files
 
-def prepare_tree(root, *, source_uid=1003):
+def prepare_tree(root, *, source_uid=1003, source_gid=None):
     """Administrative pre-grant operation, never exposed by the codex CLI."""
     root = Path(root)
-    if root.stat().st_uid != source_uid:
+    source_gid = source_uid if source_gid is None else source_gid
+    owner = (source_uid, source_gid)
+    info = root.stat()
+    if (info.st_uid, info.st_gid) != owner:
         raise IsolationError("source-owner")
+    if info.st_mode & 0o022:
+        raise IsolationError("source-directory-writable")
     files = audit_tree(root, shared_ok=True)
-    for path in files:
-        info = path.stat()
-        if info.st_uid != source_uid:
-            raise IsolationError("mixed-source-owner")
-        if path.name in (".env", ".git-credentials", ".npmrc", "auth.json"):
-            raise IsolationError("credential-file")
+    # Grant authority includes directories and symlinks, not only split files.
+    for base, dirs, names in os.walk(root, followlinks=False):
+        for name in [*dirs, *names]:
+            path = Path(base) / name
+            info = path.lstat()
+            if (info.st_uid, info.st_gid) != owner:
+                raise IsolationError("mixed-source-owner")
+            if stat.S_ISDIR(info.st_mode) and info.st_mode & 0o022:
+                raise IsolationError("source-directory-writable")
+            if name in (".env", ".git-credentials", ".npmrc", "auth.json"):
+                raise IsolationError("credential-file")
     split = 0
     for path in files:
         before = path.stat()
