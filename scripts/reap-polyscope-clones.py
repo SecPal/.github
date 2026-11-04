@@ -113,7 +113,53 @@ def is_registered_candidate(
     return candidate.name in protected_clone_root_names(conn, clone_root)
 
 
+def isolation_protects_candidate(gate, records, pending, clone_root, candidate):
+    """Unknown group members stay closed; unrelated orphan GC remains available."""
+    module = isolation_module()
+    policy = gate.policy
+    if str(clone_root) != policy["clone_root"]:
+        raise ValueError("reaper clone root differs from isolation authority")
+    repos, rows = module.validate_policy(policy, records)
+    targets = [row for row in rows.values() if row["repo_id"] == policy["repo_id"]
+               and row.get("issue_number") == policy["issue"]]
+    if len(targets) > 1:
+        raise ValueError("reaper protected group is ambiguous")
+    complete = targets and module.complete_group(targets[0], repos, rows)
+    if complete:
+        try:
+            directories = [Path(rows[ident]["path"]).lstat() for ident in complete]
+            complete = all(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+                           for info in directories)
+        except OSError:
+            complete = False
+    if pending or not complete:
+        # Before complete native attribution, an unregistered child in any
+        # linked repository could belong to the pending protected group.
+        relative = candidate.relative_to(clone_root)
+        if relative.parts and relative.parts[0] in policy["related_repo_ids"]:
+            return True
+    return any(
+        (is_within(Path(row["path"]), candidate) or is_within(candidate, Path(row["path"])))
+        and module.classify(policy, records, row["path"], pending=pending)
+        for row in rows.values()
+    )
+
+
 def quarantine_if_still_orphan(
+    db_path: Path, clone_root: Path, candidate: Path, cutoff: float, is_worktree: bool,
+    *, isolation_gate=None,
+) -> Path | None:
+    if isolation_gate:
+        # Re-read native authority at the final rename boundary, under the
+        # same creation lock, not merely at the preliminary candidate scan.
+        with isolation_gate.observation() as (records, pending):
+            if isolation_protects_candidate(isolation_gate, records, pending, clone_root, candidate):
+                return None
+            return _quarantine_if_still_orphan(db_path, clone_root, candidate, cutoff, is_worktree)
+    return _quarantine_if_still_orphan(db_path, clone_root, candidate, cutoff, is_worktree)
+
+
+def _quarantine_if_still_orphan(
     db_path: Path, clone_root: Path, candidate: Path, cutoff: float, is_worktree: bool
 ) -> Path | None:
     """Atomically detach a candidate while preventing database registrations."""
@@ -295,11 +341,7 @@ def reap(args: argparse.Namespace) -> dict[str, Any]:
     }
     gate = isolation_module().from_environment()
     if gate:
-        with gate.observation():
-            # An unregistered partial clone cannot be attributed safely. Like
-            # preview-storage GC, defer deletion for the reservation's lifetime.
-            report["deferred_isolation"] = True
-            return report
+        report["skipped"]["isolation"] = []
     protected_roots, protected_worktrees = load_protected_paths(db_path, clone_root)
     if not clone_root.is_dir():
         return report
@@ -321,6 +363,11 @@ def reap(args: argparse.Namespace) -> dict[str, Any]:
         if protected:
             report["skipped"]["active"].append(str(candidate))
             continue
+        if gate:
+            with gate.observation() as (records, pending):
+                if isolation_protects_candidate(gate, records, pending, clone_root, candidate):
+                    report["skipped"]["isolation"].append(str(candidate))
+                    continue
         try:
             newest_mtime = newest_tree_mtime(candidate)
             if newest_mtime is None:
@@ -346,7 +393,10 @@ def reap(args: argparse.Namespace) -> dict[str, Any]:
             report["would_remove"].append(str(candidate))
             report["reclaimed_bytes"] += size
             continue
-        quarantined = quarantine_if_still_orphan(db_path, clone_root, candidate, cutoff, is_worktree)
+        quarantine_options = {"isolation_gate": gate} if gate else {}
+        quarantined = quarantine_if_still_orphan(
+            db_path, clone_root, candidate, cutoff, is_worktree, **quarantine_options
+        )
         if quarantined is None:
             report["skipped"]["unsafe"].append(str(candidate))
             continue

@@ -225,9 +225,20 @@ interruption, reservation-scope and launcher identity tests. Administrative atom
 publication tests use `tests/polyscope-isolation-publication.py` with
 `SECPAL_PUBLICATION_TEST_ROOT` set to a disposable root-owned directory. The required
 Evidence Architecture job executes them as root in private mount/network
-namespaces on every PR. The independent clone reaper consults the same guard and
-defers orphan deletion for the reservation's lifetime, including unregistered
-partial groups; ordinary unreserved reaping keeps its existing behavior.
+namespaces on every PR. The independent clone reaper protects unregistered
+children of the linked repositories while a fence is pending or native group
+attribution is incomplete. Unrelated orphan roots remain eligible. After complete
+native attribution, ordinary orphans can be reaped while the protected group
+stays excluded. A fresh guarded observation holds the creation lock through the
+final quarantine rename; long filesystem deletion runs after releasing it.
+
+CI uses a disposable GitHub-hosted VM with only `contents: read`, no persisted
+checkout credentials and no production secrets. GitHub's hosted Linux runner
+already gives workflow code passwordless sudo. The VM is the security boundary;
+private namespaces scope test side effects and do not sandbox hostile root code.
+The administrative fixture is not supported on a persistent self-hosted runner.
+See [GitHub's runner privileges](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges)
+and [hosted versus self-hosted security](https://docs.github.com/en/actions/reference/security/secure-use#hardening-for-self-hosted-runners).
 
 Native and kernel qualification additionally needs a separate Polyscope data and
 clone root, authentic issue metadata, private service namespaces, four disposable

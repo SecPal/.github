@@ -350,11 +350,14 @@ class ReviewReaperTests(unittest.TestCase):
   seen=[]
   @contextlib.contextmanager
   def observation():
-   seen.append('pending-native-observation');yield [],True
+   seen.append('pending-native-observation');yield records,True
   gate=Mock();gate.observation=observation
   with tempfile.TemporaryDirectory() as tmp:
    args,target=self.fixture(tmp)
-   with patch.object(m,'isolation_module',return_value=Mock(from_environment=Mock(return_value=gate)),create=True),patch.object(m,'has_active_process',return_value=False):
+   records=[dict(id='api',name='SecPal/api',path='/fixture/source',linked_repo_ids=[],workspaces=[])]
+   gate.policy=iso.reservation(records,'SecPal/api',2639,args.clone_root)
+   module=Mock(wraps=iso);module.from_environment.return_value=gate
+   with patch.object(m,'isolation_module',return_value=module,create=True),patch.object(m,'has_active_process',return_value=False):
     result=m.reap(args)
    self.assertTrue(target.is_dir(),'pending native clone was deleted')
    self.assertEqual(result['removed'],[]);self.assertEqual(seen,['pending-native-observation'])
@@ -366,6 +369,57 @@ class ReviewReaperTests(unittest.TestCase):
    with patch.object(m,'isolation_module',return_value=module,create=True),patch.object(m,'has_active_process',return_value=False):
     with self.assertRaises(FileNotFoundError):m.reap(args)
    self.assertTrue(target.is_dir())
+
+class ReviewReaperScopeTests(unittest.TestCase):
+ fixture=ReviewReaperTests.fixture
+ def scoped_gate(self,args,*,pending,complete):
+  import contextlib
+  records=[dict(id='api',name='SecPal/api',path='/fixture/source',linked_repo_ids=[],workspaces=[])]
+  policy=iso.reservation(records,'SecPal/api',2639,args.clone_root)
+  if complete:
+   import sqlite3
+   protected=Path(args.clone_root)/'api/protected';protected.mkdir()
+   row=dict(id='target',repo_id='api',path=str(protected),status='active',issue_number=2639,
+            pr_number=None,linked_from_worktree_id=None,linked_worktree_ids=[],is_repo_workspace=False)
+   records[0]['workspaces']=[row]
+   with sqlite3.connect(Path(args.polyscope_home)/'polyscope.db') as db:db.execute('INSERT INTO worktrees VALUES (?,?)',(str(protected),'active'))
+  @contextlib.contextmanager
+  def observation():yield records,pending[0]
+  gate=Mock();gate.policy=policy;gate.observation=observation
+  module=Mock(wraps=iso);module.from_environment.return_value=gate
+  return module
+ def test_complete_guarded_group_does_not_disable_ordinary_orphan_cleanup(self):
+  m=load('reaper_complete_scope','reap-polyscope-clones.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   args,orphan=self.fixture(tmp);module=self.scoped_gate(args,pending=[False],complete=True)
+   with patch.object(m,'isolation_module',return_value=module),patch.object(m,'has_active_process',return_value=False):result=m.reap(args)
+   self.assertFalse(orphan.exists());self.assertIn(str(orphan),result['removed'])
+   self.assertTrue((Path(args.clone_root)/'api/protected').is_dir())
+ def test_pending_group_still_allows_unrelated_orphan_root_cleanup(self):
+  m=load('reaper_unrelated_scope','reap-polyscope-clones.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   args,partial=self.fixture(tmp);module=self.scoped_gate(args,pending=[True],complete=False)
+   unrelated=Path(args.clone_root)/'unrelated';unrelated.mkdir();os.utime(unrelated,(1,1))
+   with patch.object(m,'isolation_module',return_value=module),patch.object(m,'has_active_process',return_value=False):result=m.reap(args)
+   self.assertFalse(unrelated.exists());self.assertIn(str(unrelated),result['removed']);self.assertTrue(partial.is_dir())
+ def test_missing_native_group_directory_keeps_unattributed_children_closed(self):
+  m=load('reaper_missing_native_path','reap-polyscope-clones.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   args,orphan=self.fixture(tmp);module=self.scoped_gate(args,pending=[False],complete=True)
+   (Path(args.clone_root)/'api/protected').rmdir()
+   with patch.object(m,'isolation_module',return_value=module),patch.object(m,'has_active_process',return_value=False):result=m.reap(args)
+   self.assertTrue(orphan.is_dir());self.assertEqual(result['removed'],[])
+ def test_new_pending_fence_at_quarantine_boundary_prevents_deletion(self):
+  m=load('reaper_final_fence','reap-polyscope-clones.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   args,orphan=self.fixture(tmp);pending=[False];module=self.scoped_gate(args,pending=pending,complete=True)
+   original=m.newest_tree_mtime
+   def became_pending(path):
+    value=original(path)
+    if path==orphan:pending[0]=True
+    return value
+   with patch.object(m,'isolation_module',return_value=module),patch.object(m,'has_active_process',return_value=False),patch.object(m,'newest_tree_mtime',side_effect=became_pending):result=m.reap(args)
+   self.assertTrue(pending[0]);self.assertTrue(orphan.is_dir());self.assertEqual(result['removed'],[])
 
 class ReviewParentInodeTests(unittest.TestCase):
  def test_repository_swap_before_open_never_revokes_replacement_tree(self):
