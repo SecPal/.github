@@ -14,6 +14,7 @@ import os
 import pathlib
 import re
 import sqlite3
+import stat
 import tempfile
 
 
@@ -64,10 +65,16 @@ def withdraw_api_preview(worktree: pathlib.Path) -> None:
 def has_provisioned_physical_name(worktree: pathlib.Path) -> bool:
     """Rollout deliberately creates no self-alias for a colliding canonical name."""
     marker = worktree / ".polyscope-secpal-provisioned.json"
-    if marker.is_symlink() or not marker.is_file():
-        return False
     try:
-        data = json.loads(marker.read_text(encoding="utf-8"))
+        with open(
+            marker, encoding="utf-8",
+            opener=lambda path, flags: os.open(
+                path, flags | os.O_NOFOLLOW | os.O_NONBLOCK
+            ),
+        ) as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                return False
+            data = json.load(stream)
     except (OSError, UnicodeError, json.JSONDecodeError):
         return False
     return isinstance(data, dict) and data.get("workspace") == worktree.name

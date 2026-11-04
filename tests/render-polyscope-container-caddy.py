@@ -9,6 +9,7 @@ import json
 import pathlib
 import sqlite3
 import tempfile
+from unittest import mock
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -294,6 +295,36 @@ def main() -> None:
         foreign_marker.write_text(json.dumps({"workspace": collision.name}))
         marker.symlink_to(foreign_marker)
         expect_runtime_error(render_collision, "canonical Polyscope workspace alias")
+        marker.unlink()
+        rollout.write_provision_marker(marker, {
+            "repo": "api", "workspace": collision.name, "setup_hash": "a" * 64,
+        })
+        # Replacement at the actual open boundary must not turn a checked
+        # regular marker into evidence read through a symlink.
+        original_path_open = pathlib.Path.open
+        original_os_open = module.os.open
+        swapped = []
+        def replace_marker():
+            if not marker.is_symlink():
+                marker.unlink()
+                marker.symlink_to(foreign_marker)
+                swapped.append(True)
+        def racing_path_open(path, *args, **kwargs):
+            if path == marker:
+                replace_marker()
+            return original_path_open(path, *args, **kwargs)
+        def racing_os_open(path, *args, **kwargs):
+            if pathlib.Path(path) == marker:
+                replace_marker()
+            return original_os_open(path, *args, **kwargs)
+        with mock.patch.object(pathlib.Path, "open", racing_path_open), mock.patch.object(
+            module.os, "open", racing_os_open
+        ):
+            assert not module.has_provisioned_physical_name(collision)
+        assert swapped == [True]
+        marker.unlink()
+        module.os.mkfifo(marker)
+        assert not module.has_provisioned_physical_name(collision)
         marker.unlink()
         rollout.write_provision_marker(marker, {
             "repo": "api", "workspace": collision.name, "setup_hash": "a" * 64,
