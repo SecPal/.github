@@ -50,7 +50,7 @@ accepted contract; it must consume the output instead of copying scanner logic.
 ## Governance repository admission
 
 SecPal/.github invokes the accepted action at
-`e6626097efc7770557b2a6abaede5c09592e8948` inside its existing required
+`9468a2bdcca4d8dd1ae6ac49776932f5215aa750` inside its existing required
 **Evidence Architecture PR Gate**, immediately after an exact `github.sha`
 checkout with persisted credentials disabled. Successful execution and exactly
 `CLEAN` are both required before candidate validation tooling runs. Missing,
@@ -64,12 +64,13 @@ This does not make the candidate-controlled workflow technically tamper-proof:
 normal protected checks, source inspection and the sole maintainer's manual
 merge authority still apply.
 
-The candidate correction under [#1300](trivy-policy-disposition-retirement-1300.md)
-removes all eleven current dispositions and makes expiry withdraw only the
-matching suppression. It does not renew any deadline. Historical findings and
-technical rationales remain in the audit fixture. Existing protected consumer
-pins still execute the old global-expiry behavior until a correction is accepted
-and adopted; this proposal cannot self-authorize that transition.
+The correction under [#1300](trivy-policy-disposition-retirement-1300.md) was
+accepted in [#1301](https://github.com/SecPal/.github/pull/1301) at that immutable
+revision. All eleven dispositions are retired; expiry withdraws only the matching
+suppression and no deadline is renewed. Historical findings and technical
+rationales remain in the audit fixture. This governance consumer adopts already
+accepted source. Other repositories retain their own consumer pins until separate
+protected adoption; candidate-only scanner code cannot authorize that transition.
 
 ## Scanner and policy identity
 

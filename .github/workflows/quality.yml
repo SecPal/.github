@@ -105,7 +105,7 @@ jobs:
       - name: Scan repository security
         id: repository-security
         # yamllint disable-line rule:line-length
-        uses: SecPal/.github/.github/actions/trivy-repository-scan@e6626097efc7770557b2a6abaede5c09592e8948 # main
+        uses: SecPal/.github/.github/actions/trivy-repository-scan@9468a2bdcca4d8dd1ae6ac49776932f5215aa750 # main
 
       - name: Require clean repository security
         shell: bash

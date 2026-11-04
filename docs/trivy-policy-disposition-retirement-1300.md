@@ -5,8 +5,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Retirement of recurring repository-scan dispositions (#1300)
 
-This is a source proposal under [#710](https://github.com/SecPal/.github/issues/710).
-It is not protected acceptance, a consumer-pin update, or permission to merge.
+This records the historical source proposal under
+[#710](https://github.com/SecPal/.github/issues/710), before its protected
+acceptance in [#1301](https://github.com/SecPal/.github/pull/1301).
+The accepted main revision is `9468a2bdcca4d8dd1ae6ac49776932f5215aa750`.
+The governance consumer adopts it separately in
+[#1302](https://github.com/SecPal/.github/pull/1302); the current admission contract
+is [Governance repository admission](trivy-repository-scanning.md#governance-repository-admission).
+The assessment and consumer table below preserve the pre-acceptance state, not
+current adoption instructions or permission to merge.
 No expiry is renewed. The candidate policy has zero exceptions. Scanner/tool,
 database freshness, redaction, thresholds, OCI admission and branch protection
 remain unchanged.
@@ -116,18 +123,22 @@ The source candidate builds on the unchanged signed #1299 commit
 This is an explicit source dependency, not an edit or approval of Draft #1299.
 Draft #1298 is untouched.
 
-## Protected delivery and consumer pins
+## Historical protected delivery and consumer-pin snapshot
 
-Protected current main is
+This snapshot predates #1301 acceptance and #1302 governance adoption.
+The old action revisions and blocked bootstrap below are historical evidence;
+other repository adoptions remain separate protected deliveries.
+
+Protected main at that snapshot was
 `12cc0feddc25ac5e3cb5bcba5383db10c0332c9a`.
-The current governance gate executes the accepted action at
+The governance gate at that snapshot executed the accepted action at
 `e6626097efc7770557b2a6abaede5c09592e8948`, never the candidate's scanner or policy.
 That accepted revision rejects a clean independent observation because of global
 expired dispositions. Candidate tests cannot repair or authorize that authority.
 
-After protected acceptance, use its verified immutable main revision R:
+The consumer inventory at that snapshot was:
 
-| Repository | Exact consumer location                                                      | Current accepted action revision         |
+| Repository | Exact consumer location                                                      | Action revision at that snapshot         |
 | ---------- | ---------------------------------------------------------------------------- | ---------------------------------------- |
 | .github    | .github/workflows/quality.yml                                                | e6626097efc7770557b2a6abaede5c09592e8948 |
 | frontend   | .github/workflows/reusable-repository-security.yml                           | f94b47c6a44f924b11b2802ac1c334f20b2e93a9 |
@@ -138,11 +149,12 @@ After protected acceptance, use its verified immutable main revision R:
 | secpal.app | .github/workflows/quality.yml and deploy-uberspace.yml                       | 72e3b32a88513f381aa6cd769618bf197106d794 |
 | operations | No current scanner consumer                                                  | NONE                                     |
 
-R must exist on protected accepted main and pass independent source review,
-signature/provenance and external-action packaging qualification before
-repository-specific consumer PRs may adopt it. No placeholder, self-reference,
-candidate-only authority, temporary Required Check disablement, branch-protection
-change or OCI risk acceptance repairs this bootstrap.
+The recorded adoption prerequisites were an immutable revision on protected
+accepted main, independent source review, signature/provenance and external-action
+packaging qualification before repository-specific consumer PRs. The proposal
+excluded placeholders, self-reference, candidate-only authority, temporary Required
+Check disablement, branch-protection changes and OCI risk acceptance as bootstrap
+repairs.
 
 If the existing trusted gate cannot admit this correction through a separately
 accepted route, delivery is BLOCKED at the named old action/required gate. This
