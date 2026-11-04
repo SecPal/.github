@@ -123,6 +123,8 @@ test -x "$WORKSPACE/stage/usr/local/bin/secpal-polyscope-workspace"
 cmp "$REPO_ROOT/scripts/secpal-polyscope-workspace.py"     "$WORKSPACE/stage/usr/local/bin/secpal-polyscope-workspace"
 cmp "$REPO_ROOT/scripts/secpal-polyscope-workspace-ws.js"     "$WORKSPACE/stage/usr/local/libexec/secpal-polyscope-workspace-stdin.js"
 
+cmp "$REPO_ROOT/scripts/polyscope-isolation.py" "$WORKSPACE/stage/usr/local/libexec/secpal/polyscope-isolation.py"
+
 test -x "$helper"
 test -f "$library"
 test -f "$rollout"

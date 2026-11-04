@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Coordinator behavior against native Polyscope representations, without live writes."""
 import concurrent.futures
+import contextlib
+import io
+import os
 import copy
 import importlib.util
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -615,6 +618,41 @@ class NativeGroups(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             workspace.select_workspace([child],child['repo_id'],None,None,workspace_id=child['id'],native_groups=self.groups)
 
+    def test_attestation_binds_the_native_directory_inode(self):
+        from types import SimpleNamespace
+        record=dict(self.groups[0], linked_repo_ids=[g["id"] for g in self.groups[1:]])
+        result=dict(workspace_id=self.root["id"], path=self.root["path"],
+                    branch=self.root["branch"], head="a"*40)
+        original=SimpleNamespace(st_dev=1,st_ino=2,st_uid=1003,st_gid=1003)
+        replaced=SimpleNamespace(st_dev=1,st_ino=3,st_uid=1003,st_gid=1003)
+        with patch.object(workspace,"repository",return_value=record), \
+                patch.object(workspace,"lookup",return_value=self.root), \
+                patch.object(workspace,"workspace_result",return_value=result), \
+                patch.object(workspace,"observe_native_groups",return_value=self.groups):
+            with patch.object(Path,"stat",return_value=original):
+                proof=workspace.attest("SecPal/api",2551)
+                self.assertEqual(proof["filesystem"],dict(device=1,inode=2,uid=1003,gid=1003))
+            with patch.object(Path,"stat",side_effect=[original,replaced]):
+                with self.assertRaisesRegex(RuntimeError,"workspace-filesystem-changed"):
+                    workspace.attest("SecPal/api",2551)
+
+    def test_attestation_rejects_replacement_after_git_inspection(self):
+        from types import SimpleNamespace
+        record=dict(self.groups[0], linked_repo_ids=[g["id"] for g in self.groups[1:]])
+        result=dict(workspace_id=self.root["id"], path=self.root["path"],
+                    branch=self.root["branch"], head="a"*40)
+        current=[SimpleNamespace(st_dev=1,st_ino=2,st_uid=1003,st_gid=1003)]
+        def inspect(*args,**kwargs):
+            current[0]=SimpleNamespace(st_dev=1,st_ino=3,st_uid=1003,st_gid=1003)
+            return result
+        with patch.object(workspace,"repository",return_value=record), \
+                patch.object(workspace,"lookup",return_value=self.root), \
+                patch.object(workspace,"workspace_result",side_effect=inspect), \
+                patch.object(workspace,"observe_native_groups",return_value=self.groups), \
+                patch.object(Path,"stat",side_effect=lambda **kwargs:current[0]):
+            with self.assertRaisesRegex(RuntimeError,"workspace-filesystem-changed"):
+                workspace.attest("SecPal/api",2551)
+
     def test_mutated_ownership_representations_are_rejected(self):
         changes=[('status','paused'),('is_repo_workspace',True),('linked_from_worktree_id','another-root'),('issue_number',77),('pr_number',88),('repo_id','foreign'),('linked_worktree_ids',['44b95196'])]
         for field,value in changes:
@@ -657,6 +695,53 @@ class NativeGroups(unittest.TestCase):
     def test_lookup_reconciles_root_group_through_the_same_admission(self):
         with patch.object(workspace,'native_workspaces',return_value=[self.root]),patch.object(workspace,'observe_native_groups',return_value=self.groups):
             self.assertIs(workspace.lookup({'id':'repo-api'},2551,None),self.root)
+
+
+class ServiceConfiguration(unittest.TestCase):
+    def test_administrative_import_uses_the_existing_service_path_configuration(self):
+        from types import SimpleNamespace
+        names=["POLYSCOPE_HOME","GIT_BIN_DIR","STATE_ROOT","CLONE_ROOT","LOCK_PATH"]
+        before={name:getattr(workspace,name) for name in names}
+        try:
+            with patch.dict(os.environ,{"POLYSCOPE_HOME":"/fixture/data","POLYSCOPE_CLONE_ROOT":"/fixture/custom-clones"},clear=True), \
+                    patch.object(workspace.pwd,"getpwuid",return_value=SimpleNamespace(pw_dir="/fixture/service-home")) as lookup:
+                workspace.configure_paths(1003)
+                lookup.assert_called_once_with(1003)
+                self.assertEqual(workspace.POLYSCOPE_HOME,Path("/fixture/service-home"))
+                self.assertEqual(workspace.STATE_ROOT,Path("/fixture/data"))
+                self.assertEqual(workspace.CLONE_ROOT,Path("/fixture/custom-clones"))
+                self.assertEqual(workspace.LOCK_PATH,Path("/fixture/service-home/.local/state/polyscope/workspace-create.lock"))
+        finally:
+            for name,value in before.items():setattr(workspace,name,value)
+
+class RestrictedResolve(unittest.TestCase):
+    def call(self, repo="SecPal/api", issue=2639, sudo_user="codex"):
+        output, error = io.StringIO(), io.StringIO()
+        proof = {"repo": repo, "issue": issue, "workspace_id": "native-proof"}
+        with patch.dict(os.environ, {"SUDO_USER": sudo_user}), \
+                patch.object(workspace, "command", return_value=""), \
+                patch.object(workspace, "resolve", return_value=Path("/native/root")), \
+                patch.object(workspace, "attest", return_value=proof) as attest, \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
+            rc = workspace.main(["resolve", "--repo", repo, "--issue", str(issue)])
+        return rc, output.getvalue(), attest.call_count
+
+    def test_existing_exact_codex_resolve_returns_fresh_native_proof(self):
+        rc, output, calls = self.call()
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(output)["workspace_id"], "native-proof")
+        self.assertEqual(calls, 1)
+
+    def test_foreign_codex_selector_is_denied_before_attestation(self):
+        for repo, issue in [("SecPal/api", 1383), ("SecPal/frontend", 2639)]:
+            rc, output, calls = self.call(repo, issue)
+            self.assertNotEqual(rc, 0)
+            self.assertEqual(output, "")
+            self.assertEqual(calls, 0)
+
+    def test_admin_path_contract_is_preserved(self):
+        rc, output, calls = self.call(sudo_user="hosch")
+        self.assertEqual((rc, output.strip(), calls), (0, "/native/root", 0))
 
 
 if __name__ == "__main__":

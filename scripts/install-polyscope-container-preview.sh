@@ -3,6 +3,14 @@
 # SPDX-License-Identifier: MIT
 
 set -eEuo pipefail
+
+if [[ -n "${SECPAL_WORKSPACE_ISOLATION_POLICY:-}" ]]; then
+    if [[ ! "$SECPAL_WORKSPACE_ISOLATION_POLICY" =~ ^/[A-Za-z0-9._/+-]+$ ]]; then
+        echo "Error: isolation policy path contains unsupported characters." >&2
+        exit 1
+    fi
+    python3 -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location("isolation",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.load_policy(sys.argv[2])' "$(dirname -- "${BASH_SOURCE[0]}")/polyscope-isolation.py" "$SECPAL_WORKSPACE_ISOLATION_POLICY"
+fi
 umask 077
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,6 +20,7 @@ REFRESH_SOURCE="$SCRIPT_DIR/refresh-polyscope-container-preview.sh"
 RUNNER_SOURCE="$SCRIPT_DIR/run-polyscope-container-preview.py"
 CLEANUP_SOURCE="$SCRIPT_DIR/cleanup-polyscope-container-preview.py"
 TEST_SOURCE="$SCRIPT_DIR/run-polyscope-api-tests.py"
+ISOLATION_SOURCE="$SCRIPT_DIR/polyscope-isolation.py"
 ROLLOUT_SOURCE="$SCRIPT_DIR/polyscope-rollout.py"
 IMAGE="${POLYSCOPE_PREVIEW_IMAGE:-localhost/secpal-polyscope-api-toolchain:php84}"
 NETWORK="${POLYSCOPE_PREVIEW_NETWORK:-polyscope-preview-db}"
@@ -200,6 +209,7 @@ Description=Polyscope PostgreSQL container-network proxy
 ConditionPathIsSocket=$POSTGRES_SOCKET
 
 [Service]
+${SECPAL_WORKSPACE_ISOLATION_POLICY:+Environment=SECPAL_WORKSPACE_ISOLATION_POLICY=$SECPAL_WORKSPACE_ISOLATION_POLICY}
 Type=simple
 Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
@@ -221,6 +231,7 @@ Wants=network-online.target
 Requires=polyscope-postgresql-proxy.service
 
 [Service]
+${SECPAL_WORKSPACE_ISOLATION_POLICY:+Environment=SECPAL_WORKSPACE_ISOLATION_POLICY=$SECPAL_WORKSPACE_ISOLATION_POLICY}
 Type=simple
 Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
@@ -240,6 +251,7 @@ After=polyscope-preview.service
 StartLimitIntervalSec=0
 
 [Service]
+${SECPAL_WORKSPACE_ISOLATION_POLICY:+Environment=SECPAL_WORKSPACE_ISOLATION_POLICY=$SECPAL_WORKSPACE_ISOLATION_POLICY}
 Type=oneshot
 Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
@@ -309,6 +321,7 @@ renderer_target="$LIBEXEC_DIR/render-polyscope-container-caddy.py"
 refresh_target="$LIBEXEC_DIR/refresh-polyscope-container-preview.sh"
 runner_target="$LIBEXEC_DIR/run-polyscope-container-preview.py"
 cleanup_target="$LIBEXEC_DIR/cleanup-polyscope-container-preview.py"
+isolation_target="$LIBEXEC_DIR/polyscope-isolation.py"
 php_target="$BIN_DIR/php"
 composer_target="$BIN_DIR/composer"
 test_target="$BIN_DIR/polyscope-api-test"
@@ -349,6 +362,7 @@ backup_target "$renderer_target" renderer.py
 backup_target "$refresh_target" refresh.sh
 backup_target "$runner_target" runner.py
 backup_target "$cleanup_target" cleanup.py
+backup_target "$isolation_target" isolation.py
 backup_target "$php_target" php
 backup_target "$composer_target" composer
 backup_target "$test_target" api-test
@@ -367,6 +381,7 @@ rollback() {
     restore_target "$refresh_target" refresh.sh
     restore_target "$runner_target" runner.py
     restore_target "$cleanup_target" cleanup.py
+    restore_target "$isolation_target" isolation.py
     restore_target "$php_target" php
     restore_target "$composer_target" composer
     restore_target "$test_target" api-test
@@ -425,6 +440,7 @@ install_managed "$RENDERER_SOURCE" "$renderer_target" 0755
 install_managed "$REFRESH_SOURCE" "$refresh_target" 0755
 install_managed "$RUNNER_SOURCE" "$runner_target" 0755
 install_managed "$CLEANUP_SOURCE" "$cleanup_target" 0755
+install_managed "$ISOLATION_SOURCE" "$isolation_target" 0755
 install_managed "$temporary_dir/Caddyfile" "$caddyfile_target" 0600
 install_managed "$temporary_dir/php" "$php_target" 0755
 install_managed "$temporary_dir/composer" "$composer_target" 0755

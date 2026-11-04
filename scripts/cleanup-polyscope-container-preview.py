@@ -8,10 +8,28 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import functools
+import os
 import pathlib
 import sqlite3
 import sys
 
+
+@functools.lru_cache(maxsize=1)
+def isolation_module():
+    path = pathlib.Path(__file__).with_name("polyscope-isolation.py")
+    if not path.is_file():
+        path = pathlib.Path("/usr/local/libexec/secpal/polyscope-isolation.py")
+    if (not path.is_file()
+            and not os.environ.get("SECPAL_WORKSPACE_ISOLATION_POLICY")
+            and not pathlib.Path("/etc/secpal/workspace-isolation.json").exists()
+            and not pathlib.Path("/etc/secpal/workspace-isolation.required").exists()):
+        from types import SimpleNamespace
+        return SimpleNamespace(from_environment=lambda: None)
+    spec = importlib.util.spec_from_file_location("_secpal_isolation", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 def load_rollout(path: pathlib.Path):
     spec = importlib.util.spec_from_file_location("secpal_polyscope_rollout", path)
@@ -35,6 +53,12 @@ def cleanup(
     clone_root: pathlib.Path,
     repository_root: pathlib.Path,
 ) -> list[str]:
+    gate = isolation_module().from_environment()
+    if gate:
+        with gate.observation():
+            # Orphan GC is deferred for the reservation's lifetime. Excluding
+            # quarantined paths from its keep-set would instead drop their data.
+            return []
     api_source = (repository_root / "api").resolve(strict=True)
     rollout = load_rollout(
         (repository_root / ".github/scripts/polyscope-rollout.py").resolve(strict=True)

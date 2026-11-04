@@ -9,6 +9,7 @@ import base64
 import contextlib
 import copy
 import fcntl
+import functools
 import hashlib
 import importlib.util
 import json
@@ -30,6 +31,64 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
+
+@functools.lru_cache(maxsize=1)
+def isolation_module():
+    path = pathlib.Path(__file__).with_name("polyscope-isolation.py")
+    if not path.is_file():
+        path = pathlib.Path("/usr/local/libexec/secpal/polyscope-isolation.py")
+    if (not path.is_file()
+            and not os.environ.get("SECPAL_WORKSPACE_ISOLATION_POLICY")
+            and not pathlib.Path("/etc/secpal/workspace-isolation.json").exists()
+            and not pathlib.Path("/etc/secpal/workspace-isolation.required").exists()):
+        from types import SimpleNamespace
+        return SimpleNamespace(from_environment=lambda: None)
+    spec = importlib.util.spec_from_file_location("_secpal_isolation", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+_isolation_context = None
+
+def isolation_state():
+    if _isolation_context is not None:
+        return _isolation_context
+    gate = isolation_module().from_environment()
+    if gate:
+        with gate.observation() as (records, pending):
+            return gate.policy, records, pending
+    return None
+
+def isolation_path_blocked(path):
+    state = isolation_state()
+    if state is None:
+        return False
+    policy, records, pending = state
+    try:
+        return isolation_module().classify(policy, records, str(pathlib.Path(path).resolve()), pending=pending)
+    except isolation_module().IsolationError:
+        # A row created after this pass's snapshot waits for the next pass.
+        return True
+
+def isolation_blocked_paths():
+    state = isolation_state()
+    if state is None:
+        return set()
+    policy, records, pending = state
+    return {row["path"] for repo in records for row in repo["workspaces"]
+            if isolation_path_blocked(row["path"])}
+
+def withdraw_isolated_host_previews(clone_root, paths):
+    for raw in sorted(paths):
+        path = pathlib.Path(raw)
+        if path.is_symlink():
+            raise RuntimeError("isolated preview path is a symlink")
+        if path.is_dir():
+            deny_preview_nginx_access(clone_root, path)
+
+def isolation_require_execution(path):
+    if isolation_path_blocked(path):
+        raise RuntimeError("workspace-isolation-quarantined")
 
 ROLLOUT_SCRIPT_PATH = pathlib.Path(__file__).resolve()
 
@@ -1421,6 +1480,7 @@ def _bootstrap_api_worktree_locked(
     allow_schema_drift_recovery: bool = True,
 ) -> tuple[bool, str | None]:
     """Run the API mutation pipeline while the caller holds its worktree lock."""
+    isolation_require_execution(worktree_path)
     env_path = worktree_path / ".env"
     env_values = load_env_assignments(env_path)
     if preview_storage_target is None:
@@ -1575,6 +1635,7 @@ def prepare_api_worktree(
     *,
     db_path: pathlib.Path | None = None,
 ) -> tuple[bool, str | None]:
+    isolation_require_execution(worktree_path)
     with acquire_api_worktree_bootstrap_lock(worktree_path) as locked_worktree_path:
         return ensure_api_worktree_ready(
             locked_worktree_path,
@@ -1593,6 +1654,7 @@ def bootstrap_api_worktree(
     allow_tenant_key_recovery: bool = True,
     allow_schema_drift_recovery: bool = True,
 ) -> tuple[bool, str | None]:
+    isolation_require_execution(worktree_path)
     with acquire_api_worktree_bootstrap_lock(worktree_path) as locked_worktree_path:
         ready, preview_storage_target = ensure_api_worktree_ready(
             locked_worktree_path,
@@ -1619,6 +1681,7 @@ def refresh_api_worktree(
     *,
     db_path: pathlib.Path | None = None,
 ) -> tuple[bool, str | None]:
+    isolation_require_execution(worktree_path)
     return bootstrap_api_worktree(
         worktree_path,
         source_repo_path,
@@ -1635,6 +1698,7 @@ def run_api_worktree_shell_command(
     *,
     db_path: pathlib.Path | None = None,
 ) -> None:
+    isolation_require_execution(worktree_path)
     env_path = worktree_path / ".env"
     if not env_path.exists():
         raise SystemExit(f"api worktree {worktree_path} is missing .env")
@@ -3441,7 +3505,14 @@ def build_prompt_bundle(spec: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def render_local_config(spec: dict[str, Any]) -> dict[str, Any]:
+def guard_rendered_config(config: dict[str, Any]) -> dict[str, Any]:
+    policy = os.environ.get("SECPAL_WORKSPACE_ISOLATION_POLICY")
+    if not policy and isolation_state() is not None:
+        policy = "/etc/secpal/workspace-isolation.json"
+    return isolation_module().wrap_config(config, policy) if policy else config
+
+
+def render_local_config(spec: dict[str, Any], *, guard: bool = True) -> dict[str, Any]:
     require_repo_instruction_files(spec)
     config = copy.deepcopy(spec["local_config"])
     config = enrich_local_config(spec["path"].name, config)
@@ -3451,7 +3522,7 @@ def render_local_config(spec: dict[str, Any]) -> dict[str, Any]:
     )
     for task in config.get("tasks", []):
         task["prompt"] = collapse_spaces(f"{preamble} {task['prompt']}")
-    return config
+    return guard_rendered_config(config) if guard else config
 
 
 def prefix_first_line(prefix: str, text: str) -> str:
@@ -3613,7 +3684,7 @@ def validate_repo_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
         repo_path = pathlib.Path(spec["path"])
         if not is_workspace_automation_enabled(spec):
             continue
-        config = render_local_config(spec)
+        config = render_local_config(spec, guard=False)
         package_scripts = load_package_scripts(repo_path)
         composer_scripts = load_composer_scripts(repo_path)
 
@@ -3857,7 +3928,7 @@ def render_worktree_local_config(
     db_path: pathlib.Path | None = None,
     container_preview: bool = False,
 ) -> str:
-    config = render_local_config(spec)
+    config = render_local_config(spec, guard=False)
     if spec["path"].name == "api":
         manages_runtime_units = should_manage_api_runtime_units(
             worktree_path.parent.parent,
@@ -3881,7 +3952,7 @@ def render_worktree_local_config(
             preview["url"] = f"https://{preview_prefix}-{workspace}.preview.secpal.dev"
         else:
             preview["url"] = f"https://{workspace}.preview.secpal.dev"
-    return render_pretty_json(config) + "\n"
+    return render_pretty_json(guard_rendered_config(config)) + "\n"
 
 
 def collect_setup_inputs(worktree_path: pathlib.Path, setup_commands: list[str]) -> dict[str, str]:
@@ -4251,6 +4322,8 @@ def build_preview_workspace_redirects(
             # not prevent active workspaces from receiving their own aliases.
             if not physical_path.exists():
                 continue
+            if isolation_path_blocked(physical_path):
+                continue
             if not canonical_path.is_symlink() or os.readlink(canonical_path) != physical_workspace:
                 raise RuntimeError(f"workspace alias no longer points to its registered physical clone: {canonical_path}")
             if physical_path.is_symlink() or not physical_path.is_dir():
@@ -4299,6 +4372,8 @@ def _run_preview_setfacl(
     executable: str,
     arguments: list[str],
     failure_message: str,
+    *,
+    pass_fds: tuple[int, ...] = (),
 ) -> None:
     try:
         subprocess.run(
@@ -4306,6 +4381,7 @@ def _run_preview_setfacl(
             check=True,
             capture_output=True,
             text=True,
+            **({"pass_fds": pass_fds} if pass_fds else {}),
         )
     except subprocess.CalledProcessError as error:
         detail = error.stderr.strip() if error.stderr else "no error output"
@@ -4396,25 +4472,60 @@ def deny_preview_nginx_access(
     *,
     setfacl_bin: str | None = None,
 ) -> None:
-    """Block the nginx worker at one physical preview worktree."""
+    """Deny the opened worktree inode without following a replacement path."""
     resolved_clone_root = clone_root.resolve(strict=True)
-    resolved_worktree_path = worktree_path.resolve(strict=True)
-    if resolved_worktree_path.parent.parent != resolved_clone_root:
+    if ".." in worktree_path.parts or worktree_path.parent.parent != resolved_clone_root:
         raise RuntimeError(
-            f"preview worktree {resolved_worktree_path} is not directly below clone root {resolved_clone_root}"
+            f"preview worktree {worktree_path} is not directly below clone root {resolved_clone_root}"
         )
 
+    # Capture every expected inode before opening the descriptor chain. A
+    # renamed repository or worktree must not redirect revocation to its replacement.
+    expected = [path.stat(follow_symlinks=False) for path in
+                (resolved_clone_root, worktree_path.parent, worktree_path)]
+    if any(not stat.S_ISDIR(info.st_mode) for info in expected):
+        raise RuntimeError("preview directory identity is not a physical directory")
+
+    def verify_identity(fd, info):
+        opened = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            raise RuntimeError("preview directory identity changed before revocation")
+
     executable = resolve_setfacl_bin(setfacl_bin)
-    _run_preview_setfacl(
-        executable,
-        [
-            "-m",
-            "u:www-data:---",
-            "--",
-            str(resolved_worktree_path),
-        ],
-        f"unable to deny Nginx preview access to {resolved_worktree_path}",
-    )
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    clone_fd = os.open(resolved_clone_root, flags)
+    try:
+        verify_identity(clone_fd, expected[0])
+        repo_fd = os.open(worktree_path.parent.name, flags, dir_fd=clone_fd)
+        try:
+            verify_identity(repo_fd, expected[1])
+            worktree_fd = os.open(worktree_path.name, flags, dir_fd=repo_fd)
+            try:
+                verify_identity(worktree_fd, expected[2])
+                mount_ids = [
+                    next(
+                        line.split()[1]
+                        for line in pathlib.Path(f"/proc/self/fdinfo/{fd}").read_text().splitlines()
+                        if line.startswith("mnt_id:")
+                    )
+                    for fd in (clone_fd, repo_fd, worktree_fd)
+                ]
+                if len(set(mount_ids)) != 1:
+                    raise RuntimeError("preview worktree crosses a mount boundary")
+                # The inherited fd pins the object across rename/symlink races.
+                # Reopening the original pathname here could revoke another tree.
+                _run_preview_setfacl(
+                    executable,
+                    ["-m", "u:www-data:---", "--", f"/proc/self/fd/{worktree_fd}"],
+                    f"unable to deny Nginx preview access to {worktree_path}",
+                    pass_fds=(worktree_fd,),
+                )
+            finally:
+                os.close(worktree_fd)
+        finally:
+            os.close(repo_fd)
+    finally:
+        os.close(clone_fd)
 
 
 def deny_preview_nginx_clone_access(
@@ -5037,6 +5148,7 @@ def ensure_api_runtime_owner(
     preview_enabled: bool,
 ) -> dict[str, str]:
     """Converge one persistent API runtime owner before allowing preview access."""
+    isolation_require_execution(worktree_path)
     try:
         runtime_units = build_api_runtime_unit_specs(
             worktree_path,
@@ -5088,6 +5200,9 @@ def provision_worktrees(
         repo_state,
         clone_root,
     )
+    blocked_paths = {str(path) for paths in registered_worktrees.values() for path in paths
+                     if isolation_path_blocked(path)}
+    isolation_active = isolation_state() is not None
     admission = container_preview_admission() if container_preview else None
 
     def withdraw_if_api(repo_name: str, worktree: pathlib.Path) -> None:
@@ -5134,6 +5249,7 @@ def provision_worktrees(
 
     if not container_preview:
         try:
+            withdraw_isolated_host_previews(clone_root, blocked_paths)
             revoke_unregistered_preview_nginx_access(clone_root, registered_worktrees)
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
             error_message = f"failed to reconcile preview access: {error}"
@@ -5161,6 +5277,8 @@ def provision_worktrees(
         setup_commands = validation_commands
 
         for worktree_path in registered_worktrees[repo_name]:
+            if str(worktree_path) in blocked_paths:
+                continue
             if not worktree_path.is_dir() or worktree_path.is_symlink():
                 print(
                     f"Skipping registered {repo_name} worktree at {worktree_path}: path is missing or not a real directory"
@@ -5228,7 +5346,7 @@ def provision_worktrees(
     for removed_alias in removed_workspace_aliases:
         print(f"Removed stale managed workspace alias {removed_alias}")
 
-    cleaned_preview_storage_targets = cleanup_removed_api_preview_databases(
+    cleaned_preview_storage_targets = [] if isolation_active else cleanup_removed_api_preview_databases(
         repo_state,
         repo_specs,
         clone_root,
@@ -6189,6 +6307,9 @@ def dispatch_instruction_dependent_direct_api_mode(args: argparse.Namespace) -> 
     if mode == "run_api_worktree" and not args.shell_command:
         raise SystemExit("--shell-command is required with --run-api-worktree")
 
+    if isolation_path_blocked(requested_worktree):
+        return 0
+
     application_runtime = mode == "run_api_runtime_worktree"
     if application_runtime:
         role = getattr(args, "runtime_role", None)
@@ -6375,6 +6496,18 @@ def apply_canonical_reconcile_mode(args: argparse.Namespace) -> None:
 
 
 def main() -> int:
+    global _isolation_context
+    gate = isolation_module().from_environment()
+    if gate:
+        with gate.observation() as (records, pending):
+            _isolation_context = gate.policy, records, pending
+        try:
+            return isolated_main()
+        finally:
+            _isolation_context = None
+    return isolated_main()
+
+def isolated_main() -> int:
     args = parse_args()
     apply_canonical_reconcile_mode(args)
 
@@ -6437,6 +6570,11 @@ def run_rollout(args: argparse.Namespace) -> int:
         db_backup = sync_repository_metadata(args.db_path, repo_state, repo_specs)
 
     if not container:
+        try:
+            withdraw_isolated_host_previews(args.clone_root, isolation_blocked_paths())
+        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+            print(f"Failed to withdraw isolated host previews: {error}", file=sys.stderr)
+            return 1
         nginx_http2_syntax = args.nginx_http2_syntax
         if args.install_nginx or args.refresh_nginx or nginx_http2_syntax == "auto":
             nginx_http2_syntax = detect_nginx_http2_syntax()

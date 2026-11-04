@@ -269,6 +269,7 @@ def main() -> None:
         assert "StartLimitIntervalSec=0" in refresh_unit
         assert "ExecStartPre=/usr/bin/sleep 2" in refresh_unit
         assert home.joinpath("custom-libexec/cleanup-polyscope-container-preview.py").is_file()
+        assert home.joinpath("custom-libexec/polyscope-isolation.py").read_bytes() == (REPO_ROOT/"scripts/polyscope-isolation.py").read_bytes()
         assert "Restart=" not in refresh_unit
         backups = list((home / ".local/state/polyscope/backups").iterdir())
         assert len(backups) == 5, backups
@@ -279,6 +280,8 @@ def main() -> None:
         previous_test_source = home / "custom-libexec/run-polyscope-api-tests.py"
         previous_test_wrapper.write_text("previous test wrapper\n")
         previous_test_source.write_text("previous test source\n")
+        previous_guard = home / "custom-libexec/polyscope-isolation.py"
+        previous_guard.write_text("previous guard\n")
         rollback_env = env | {"FAIL_PREVIEW_ENABLE": "1"}
         rolled_back = subprocess.run(
             ["bash", str(INSTALLER)],
@@ -292,6 +295,7 @@ def main() -> None:
         assert list(service_state.iterdir()) == []
         assert previous_test_wrapper.read_text() == "previous test wrapper\n"
         assert previous_test_source.read_text() == "previous test source\n"
+        assert previous_guard.read_text() == "previous guard\n"
 
 
         commands = command_log.read_text()

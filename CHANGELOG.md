@@ -20,6 +20,33 @@ Log of notable changes to SecPal organization defaults (newest first).
 - Document source remediation, residual risks and the protected consumer-pin
   bootstrap; retain every existing scanner, freshness and admission boundary.
 
+## 2026-11-04 - Harden Isolation Recovery and Revocation
+
+**Security:**
+
+- Reject policy paths that could alter generated systemd directives.
+- Defer clone-reaper deletion through guarded native recovery and reject
+  repository/worktree inode replacement before ACL revocation.
+- Run administrative publication barriers in required CI and qualify explicit
+  fresh-install lock and authority-directory prerequisites.
+- Retain creation fences until every configured native repository member is
+  verified, including interrupted registration of a still-partial group.
+- Pin preview ACL denial to the opened directory and reject symlink or mount
+  redirection; qualify the process drain required for complete view revocation
+  (refs #1297). Live activation remains separate.
+
+## 2026-11-03 - Isolate Native Workspace Provisioning
+
+**Security:**
+
+- Fence the authorized linked workspace group before native registration and
+  preserve that fence through setup, rollout, timers and preview reconciliation.
+- Add a restricted UID-separated development runner with fresh native identity
+  checks, hardlink separation and a narrow idmapped filesystem grant.
+- Qualify interrupted registration and resource cleanup without broadening
+  restricted sudo or management access. Live activation remains separate
+  (refs #1297).
+
 ## 2026-11-02 - Reproducible Polyscope PHP Development
 
 **Fixed:**

@@ -7380,7 +7380,8 @@ if grep -qE 'worktree-provision\.lock|\.polyscope/clones' "$fake_unit_dir/polysc
 fi
 if command -v systemd-analyze >/dev/null 2>&1; then
   systemd_verify_log="$workspace/systemd-analyze-verify.log"
-  if ! SYSTEMD_UNIT_PATH="$fake_unit_dir:" systemd-analyze verify \
+  # Exclude real host system-unit drop-ins from this disposable user-unit test.
+  if ! SYSTEMD_UNIT_PATH="$fake_unit_dir:/usr/lib/systemd/system" systemd-analyze verify \
     "$fake_unit_dir"/*.service \
     "$fake_unit_dir"/*.path \
     "$fake_unit_dir"/*.timer >"$systemd_verify_log" 2>&1; then
@@ -7491,6 +7492,10 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     original_run = module.subprocess.run
 
     def record_run(arguments: list[str], **kwargs: object) -> None:
+        if arguments[-1].startswith("/proc/self/fd/"):
+            fd = int(arguments[-1].rsplit("/", 1)[-1])
+            assert fd in kwargs["pass_fds"]
+            arguments = [*arguments[:-1], str(Path(arguments[-1]).resolve(strict=True))]
         if (
             "-R" in arguments
             and "-d" not in arguments
@@ -8581,3 +8586,8 @@ bash "$SCRIPT_DIR/polyscope-system-installer.sh"
 
 python3 "$SCRIPT_DIR/secpal-polyscope-workspace.py"
 node --test "$SCRIPT_DIR/secpal-polyscope-workspace-ws.test.mjs"
+
+# Keep group isolation admission in the maintained rollout regression entrypoint.
+python3 "$SCRIPT_DIR/polyscope-isolation.py"
+python3 "$SCRIPT_DIR/polyscope-isolation-regressions.py"
+python3 "$SCRIPT_DIR/secpal-codex-workspace.py"
