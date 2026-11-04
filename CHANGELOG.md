@@ -25,6 +25,10 @@ Log of notable changes to SecPal organization defaults (newest first).
 **Security:**
 
 - Reject policy paths that could alter generated systemd directives.
+- Defer clone-reaper deletion through guarded native recovery and reject
+  repository/worktree inode replacement before ACL revocation.
+- Run administrative publication barriers in required CI and qualify explicit
+  fresh-install lock and authority-directory prerequisites.
 - Retain creation fences until every configured native repository member is
   verified, including interrupted registration of a still-partial group.
 - Pin preview ACL denial to the opened directory and reject symlink or mount

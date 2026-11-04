@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import argparse
+import functools
+import importlib.util
 import json
 import os
 import shutil
@@ -16,6 +18,25 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+
+
+@functools.lru_cache(maxsize=1)
+def isolation_module():
+    path = Path(__file__).with_name("polyscope-isolation.py")
+    if not path.is_file():
+        path = Path("/usr/local/libexec/secpal/polyscope-isolation.py")
+    if (not path.is_file()
+            and not os.environ.get("SECPAL_WORKSPACE_ISOLATION_POLICY")
+            and not Path("/etc/secpal/workspace-isolation.json").exists()
+            and not Path("/etc/secpal/workspace-isolation.json").is_symlink()
+            and not Path("/etc/secpal/workspace-isolation.required").exists()
+            and not Path("/etc/secpal/workspace-isolation.required").is_symlink()):
+        from types import SimpleNamespace
+        return SimpleNamespace(from_environment=lambda: None)
+    spec = importlib.util.spec_from_file_location("_secpal_reaper_isolation", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def parse_duration(value: str) -> int:
@@ -266,13 +287,20 @@ def reap(args: argparse.Namespace) -> dict[str, Any]:
     home = resolved_absolute(Path(args.polyscope_home), "Polyscope home")
     clone_root = resolved_absolute(Path(args.clone_root) if args.clone_root else home / "clones", "clone root")
     db_path = home / "polyscope.db"
-    protected_roots, protected_worktrees = load_protected_paths(db_path, clone_root)
     report: dict[str, Any] = {
         "removed": [],
         "would_remove": [],
         "reclaimed_bytes": 0,
         "skipped": {"active": [], "grace_period": [], "lock": [], "process": [], "unsafe": []},
     }
+    gate = isolation_module().from_environment()
+    if gate:
+        with gate.observation():
+            # An unregistered partial clone cannot be attributed safely. Like
+            # preview-storage GC, defer deletion for the reservation's lifetime.
+            report["deferred_isolation"] = True
+            return report
+    protected_roots, protected_worktrees = load_protected_paths(db_path, clone_root)
     if not clone_root.is_dir():
         return report
 
@@ -337,7 +365,7 @@ def main() -> int:
     args = parse_args()
     try:
         report = reap(args)
-    except ValueError as exc:
+    except (ValueError, OSError, RuntimeError) as exc:
         print(exc, file=sys.stderr)
         return 2
     if args.json:

@@ -28,6 +28,46 @@ must not trigger automatic re-provisioning.
 
 ## Reservation and execution admission
 
+First activation has two explicit installation prerequisites, including on a
+fresh host: a root-owned, non-writable-by-group/others authority directory and the
+existing coordinator's service-owned creation lock. Arming deliberately rejects
+missing or untrusted paths; it does not create a root-owned replacement lock or
+silently repair existing ownership. These are administrative installation steps,
+never additional sudo rights for codex. Under the closed creation window, after
+verifying the installed immutable coordinator, initialize only missing state:
+
+```bash
+sudo /usr/bin/python3 -I - <<'PY'
+from pathlib import Path
+import stat
+p = Path("/etc/secpal")
+if not p.exists() and not p.is_symlink():
+    p.mkdir(mode=0o755)
+s = p.lstat()
+if not stat.S_ISDIR(s.st_mode) or s.st_uid != 0 or s.st_mode & 0o022:
+    raise SystemExit("untrusted authority directory; abort")
+PY
+sudo -u secpal -- /usr/bin/python3 -I - <<'PY'
+import importlib.machinery
+import importlib.util
+loader = importlib.machinery.SourceFileLoader(
+    "workspace_owner", "/usr/local/bin/secpal-polyscope-workspace")
+spec = importlib.util.spec_from_loader(loader.name, loader)
+owner = importlib.util.module_from_spec(spec)
+loader.exec_module(owner)
+owner.configure_paths(1003)
+with owner.creation_lock() as stream:
+    if stream.read().strip():
+        raise SystemExit("unresolved native creation; retain fence and abort")
+PY
+```
+
+The initializer is the existing bounded coordinator function: it creates no
+workspace, clears no fence and changes no native registration. Stop on a pending
+fence, different owner, symlink or unsafe mode. The administrative publication
+regression proves a fresh configured lock and authority parent can be initialized
+this way, while each missing prerequisite fails closed beforehand.
+
 Before any native creation, an administrator arms
 `/etc/secpal/workspace-isolation.json` using the versioned guard's `--arm --model`
 operation with an explicit `--server-bin` matching the configured service executable.
@@ -144,7 +184,8 @@ The following is an ordering contract, not a live activation approval:
 2. Close all native creation entrances, including UI/WebSocket/REST and relay RPC.
    A coordinator lock alone does not close the other entrances. Confirm the
    qualified native relay-disable behavior and controlled local management access.
-3. Pause only the documented provisioning/path/timer/refresh triggers. Let old
+3. Pause only the documented provisioning/path/timer/refresh and clone-reaper
+   triggers. Let old
    processes drain successfully within a bounded window; require empty jobs and
    cgroups and released locks. On timeout, failure or unexplained work, abort.
    Do not force-kill old live services.
@@ -155,7 +196,8 @@ The following is an ordering contract, not a live activation approval:
    preserve every existing restricted-sudo and management-network denial. Existing
    installers can restart services: their invocation needs separate authorization.
 5. Under the closed creation window, make required authority effective, arm the
-   reservation through the existing coordinator and wrap every effective setup/run
+   reservation through the existing coordinator after the explicit first-activation
+   prerequisites above, and wrap every effective setup/run
    source. Verify both positive ordinary-workspace and negative target admission.
 6. Reopen only the controlled native interface needed for one trusted coordinator
    creation. Authenticate the returned root and all children before any writable
@@ -181,7 +223,11 @@ and `python3 tests/install-polyscope-container-preview.py`, followed by the comp
 `bash scripts/preflight.sh`. The rollout suite includes the portable guard,
 interruption, reservation-scope and launcher identity tests. Administrative atomic
 publication tests use `tests/polyscope-isolation-publication.py` with
-`SECPAL_PUBLICATION_TEST_ROOT` set to a disposable root-owned directory.
+`SECPAL_PUBLICATION_TEST_ROOT` set to a disposable root-owned directory. The required
+Evidence Architecture job executes them as root in private mount/network
+namespaces on every PR. The independent clone reaper consults the same guard and
+defers orphan deletion for the reservation's lifetime, including unregistered
+partial groups; ordinary unreserved reaping keeps its existing behavior.
 
 Native and kernel qualification additionally needs a separate Polyscope data and
 clone root, authentic issue metadata, private service namespaces, four disposable

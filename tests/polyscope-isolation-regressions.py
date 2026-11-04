@@ -334,4 +334,66 @@ class ReviewRevocationTests(unittest.TestCase):
     m.deny_preview_nginx_access(clone,target,setfacl_bin='/usr/bin/setfacl')
    self.assertEqual(len(seen),1)
 
+
+class ReviewReaperTests(unittest.TestCase):
+ def fixture(self, tmp):
+  import argparse,sqlite3,time
+  home=Path(tmp);clone=home/'clones';target=clone/'api'/'partial';target.mkdir(parents=True)
+  db=sqlite3.connect(home/'polyscope.db')
+  db.executescript("CREATE TABLE repositories(id TEXT,name TEXT,path TEXT);CREATE TABLE worktrees(path TEXT,status TEXT);")
+  db.execute("INSERT INTO repositories VALUES ('api','SecPal/api','/fixture/source')");db.commit();db.close()
+  os.utime(target,(1,1));os.utime(target.parent,(1,1))
+  return argparse.Namespace(polyscope_home=str(home),clone_root=str(clone),grace_period=1,dry_run=False),target
+ def test_reaper_retains_unregistered_partial_clone_under_creation_fence(self):
+  import contextlib
+  m=load('review_reaper_pending','reap-polyscope-clones.py')
+  seen=[]
+  @contextlib.contextmanager
+  def observation():
+   seen.append('pending-native-observation');yield [],True
+  gate=Mock();gate.observation=observation
+  with tempfile.TemporaryDirectory() as tmp:
+   args,target=self.fixture(tmp)
+   with patch.object(m,'isolation_module',return_value=Mock(from_environment=Mock(return_value=gate)),create=True),patch.object(m,'has_active_process',return_value=False):
+    result=m.reap(args)
+   self.assertTrue(target.is_dir(),'pending native clone was deleted')
+   self.assertEqual(result['removed'],[]);self.assertEqual(seen,['pending-native-observation'])
+ def test_unavailable_guard_cannot_fall_back_to_orphan_deletion(self):
+  m=load('review_reaper_unavailable','reap-polyscope-clones.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   args,target=self.fixture(tmp)
+   module=Mock();module.from_environment.side_effect=FileNotFoundError('required authority')
+   with patch.object(m,'isolation_module',return_value=module,create=True),patch.object(m,'has_active_process',return_value=False):
+    with self.assertRaises(FileNotFoundError):m.reap(args)
+   self.assertTrue(target.is_dir())
+
+class ReviewParentInodeTests(unittest.TestCase):
+ def test_repository_swap_before_open_never_revokes_replacement_tree(self):
+  m=load('review_parent_inode','polyscope-rollout.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   clone=Path(tmp)/'clones';repo=clone/'api';target=repo/'protected';target.mkdir(parents=True)
+   foreign=clone/'foreign';(foreign/'protected').mkdir(parents=True)
+   saved=clone/'retired';original=m.os.open
+   def opening(path,flags,*args,**kwargs):
+    if path=='api' and kwargs.get('dir_fd') is not None:
+     repo.rename(saved);foreign.rename(repo)
+    return original(path,flags,*args,**kwargs)
+   with patch.object(m.os,'open',side_effect=opening),patch.object(m.subprocess,'run') as run:
+    with self.assertRaisesRegex(RuntimeError,'identity'):
+     m.deny_preview_nginx_access(clone,target,setfacl_bin='/usr/bin/setfacl')
+    run.assert_not_called()
+ def test_worktree_swap_before_open_never_revokes_replacement_tree(self):
+  m=load('review_worktree_inode','polyscope-rollout.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   clone=Path(tmp)/'clones';target=clone/'api'/'protected';target.mkdir(parents=True)
+   foreign=target.with_name('foreign');foreign.mkdir();saved=target.with_name('retired');original=m.os.open
+   def opening(path,flags,*args,**kwargs):
+    if path=='protected' and kwargs.get('dir_fd') is not None:
+     target.rename(saved);foreign.rename(target)
+    return original(path,flags,*args,**kwargs)
+   with patch.object(m.os,'open',side_effect=opening),patch.object(m.subprocess,'run') as run:
+    with self.assertRaisesRegex(RuntimeError,'identity'):
+     m.deny_preview_nginx_access(clone,target,setfacl_bin='/usr/bin/setfacl')
+    run.assert_not_called()
+
 if __name__=='__main__':unittest.main()

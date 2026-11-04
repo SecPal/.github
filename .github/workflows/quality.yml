@@ -135,6 +135,16 @@ jobs:
       - name: Validate declared architecture
         run: python3 -I scripts/secpal-evidence-architecture.py --repository-root . --repository SecPal/.github
 
+      - name: Test administrative isolation publication
+        shell: bash
+        run: |
+          fixture_root="$(sudo mktemp -d /var/lib/secpal-isolation-publication.XXXXXX)"
+          trap 'sudo rm -rf -- "$fixture_root"' EXIT
+          sudo chmod 0755 "$fixture_root"
+          sudo unshare --mount --net --propagation private --fork env \
+            SECPAL_PUBLICATION_TEST_ROOT="$fixture_root" \
+            python3 -B tests/polyscope-isolation-publication.py
+
       - name: Prove active enforcement paths
         run: |
           python3 tests/secpal-evidence-architecture.py

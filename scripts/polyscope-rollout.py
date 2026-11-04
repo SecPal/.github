@@ -4479,14 +4479,29 @@ def deny_preview_nginx_access(
             f"preview worktree {worktree_path} is not directly below clone root {resolved_clone_root}"
         )
 
+    # Capture every expected inode before opening the descriptor chain. A
+    # renamed repository or worktree must not redirect revocation to its replacement.
+    expected = [path.stat(follow_symlinks=False) for path in
+                (resolved_clone_root, worktree_path.parent, worktree_path)]
+    if any(not stat.S_ISDIR(info.st_mode) for info in expected):
+        raise RuntimeError("preview directory identity is not a physical directory")
+
+    def verify_identity(fd, info):
+        opened = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            raise RuntimeError("preview directory identity changed before revocation")
+
     executable = resolve_setfacl_bin(setfacl_bin)
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     clone_fd = os.open(resolved_clone_root, flags)
     try:
+        verify_identity(clone_fd, expected[0])
         repo_fd = os.open(worktree_path.parent.name, flags, dir_fd=clone_fd)
         try:
+            verify_identity(repo_fd, expected[1])
             worktree_fd = os.open(worktree_path.name, flags, dir_fd=repo_fd)
             try:
+                verify_identity(worktree_fd, expected[2])
                 mount_ids = [
                     next(
                         line.split()[1]

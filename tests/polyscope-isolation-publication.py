@@ -124,4 +124,40 @@ class Arming(unittest.TestCase):
       with self.assertRaises(FileExistsError):m.arm(self.path,'gpt-5.3-codex',str(self.binary))
       self.assertEqual(self.path.read_bytes(),before)
 
+
+ def test_fresh_activation_initializes_existing_service_lock_and_authority_parent(self):
+  # Arming intentionally does not create root-owned substitutes for service state.
+  self.root.chmod(0o755)
+  home=self.root/'service-home';home.mkdir(mode=0o700);os.chown(home,1003,1003)
+  spec=importlib.util.spec_from_file_location('fresh_coordinator',Path(m.__file__).with_name('secpal-polyscope-workspace.py'))
+  owner=importlib.util.module_from_spec(spec);spec.loader.exec_module(owner)
+  owner.LOCK_PATH=home/'.local/state/polyscope/workspace-create.lock'
+  owner.CLONE_ROOT=home/'clones';owner.configure_paths=Mock()
+  parent=self.root/'etc-secpal'
+  policy=parent/'workspace-isolation.json';marker=parent/'workspace-isolation.required'
+  with patch.object(m,'coordinator',return_value=owner),patch.object(m,'DEFAULT_POLICY_PATH',policy),patch.object(m,'REQUIRED_MARKER_PATH',marker):
+   with self.assertRaises(FileNotFoundError):m.arm(policy,'gpt-5.3-codex',str(self.binary))
+   self.assertFalse(policy.exists());self.assertFalse(marker.exists())
+   # This is the documented, already-existing coordinator initializer under its
+   # service identity, not a new privileged helper or a root-created lock.
+   child=os.fork()
+   if child==0:
+    try:
+     os.setgroups([]);os.setgid(1003);os.setuid(1003)
+     with owner.creation_lock() as stream:
+      if stream.read().strip():os._exit(76)
+    except BaseException:os._exit(75)
+    os._exit(0)
+   _,status=os.waitpid(child,0);self.assertEqual(os.waitstatus_to_exitcode(status),0)
+   info=owner.LOCK_PATH.stat()
+   self.assertEqual((info.st_uid,info.st_nlink,info.st_mode&0o777),(1003,1,0o600))
+   with self.assertRaises(FileNotFoundError):m.arm(policy,'gpt-5.3-codex',str(self.binary))
+   self.assertFalse(policy.exists());self.assertFalse(marker.exists())
+   # Installation initializes only the missing root-controlled authority parent.
+   parent.mkdir(mode=0o755)
+   m.arm(policy,'gpt-5.3-codex',str(self.binary))
+   self.assertEqual(m.load_policy(marker),{'version':1})
+   self.assertEqual(m.load_policy(policy)['clone_root'],str(owner.CLONE_ROOT))
+   self.assertEqual(owner.LOCK_PATH.read_text(),'')
+
 if __name__=="__main__":unittest.main()
