@@ -446,6 +446,21 @@ def main() -> int:
         lock["dependencies"]["lodash"]["dev"] = True
         lock["fixture_token"] = SYNTHETIC_SECRET
         (workspace / "package-lock.json").write_text(json.dumps(lock, indent=2) + "\n")
+        # The reviewed GHSA range changed on 2026-11-03 to >=4.17.23,<4.18.1.
+        # Keep 4.17.20 for its four independent CVEs; use a separate true positive
+        # for the array-path bypass rather than weakening the required finding.
+        # https://github.com/advisories/GHSA-f23m-r3pf-42rh
+        canary = workspace / "lodash-array-path"
+        canary.mkdir()
+        (canary / "package-lock.json").write_text(json.dumps({
+            "name": "secpal-lodash-array-path-canary", "version": "1.0.0",
+            "lockfileVersion": 2, "requires": True,
+            "packages": {
+                "": {"devDependencies": {"lodash": "4.17.23"}},
+                "node_modules/lodash": {"version": "4.17.23", "dev": True},
+            },
+            "dependencies": {"lodash": {"version": "4.17.23", "dev": True}},
+        }) + "\n")
         (workspace / "trivy.yaml").write_text(
             "scan:\n  skip-files:\n    - '**'\n",
             encoding="utf-8",
@@ -527,6 +542,15 @@ def main() -> int:
         scanned = subprocess.run(scan_command, check=True, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.PIPE, env={"HOME": str(root)})
         native_value = json.loads(native.read_text(encoding="utf-8"))
+        canary_findings = [
+            finding for item in native_value.get("Results", [])
+            if item.get("Target") == "lodash-array-path/package-lock.json"
+            for finding in item.get("Vulnerabilities", [])
+            if finding.get("VulnerabilityID") == "CVE-2026-2950"
+        ]
+        if (len(canary_findings) != 1 or canary_findings[0].get("PkgName") != "lodash"
+                or canary_findings[0].get("InstalledVersion") != "4.17.23"):
+            raise RuntimeError("native lodash array-path canary lost its real positive detection")
         if native_value.get("ArtifactType") != "repository":
             raise RuntimeError("pinned Trivy did not identify the Git worktree as a repository")
         completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -585,10 +609,13 @@ def main() -> int:
         }
         required_fixture_rules = {
             ("package-lock.json", rule) for rule in (
-                "CVE-2026-2950", "CVE-2020-28500", "CVE-2026-4800",
+                "CVE-2020-28500", "CVE-2026-4800",
                 "CVE-2021-23337", "CVE-2025-13465",
             )
-        } | {("Containerfile", "DS-0002"), ("Containerfile", "DS-0026")}
+        } | {
+            ("lodash-array-path/package-lock.json", "CVE-2026-2950"),
+            ("Containerfile", "DS-0002"), ("Containerfile", "DS-0026"),
+        }
         if not required_fixture_rules <= positive_fixture_rules:
             raise RuntimeError("materialized fixtures lost original positive detections")
         representations = {}
