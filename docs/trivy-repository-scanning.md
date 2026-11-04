@@ -890,3 +890,19 @@ metadata admission, exact-peer access, identity removal and exact-run lifetime
 and cleanup still require the existing trusted operation. No GCP resource,
 production endpoint or host service is changed by this qualification. Consumers
 may adopt the new immutable scanner revision only after protected acceptance.
+
+## Advisory-sensitive replay canaries
+
+The native repository replay keeps lodash 4.17.20 and its independent
+CVE-2020-28500, CVE-2021-23337, CVE-2025-13465 and CVE-2026-4800 checks.
+GHSA-f23m-r3pf-42rh changed its lodash range on 2026-11-03 to
+`>=4.17.23, <4.18.1`; CVE-2026-2950 therefore has a separate 4.17.23 lockfile
+canary. The replay requires the native vulnerability ID, package and installed
+version before checking the normalized required finding. A feed change must
+trigger requalification, never removal of the positive expectation or an ignore.
+
+The maintainer advisory and reviewed ecosystem range are authoritative context:
+<https://github.com/lodash/lodash/security/advisories/GHSA-f23m-r3pf-42rh>.
+This fixture correction changes no scanner implementation, security disposition,
+expiry, VEX or policy threshold. An expired central disposition remains a separate
+fail-closed policy-admission error.
