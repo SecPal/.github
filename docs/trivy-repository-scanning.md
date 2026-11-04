@@ -50,7 +50,7 @@ accepted contract; it must consume the output instead of copying scanner logic.
 ## Governance repository admission
 
 SecPal/.github invokes the accepted action at
-`55bcdb6f00eb7d552da206f83fcdc87cf2c43375` inside its existing required
+`9468a2bdcca4d8dd1ae6ac49776932f5215aa750` inside its existing required
 **Evidence Architecture PR Gate**, immediately after an exact `github.sha`
 checkout with persisted credentials disabled. Successful execution and exactly
 `CLEAN` are both required before candidate validation tooling runs. Missing,
@@ -64,15 +64,13 @@ This does not make the candidate-controlled workflow technically tamper-proof:
 normal protected checks, source inspection and the sole maintainer's manual
 merge authority still apply.
 
-The central policy validates every exception's expiry, including exceptions for
-other repositories. The reviewed Frontend disposition and eight Deployment
-dispositions/source-control qualification expire at `2026-11-04T00:00:00Z`;
-the exact-blob Android disposition expires at `2026-11-20T00:00:00Z`.
-The earliest global deadline is therefore November 4, including scans of
-SecPal/.github with no matching findings. Central requalification is recorded
-under #1244, preserving completed #1199 and #1236. This consumer adoption does
-not renew or relax those entries; a later accepted policy and consumer pin
-adoption are needed before the next global deadline.
+The correction under [#1300](trivy-policy-disposition-retirement-1300.md) was
+accepted in [#1301](https://github.com/SecPal/.github/pull/1301) at that immutable
+revision. All eleven dispositions are retired; expiry withdraws only the matching
+suppression and no deadline is renewed. Historical findings and technical
+rationales remain in the audit fixture. This governance consumer adopts already
+accepted source. Other repositories retain their own consumer pins until separate
+protected adoption; candidate-only scanner code cannot authorize that transition.
 
 ## Scanner and policy identity
 
@@ -98,8 +96,9 @@ successful result.
 
 Exceptions require an exact repository identity, class, rule, repository-relative path, disposition,
 expiry, rationale, and unique ID in the central policy. `NOT_AFFECTED` is valid
-only for vulnerability findings. Expired, duplicate, ambiguous, or malformed
-exceptions fail closed. VEX runtime injection is disabled; reviewed VEX may be
+only for vulnerability findings. An expired disposition cannot suppress a
+finding, including at its exact boundary; it does not invalidate another
+repository scan. Duplicate, ambiguous or malformed policy remains fail-closed. VEX runtime injection is disabled; reviewed VEX may be
 enabled only by changing the versioned central policy and binding its document
 identity there. The Trivy-native ignore file is intentionally empty so a caller
 cannot suppress findings before policy admission.
@@ -368,6 +367,12 @@ diagnostics/database were not retained, so neither qualification establishes
 the historical record-level failure cause.
 
 ## Exact deployment source qualification and run-bound controls
+
+The following records preserve the historical source/control qualification.
+Under [#1300](trivy-policy-disposition-retirement-1300.md), all eight finding
+dispositions are retired. None is automatically admitted as an architecture
+waiver. The source-coverage deadline remains unchanged and expired; this
+proposal does not authorize deployment or renew its diagnostic qualification.
 
 Version 4 adds explicit coverage facts for the source-bound deployment
 qualification owned by [#1236](https://github.com/SecPal/.github/issues/1236).
@@ -890,3 +895,19 @@ metadata admission, exact-peer access, identity removal and exact-run lifetime
 and cleanup still require the existing trusted operation. No GCP resource,
 production endpoint or host service is changed by this qualification. Consumers
 may adopt the new immutable scanner revision only after protected acceptance.
+
+## Advisory-sensitive replay canaries
+
+The native repository replay keeps lodash 4.17.20 and its independent
+CVE-2020-28500, CVE-2021-23337, CVE-2025-13465 and CVE-2026-4800 checks.
+GHSA-f23m-r3pf-42rh changed its lodash range on 2026-11-03 to
+`>=4.17.23, <4.18.1`; CVE-2026-2950 therefore has a separate 4.17.23 lockfile
+canary. The replay requires the native vulnerability ID, package and installed
+version before checking the normalized required finding. A feed change must
+trigger requalification, never removal of the positive expectation or an ignore.
+
+The maintainer advisory and reviewed ecosystem range are authoritative context:
+<https://github.com/lodash/lodash/security/advisories/GHSA-f23m-r3pf-42rh>.
+This fixture correction changes no scanner implementation, security disposition,
+expiry, VEX or policy threshold. An expired central disposition remains a separate
+fail-closed policy-admission error.

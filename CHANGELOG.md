@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-04 - Retire Recurring Repository-Scan Exceptions
+
+**Security:**
+
+- Withdraw expired suppressions only at matching finding admission, so unrelated
+  repository scans retain their own scanner/database health.
+- Remove all eleven current dispositions without renewing dates; preserve their
+  complete audit history and leave unremediated findings blocking.
+- Document source remediation, residual risks and the protected consumer-pin
+  bootstrap; retain every existing scanner, freshness and admission boundary.
+
 ## 2026-11-04 - Harden Isolation Recovery and Revocation
 
 **Security:**

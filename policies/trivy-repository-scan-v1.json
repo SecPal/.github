@@ -1,6 +1,6 @@
 {
   "id": "secpal-trivy-repository-policy-v1",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "required_scanners": ["vuln", "secret", "misconfig"],
   "actions": {
     "VULNERABILITY": {
@@ -25,127 +25,7 @@
       "CRITICAL": "ACTIONABLE"
     }
   },
-  "exceptions": [
-    {
-      "id": "frontend-braces-cve-2026-93687-not-affected-1199",
-      "repository": "SecPal/frontend",
-      "class": "VULNERABILITY",
-      "rule_id": "CVE-2026-93687",
-      "path": "package-lock.json",
-      "disposition": "NOT_AFFECTED",
-      "expires_at": "2026-11-04T00:00:00Z",
-      "rationale": "Requalified 2026-10-21 under SecPal/.github#1244, preserving #1199 history, against protected SecPal/frontend@9dc3ccd034085784106bfc5c715ef4c2f781190e. Fresh pinned Trivy 0.74.0 retains this sole HIGH finding. Locked braces 3.0.3 is development-only through @lingui/cli 6.10.0 -> micromatch 4.0.8 and vite-plugin-static-copy 4.1.1 -> chokidar 3.6.0. Authenticated npm tarballs show Lingui uses micromatch.any/capture backed by picomatch with committed catalog patterns and filenames as data; chokidar brace expansion receives only the four literal committed static-copy targets. No untrusted HTTP input reaches braces; the immutable Nginx runtime copies compiled assets and no Node/npm/node_modules. The registry still publishes 3.0.3 with no fixed release; no accepted dependency correction removes the finding. NOT_AFFECTED is limited to this reviewed reachability, not absence of a vulnerable component. Fourteen-day review window ends 2026-11-04; requalify on dependency, build/watch-pattern or runtime-input changes, and prefer a qualified upstream removal/fix."
-    },
-    {
-      "id": "android-country-reference-sendgrid-1199",
-      "repository": "SecPal/android",
-      "class": "SECRET",
-      "rule_id": "sendgrid-api-token",
-      "path": "android/app/src/main/assets/public/assets/EmployeeAddressFields-D642volM.js",
-      "source_blob": "f0bc32de9c027ed0bd3b7842642e5d137510e65c",
-      "disposition": "IGNORED",
-      "expires_at": "2026-11-20T00:00:00Z",
-      "rationale": "Requalified 2026-10-21 under SecPal/.github#1244, preserving #1199 history, against protected SecPal/android@6d87dbe300d2bd86e3d212257f0494c5c7ff2e3c. Fresh pinned Trivy 0.74.0 retains exactly one sendgrid-api-token observation in this exact unchanged 9782-byte asset blob. The maintained frontend pin remains 8c950220d8ae582a536135eed75c8ecb2a4858c8; all 198 dot-joined static alpha-2 country codes match src/lib/iso3166CountryOptions.ts blob b3e8f72d92d280ffc1f0f3a569ea1c33cc23ccca in order. Independent application of the upstream 0.74.0 SendGrid detector locates its sole match wholly inside that literal; no credential, environment or interpolated data contributes. This is a source-blob-bound false positive, not permission to ignore replacement bytes or other secrets. No accepted frontend encoding/asset correction eliminates it. Thirty-day review ends 2026-11-20 because exact immutable bytes and provenance are stable; any replacement blob is immediately unexcepted. Prefer a separately accepted encoding correction and Android asset rebuild over retention."
-    },
-    {
-      "id": "deployment-ds-0026-1236",
-      "repository": "SecPal/deployment",
-      "class": "MISCONFIGURATION",
-      "rule_id": "DS-0026",
-      "path": "containers/phase-b-gateway/Containerfile",
-      "disposition": "IGNORED",
-      "expires_at": "2026-11-04T00:00:00Z",
-      "rationale": "Independently requalified 2026-10-21 under SecPal/.github#1244 against protected SecPal/deployment@b518ef86ca61e988bb9dcfaf7d079d2543439c50, preserving completed #1236. Fresh pinned Trivy 0.74.0 retains this exact rule/path observation. All six source/control bindings and all seven Terraform paths match deployment-ephemeral-1236 exactly. The current gateway remains a non-production fixture with one effective Quadlet HealthSpec/HealthCmd authority: bounded endpoint probe, Notify=healthy and HealthOnFailure=kill. Current metadata/control/transport/cleanup and Quadlet contract regressions pass; adding an image-level probe would duplicate that authority. The source-static verdict never executes or substitutes concrete run controls: actual-input admission, exact-peer access, identity removal and exact-run lifetime/cleanup remain REQUIRED_NOT_EXECUTED until the existing trusted operation. Fourteen-day requalification ends 2026-11-04, bounded by the same renewed source/control qualification; any bound source/control change fails closed. This disposition is IGNORED with reviewed residual risk, never NOT_AFFECTED.",
-      "qualification_id": "deployment-ephemeral-1236"
-    },
-    {
-      "id": "deployment-gcp-0031-1236",
-      "repository": "SecPal/deployment",
-      "class": "MISCONFIGURATION",
-      "rule_id": "GCP-0031",
-      "path": "infra/ci-cloud/gcp-rocky/main.tf",
-      "disposition": "IGNORED",
-      "expires_at": "2026-11-04T00:00:00Z",
-      "rationale": "Independently requalified 2026-10-21 under SecPal/.github#1244 against protected SecPal/deployment@b518ef86ca61e988bb9dcfaf7d079d2543439c50, preserving completed #1236. Fresh pinned Trivy 0.74.0 retains this exact rule/path observation. All six source/control bindings and all seven Terraform paths match deployment-ephemeral-1236 exactly. The public IPv4 remains real exposure, restricted to actual runner /32 TCP/22, per-run Ed25519 access, exact source/run/image/resource identity, access rotation and maximum three-hour TTL. Before target execution, the bound transition detaches guest service identity and independently rejects any remaining or reappearing account. These reduce but do not remove network exposure. The source-static verdict never executes or substitutes concrete run controls: actual-input admission, exact-peer access, identity removal and exact-run lifetime/cleanup remain REQUIRED_NOT_EXECUTED until the existing trusted operation. Fourteen-day requalification ends 2026-11-04, bounded by the same renewed source/control qualification; any bound source/control change fails closed. This disposition is IGNORED with reviewed residual risk, never NOT_AFFECTED.",
-      "qualification_id": "deployment-ephemeral-1236"
-    },
-    {
-      "id": "deployment-gcp-0033-1236",
-      "repository": "SecPal/deployment",
-      "class": "MISCONFIGURATION",
-      "rule_id": "GCP-0033",
-      "path": "infra/ci-cloud/gcp-rocky/main.tf",
-      "disposition": "IGNORED",
-      "expires_at": "2026-11-04T00:00:00Z",
-      "rationale": "Independently requalified 2026-10-21 under SecPal/.github#1244 against protected SecPal/deployment@b518ef86ca61e988bb9dcfaf7d079d2543439c50, preserving completed #1236. Fresh pinned Trivy 0.74.0 retains this exact rule/path observation. All six source/control bindings and all seven Terraform paths match deployment-ephemeral-1236 exactly. The boot attachment refers to the same separate disk observed by GCP-0034. Current supported Hyperdisk uses Google-managed encryption at rest; absence of CMEK/CSEK is not absence of encryption. This ephemeral non-customer-state qualification has no independent customer-key-custody requirement; no new KMS lifecycle is justified. The source-static verdict never executes or substitutes concrete run controls: actual-input admission, exact-peer access, identity removal and exact-run lifetime/cleanup remain REQUIRED_NOT_EXECUTED until the existing trusted operation. Fourteen-day requalification ends 2026-11-04, bounded by the same renewed source/control qualification; any bound source/control change fails closed. This disposition is IGNORED with reviewed residual risk, never NOT_AFFECTED.",
-      "qualification_id": "deployment-ephemeral-1236"
-    },
-    {
-      "id": "deployment-gcp-0034-1236",
-      "repository": "SecPal/deployment",
-      "class": "MISCONFIGURATION",
-      "rule_id": "GCP-0034",
-      "path": "infra/ci-cloud/gcp-rocky/main.tf",
-      "disposition": "IGNORED",
-      "expires_at": "2026-11-04T00:00:00Z",
-      "rationale": "Independently requalified 2026-10-21 under SecPal/.github#1244 against protected SecPal/deployment@b518ef86ca61e988bb9dcfaf7d079d2543439c50, preserving completed #1236. Fresh pinned Trivy 0.74.0 retains this exact rule/path observation. All six source/control bindings and all seven Terraform paths match deployment-ephemeral-1236 exactly. This is the separate resource observation for the same encrypted boot disk as GCP-0033. Google-managed encryption remains the accepted at-rest authority for bounded ephemeral non-customer-state qualification; introducing customer key custody would not satisfy an otherwise missing requirement. The source-static verdict never executes or substitutes concrete run controls: actual-input admission, exact-peer access, identity removal and exact-run lifetime/cleanup remain REQUIRED_NOT_EXECUTED until the existing trusted operation. Fourteen-day requalification ends 2026-11-04, bounded by the same renewed source/control qualification; any bound source/control change fails closed. This disposition is IGNORED with reviewed residual risk, never NOT_AFFECTED.",
-      "qualification_id": "deployment-ephemeral-1236"
-    },
-    {
-      "id": "deployment-gcp-0036-1236",
-      "repository": "SecPal/deployment",
-      "class": "MISCONFIGURATION",
-      "rule_id": "GCP-0036",
-      "path": "infra/ci-cloud/gcp-rocky/main.tf",
-      "disposition": "IGNORED",
-      "expires_at": "2026-11-04T00:00:00Z",
-      "rationale": "Independently requalified 2026-10-21 under SecPal/.github#1244 against protected SecPal/deployment@b518ef86ca61e988bb9dcfaf7d079d2543439c50, preserving completed #1236. Fresh pinned Trivy 0.74.0 retains this exact rule/path observation. All six source/control bindings and all seven Terraform paths match deployment-ephemeral-1236 exactly. OS Login remains explicitly disabled in favor of the exact-run Ed25519 management contract with project SSH keys blocked, actual runner /32 restriction, identity removal before target execution, rotation and bounded cleanup. IAM-based OS Login would change that identity authority; no generic exemption for production or other instances is admitted. The source-static verdict never executes or substitutes concrete run controls: actual-input admission, exact-peer access, identity removal and exact-run lifetime/cleanup remain REQUIRED_NOT_EXECUTED until the existing trusted operation. Fourteen-day requalification ends 2026-11-04, bounded by the same renewed source/control qualification; any bound source/control change fails closed. This disposition is IGNORED with reviewed residual risk, never NOT_AFFECTED.",
-      "qualification_id": "deployment-ephemeral-1236"
-    },
-    {
-      "id": "deployment-gcp-0075-1236",
-      "repository": "SecPal/deployment",
-      "class": "MISCONFIGURATION",
-      "rule_id": "GCP-0075",
-      "path": "infra/ci-cloud/gcp-rocky/main.tf",
-      "disposition": "IGNORED",
-      "expires_at": "2026-11-04T00:00:00Z",
-      "rationale": "Independently requalified 2026-10-21 under SecPal/.github#1244 against protected SecPal/deployment@b518ef86ca61e988bb9dcfaf7d079d2543439c50, preserving completed #1236. Fresh pinned Trivy 0.74.0 retains this exact rule/path observation. All six source/control bindings and all seven Terraform paths match deployment-ephemeral-1236 exactly. Private Google Access remains false on the exact external-IPv4 topology. Official provider semantics confirm it has no effect on instances with external IPs. The committed restricted egress design remains bound; a change to private-only networking requires reassessment. The source-static verdict never executes or substitutes concrete run controls: actual-input admission, exact-peer access, identity removal and exact-run lifetime/cleanup remain REQUIRED_NOT_EXECUTED until the existing trusted operation. Fourteen-day requalification ends 2026-11-04, bounded by the same renewed source/control qualification; any bound source/control change fails closed. This disposition is IGNORED with reviewed residual risk, never NOT_AFFECTED.",
-      "qualification_id": "deployment-ephemeral-1236"
-    },
-    {
-      "id": "deployment-gcp-0029-1236",
-      "repository": "SecPal/deployment",
-      "class": "MISCONFIGURATION",
-      "rule_id": "GCP-0029",
-      "path": "infra/ci-cloud/gcp-rocky/main.tf",
-      "disposition": "IGNORED",
-      "expires_at": "2026-11-04T00:00:00Z",
-      "rationale": "Independently requalified 2026-10-21 under SecPal/.github#1244 against protected SecPal/deployment@b518ef86ca61e988bb9dcfaf7d079d2543439c50, preserving completed #1236. Fresh pinned Trivy 0.74.0 retains this exact rule/path observation. All six source/control bindings and all seven Terraform paths match deployment-ephemeral-1236 exactly. Flow logging remains absent on the ephemeral test subnet. Exact-run provenance, resource identity and independently verified provider absence are retained, but packet-level audit is not provided. There is no customer workload or accepted packet-audit obligation; telemetry collection would add privacy, retention and cost responsibilities. This explicitly accepts that bounded audit gap, not an assertion of no exposure. The source-static verdict never executes or substitutes concrete run controls: actual-input admission, exact-peer access, identity removal and exact-run lifetime/cleanup remain REQUIRED_NOT_EXECUTED until the existing trusted operation. Fourteen-day requalification ends 2026-11-04, bounded by the same renewed source/control qualification; any bound source/control change fails closed. This disposition is IGNORED with reviewed residual risk, never NOT_AFFECTED.",
-      "qualification_id": "deployment-ephemeral-1236"
-    },
-    {
-      "id": "deployment-gcp-0076-1236",
-      "repository": "SecPal/deployment",
-      "class": "MISCONFIGURATION",
-      "rule_id": "GCP-0076",
-      "path": "infra/ci-cloud/gcp-rocky/main.tf",
-      "disposition": "IGNORED",
-      "expires_at": "2026-11-04T00:00:00Z",
-      "rationale": "Independently requalified 2026-10-21 under SecPal/.github#1244 against protected SecPal/deployment@b518ef86ca61e988bb9dcfaf7d079d2543439c50, preserving completed #1236. Fresh pinned Trivy 0.74.0 retains this exact rule/path observation. All six source/control bindings and all seven Terraform paths match deployment-ephemeral-1236 exactly. The distinct MEDIUM flow-log observation remains visible alongside GCP-0029. The same non-customer ephemeral subnet has exact-run evidence and independently verified cleanup, without packet-level audit. No new audit obligation has appeared; enabling telemetry would require justified privacy, retention and cost ownership. The source-static verdict never executes or substitutes concrete run controls: actual-input admission, exact-peer access, identity removal and exact-run lifetime/cleanup remain REQUIRED_NOT_EXECUTED until the existing trusted operation. Fourteen-day requalification ends 2026-11-04, bounded by the same renewed source/control qualification; any bound source/control change fails closed. This disposition is IGNORED with reviewed residual risk, never NOT_AFFECTED.",
-      "qualification_id": "deployment-ephemeral-1236"
-    },
-    {
-      "id": "frontend-deepmerge-cve-2026-93753-not-affected-1288",
-      "repository": "SecPal/frontend",
-      "class": "VULNERABILITY",
-      "rule_id": "CVE-2026-93753",
-      "path": "package-lock.json",
-      "disposition": "NOT_AFFECTED",
-      "expires_at": "2026-11-04T00:00:00Z",
-      "rationale": "Reviewed 2026-10-28 under SecPal/.github#1288 against protected SecPal/frontend@25fd3ec47bb911a005652e0573c8eeaaa17650a0 and the pending dependency updates. Fresh pinned Trivy 0.74.0 reports deepmerge 4.3.1; npm and upstream GHSA-gcqx-w48m-w2h4 provide no fixed release. The lockfile has exactly one caller: development-only @rollup/plugin-node-resolve 16.0.3 through workbox-build 7.4.1. Integrity-authenticated package source and real module instrumentation show its sole deepMerge call clones an empty object and the package's static literal defaults at module initialization. nodeResolve(opts) uses object spread and does not pass caller options to deepmerge; adversarial options did not create another call. The production dependency closure and application sources contain no deepmerge import, and the static Nginx runtime contains no Node/npm toolchain. No application, HTTP or mutable user data reaches this vulnerable merge. NOT_AFFECTED describes this reviewed reachability, not absence of the component. Requalify on caller, input, dependency-graph or runtime-boundary changes; the bounded disposition expires 2026-11-04 and must yield to a qualified upstream fix/removal."
-    }
-  ],
+  "exceptions": [],
   "vex": {
     "documents": [],
     "accepted_statuses": ["not_affected", "fixed"],

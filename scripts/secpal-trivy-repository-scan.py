@@ -1055,7 +1055,7 @@ def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any
     exceptions = policy.get("exceptions")
     if not isinstance(exceptions, list):
         raise ContractError("policy exceptions must be an array")
-    now = _timestamp(completed_at)
+    _timestamp(completed_at)
     seen: set[str] = set()
     seen_selectors: set[tuple[str, str, str, str]] = set()
     for exception in exceptions:
@@ -1091,8 +1091,8 @@ def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any
             raise ContractError("policy exception disposition is invalid")
         if exception["disposition"] == "NOT_AFFECTED" and exception["class"] != "VULNERABILITY":
             raise ContractError("VEX NOT_AFFECTED applies only to vulnerabilities")
-        if _timestamp(exception["expires_at"]) <= now:
-            raise ContractError("policy exception is expired")
+        # Expiry withdraws this suppression at application, not scan health.
+        _timestamp(exception["expires_at"])
         if ("qualification_id" in exception
                 and _timestamp(exception["expires_at"]) > _timestamp(DEPLOYMENT_TERRAFORM_EXPIRES)):
             raise ContractError("exception outlives its source qualification")
@@ -1109,7 +1109,7 @@ def _validate_policy(policy: dict[str, Any], completed_at: str) -> dict[str, Any
 
 def _apply_exception(
     finding: dict[str, Any], exceptions: list[dict[str, Any]], repository: str,
-    coverage: dict[str, Any] | None = None,
+    completed_at: str, coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     matches = [
         exception
@@ -1118,6 +1118,7 @@ def _apply_exception(
         and exception["class"] == finding["class"]
         and exception["rule_id"] == finding["rule_id"]
         and exception["path"] == finding["path"]
+        and _timestamp(exception["expires_at"]) > _timestamp(completed_at)
     ]
     if len(matches) > 1:
         raise ContractError("more than one exception matches a finding")
@@ -1157,7 +1158,7 @@ def admit(observation: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]
         {**exception, "path": _path(exception["path"])}
         for exception in policy["exceptions"]
     ]
-    findings = [_apply_exception(finding, exceptions, observation["subject"]["repository"], coverage) for finding in observation["findings"]]
+    findings = [_apply_exception(finding, exceptions, observation["subject"]["repository"], observation["completed_at"], coverage) for finding in observation["findings"]]
     active = [finding for finding in findings if "exception" not in finding]
     actions = [policy["actions"][finding["class"]][finding["severity"]] for finding in active]
     if observation["database"]["status"] != "FRESH":
