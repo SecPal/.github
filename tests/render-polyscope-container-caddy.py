@@ -260,6 +260,54 @@ def main() -> None:
             )
         )
 
+        # Rollout retains the physical name when the short slug collides.
+        spec = importlib.util.spec_from_file_location(
+            "collision_rollout", REPO_ROOT / "scripts/polyscope-rollout.py"
+        )
+        rollout = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rollout)
+        collision = clone_root / "api-repo_1/calm-otter-deadbeef"
+        (collision / "public").mkdir(parents=True)
+        (collision.parent / "calm-otter").symlink_to(api_worktree.name)
+        module.admit_api_preview(collision)
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "insert into worktrees (id, repo_id, path, status) values (?, ?, ?, 'active')",
+                ("collision-api", "api-repo_1", str(collision)),
+            )
+        assert rollout.resolve_current_workspace_name(collision, db_path=db_path) == collision.name
+        rollout.ensure_workspace_alias(collision, db_path=db_path)
+        registry_before_collision = alias_registry.read_bytes()
+        def render_collision():
+            return module.render(
+                db_path, pathlib.Path("/workspaces"), clone_root, repository_root
+            )
+        expect_runtime_error(render_collision, "canonical Polyscope workspace alias")
+        marker = collision / rollout.PROVISION_MARKER_FILENAME
+        for invalid in ({"workspace": "calm-otter"}, {"workspace": "../escape"}, []):
+            marker.write_text(json.dumps(invalid))
+            expect_runtime_error(render_collision, "canonical Polyscope workspace alias")
+        marker.write_text("{")
+        expect_runtime_error(render_collision, "canonical Polyscope workspace alias")
+        marker.unlink()
+        foreign_marker = root / "foreign-provision-marker.json"
+        foreign_marker.write_text(json.dumps({"workspace": collision.name}))
+        marker.symlink_to(foreign_marker)
+        expect_runtime_error(render_collision, "canonical Polyscope workspace alias")
+        marker.unlink()
+        rollout.write_provision_marker(marker, {
+            "repo": "api", "workspace": collision.name, "setup_hash": "a" * 64,
+        })
+        collision_rendered = render_collision()
+        assert f"api-{collision.name}.preview.secpal.dev" in collision_rendered
+        assert "api-calm-otter.preview.secpal.dev" in collision_rendered
+        assert f"redir https://api-{collision.name}.preview.secpal.dev" not in collision_rendered
+        assert alias_registry.read_bytes() == registry_before_collision
+        module.withdraw_api_preview(collision)
+        assert f"api-{collision.name}.preview.secpal.dev" not in render_collision()
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("delete from worktrees where id = 'collision-api'")
+
         escaping_link = clone_root / "api-repo_1/calm-otter-a1b2c3d4/public/leak"
         escaping_link.symlink_to(pathlib.Path("../.env"))
         expect_runtime_error(

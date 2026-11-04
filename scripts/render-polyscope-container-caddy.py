@@ -61,6 +61,18 @@ def withdraw_api_preview(worktree: pathlib.Path) -> None:
     (worktree / API_PREVIEW_ADMISSION_FILENAME).unlink(missing_ok=True)
 
 
+def has_provisioned_physical_name(worktree: pathlib.Path) -> bool:
+    """Rollout deliberately creates no self-alias for a colliding canonical name."""
+    marker = worktree / ".polyscope-secpal-provisioned.json"
+    if marker.is_symlink() or not marker.is_file():
+        return False
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and data.get("workspace") == worktree.name
+
+
 def _resolved(path: pathlib.Path) -> pathlib.Path:
     try:
         return path.resolve(strict=True)
@@ -190,7 +202,10 @@ def active_workspaces(
             for logical_name, physical_name in aliases.items()
             if physical_name == physical_workspace
         ]
-        if not logical_aliases and PHYSICAL_SUFFIX_PATTERN.fullmatch(physical_workspace) is None:
+        if not logical_aliases and (
+            PHYSICAL_SUFFIX_PATTERN.fullmatch(physical_workspace) is None
+            or has_provisioned_physical_name(physical_worktree)
+        ):
             logical_aliases = [physical_workspace]
         if len(logical_aliases) != 1:
             raise RuntimeError(

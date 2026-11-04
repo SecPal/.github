@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-04 - Preserve Collision-Selected Preview Names
+
+**Fixed:**
+
+- Render a provisioned workspace's physical canonical name when short preview
+  slugs collide and the authoritative rollout intentionally creates no self-alias.
+- Preserve existing aliases, preview admission and isolation; missing or invalid
+  canonical-name evidence still blocks ambiguous hashed workspace routes.
+
 ## 2026-11-04 - Retire Recurring Repository-Scan Exceptions
 
 **Security:**
