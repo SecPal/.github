@@ -81,7 +81,9 @@ def isolation_blocked_paths():
 def withdraw_isolated_host_previews(clone_root, paths):
     for raw in sorted(paths):
         path = pathlib.Path(raw)
-        if path.is_dir() and not path.is_symlink():
+        if path.is_symlink():
+            raise RuntimeError("isolated preview path is a symlink")
+        if path.is_dir():
             deny_preview_nginx_access(clone_root, path)
 
 def isolation_require_execution(path):
@@ -4370,6 +4372,8 @@ def _run_preview_setfacl(
     executable: str,
     arguments: list[str],
     failure_message: str,
+    *,
+    pass_fds: tuple[int, ...] = (),
 ) -> None:
     try:
         subprocess.run(
@@ -4377,6 +4381,7 @@ def _run_preview_setfacl(
             check=True,
             capture_output=True,
             text=True,
+            **({"pass_fds": pass_fds} if pass_fds else {}),
         )
     except subprocess.CalledProcessError as error:
         detail = error.stderr.strip() if error.stderr else "no error output"
@@ -4467,25 +4472,45 @@ def deny_preview_nginx_access(
     *,
     setfacl_bin: str | None = None,
 ) -> None:
-    """Block the nginx worker at one physical preview worktree."""
+    """Deny the opened worktree inode without following a replacement path."""
     resolved_clone_root = clone_root.resolve(strict=True)
-    resolved_worktree_path = worktree_path.resolve(strict=True)
-    if resolved_worktree_path.parent.parent != resolved_clone_root:
+    if ".." in worktree_path.parts or worktree_path.parent.parent != resolved_clone_root:
         raise RuntimeError(
-            f"preview worktree {resolved_worktree_path} is not directly below clone root {resolved_clone_root}"
+            f"preview worktree {worktree_path} is not directly below clone root {resolved_clone_root}"
         )
 
     executable = resolve_setfacl_bin(setfacl_bin)
-    _run_preview_setfacl(
-        executable,
-        [
-            "-m",
-            "u:www-data:---",
-            "--",
-            str(resolved_worktree_path),
-        ],
-        f"unable to deny Nginx preview access to {resolved_worktree_path}",
-    )
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    clone_fd = os.open(resolved_clone_root, flags)
+    try:
+        repo_fd = os.open(worktree_path.parent.name, flags, dir_fd=clone_fd)
+        try:
+            worktree_fd = os.open(worktree_path.name, flags, dir_fd=repo_fd)
+            try:
+                mount_ids = [
+                    next(
+                        line.split()[1]
+                        for line in pathlib.Path(f"/proc/self/fdinfo/{fd}").read_text().splitlines()
+                        if line.startswith("mnt_id:")
+                    )
+                    for fd in (clone_fd, repo_fd, worktree_fd)
+                ]
+                if len(set(mount_ids)) != 1:
+                    raise RuntimeError("preview worktree crosses a mount boundary")
+                # The inherited fd pins the object across rename/symlink races.
+                # Reopening the original pathname here could revoke another tree.
+                _run_preview_setfacl(
+                    executable,
+                    ["-m", "u:www-data:---", "--", f"/proc/self/fd/{worktree_fd}"],
+                    f"unable to deny Nginx preview access to {worktree_path}",
+                    pass_fds=(worktree_fd,),
+                )
+            finally:
+                os.close(worktree_fd)
+        finally:
+            os.close(repo_fd)
+    finally:
+        os.close(clone_fd)
 
 
 def deny_preview_nginx_clone_access(

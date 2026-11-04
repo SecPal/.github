@@ -79,4 +79,49 @@ class Arming(unittest.TestCase):
   with self.assertRaises(m.IsolationError):m.arm(self.path,"gpt-5.3-codex",str(self.binary))
   self.assertFalse(self.path.exists())
 
+
+ def test_actual_signals_before_and_after_publication_preserve_closed_recovery(self):
+  import signal,select
+  for sig in [signal.SIGTERM,signal.SIGKILL]:
+   for stage in ['before-marker','after-marker','after-policy']:
+    with self.subTest(signal=sig,stage=stage):
+     self.path.unlink(missing_ok=True);self.marker.unlink(missing_ok=True)
+     read_fd,write_fd=os.pipe()
+     child=os.fork()
+     if child==0:
+      os.close(read_fd)
+      original=m.publish_policy
+      def pause():
+       os.write(write_fd,b'1');os.close(write_fd);signal.pause()
+      def publish(path,data):
+       if stage=='before-marker' and Path(path)==self.marker:pause()
+       original(path,data)
+       if (stage=='after-marker' and Path(path)==self.marker) or (stage=='after-policy' and Path(path)==self.path):pause()
+      try:
+       with patch.object(m,'publish_policy',side_effect=publish):m.arm(self.path,'gpt-5.3-codex',str(self.binary))
+      finally:os._exit(91)
+     os.close(write_fd)
+     ready=select.select([read_fd],[],[],5)[0]
+     if not ready:
+      os.kill(child,signal.SIGKILL);os.waitpid(child,0);os.close(read_fd)
+      self.fail('publication barrier deadline')
+     observed=os.read(read_fd,1);os.close(read_fd)
+     if observed!=b'1':
+      os.waitpid(child,0);self.fail('arming exited before publication barrier')
+     os.kill(child,sig);_,status=os.waitpid(child,0)
+     self.assertTrue(os.WIFSIGNALED(status));self.assertEqual(os.WTERMSIG(status),sig)
+     self.assertEqual(self.marker.exists(),stage!='before-marker')
+     self.assertEqual(self.path.exists(),stage=='after-policy')
+     with patch.dict(os.environ,{},clear=True):
+      if stage=='after-marker':
+       with self.assertRaises(FileNotFoundError):m.from_environment()
+      elif stage=='after-policy':self.assertIsInstance(m.from_environment(),m.Gate)
+     if stage=='after-marker':
+      m.arm(self.path,'gpt-5.3-codex',str(self.binary))
+      self.assertTrue(self.path.exists())
+     elif stage=='after-policy':
+      before=self.path.read_bytes()
+      with self.assertRaises(FileExistsError):m.arm(self.path,'gpt-5.3-codex',str(self.binary))
+      self.assertEqual(self.path.read_bytes(),before)
+
 if __name__=="__main__":unittest.main()

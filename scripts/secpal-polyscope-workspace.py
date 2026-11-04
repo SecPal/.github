@@ -223,6 +223,16 @@ def observe_native_groups():
         raise RuntimeError("workspace-group-observation") from None
 
 
+def admit_configured_group(record, row, groups):
+    """Pure configured-membership admission for creation and attestation."""
+    if row.get("linked_worktree_ids"):
+        admit_native_group(row, groups)
+    members = {row["id"], *row.get("linked_worktree_ids", [])}
+    actual_repos = {w["repo_id"] for r in groups for w in r["workspaces"] if w["id"] in members}
+    if actual_repos != {record["id"], *record.get("linked_repo_ids", [])}:
+        raise RuntimeError("workspace-configured-group-incomplete")
+
+
 def select_native_workspace(rows, repo_id, issue, pr, workspace_id=None):
     try:
         return select_workspace(rows, repo_id, issue, pr, workspace_id)
@@ -448,6 +458,8 @@ def ensure(repo, issue, pr, sha):
         row = select_native_workspace(before, record["id"], issue, pr)
         if row is not None:
             result = workspace_result(repo, row, sha)
+            if record.get("linked_repo_ids") or row.get("linked_worktree_ids"):
+                admit_configured_group(record, row, observe_native_groups())
             if (pending is not None
                     and pending.get("api_base") == API_BASE
                     and (pending["repo"], pending["issue"], pending["pr"]) == (repo, issue, pr)):
@@ -461,11 +473,15 @@ def ensure(repo, issue, pr, sha):
             if prior is None:
                 raise RuntimeError("create-outcome-unverified")
             workspace_result(pending["repo"], prior, pending["sha"])
+            if prior_repo.get("linked_repo_ids") or prior.get("linked_worktree_ids"):
+                admit_configured_group(prior_repo, prior, observe_native_groups())
             fence(stream, None)
         # Re-read after reconciling another native creation.
         before = native_workspaces(record)
         row = select_native_workspace(before, record["id"], issue, pr)
         if row is not None:
+            if record.get("linked_repo_ids") or row.get("linked_worktree_ids"):
+                admit_configured_group(record, row, observe_native_groups())
             return workspace_result(repo, row, sha)
         # The supported create messages register either an Issue or a PR.
         # Do not create a partial ownership mapping for combined selectors.
@@ -495,6 +511,8 @@ def ensure(repo, issue, pr, sha):
         if returned is not None and returned.get("id") != row["id"]:
             raise RuntimeError("create-readback-identity")
         result = workspace_result(repo, row, sha, created=True)
+        if record.get("linked_repo_ids") or row.get("linked_worktree_ids"):
+            admit_configured_group(record, row, observe_native_groups())
         fence(stream, None)
         return result
 
@@ -515,12 +533,8 @@ def attest(repo, issue, pr=None, sha=None, workspace_id=None):
     # Reuse the sole coordinator's native ownership contract.
     if current != row:
         raise RuntimeError("workspace-group-changed")
-    if row.get("linked_worktree_ids"):
-        admit_native_group(row, groups)
+    admit_configured_group(record, row, groups)
     members = {row["id"], *row.get("linked_worktree_ids", [])}
-    actual_repos = {w["repo_id"] for r in groups for w in r["workspaces"] if w["id"] in members}
-    if actual_repos != {record["id"], *record.get("linked_repo_ids", [])}:
-        raise RuntimeError("workspace-configured-group-incomplete")
     after = source.stat(follow_symlinks=False)
     if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
         raise RuntimeError("workspace-filesystem-changed")

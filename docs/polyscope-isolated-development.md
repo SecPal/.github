@@ -46,7 +46,10 @@ it if policy publication fails. An existing marker must pass the root-ownership
 check. The marker makes loss of the policy fail closed. Once armed, the default authority also applies when a service
 loses its optional environment file. Every effective native repository/workspace
 setup and run command must be wrapped before opening the creation window,
-including commands inherited by the three linked repositories. Apply wrapping to
+including commands inherited by the three linked repositories. Installer policy
+paths use the same closed absolute-path character set as preview inputs; control
+characters, whitespace, quotes and systemd specifiers are rejected before reading
+authority or writing units. Apply wrapping to
 final rendered output after generated actions and container overrides, so later
 enrichment cannot introduce an unguarded command. Wrapping joins the
 entire setup sequence inside one guard; it does not merely disable autostart.
@@ -55,7 +58,11 @@ The guard uses the existing coordinator's native observation and shared creation
 fence. It blocks the target root, all children and new incomplete/unbound related
 workspaces from their earliest registration. An interrupted coordinator leaves its
 pending fence intact until native read-back reconciles the outcome. Repetition
-adopts that group; it must not create a replacement. Existing workspaces and later
+adopts that group; it must not create a replacement. The coordinator compares the
+observed member repositories with the configured group before clearing a pending
+fence, including when the root is visible before any child links appear. Native
+read-back failure, malformed pending data or a partial group retains the fence.
+Existing workspaces and later
 complete, independently bound groups keep regular admission.
 
 Rollout, worktree bootstrap and runtime creation reject protected paths before
@@ -64,7 +71,11 @@ rather than pruning them. While a reservation is active, orphan preview-database
 collection is deferred; reconcile that housekeeping separately after the
 reservation's lifetime. Both container and host preview rendering exclude protected members. Host refresh
 also revokes only their old Nginx traversal grant before rendering, including
-refresh-only passes. Container rendering excludes protected members even if they
+refresh-only passes. A symlink at a protected root aborts withdrawal. Denial opens
+the clone, repository and worktree without following symlinks, requires one mount
+identity, and passes the pinned directory descriptor to setfacl. A rename after
+checking cannot redirect denial to another inode; a same-filesystem bind mount
+is also rejected. Container rendering excludes protected members even if they
 contain old readiness tokens. Cleanup and refresh must not remove their files or
 restart preview services solely because they were registered.
 
@@ -113,7 +124,14 @@ SIGKILL requires explicit scope-labeled cleanup, which needs no management API.
 The launcher is not the Unix access-control boundary: UID 1001 already controls
 its own rootless OCI account. The narrow mount and host DAC/SELinux/network rules
 are that boundary. Revocation therefore requires retiring the grant and any
-processes holding it, not just deleting a receipt. Never add broad sudo, secpal
+processes holding it, not just deleting a receipt. An open descriptor can survive
+ACL withdrawal, and another mount namespace can retain a copy after an ordinary
+unmount. Before claiming revocation, drain the identified scoped containers and
+host processes, including their mount namespaces and open descriptors, then use
+an ordinary unmount and repeat negative probes. Do not use lazy/forced unmount,
+UID-wide termination or foreign-workspace ACL changes as a shortcut. An unknown
+holder or an unverified drain is an activation/rollback blocker.
+Never add broad sudo, secpal
 execution or management access to make the launcher work.
 
 ## Separate activation and rollback order

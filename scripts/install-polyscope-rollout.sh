@@ -5,6 +5,10 @@
 set -euo pipefail
 
 if [[ -n "${SECPAL_WORKSPACE_ISOLATION_POLICY:-}" ]]; then
+    if [[ ! "$SECPAL_WORKSPACE_ISOLATION_POLICY" =~ ^/[A-Za-z0-9._/+-]+$ ]]; then
+        echo "Error: isolation policy path contains unsupported characters." >&2
+        exit 1
+    fi
     python3 -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location("isolation",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.load_policy(sys.argv[2])' "$(dirname -- "${BASH_SOURCE[0]}")/polyscope-isolation.py" "$SECPAL_WORKSPACE_ISOLATION_POLICY"
 fi
 

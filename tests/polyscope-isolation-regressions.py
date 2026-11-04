@@ -217,4 +217,121 @@ class StandaloneTests(unittest.TestCase):
    env["SECPAL_WORKSPACE_ISOLATION_POLICY"]="/missing/required-policy"
    p=subprocess.run([sys.executable,"-c",code,str(path)],env=env,capture_output=True)
    self.assertNotEqual(p.returncode,0)
+
+class ReviewRecoveryTests(unittest.TestCase):
+ def test_pending_fence_and_failed_snapshot_never_dispatch(self):
+  from types import SimpleNamespace
+  with tempfile.TemporaryDirectory() as tmp:
+   lock=Path(tmp)/'create.lock';lock.write_text('{"pending":"incomplete"}');lock.chmod(0o600)
+   owner=SimpleNamespace(LOCK_PATH=lock)
+   gate=iso.Gate.__new__(iso.Gate);gate.owner=owner;gate.policy={}
+   before=lock.read_bytes()
+   with patch.object(iso,'snapshot',side_effect=RuntimeError('fixture API unavailable')):
+    with self.assertRaisesRegex(RuntimeError,'API unavailable'):
+     with gate.observation():self.fail('observation admitted')
+   self.assertEqual(lock.read_bytes(),before)
+   with iso.native_fence(owner) as pending:self.assertTrue(pending)
+ def test_failed_native_readback_retains_fence_and_blocks_retry(self):
+  m=load('review_readback','secpal-polyscope-workspace.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   m.LOCK_PATH=Path(tmp)/'state/create.lock';m.CLONE_ROOT=Path(tmp)
+   record={'id':'api','name':'SecPal/api'}
+   m.repository=lambda repo:record;m.authenticate_task=lambda *a:{}
+   m.native_workspaces=lambda repo:[]
+   m.create_native=Mock(side_effect=RuntimeError('polyscope-bridge-unavailable'))
+   m.lookup=Mock(side_effect=RuntimeError('polyscope-api-unavailable'))
+   with self.assertRaisesRegex(RuntimeError,'api-unavailable'):m.ensure('SecPal/api',2639,None,None)
+   before=m.LOCK_PATH.read_bytes();self.assertTrue(before)
+   with self.assertRaisesRegex(RuntimeError,'api-unavailable'):m.ensure('SecPal/api',2639,None,None)
+   self.assertEqual(m.LOCK_PATH.read_bytes(),before);m.create_native.assert_called_once()
+ def test_malformed_fence_cannot_turn_into_a_new_create(self):
+  m=load('review_malformed_fence','secpal-polyscope-workspace.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   m.LOCK_PATH=Path(tmp)/'create.lock';m.LOCK_PATH.write_text('{"repo":');m.LOCK_PATH.chmod(0o600)
+   m.CLONE_ROOT=Path(tmp);m.repository=lambda repo:{'id':'api'}
+   m.authenticate_task=lambda *a:{};m.create_native=Mock()
+   with self.assertRaises(ValueError):m.ensure('SecPal/api',2639,None,None)
+   self.assertEqual(m.LOCK_PATH.read_text(),'{"repo":');m.create_native.assert_not_called()
+
+ def test_partial_native_group_keeps_creation_fence_until_all_configured_repos_exist(self):
+  m=load('review_partial_group_fence','secpal-polyscope-workspace.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   m.LOCK_PATH=Path(tmp)/'create.lock';m.CLONE_ROOT=Path(tmp)
+   repo_ids=['api','web','mobile','contracts'];ids=['new','child-a','child-b','child-c']
+   record={'id':'api','name':'SecPal/api','linked_repo_ids':repo_ids[1:]}
+   m.repository=lambda repo:record;m.authenticate_task=lambda *a:{}
+   m.workspace_result=Mock(return_value={'workspace_id':'new'});m.create_native=Mock()
+   pending=json.dumps(dict(repo='SecPal/api',issue=2639,pr=None,sha=None,api_base=m.API_BASE))
+   groups=[]
+   def group(size):
+    groups.clear()
+    for n,rid in enumerate(repo_ids):
+     row=dict(id=ids[n],repo_id=rid,branch='fixture',path=str(Path(tmp)/rid/ids[n]),status='active',issue_number=2639 if n==0 else None,pr_number=None,is_repo_workspace=False,linked_from_worktree_id=None if n==0 else ids[0],linked_worktree_ids=[x for x in ids[:size] if x!=ids[n]])
+     groups.append(dict(id=rid,name='SecPal/'+rid,workspaces=[row] if n<size else []))
+   m.observe_native_groups=lambda:groups;m.native_workspaces=lambda repo:groups[0]['workspaces']
+   for size in [1,2]:
+    with self.subTest(partial_members=size):
+     group(size);m.LOCK_PATH.write_text(pending);m.LOCK_PATH.chmod(0o600)
+     with self.assertRaisesRegex(RuntimeError,'configured-group-incomplete'):m.ensure('SecPal/api',2639,None,None)
+     self.assertEqual(m.LOCK_PATH.read_text(),pending);m.create_native.assert_not_called()
+   group(4)
+   first=m.ensure('SecPal/api',2639,None,None);second=m.ensure('SecPal/api',2639,None,None)
+   self.assertEqual(first['workspace_id'],second['workspace_id'])
+   self.assertEqual(m.LOCK_PATH.read_text(),'');m.create_native.assert_not_called()
+
+class ReviewUnitInputTests(unittest.TestCase):
+ def test_unit_policy_path_rejects_control_and_systemd_syntax_before_reading(self):
+  for name in ['install-polyscope-rollout.sh','install-polyscope-container-preview.sh']:
+   for value in ['/fixture/policy\nExecStartPre=/bin/false','/fixture/policy file','/fixture/policy%n','/fixture/policy"quote']:
+    with self.subTest(installer=name,value=value):
+     result=subprocess.run(['bash',str(root/'scripts'/name)],env={'HOME':'/nonexistent','PATH':'/usr/bin:/bin','SECPAL_WORKSPACE_ISOLATION_POLICY':value},capture_output=True,text=True)
+     self.assertNotEqual(result.returncode,0)
+     self.assertIn('isolation policy path contains unsupported characters',result.stderr)
+     self.assertNotIn('Traceback',result.stderr)
+
+class ReviewRevocationTests(unittest.TestCase):
+ def test_symlinked_protected_root_aborts_instead_of_reporting_revocation(self):
+  m=load('review_symlink_withdraw','polyscope-rollout.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   clone=Path(tmp)/'clones';foreign=clone/'repo'/'foreign';foreign.mkdir(parents=True)
+   target=foreign.with_name('protected');target.symlink_to(foreign,target_is_directory=True)
+   m.deny_preview_nginx_access=Mock()
+   with self.assertRaises(RuntimeError):m.withdraw_isolated_host_previews(clone,[str(target)])
+   m.deny_preview_nginx_access.assert_not_called()
+ def test_symlinked_worktree_or_repository_cannot_revoke_foreign_access(self):
+  m=load('review_symlink_deny','polyscope-rollout.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   clone=Path(tmp)/'clones';foreign=clone/'repo'/'foreign';foreign.mkdir(parents=True)
+   target=foreign.with_name('protected');target.symlink_to(foreign,target_is_directory=True)
+   alias=clone/'alias';alias.symlink_to(foreign.parent,target_is_directory=True)
+   with patch.object(m.subprocess,'run') as run:
+    for path in [target,alias/'foreign',foreign.parent/'..']:
+     with self.subTest(path=path):
+      with self.assertRaises((RuntimeError,OSError)):m.deny_preview_nginx_access(clone,path,setfacl_bin='/usr/bin/setfacl')
+    run.assert_not_called()
+ def test_mount_boundary_cannot_revoke_another_tree_on_the_same_filesystem(self):
+  m=load('review_mount_deny','polyscope-rollout.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   clone=Path(tmp)/'clones';target=clone/'repo'/'protected';target.mkdir(parents=True)
+   with patch.object(Path,'read_text',side_effect=['mnt_id:\t1\n','mnt_id:\t1\n','mnt_id:\t2\n']),patch.object(m.subprocess,'run') as run:
+    with self.assertRaisesRegex(RuntimeError,'mount boundary'):
+     m.deny_preview_nginx_access(clone,target,setfacl_bin='/usr/bin/setfacl')
+    run.assert_not_called()
+ def test_acl_uses_opened_directory_when_path_changes_before_execution(self):
+  m=load('review_inode_deny','polyscope-rollout.py')
+  with tempfile.TemporaryDirectory() as tmp:
+   clone=Path(tmp)/'clones';target=clone/'repo'/'protected';target.mkdir(parents=True)
+   foreign=target.with_name('foreign');foreign.mkdir()
+   saved=target.with_name('retired');identity=target.stat();seen=[]
+   def setfacl(arguments,**kwargs):
+    target.rename(saved);target.symlink_to(foreign,target_is_directory=True)
+    operand=Path(arguments[-1]);info=operand.stat()
+    seen.append((info.st_dev,info.st_ino))
+    self.assertEqual(seen[-1],(identity.st_dev,identity.st_ino))
+    fd=int(str(operand).rsplit('/',1)[-1])
+    self.assertIn(fd,kwargs['pass_fds'])
+   with patch.object(m.subprocess,'run',side_effect=setfacl):
+    m.deny_preview_nginx_access(clone,target,setfacl_bin='/usr/bin/setfacl')
+   self.assertEqual(len(seen),1)
+
 if __name__=='__main__':unittest.main()

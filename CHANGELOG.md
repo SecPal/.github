@@ -9,6 +9,17 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-04 - Harden Isolation Recovery and Revocation
+
+**Security:**
+
+- Reject policy paths that could alter generated systemd directives.
+- Retain creation fences until every configured native repository member is
+  verified, including interrupted registration of a still-partial group.
+- Pin preview ACL denial to the opened directory and reject symlink or mount
+  redirection; qualify the process drain required for complete view revocation
+  (refs #1297). Live activation remains separate.
+
 ## 2026-11-03 - Isolate Native Workspace Provisioning
 
 **Security:**

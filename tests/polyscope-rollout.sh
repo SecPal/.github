@@ -7492,6 +7492,10 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     original_run = module.subprocess.run
 
     def record_run(arguments: list[str], **kwargs: object) -> None:
+        if arguments[-1].startswith("/proc/self/fd/"):
+            fd = int(arguments[-1].rsplit("/", 1)[-1])
+            assert fd in kwargs["pass_fds"]
+            arguments = [*arguments[:-1], str(Path(arguments[-1]).resolve(strict=True))]
         if (
             "-R" in arguments
             and "-d" not in arguments
