@@ -136,9 +136,9 @@ The governance gate at that snapshot executed the accepted action at
 That accepted revision rejects a clean independent observation because of global
 expired dispositions. Candidate tests cannot repair or authorize that authority.
 
-After protected acceptance, use its verified immutable main revision R:
+The consumer inventory at that snapshot was:
 
-| Repository | Exact consumer location                                                      | Current accepted action revision         |
+| Repository | Exact consumer location                                                      | Action revision at that snapshot         |
 | ---------- | ---------------------------------------------------------------------------- | ---------------------------------------- |
 | .github    | .github/workflows/quality.yml                                                | e6626097efc7770557b2a6abaede5c09592e8948 |
 | frontend   | .github/workflows/reusable-repository-security.yml                           | f94b47c6a44f924b11b2802ac1c334f20b2e93a9 |
@@ -149,11 +149,12 @@ After protected acceptance, use its verified immutable main revision R:
 | secpal.app | .github/workflows/quality.yml and deploy-uberspace.yml                       | 72e3b32a88513f381aa6cd769618bf197106d794 |
 | operations | No current scanner consumer                                                  | NONE                                     |
 
-R must exist on protected accepted main and pass independent source review,
-signature/provenance and external-action packaging qualification before
-repository-specific consumer PRs may adopt it. No placeholder, self-reference,
-candidate-only authority, temporary Required Check disablement, branch-protection
-change or OCI risk acceptance repairs this bootstrap.
+The recorded adoption prerequisites were an immutable revision on protected
+accepted main, independent source review, signature/provenance and external-action
+packaging qualification before repository-specific consumer PRs. The proposal
+excluded placeholders, self-reference, candidate-only authority, temporary Required
+Check disablement, branch-protection changes and OCI risk acceptance as bootstrap
+repairs.
 
 If the existing trusted gate cannot admit this correction through a separately
 accepted route, delivery is BLOCKED at the named old action/required gate. This
