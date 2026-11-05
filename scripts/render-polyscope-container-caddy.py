@@ -14,6 +14,7 @@ import os
 import pathlib
 import re
 import sqlite3
+import stat
 import tempfile
 
 
@@ -59,6 +60,24 @@ def admit_api_preview(worktree: pathlib.Path) -> None:
 def withdraw_api_preview(worktree: pathlib.Path) -> None:
     """The running Caddy file matcher observes withdrawal without a reload."""
     (worktree / API_PREVIEW_ADMISSION_FILENAME).unlink(missing_ok=True)
+
+
+def has_provisioned_physical_name(worktree: pathlib.Path) -> bool:
+    """Rollout deliberately creates no self-alias for a colliding canonical name."""
+    marker = worktree / ".polyscope-secpal-provisioned.json"
+    try:
+        with open(
+            marker, encoding="utf-8",
+            opener=lambda path, flags: os.open(
+                path, flags | os.O_NOFOLLOW | os.O_NONBLOCK
+            ),
+        ) as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                return False
+            data = json.load(stream)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and data.get("workspace") == worktree.name
 
 
 def _resolved(path: pathlib.Path) -> pathlib.Path:
@@ -190,7 +209,10 @@ def active_workspaces(
             for logical_name, physical_name in aliases.items()
             if physical_name == physical_workspace
         ]
-        if not logical_aliases and PHYSICAL_SUFFIX_PATTERN.fullmatch(physical_workspace) is None:
+        if not logical_aliases and (
+            PHYSICAL_SUFFIX_PATTERN.fullmatch(physical_workspace) is None
+            or has_provisioned_physical_name(physical_worktree)
+        ):
             logical_aliases = [physical_workspace]
         if len(logical_aliases) != 1:
             raise RuntimeError(

@@ -9,6 +9,7 @@ import json
 import pathlib
 import sqlite3
 import tempfile
+from unittest import mock
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -259,6 +260,84 @@ def main() -> None:
                 {"version": 1, "aliases": {"calm-otter": "calm-otter-a1b2c3d4"}}
             )
         )
+
+        # Rollout retains the physical name when the short slug collides.
+        spec = importlib.util.spec_from_file_location(
+            "collision_rollout", REPO_ROOT / "scripts/polyscope-rollout.py"
+        )
+        rollout = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rollout)
+        collision = clone_root / "api-repo_1/calm-otter-deadbeef"
+        (collision / "public").mkdir(parents=True)
+        (collision.parent / "calm-otter").symlink_to(api_worktree.name)
+        module.admit_api_preview(collision)
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "insert into worktrees (id, repo_id, path, status) values (?, ?, ?, 'active')",
+                ("collision-api", "api-repo_1", str(collision)),
+            )
+        assert rollout.resolve_current_workspace_name(collision, db_path=db_path) == collision.name
+        rollout.ensure_workspace_alias(collision, db_path=db_path)
+        registry_before_collision = alias_registry.read_bytes()
+        def render_collision():
+            return module.render(
+                db_path, pathlib.Path("/workspaces"), clone_root, repository_root
+            )
+        expect_runtime_error(render_collision, "canonical Polyscope workspace alias")
+        marker = collision / rollout.PROVISION_MARKER_FILENAME
+        for invalid in ({"workspace": "calm-otter"}, {"workspace": "../escape"}, []):
+            marker.write_text(json.dumps(invalid))
+            expect_runtime_error(render_collision, "canonical Polyscope workspace alias")
+        marker.write_text("{")
+        expect_runtime_error(render_collision, "canonical Polyscope workspace alias")
+        marker.unlink()
+        foreign_marker = root / "foreign-provision-marker.json"
+        foreign_marker.write_text(json.dumps({"workspace": collision.name}))
+        marker.symlink_to(foreign_marker)
+        expect_runtime_error(render_collision, "canonical Polyscope workspace alias")
+        marker.unlink()
+        rollout.write_provision_marker(marker, {
+            "repo": "api", "workspace": collision.name, "setup_hash": "a" * 64,
+        })
+        # Replacement at the actual open boundary must not turn a checked
+        # regular marker into evidence read through a symlink.
+        original_path_open = pathlib.Path.open
+        original_os_open = module.os.open
+        swapped = []
+        def replace_marker():
+            if not marker.is_symlink():
+                marker.unlink()
+                marker.symlink_to(foreign_marker)
+                swapped.append(True)
+        def racing_path_open(path, *args, **kwargs):
+            if path == marker:
+                replace_marker()
+            return original_path_open(path, *args, **kwargs)
+        def racing_os_open(path, *args, **kwargs):
+            if pathlib.Path(path) == marker:
+                replace_marker()
+            return original_os_open(path, *args, **kwargs)
+        with mock.patch.object(pathlib.Path, "open", racing_path_open), mock.patch.object(
+            module.os, "open", racing_os_open
+        ):
+            assert not module.has_provisioned_physical_name(collision)
+        assert swapped == [True]
+        marker.unlink()
+        module.os.mkfifo(marker)
+        assert not module.has_provisioned_physical_name(collision)
+        marker.unlink()
+        rollout.write_provision_marker(marker, {
+            "repo": "api", "workspace": collision.name, "setup_hash": "a" * 64,
+        })
+        collision_rendered = render_collision()
+        assert f"api-{collision.name}.preview.secpal.dev" in collision_rendered
+        assert "api-calm-otter.preview.secpal.dev" in collision_rendered
+        assert f"redir https://api-{collision.name}.preview.secpal.dev" not in collision_rendered
+        assert alias_registry.read_bytes() == registry_before_collision
+        module.withdraw_api_preview(collision)
+        assert f"api-{collision.name}.preview.secpal.dev" not in render_collision()
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("delete from worktrees where id = 'collision-api'")
 
         escaping_link = clone_root / "api-repo_1/calm-otter-a1b2c3d4/public/leak"
         escaping_link.symlink_to(pathlib.Path("../.env"))
