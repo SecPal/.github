@@ -24,6 +24,9 @@ on:
       - edited
       - converted_to_draft
 
+# Enrollment uses no Actions cache; prevent cache access across the reusable call.
+cache-mode: none
+
 permissions:
   contents: write
   pull-requests: write
@@ -31,7 +34,8 @@ permissions:
 # Ensure only one auto-merge runs at a time per PR
 concurrency:
   group: ${{ github.repository }}-dependabot-auto-merge-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
+  # A newer eligibility event invalidates an older enrollment attempt.
+  cancel-in-progress: true
 
 jobs:
   auto-merge:
