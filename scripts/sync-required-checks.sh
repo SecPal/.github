@@ -20,7 +20,6 @@ PENDING_CONTEXTS_JSON='{
     "auto-merge / Dependabot Source Safety"
   ],
   "frontend": [
-    "Performance Audit",
     "auto-merge / Dependabot Source Safety"
   ],
   "deployment": [
@@ -123,7 +122,8 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Container Contract",
     "Repository Security / Repository Security",
     "Dependabot Manifest Guard / Manifest Coverage",
-    "Dependabot Manifest Guard / Cadence Policy"
+    "Dependabot Manifest Guard / Cadence Policy",
+    "Performance Audit"
   ],
   "secpal.app": [
     "Check REUSE Compliance / Check REUSE Compliance",
@@ -191,7 +191,8 @@ REQUIRED_APP_BINDINGS_JSON='{
   "frontend": {
     "Repository Security / Repository Security": 15368,
     "Dependabot Manifest Guard / Manifest Coverage": 15368,
-    "Dependabot Manifest Guard / Cadence Policy": 15368
+    "Dependabot Manifest Guard / Cadence Policy": 15368,
+    "Performance Audit": 15368
   },
   "secpal.app": {
     "auto-merge / Dependabot Source Safety": 15368
