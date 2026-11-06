@@ -50,7 +50,8 @@ EXPECTED_APP_BINDINGS_JSON='{
   "frontend": {
     "Repository Security / Repository Security": 15368,
     "Dependabot Manifest Guard / Manifest Coverage": 15368,
-    "Dependabot Manifest Guard / Cadence Policy": 15368
+    "Dependabot Manifest Guard / Cadence Policy": 15368,
+    "Performance Audit": 15368
   },
   "secpal.app": {
     "auto-merge / Dependabot Source Safety": 15368
@@ -244,7 +245,8 @@ EXPECTED_CONTEXTS_JSON='{
     "Container Contract",
     "Repository Security / Repository Security",
     "Dependabot Manifest Guard / Manifest Coverage",
-    "Dependabot Manifest Guard / Cadence Policy"
+    "Dependabot Manifest Guard / Cadence Policy",
+    "Performance Audit"
   ],
   "secpal.app": [
     "Check REUSE Compliance / Check REUSE Compliance",
