@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import * as yaml from "js-yaml";
+import { createRequire } from "node:module";
 
 const workflow = yaml.load(
   readFileSync(
@@ -100,7 +101,11 @@ async function verifySource(change = {}) {
       sha: head,
       author: { login: "dependabot[bot]" },
       committer: { login: "web-flow" },
-      commit: { verification: { verified: true } },
+      commit: {
+        verification: { verified: true },
+        message:
+          "Bumps fixture from 1.2.3 to 1.2.4.\n\n---\nupdated-dependencies:\n- dependency-name: fixture\n  update-type: version-update:semver-patch\n...\n",
+      },
       parents: [{}],
     },
   ];
@@ -122,10 +127,12 @@ async function verifySource(change = {}) {
     PACKAGE_ECOSYSTEM: "npm_and_yarn",
     DEPENDENCY_DIRECTORY: "/",
     ALLOWED_ECOSYSTEMS: "npm_and_yarn,github_actions",
+    VERIFIED_DEPENDENCIES:
+      '[{"dependencyName":"fixture","updateType":"version-update:semver-patch"}]',
     ...change.env,
   });
   try {
-    await new AsyncFunction("github", "context", "core", sourceScript)(
+    await new AsyncFunction("github", "context", "core", "require", sourceScript)(
       github,
       {
         repo: { owner: "SecPal", repo: "frontend" },
@@ -135,7 +142,8 @@ async function verifySource(change = {}) {
         setOutput: (key, value) => {
           output[key] = value;
         },
-      }
+      },
+      createRequire(import.meta.url)
     );
     return output.verified;
   } finally {
@@ -219,4 +227,86 @@ test("multiple bot commits cannot reuse the first commit classification", async 
     parents: [{}],
   };
   assert.equal(await verifySource({ pr: { commits: 2 }, commits: [commit, commit] }), "false");
+});
+
+test("calculated metadata from a mutable title cannot authenticate a SHA update", async () => {
+  const commit = {
+    sha: "a".repeat(40),
+    author: { login: "dependabot[bot]" },
+    committer: { login: "web-flow" },
+    commit: {
+      verification: { verified: true },
+      message:
+        "Bumps fixture from abcdef to bcdefa.\n\n---\nupdated-dependencies:\n- dependency-name: fixture\n  dependency-type: direct:production\n...\n",
+    },
+    parents: [{}],
+  };
+  assert.equal(await verifySource({ commits: [commit] }), "false");
+});
+
+test("immutable shared workflow pins remain manual even with a claimed patch class", async () => {
+  assert.equal(
+    await verifySource({
+      env: {
+        PACKAGE_ECOSYSTEM: "github_actions",
+        VERIFIED_DEPENDENCIES:
+          '[{"dependencyName":"SecPal/.github/.github/workflows/reusable-test.yml","updateType":"version-update:semver-patch"}]',
+      },
+      files: [
+        { filename: ".github/workflows/quality.yml" },
+        { filename: ".github/workflows/lint.yml" },
+      ],
+    }),
+    "false"
+  );
+});
+test("a signed minor class passes the same source boundary", async () => {
+  const message =
+    "Bumps fixture from 1.2.3 to 1.3.0.\n\n---\nupdated-dependencies:\n- dependency-name: fixture\n  update-type: version-update:semver-minor\n...\n";
+  assert.equal(
+    await verifySource({
+      env: {
+        VERIFIED_DEPENDENCIES:
+          '[{"dependencyName":"fixture","updateType":"version-update:semver-minor"}]',
+      },
+      commits: [
+        {
+          sha: "a".repeat(40),
+          author: { login: "dependabot[bot]" },
+          committer: { login: "web-flow" },
+          commit: { message, verification: { verified: true } },
+          parents: [{}],
+        },
+      ],
+    }),
+    "true"
+  );
+});
+
+test("deployment's workflow allowlist keeps cloud execution paths manual", async () => {
+  const env = {
+    ALLOWED_ECOSYSTEMS: "github_actions",
+    PACKAGE_ECOSYSTEM: "github_actions",
+    WORKFLOW_PATHS: '[".github/workflows/quality.yml",".github/workflows/local-integration.yml"]',
+  };
+  assert.equal(
+    await verifySource({
+      env,
+      files: [
+        { filename: ".github/workflows/quality.yml" },
+        { filename: ".github/workflows/local-integration.yml" },
+      ],
+    }),
+    "true"
+  );
+  assert.equal(
+    await verifySource({
+      env,
+      files: [
+        { filename: ".github/workflows/quality.yml" },
+        { filename: ".github/workflows/cloud-janitor.yml" },
+      ],
+    }),
+    "false"
+  );
 });
