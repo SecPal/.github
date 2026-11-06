@@ -62,6 +62,7 @@ jobs:
         run: |
           bash tests/android-consumed-workflow-action-pins.sh
           bash tests/dependabot-auto-merge.sh
+          node --test tests/dependabot-auto-merge-boundaries.mjs
 
   work-graph-resolver:
     name: Work-Graph Resolver

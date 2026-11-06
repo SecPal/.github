@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-06 - Authenticate Dependabot Auto-Merge Candidates
+
+**Security:**
+
+- Keep unknown semver metadata and unknown maintainer state on manual review;
+  PR titles cannot authorize an automatic merge.
+- Verify every signed bot commit and the ecosystem-specific manifest/workflow
+  paths before enrollment, and bind enrollment to the verified head.
+- Allow callers to restrict dependency ecosystems; infrastructure updates remain
+  manual until their classification and applicable checks are proven.
+- Preserve phase 1 for current callers pending complete required-check adoption.
+
 ## 2026-11-04 - Preserve Collision-Selected Preview Names
 
 **Fixed:**

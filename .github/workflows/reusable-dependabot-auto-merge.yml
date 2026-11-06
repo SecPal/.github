@@ -31,6 +31,11 @@ on:
         required: false
         default: "1"
         type: string
+      allowed-ecosystems:
+        description: "Verified dependency ecosystems allowed for this caller (comma-separated)"
+        required: false
+        type: string
+        default: "github_actions,npm_and_yarn,composer,gradle,bundler"
       merge-method:
         description: "Merge method: merge, squash, or rebase"
         required: false
@@ -52,6 +57,9 @@ jobs:
     # https://docs.github.com/en/code-security/dependabot/working-with-dependabot/automating-dependabot-with-github-actions#enable-auto-merge-on-a-pull-request
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       should-auto-merge: ${{ steps.check.outputs.should-auto-merge }}
       update-type: ${{ steps.check.outputs.update-type }}
@@ -63,10 +71,56 @@ jobs:
         with:
           github-token: "${{ github.token }}"
 
+      - name: Verify Dependabot source boundary
+        id: source
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PACKAGE_ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          DEPENDENCY_DIRECTORY: ${{ steps.metadata.outputs.directory }}
+          ALLOWED_ECOSYSTEMS: ${{ inputs.allowed-ecosystems }}
+        with:
+          script: |
+            core.setOutput('verified', 'false');
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const expected = context.payload.pull_request.head.sha;
+            const read = async () => (await github.rest.pulls.get({ owner, repo, pull_number })).data;
+            const pr = await read();
+            if (pr.state !== 'open' || pr.base.ref !== 'main' || pr.draft ||
+                pr.user.login !== 'dependabot[bot]' || pr.user.type !== 'Bot' ||
+                pr.head.repo?.full_name !== `${owner}/${repo}` || pr.head.sha !== expected) return;
+            const ecosystem = process.env.PACKAGE_ECOSYSTEM;
+            if (!process.env.ALLOWED_ECOSYSTEMS.split(',').includes(ecosystem)) return;
+            const directory = process.env.DEPENDENCY_DIRECTORY;
+            if (!directory || !directory.startsWith('/') || directory.includes('..') || directory.includes('\\')) return;
+            const prefix = directory === '/' ? '' : directory.slice(1).replace(/\/$/, '') + '/';
+            const manifests = {
+              npm_and_yarn: ['package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml'],
+              composer: ['composer.json', 'composer.lock'],
+              bundler: ['Gemfile', 'Gemfile.lock'],
+              gradle: ['build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts',
+                'variables.gradle', 'gradle/libs.versions.toml', 'app/build.gradle', 'app/build.gradle.kts'],
+            };
+            const allowed = path => typeof path === 'string' && (ecosystem === 'github_actions'
+              ? /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path)
+              : (manifests[ecosystem] || []).some(name => path === prefix + name));
+            const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number, per_page: 100 });
+            if (!files.length || files.length !== pr.changed_files ||
+                !files.every(file => allowed(file.filename) && (!file.previous_filename || allowed(file.previous_filename)))) return;
+            const commits = await github.paginate(github.rest.pulls.listCommits, { owner, repo, pull_number, per_page: 100 });
+            // fetch-metadata classifies the first commit; require it to be the exact head.
+            if (commits.length !== 1 || commits.length !== pr.commits || commits[0].sha !== expected ||
+                !commits.every(commit => commit.author?.login === 'dependabot[bot]' &&
+                  ['web-flow', 'dependabot[bot]'].includes(commit.committer?.login) &&
+                  commit.commit.verification?.verified === true && commit.parents.length === 1)) return;
+            const after = await read();
+            if (after.head.sha !== expected || after.base.sha !== pr.base.sha || after.state !== 'open') return;
+            core.setOutput('verified', 'true');
+
       - name: Check PR metadata
         id: check
         env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          SOURCE_VERIFIED: ${{ steps.source.outputs.verified }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PHASE: ${{ inputs.phase }}
           METADATA_STEP_OUTCOME: ${{ steps.metadata.outcome }}
@@ -79,46 +133,6 @@ jobs:
           PREVIOUS_VERSION: ${{ steps.metadata.outputs.previous-version }}
           NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
         run: |
-          fallback_from_pr_title() {
-            local version_range_pattern old_major old_minor old_patch new_major new_minor new_patch
-
-            version_range_pattern='from[[:space:]]+([0-9]+)(\.([0-9]+))?'
-            version_range_pattern+='(\.([0-9]+))?[[:space:]]+to[[:space:]]+'
-            version_range_pattern+='([0-9]+)(\.([0-9]+))?(\.([0-9]+))?'
-
-            if [[ ! "${PR_TITLE}" =~ ${version_range_pattern} ]]; then
-              return 1
-            fi
-
-            old_major="${BASH_REMATCH[1]}"
-            old_minor="${BASH_REMATCH[3]:-0}"
-            old_patch="${BASH_REMATCH[5]:-0}"
-            new_major="${BASH_REMATCH[6]}"
-            new_minor="${BASH_REMATCH[8]:-0}"
-            new_patch="${BASH_REMATCH[10]:-0}"
-
-            if [[ "${new_major}" != "${old_major}" ]]; then
-              echo "update-type=major" >> "${GITHUB_OUTPUT}"
-              echo "❌ Not eligible: MAJOR semver update requires manual review (Phase ${PHASE})"
-            elif [[ "${new_minor}" != "${old_minor}" ]]; then
-              echo "update-type=minor" >> "${GITHUB_OUTPUT}"
-              if [[ "${PHASE}" == "2" || "${PHASE}" == "3" ]]; then
-                echo "should-auto-merge=true" >> "${GITHUB_OUTPUT}"
-                echo "✅ Eligible for auto-merge (Phase ${PHASE}): MINOR semver update via title fallback"
-              else
-                echo "❌ Not eligible: MINOR semver update requires manual review (Phase ${PHASE})"
-              fi
-            elif [[ "${new_patch}" != "${old_patch}" ]]; then
-              echo "update-type=patch" >> "${GITHUB_OUTPUT}"
-              echo "should-auto-merge=true" >> "${GITHUB_OUTPUT}"
-              echo "✅ Eligible for auto-merge (Phase ${PHASE}): PATCH semver update via title fallback"
-            else
-              return 1
-            fi
-
-            return 0
-          }
-
           is_grouped_update() {
             [[ -n "${DEPENDENCY_GROUP}" || "${DEPENDENCY_NAMES}" == *,* ]]
           }
@@ -166,7 +180,7 @@ jobs:
           echo "New version: ${NEW_VERSION}"
 
           # Check if PR has 'dependencies' label (required for Dependabot PRs)
-          if ! echo "${PR_LABELS}" | grep -q "dependencies"; then
+          if ! jq -e 'type == "array" and index("dependencies") != null' <<<"${PR_LABELS}" >/dev/null; then
             echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
             echo "update-type=not-dependabot" >> "${GITHUB_OUTPUT}"
             echo "❌ Not eligible: Missing dependencies label"
@@ -180,7 +194,14 @@ jobs:
             exit 0
           fi
 
-          if [[ "${MAINTAINER_CHANGES}" == "true" ]]; then
+          if [[ "${SOURCE_VERIFIED}" != "true" ]]; then
+            echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
+            echo "update-type=unverified-source" >> "${GITHUB_OUTPUT}"
+            echo "Not eligible: source identity or changed paths could not be verified"
+            exit 0
+          fi
+
+          if [[ "${MAINTAINER_CHANGES}" != "false" ]]; then
             echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
             echo "update-type=maintainer-changes" >> "${GITHUB_OUTPUT}"
             echo "❌ Not eligible: Dependabot PR includes maintainer changes"
@@ -224,10 +245,6 @@ jobs:
                 [[ -n "${PREVIOUS_VERSION}" && -n "${NEW_VERSION}" ]]; then
                 echo "update-type=github-actions-non-semver" >> "${GITHUB_OUTPUT}"
                 echo "❌ Not eligible: GitHub Actions reference update does not expose a semver update-type"
-              # Fallback to PR title parsing only when fetch-metadata returns empty outputs
-              # for non-GitHub-Actions ecosystems.
-              elif [[ "${PACKAGE_ECOSYSTEM}" != "github_actions" ]] && fallback_from_pr_title; then
-                :
               else
                 echo "update-type=metadata-unavailable" >> "${GITHUB_OUTPUT}"
                 echo "❌ Not eligible: Dependabot metadata did not include an update type"
@@ -283,6 +300,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           MERGE_METHOD: ${{ inputs.merge-method }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           echo "🤖 Enabling auto-merge..."
           echo "PR: ${PR_URL}"
@@ -293,13 +311,13 @@ jobs:
           # Enable auto-merge with configured merge strategy
           case "${MERGE_METHOD}" in
             squash)
-              gh pr merge --auto --squash "${PR_URL}"
+              gh pr merge --auto --squash --match-head-commit "${EXPECTED_HEAD}" "${PR_URL}"
               ;;
             rebase)
-              gh pr merge --auto --rebase "${PR_URL}"
+              gh pr merge --auto --rebase --match-head-commit "${EXPECTED_HEAD}" "${PR_URL}"
               ;;
             merge)
-              gh pr merge --auto --merge "${PR_URL}"
+              gh pr merge --auto --merge --match-head-commit "${EXPECTED_HEAD}" "${PR_URL}"
               ;;
             *)
               echo "❌ Invalid merge method: ${MERGE_METHOD}"

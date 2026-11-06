@@ -399,6 +399,7 @@ assert_eligibility() {
     PR_LABELS='["dependencies"]' \
     METADATA_STEP_OUTCOME="success" \
     MAINTAINER_CHANGES="false" \
+    SOURCE_VERIFIED="true" \
     UPDATED_DEPENDENCIES_JSON="$updated_dependencies_json" \
     PACKAGE_ECOSYSTEM="$package_ecosystem" \
     PREVIOUS_VERSION="1.2.3" \
@@ -848,30 +849,12 @@ grep -Fq '          MAINTAINER_CHANGES: ${{ steps.metadata.outputs.maintainer-ch
   exit 1
 }
 
-grep -Fq '          PR_TITLE: ${{ github.event.pull_request.title }}' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable Dependabot workflow must expose the PR title for the metadata-empty fallback path." >&2
+if grep -Fq 'fallback_from_pr_title' "$REUSABLE_WORKFLOW"; then
+  echo "Unclassified metadata must remain manual; PR titles cannot authorize merges." >&2
   exit 1
-}
+fi
 
-grep -Fq 'Fallback to PR title parsing only when fetch-metadata returns empty outputs' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable Dependabot workflow must document the metadata-empty title fallback boundary." >&2
-  exit 1
-}
-
-# Keep every metadata-empty GitHub Actions update on manual review, even when
-# the PR title still looks semver-shaped. Title parsing is only allowed for
-# non-GitHub-Actions ecosystems with empty fetch-metadata outputs.
-grep -Fq 'if [[ "${PACKAGE_ECOSYSTEM}" == "github_actions" ]] &&' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable Dependabot workflow must recognize fetch-metadata's normalized GitHub Actions ecosystem." >&2
-  exit 1
-}
-
-grep -Fq 'elif [[ "${PACKAGE_ECOSYSTEM}" != "github_actions" ]] && fallback_from_pr_title; then' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable Dependabot workflow must restrict the metadata-empty PR title fallback to non-GitHub-Actions ecosystems." >&2
-  exit 1
-}
-
-grep -Fq 'if [[ "${MAINTAINER_CHANGES}" == "true" ]]; then' "$REUSABLE_WORKFLOW" || {
+grep -Fq 'if [[ "${MAINTAINER_CHANGES}" != "false" ]]; then' "$REUSABLE_WORKFLOW" || {
   echo "Reusable Dependabot workflow must fail closed when Dependabot metadata reports maintainer changes." >&2
   exit 1
 }
