@@ -14,6 +14,10 @@
 # For cross-repository callers, pin to a reviewed immutable commit SHA. A
 # moving branch ref or stale tag can silently preserve obsolete behavior.
 #
+# Callers must reconcile all PR head, label, draft and target changes. Require
+# source-safety before any enrollment (including phase 1);
+# enrollment remains informational and manual operator requests stay untouched.
+#
 # Strategy:
 #   Phase 1 (default): PATCH updates auto-merge ✅, MINOR/MAJOR require review
 #   Phase 2: PATCH + MINOR auto-merge ✅, MAJOR requires review
@@ -31,8 +35,18 @@ on:
         required: false
         default: "1"
         type: string
+      allowed-ecosystems:
+        description: "Verified dependency ecosystems allowed for this caller (comma-separated)"
+        required: false
+        type: string
+        default: "github_actions,npm_and_yarn,composer,gradle,bundler"
+      workflow-paths:
+        description: "Optional JSON allowlist of Actions workflow paths; empty means all workflow files"
+        required: false
+        type: string
+        default: "[]"
       merge-method:
-        description: "Merge method: merge, squash, or rebase"
+        description: "Automatic merge method: squash"
         required: false
         default: "squash"
         type: string
@@ -52,6 +66,9 @@ jobs:
     # https://docs.github.com/en/code-security/dependabot/working-with-dependabot/automating-dependabot-with-github-actions#enable-auto-merge-on-a-pull-request
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       should-auto-merge: ${{ steps.check.outputs.should-auto-merge }}
       update-type: ${{ steps.check.outputs.update-type }}
@@ -63,10 +80,90 @@ jobs:
         with:
           github-token: "${{ github.token }}"
 
+      - name: Verify Dependabot source boundary
+        id: source
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PACKAGE_ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          DEPENDENCY_DIRECTORY: ${{ steps.metadata.outputs.directory }}
+          ALLOWED_ECOSYSTEMS: ${{ inputs.allowed-ecosystems }}
+          VERIFIED_DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
+          WORKFLOW_PATHS: ${{ inputs.workflow-paths }}
+        with:
+          script: |
+            core.setOutput('verified', 'false');
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const expected = context.payload.pull_request.head.sha;
+            const read = async () => (await github.rest.pulls.get({ owner, repo, pull_number })).data;
+            const pr = await read();
+            if (pr.state !== 'open' || pr.base.ref !== 'main' || pr.draft ||
+                pr.user.login !== 'dependabot[bot]' || pr.user.type !== 'Bot' ||
+                pr.head.repo?.full_name !== `${owner}/${repo}` || pr.head.sha !== expected) return;
+            const ecosystem = process.env.PACKAGE_ECOSYSTEM;
+            if (!process.env.ALLOWED_ECOSYSTEMS.split(',').includes(ecosystem)) return;
+            const verifiedDependencies = JSON.parse(process.env.VERIFIED_DEPENDENCIES || 'null');
+            if (!Array.isArray(verifiedDependencies) || (ecosystem === 'github_actions' &&
+                verifiedDependencies.some(item => /^SecPal\/\.github(?:\/|$)/i.test(item.dependencyName)))) return;
+            const directory = process.env.DEPENDENCY_DIRECTORY;
+            if (!directory || !directory.startsWith('/') || directory.includes('..') || directory.includes('\\')) return;
+            const prefix = directory === '/' ? '' : directory.slice(1).replace(/\/$/, '') + '/';
+            const manifests = {
+              npm_and_yarn: ['package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml'],
+              composer: ['composer.json', 'composer.lock'],
+              bundler: ['Gemfile', 'Gemfile.lock'],
+              gradle: ['build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts',
+                'variables.gradle', 'gradle/libs.versions.toml', 'app/build.gradle', 'app/build.gradle.kts'],
+            };
+            const workflowPaths = JSON.parse(process.env.WORKFLOW_PATHS || '[]');
+            if (!Array.isArray(workflowPaths) || !workflowPaths.every(path =>
+                typeof path === 'string' && /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path))) return;
+            const allowed = path => typeof path === 'string' && (ecosystem === 'github_actions'
+              ? /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path) &&
+                (!workflowPaths.length || workflowPaths.includes(path))
+              : (manifests[ecosystem] || []).some(name => path === prefix + name));
+            const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number, per_page: 100 });
+            if (!files.length || files.length !== pr.changed_files ||
+                !files.every(file => allowed(file.filename) && (!file.previous_filename || allowed(file.previous_filename)))) return;
+            const commits = await github.paginate(github.rest.pulls.listCommits, { owner, repo, pull_number, per_page: 100 });
+            // fetch-metadata classifies the first commit; require it to be the exact head.
+            if (commits.length !== 1 || commits.length !== pr.commits || commits[0].sha !== expected ||
+                !commits.every(commit => commit.author?.login === 'dependabot[bot]' &&
+                  ['web-flow', 'dependabot[bot]'].includes(commit.committer?.login) &&
+                  commit.commit.verification?.verified === true && commit.parents.length === 1)) return;
+            // fetch-metadata can calculate a missing class using a mutable PR
+            // title. Require each class in the signed YAML metadata itself.
+            const proof = require('node:child_process').spawnSync('ruby', ['-rjson', '-ryaml', '-e', String.raw`
+              begin
+                input = JSON.parse(STDIN.read)
+                fragment = input.fetch('message')[/^---\n([\s\S]*?)\n^\.\.\.\n/m, 1]
+                metadata = YAML.safe_load(fragment, permitted_classes: [], permitted_symbols: [], aliases: false)
+                dependencies = metadata.fetch('updated-dependencies')
+                verified = input.fetch('verified')
+                types = %w[version-update:semver-patch version-update:semver-minor version-update:semver-major]
+                valid = dependencies.is_a?(Array) && verified.is_a?(Array) && !dependencies.empty? &&
+                  dependencies.length == verified.length && dependencies.each_with_index.all? do |dependency, index|
+                    expected = verified[index]
+                    dependency.is_a?(Hash) && expected.is_a?(Hash) &&
+                      dependency['dependency-name'] == expected['dependencyName'] &&
+                      types.include?(dependency['update-type']) && dependency['update-type'] == expected['updateType']
+                  end
+                print(valid ? 'true' : 'false')
+              rescue StandardError
+                print 'false'
+              end
+            `], { input: JSON.stringify({ message: commits[0].commit.message,
+              verified: verifiedDependencies }),
+              encoding: 'utf8', env: { PATH: process.env.PATH }, timeout: 10000, maxBuffer: 1024 * 1024 });
+            if (proof.status !== 0 || proof.stdout !== 'true') return;
+            const after = await read();
+            if (after.head.sha !== expected || after.base.sha !== pr.base.sha || after.state !== 'open') return;
+            core.setOutput('verified', 'true');
+
       - name: Check PR metadata
         id: check
         env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          SOURCE_VERIFIED: ${{ steps.source.outputs.verified }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PHASE: ${{ inputs.phase }}
           METADATA_STEP_OUTCOME: ${{ steps.metadata.outcome }}
@@ -79,46 +176,6 @@ jobs:
           PREVIOUS_VERSION: ${{ steps.metadata.outputs.previous-version }}
           NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
         run: |
-          fallback_from_pr_title() {
-            local version_range_pattern old_major old_minor old_patch new_major new_minor new_patch
-
-            version_range_pattern='from[[:space:]]+([0-9]+)(\.([0-9]+))?'
-            version_range_pattern+='(\.([0-9]+))?[[:space:]]+to[[:space:]]+'
-            version_range_pattern+='([0-9]+)(\.([0-9]+))?(\.([0-9]+))?'
-
-            if [[ ! "${PR_TITLE}" =~ ${version_range_pattern} ]]; then
-              return 1
-            fi
-
-            old_major="${BASH_REMATCH[1]}"
-            old_minor="${BASH_REMATCH[3]:-0}"
-            old_patch="${BASH_REMATCH[5]:-0}"
-            new_major="${BASH_REMATCH[6]}"
-            new_minor="${BASH_REMATCH[8]:-0}"
-            new_patch="${BASH_REMATCH[10]:-0}"
-
-            if [[ "${new_major}" != "${old_major}" ]]; then
-              echo "update-type=major" >> "${GITHUB_OUTPUT}"
-              echo "❌ Not eligible: MAJOR semver update requires manual review (Phase ${PHASE})"
-            elif [[ "${new_minor}" != "${old_minor}" ]]; then
-              echo "update-type=minor" >> "${GITHUB_OUTPUT}"
-              if [[ "${PHASE}" == "2" || "${PHASE}" == "3" ]]; then
-                echo "should-auto-merge=true" >> "${GITHUB_OUTPUT}"
-                echo "✅ Eligible for auto-merge (Phase ${PHASE}): MINOR semver update via title fallback"
-              else
-                echo "❌ Not eligible: MINOR semver update requires manual review (Phase ${PHASE})"
-              fi
-            elif [[ "${new_patch}" != "${old_patch}" ]]; then
-              echo "update-type=patch" >> "${GITHUB_OUTPUT}"
-              echo "should-auto-merge=true" >> "${GITHUB_OUTPUT}"
-              echo "✅ Eligible for auto-merge (Phase ${PHASE}): PATCH semver update via title fallback"
-            else
-              return 1
-            fi
-
-            return 0
-          }
-
           is_grouped_update() {
             [[ -n "${DEPENDENCY_GROUP}" || "${DEPENDENCY_NAMES}" == *,* ]]
           }
@@ -130,7 +187,8 @@ jobs:
                 github-actions-major:github_actions:version-update:semver-major)
                 ;;
               *)
-                return 1
+                [[ "${PACKAGE_ECOSYSTEM}" != "github_actions" &&
+                  "${DEPENDENCY_GROUP}" != github-actions-* ]] || return 1
                 ;;
             esac
 
@@ -166,7 +224,7 @@ jobs:
           echo "New version: ${NEW_VERSION}"
 
           # Check if PR has 'dependencies' label (required for Dependabot PRs)
-          if ! echo "${PR_LABELS}" | grep -q "dependencies"; then
+          if ! jq -e 'type == "array" and index("dependencies") != null' <<<"${PR_LABELS}" >/dev/null; then
             echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
             echo "update-type=not-dependabot" >> "${GITHUB_OUTPUT}"
             echo "❌ Not eligible: Missing dependencies label"
@@ -180,7 +238,14 @@ jobs:
             exit 0
           fi
 
-          if [[ "${MAINTAINER_CHANGES}" == "true" ]]; then
+          if [[ "${SOURCE_VERIFIED}" != "true" ]]; then
+            echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
+            echo "update-type=unverified-source" >> "${GITHUB_OUTPUT}"
+            echo "Not eligible: source identity or changed paths could not be verified"
+            exit 0
+          fi
+
+          if [[ "${MAINTAINER_CHANGES}" != "false" ]]; then
             echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
             echo "update-type=maintainer-changes" >> "${GITHUB_OUTPUT}"
             echo "❌ Not eligible: Dependabot PR includes maintainer changes"
@@ -224,10 +289,6 @@ jobs:
                 [[ -n "${PREVIOUS_VERSION}" && -n "${NEW_VERSION}" ]]; then
                 echo "update-type=github-actions-non-semver" >> "${GITHUB_OUTPUT}"
                 echo "❌ Not eligible: GitHub Actions reference update does not expose a semver update-type"
-              # Fallback to PR title parsing only when fetch-metadata returns empty outputs
-              # for non-GitHub-Actions ecosystems.
-              elif [[ "${PACKAGE_ECOSYSTEM}" != "github_actions" ]] && fallback_from_pr_title; then
-                :
               else
                 echo "update-type=metadata-unavailable" >> "${GITHUB_OUTPUT}"
                 echo "❌ Not eligible: Dependabot metadata did not include an update type"
@@ -240,50 +301,89 @@ jobs:
               ;;
           esac
 
-  # Enable auto-merge for eligible PRs
+  source-safety:
+    name: Dependabot Source Safety
+    needs: check-eligibility
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Reconcile automated enrollment against this exact head
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ELIGIBLE: >-
+            ${{ needs.check-eligibility.result == 'success' &&
+                needs.check-eligibility.outputs.should-auto-merge == 'true' && inputs.merge-method == 'squash' }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const expected = context.payload.pull_request.head.sha;
+            const read = async () => {
+              const pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
+              if (pr.head.sha !== expected || pr.base.ref !== 'main' || pr.state !== 'open' ||
+                  !Object.hasOwn(pr, 'auto_merge') || (pr.auto_merge && !pr.auto_merge.enabled_by?.login)) {
+                throw new Error('Current PR enrollment identity is unavailable or changed');
+              }
+              return pr;
+            };
+            const pr = await read();
+            if (pr.user.login === 'dependabot[bot]' &&
+                pr.auto_merge?.enabled_by.login === 'github-actions[bot]' &&
+                (process.env.ELIGIBLE !== 'true' || pr.auto_merge.merge_method !== 'squash')) {
+              await github.graphql('mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }',
+                { id: pr.node_id });
+              if ((await read()).auto_merge?.enabled_by.login === 'github-actions[bot]') {
+                throw new Error('Unsafe automated enrollment is still active');
+              }
+            }
+
+  # Enrollment is informational; branch protection owns quality admission.
   auto-merge:
     name: Enable Auto-Merge
     runs-on: ubuntu-latest
-    needs: check-eligibility
+    needs: [check-eligibility, source-safety]
     if: needs.check-eligibility.outputs.should-auto-merge == 'true'
     timeout-minutes: 20
     steps:
-      - name: Wait for CI checks
-        id: wait-for-checks
-        uses: lewagon/wait-on-check-action@369769072fe522a3a8a85c03c96af1e5242a1994 # v1.9.1
+      - name: Preserve existing operator enrollment
+        id: enrollment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          wait-interval: 10
-          # For reusable workflows, the check name format is "caller_job / callee_job"
-          # The caller job is named "auto-merge" and this job is "Enable Auto-Merge"
-          running-workflow-name: "auto-merge / Enable Auto-Merge"
-          allowed-conclusions: success,skipped,neutral
-          # Also ignore by explicit check name as backup
-          ignore-checks: >-
-            Dependabot Auto-Merge,
-            auto-merge / Enable Auto-Merge,
-            auto-merge / Check Auto-Merge Eligibility
-        continue-on-error: true
-
-      - name: Log wait result
-        run: |
-          echo "Wait for checks outcome: ${{ steps.wait-for-checks.outcome }}"
-          echo "Wait for checks conclusion: ${{ steps.wait-for-checks.conclusion }}"
-          if [[ "${{ steps.wait-for-checks.outcome }}" == "failure" ]]; then
-            echo "⚠️ Wait for checks failed or timed out"
-            echo "   This is expected if there are no other CI checks configured for this repository."
-            echo "   The workflow will continue with auto-merge since continue-on-error is set."
-          else
-            echo "✅ All CI checks passed or were skipped"
-          fi
+          script: |
+            const pr = (await github.rest.pulls.get({ ...context.repo,
+              pull_number: context.payload.pull_request.number })).data;
+            if (pr.head.sha !== context.payload.pull_request.head.sha || pr.base.ref !== 'main' ||
+                pr.state !== 'open' || pr.draft || !Object.hasOwn(pr, 'auto_merge')) throw new Error('PR changed');
+            core.setOutput('required', pr.auto_merge === null ? 'true' : 'false');
 
       - name: Enable auto-merge
+        if: steps.enrollment.outputs.required == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           MERGE_METHOD: ${{ inputs.merge-method }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
+          set -euo pipefail
+          # A failed revocation must block merging. Never enroll before GitHub
+          # actually requires this run's successful safety check.
+          if checks=$(gh pr checks "$PR_URL" --required --json name,state,link); then
+            :
+          else
+            status=$?
+            case "$status" in
+              1|8) ;; # Other protected checks may still be failing or pending.
+              *) exit "$status" ;;
+            esac
+          fi
+          jq -e --arg run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/job/" '
+            [.[] | select(.name == "auto-merge / Dependabot Source Safety")] |
+            length == 1 and .[0].state == "SUCCESS" and (.[0].link | startswith($run))
+          ' <<< "$checks"
           echo "🤖 Enabling auto-merge..."
           echo "PR: ${PR_URL}"
           echo "Update type: ${{ needs.check-eligibility.outputs.update-type }}"
@@ -293,13 +393,7 @@ jobs:
           # Enable auto-merge with configured merge strategy
           case "${MERGE_METHOD}" in
             squash)
-              gh pr merge --auto --squash "${PR_URL}"
-              ;;
-            rebase)
-              gh pr merge --auto --rebase "${PR_URL}"
-              ;;
-            merge)
-              gh pr merge --auto --merge "${PR_URL}"
+              gh pr merge --auto --squash --match-head-commit "${EXPECTED_HEAD}" "${PR_URL}"
               ;;
             *)
               echo "❌ Invalid merge method: ${MERGE_METHOD}"
@@ -310,6 +404,7 @@ jobs:
           echo "✅ Auto-merge enabled! PR will merge when all checks pass."
 
       - name: Add comment
+        if: steps.enrollment.outputs.required == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
