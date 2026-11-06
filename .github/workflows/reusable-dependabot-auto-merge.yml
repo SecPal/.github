@@ -4,7 +4,13 @@
 # Reusable Dependabot Auto-Merge Workflow
 # Automatically merges Dependabot PRs based on configurable phase/policy
 #
-# Usage in other repositories:
+# Usage in other repositories (explicit caller ceiling; reads cannot be added
+# by a reusable workflow when the caller grants none):
+#   permissions:
+#     contents: write
+#     pull-requests: write
+#     checks: read
+#     statuses: read
 #   jobs:
 #     auto-merge:
 #       uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@<trusted-commit-sha>
@@ -57,6 +63,8 @@ cache-mode: none
 permissions:
   contents: write
   pull-requests: write
+  checks: read
+  statuses: read
 
 jobs:
   # Determine if this PR is eligible for auto-merge
@@ -327,7 +335,7 @@ jobs:
             const expected = context.payload.pull_request.head.sha;
             const read = async () => {
               const pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
-              if (pr.head.sha !== expected || pr.base.ref !== 'main' || pr.state !== 'open' ||
+              if (pr.head.sha !== expected || pr.state !== 'open' ||
                   !Object.hasOwn(pr, 'auto_merge') || !Array.isArray(pr.labels) ||
                   (pr.auto_merge && !pr.auto_merge.enabled_by?.login)) {
                 throw new Error('Current PR enrollment identity is unavailable or changed');
@@ -338,7 +346,7 @@ jobs:
             if (pr.user.login === 'dependabot[bot]' &&
                 pr.auto_merge?.enabled_by.login === 'github-actions[bot]' &&
                 (process.env.ELIGIBLE !== 'true' || !pr.labels.some(label => label.name === 'dependencies') ||
-                  pr.draft || pr.auto_merge.merge_method !== 'squash')) {
+                  pr.base.ref !== 'main' || pr.draft || pr.auto_merge.merge_method !== 'squash')) {
               await github.graphql('mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }',
                 { id: pr.node_id });
               if ((await read()).auto_merge?.enabled_by.login === 'github-actions[bot]') {

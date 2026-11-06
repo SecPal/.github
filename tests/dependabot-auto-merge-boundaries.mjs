@@ -269,18 +269,19 @@ test("queued automation is revoked when eligibility changes, while manual reques
   assert.ok(workflow.jobs["auto-merge"].needs.includes("source-safety"));
   const script = safety.steps[0].with.script;
   const head = "a".repeat(40);
-  for (const [eligible, owner, remains, expected, hasLabel = true] of [
+  for (const [eligible, owner, remains, expected, hasLabel = true, mainTarget = true] of [
     ["false", "github-actions[bot]", null, true],
     ["false", "aroviqen", "aroviqen", true],
     ["true", "github-actions[bot]", "github-actions[bot]", true],
     ["false", "github-actions[bot]", "github-actions[bot]", false],
     ["true", "github-actions[bot]", null, true, false],
+    ["true", "github-actions[bot]", null, true, true, false],
   ]) {
     let mutations = 0;
     const request = (login) => (login ? { enabled_by: { login }, merge_method: "squash" } : null);
     const pr = {
       head: { sha: head },
-      base: { ref: "main" },
+      base: { ref: mainTarget ? "main" : "release" },
       state: "open",
       node_id: "PR_1",
       user: { login: "dependabot[bot]" },
@@ -307,7 +308,7 @@ test("queued automation is revoked when eligibility changes, while manual reques
     else await assert.rejects(run());
     assert.equal(
       mutations,
-      (eligible !== "true" || !hasLabel) && owner === "github-actions[bot]" ? 1 : 0
+      (eligible !== "true" || !hasLabel || !mainTarget) && owner === "github-actions[bot]" ? 1 : 0
     );
   }
   delete process.env.ELIGIBLE;
@@ -419,4 +420,11 @@ test("a stale eligible run cannot enroll after the live dependencies label is re
     );
     assert.equal(out.required, labels.length ? "true" : "false");
   }
+});
+
+test("native required-check lookup has only the necessary read scopes", () => {
+  assert.equal(workflow.permissions.checks, "read");
+  assert.equal(workflow.permissions.statuses, "read");
+  const eligibility = workflow.jobs["check-eligibility"].permissions;
+  assert.deepEqual(eligibility, { contents: "read", "pull-requests": "read" });
 });
