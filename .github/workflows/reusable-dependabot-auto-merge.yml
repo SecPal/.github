@@ -51,6 +51,9 @@ on:
         default: "squash"
         type: string
 
+# Enrollment uses no Actions cache; prevent cache access across the reusable call.
+cache-mode: none
+
 permissions:
   contents: write
   pull-requests: write
@@ -325,7 +328,8 @@ jobs:
             const read = async () => {
               const pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
               if (pr.head.sha !== expected || pr.base.ref !== 'main' || pr.state !== 'open' ||
-                  !Object.hasOwn(pr, 'auto_merge') || (pr.auto_merge && !pr.auto_merge.enabled_by?.login)) {
+                  !Object.hasOwn(pr, 'auto_merge') || !Array.isArray(pr.labels) ||
+                  (pr.auto_merge && !pr.auto_merge.enabled_by?.login)) {
                 throw new Error('Current PR enrollment identity is unavailable or changed');
               }
               return pr;
@@ -333,7 +337,8 @@ jobs:
             const pr = await read();
             if (pr.user.login === 'dependabot[bot]' &&
                 pr.auto_merge?.enabled_by.login === 'github-actions[bot]' &&
-                (process.env.ELIGIBLE !== 'true' || pr.auto_merge.merge_method !== 'squash')) {
+                (process.env.ELIGIBLE !== 'true' || !pr.labels.some(label => label.name === 'dependencies') ||
+                  pr.draft || pr.auto_merge.merge_method !== 'squash')) {
               await github.graphql('mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }',
                 { id: pr.node_id });
               if ((await read()).auto_merge?.enabled_by.login === 'github-actions[bot]') {
@@ -357,8 +362,10 @@ jobs:
             const pr = (await github.rest.pulls.get({ ...context.repo,
               pull_number: context.payload.pull_request.number })).data;
             if (pr.head.sha !== context.payload.pull_request.head.sha || pr.base.ref !== 'main' ||
-                pr.state !== 'open' || pr.draft || !Object.hasOwn(pr, 'auto_merge')) throw new Error('PR changed');
-            core.setOutput('required', pr.auto_merge === null ? 'true' : 'false');
+                pr.state !== 'open' || pr.draft || !Object.hasOwn(pr, 'auto_merge') ||
+                !Array.isArray(pr.labels)) throw new Error('PR changed');
+            core.setOutput('required', pr.auto_merge === null &&
+              pr.labels.some(label => label.name === 'dependencies') ? 'true' : 'false');
 
       - name: Enable auto-merge
         if: steps.enrollment.outputs.required == 'true'

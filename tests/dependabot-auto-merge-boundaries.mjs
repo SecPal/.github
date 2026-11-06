@@ -262,17 +262,19 @@ test("deployment's workflow allowlist keeps cloud execution paths manual", async
 });
 
 test("queued automation is revoked when eligibility changes, while manual requests survive", async () => {
+  assert.equal(workflow["cache-mode"], "none");
   const safety = workflow.jobs["source-safety"];
   assert.ok(safety, "source safety must run before enrollment on every PR head");
   assert.equal(safety.if, "${{ always() }}");
   assert.ok(workflow.jobs["auto-merge"].needs.includes("source-safety"));
   const script = safety.steps[0].with.script;
   const head = "a".repeat(40);
-  for (const [eligible, owner, remains, expected] of [
+  for (const [eligible, owner, remains, expected, hasLabel = true] of [
     ["false", "github-actions[bot]", null, true],
     ["false", "aroviqen", "aroviqen", true],
     ["true", "github-actions[bot]", "github-actions[bot]", true],
     ["false", "github-actions[bot]", "github-actions[bot]", false],
+    ["true", "github-actions[bot]", null, true, false],
   ]) {
     let mutations = 0;
     const request = (login) => (login ? { enabled_by: { login }, merge_method: "squash" } : null);
@@ -282,6 +284,7 @@ test("queued automation is revoked when eligibility changes, while manual reques
       state: "open",
       node_id: "PR_1",
       user: { login: "dependabot[bot]" },
+      labels: hasLabel ? [{ name: "dependencies" }] : [],
       auto_merge: request(owner),
     };
     const github = {
@@ -302,7 +305,10 @@ test("queued automation is revoked when eligibility changes, while manual reques
       });
     if (expected) await run();
     else await assert.rejects(run());
-    assert.equal(mutations, eligible !== "true" && owner === "github-actions[bot]" ? 1 : 0);
+    assert.equal(
+      mutations,
+      (eligible !== "true" || !hasLabel) && owner === "github-actions[bot]" ? 1 : 0
+    );
   }
   delete process.env.ELIGIBLE;
 });
@@ -376,5 +382,41 @@ test("enrollment requires a successful protected safety check from this same run
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+});
+
+test("a stale eligible run cannot enroll after the live dependencies label is removed", async () => {
+  const step = workflow.jobs["auto-merge"].steps.find((step) => step.id === "enrollment");
+  const head = "a".repeat(40);
+  for (const labels of [[], [{ name: "dependencies" }]]) {
+    const out = {};
+    await new AsyncFunction("github", "context", "core", step.with.script)(
+      {
+        rest: {
+          pulls: {
+            get: async () => ({
+              data: {
+                head: { sha: head },
+                base: { ref: "main" },
+                state: "open",
+                draft: false,
+                labels,
+                auto_merge: null,
+              },
+            }),
+          },
+        },
+      },
+      {
+        repo: { owner: "SecPal", repo: ".github" },
+        payload: { pull_request: { number: 1, head: { sha: head } } },
+      },
+      {
+        setOutput: (k, v) => {
+          out[k] = v;
+        },
+      }
+    );
+    assert.equal(out.required, labels.length ? "true" : "false");
   }
 });
