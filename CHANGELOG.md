@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-06 - Enable Protected Patch And Minor Auto-Merge
+
+- Enable phase 2 for organization configuration only after the actual Source
+  Safety check is required alongside all existing quality and security checks.
+- Keep major, unclassified, SHA-based and unverified updates on manual review;
+  existing operator enrollment and all other protection settings are preserved.
+
 ## 2026-11-06 - Authenticate Dependabot Auto-Merge Candidates
 
 **Security:**

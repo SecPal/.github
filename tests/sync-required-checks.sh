@@ -8,6 +8,54 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SYNC_SCRIPT="$REPO_ROOT/scripts/sync-required-checks.sh"
 CODECOV_SCRIPT="$REPO_ROOT/scripts/configure-codecov-optional.sh"
+EXPECTED_APP_BINDINGS_JSON='{
+  ".github": {
+    "Validate Signed PR Commits": 15368,
+    "Evidence Architecture PR Gate": 15368,
+    "Verify Workflow Pin Provenance": 15368,
+    "Work-Graph Resolver": 15368,
+    "Vulnerability Policy": 15368,
+    "Dependabot Manifest Guard Contract": 15368,
+    "auto-merge / Dependabot Source Safety": 15368
+  },
+  "deployment": {
+    "Repository Contract": 15368,
+    "REUSE Compliance / Check REUSE Compliance": 15368,
+    "Markdown and Shell": 15368,
+    "Quadlet Contract (amd64)": 15368,
+    "Quadlet Contract (arm64)": 15368,
+    "Repository Security": 15368,
+    "OpenSSH Account Contract": 15368,
+    "DNF4 Exact NEVRA Contract": 15368,
+    "Architecture Gate (Python 3.12.13)": 15368,
+    "Architecture Gate (Python 3.13.14)": 15368
+  },
+  "android": {
+    "Android Lint": 15368,
+    "Android JVM Unit Tests": 15368,
+    "Android Release Network Security": 15368,
+    "Dependency Audit": 15368,
+    "Repository Security / Scan repository": 15368
+  },
+  "api": {
+    "Repository Security / Accept API Repository Security": 15368,
+    "Pre-commit Hook Smoke Test (ubuntu-latest)": 15368,
+    "Pre-commit Hook Smoke Test (macos-latest)": 15368
+  },
+  "contracts": {
+    "Dependabot Manifest Guard / Manifest Coverage": 15368,
+    "Dependabot Manifest Guard / Cadence Policy": 15368,
+    "auto-merge / Dependabot Source Safety": 15368
+  },
+  "frontend": {
+    "Repository Security / Repository Security": 15368,
+    "Dependabot Manifest Guard / Manifest Coverage": 15368,
+    "Dependabot Manifest Guard / Cadence Policy": 15368
+  },
+  "secpal.app": {
+    "auto-merge / Dependabot Source Safety": 15368
+  }
+}'
 SHELL_BIN="${BASH:-$(command -v bash)}"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -41,14 +89,14 @@ assert_payload_contexts_equal() {
   local expected_strict="$3"
   local expected_repo="${4:-}"
 
-  if ! jq -e --argjson expected "$expected" --argjson expected_strict "$expected_strict" --arg repo "$expected_repo" '
+  if ! jq -e --argjson expected "$expected" --argjson expected_strict "$expected_strict" --arg repo "$expected_repo" --argjson apps "$EXPECTED_APP_BINDINGS_JSON" '
     .strict == $expected_strict and
     (.checks | length) == ($expected | length) and
     ([.checks[].context] | length) == ([.checks[].context] | unique | length) and
     ($expected | length) == ($expected | unique | length) and
     ([.checks[].context] | sort) == ($expected | sort) and
     all(.checks[];
-      .app_id == (if $repo == "deployment" or .context == "Evidence Architecture PR Gate" or .context == "Validate Signed PR Commits" then 15368 else -1 end)
+      .app_id == ($apps[$repo][.context] // -1)
     )
   ' >/dev/null <<<"$payload"; then
     echo "Payload did not contain exactly the expected required checks" >&2
@@ -113,7 +161,12 @@ EXPECTED_CONTEXTS_JSON='{
     "Lint GitHub Actions Workflows",
     "CodeQL",
     "Validate Signed PR Commits",
-    "Evidence Architecture PR Gate"
+    "Evidence Architecture PR Gate",
+    "Verify Workflow Pin Provenance",
+    "Work-Graph Resolver",
+    "Vulnerability Policy",
+    "Dependabot Manifest Guard Contract",
+    "auto-merge / Dependabot Source Safety"
   ],
   "android": [
     "Check REUSE Compliance / Check REUSE Compliance",
@@ -125,13 +178,17 @@ EXPECTED_CONTEXTS_JSON='{
     "Vitest Tests",
     "Analyze with CodeQL (javascript-typescript)",
     "Check PR Size / Check PR Size",
-    "AI Instructions / Validate AI Instructions",
     "Markdown Lint / Lint Markdown Files",
-    "Certificate transparency"
+    "AI Instructions / Validate AI Instructions",
+    "Certificate transparency",
+    "Android Lint",
+    "Android JVM Unit Tests",
+    "Android Release Network Security",
+    "Dependency Audit",
+    "Repository Security / Scan repository"
   ],
   "api": [
     "Check REUSE Compliance / Check REUSE Compliance",
-    "Check License Compatibility",
     "Laravel Pint / Check Code Style",
     "PHPStan / Static Analysis",
     "Formatting Check / Check Code Formatting",
@@ -139,7 +196,11 @@ EXPECTED_CONTEXTS_JSON='{
     "Check PR Size / Check PR Size",
     "PEST Tests",
     "check-conflicts / Detect Git Conflict Markers",
-    "AI Instructions / Validate AI Instructions"
+    "AI Instructions / Validate AI Instructions",
+    "Check License Compatibility",
+    "Repository Security / Accept API Repository Security",
+    "Pre-commit Hook Smoke Test (ubuntu-latest)",
+    "Pre-commit Hook Smoke Test (macos-latest)"
   ],
   "contracts": [
     "REUSE Compliance / Check REUSE Compliance",
@@ -150,29 +211,40 @@ EXPECTED_CONTEXTS_JSON='{
     "License Compatibility / Check License Compatibility",
     "Markdown Lint / Lint Markdown Files",
     "check-conflicts / Detect Git Conflict Markers",
-    "AI Instructions / Validate AI Instructions"
+    "AI Instructions / Validate AI Instructions",
+    "Dependabot Manifest Guard / Manifest Coverage",
+    "Dependabot Manifest Guard / Cadence Policy",
+    "auto-merge / Dependabot Source Safety"
   ],
   "deployment": [
     "Repository Contract",
     "REUSE Compliance / Check REUSE Compliance",
     "Markdown and Shell",
     "Quadlet Contract (amd64)",
-    "Quadlet Contract (arm64)"
+    "Quadlet Contract (arm64)",
+    "Repository Security",
+    "OpenSSH Account Contract",
+    "DNF4 Exact NEVRA Contract",
+    "Architecture Gate (Python 3.12.13)",
+    "Architecture Gate (Python 3.13.14)"
   ],
   "frontend": [
     "Check REUSE Compliance / Check REUSE Compliance",
-    "Check License Compatibility",
     "Formatting Check / Check Code Formatting",
     "ESLint / Run Linter",
     "TypeScript Check / Build Project",
-    "Analyze with CodeQL (javascript-typescript)",
     "Markdown Lint / Lint Markdown Files",
     "Check PR Size / Check PR Size",
     "Vitest Tests",
     "check-conflicts / Detect Git Conflict Markers",
+    "Analyze with CodeQL (javascript-typescript)",
     "AI Instructions / Validate AI Instructions",
+    "Check License Compatibility",
     "Strict CSP",
-    "Container Contract"
+    "Container Contract",
+    "Repository Security / Repository Security",
+    "Dependabot Manifest Guard / Manifest Coverage",
+    "Dependabot Manifest Guard / Cadence Policy"
   ],
   "secpal.app": [
     "Check REUSE Compliance / Check REUSE Compliance",
@@ -184,9 +256,10 @@ EXPECTED_CONTEXTS_JSON='{
     "Astro Build / Build Project",
     "Check PR Size / Check PR Size",
     "check-conflicts / Detect Git Conflict Markers",
+    "Node Tests / Run Tests",
     "Analyze Code (javascript-typescript)",
     "AI Instructions / Validate AI Instructions",
-    "Node Tests / Run Tests"
+    "auto-merge / Dependabot Source Safety"
   ]
 }'
 
@@ -360,8 +433,8 @@ chmod +x "$fake_bin/gh"
 state_dir="$TMP_DIR/required-states"
 mkdir -p "$state_dir"
 for expected_repo in "${expected_repositories[@]}"; do
-  jq --arg repo "$expected_repo" '.strict = false |
-    if $repo == "deployment" then . else .checks |= map(.app_id = null) end' \
+  jq --arg repo "$expected_repo" --argjson apps "$EXPECTED_APP_BINDINGS_JSON" '.strict = false |
+    .checks |= map(if $apps[$repo][.context] == null then .app_id = null else . end)' \
     <<<"${payloads[$expected_repo]}" >"$state_dir/$expected_repo.json"
 done
 
@@ -375,16 +448,9 @@ for bound_repo in api frontend; do
   mv "$state_dir/$bound_repo.bound.json" "$state_dir/$bound_repo.json"
 done
 
-# Exercise promotion of the evidence gate while preserving the signed-commit App binding.
-jq '
-  .checks |= map(select(.context != "Evidence Architecture PR Gate")) |
-  .checks |= map(
-    if .context == "Validate Signed PR Commits"
-    then .app_id = 15368
-    else .app_id = null
-    end
-  )
-' "$state_dir/.github.json" >"$state_dir/.github.bound.json"
+# Exercise promotion of the evidence gate while preserving every other binding.
+jq '.checks |= map(select(.context != "Evidence Architecture PR Gate"))' \
+  "$state_dir/.github.json" >"$state_dir/.github.bound.json"
 mv "$state_dir/.github.bound.json" "$state_dir/.github.json"
 
 assert_mode_conflict() {
@@ -485,7 +551,7 @@ fi
 remediation_failures=0
 expected_status_endpoint='repos/SecPal/.github/branches/main/protection/required_status_checks'
 expected_status_payload="$(
-  jq -c '{
+  jq -c --argjson order "$(jq -c '.[".github"]' <<<"$EXPECTED_CONTEXTS_JSON")" '{
     strict: true,
     checks: ([
       .checks[]
@@ -494,7 +560,7 @@ expected_status_payload="$(
           app_id: (if .app_id == null then -1 else .app_id end)
         }
     ] + [{context: "Evidence Architecture PR Gate", app_id: 15368}])
-  }' "$state_dir/.github.json"
+  } | .checks |= sort_by(.context as $context | $order | index($context))' "$state_dir/.github.json"
 )"
 expected_status_log="$(printf 'GET\t%s\t-\nPATCH\t%s\t%s' \
   "$expected_status_endpoint" "$expected_status_endpoint" "$expected_status_payload")"
@@ -579,7 +645,7 @@ assert_sync_rejects_state() {
   fi
 }
 
-# Deployment's existing five producer bindings are mandatory, never inferred
+# Deployment's existing producer bindings are mandatory, never inferred
 # or relaxed when a live entry already has a conflicting identity.
 for binding in null -1 777; do
   jq --argjson binding "$binding" '.checks[0].app_id = $binding' \
@@ -593,9 +659,9 @@ original_sync_script="$SYNC_SCRIPT"
 for mutation in missing substituted duplicate; do
   mutated_script="$TMP_DIR/$mutation-sync.sh"
   case "$mutation" in
-    missing) sed '/^    "Evidence Architecture PR Gate"$/d; s/"Validate Signed PR Commits",/"Validate Signed PR Commits"/' "$original_sync_script" >"$mutated_script" ;;
-    substituted) sed 's/^    "Evidence Architecture PR Gate"$/    "Evidence Architecture Gate"/' "$original_sync_script" >"$mutated_script" ;;
-    duplicate) sed 's/^    "Evidence Architecture PR Gate"$/    "Evidence Architecture PR Gate", "Evidence Architecture PR Gate"/' "$original_sync_script" >"$mutated_script" ;;
+    missing) sed '/^    "Evidence Architecture PR Gate",$/d' "$original_sync_script" >"$mutated_script" ;;
+    substituted) sed 's/^    "Evidence Architecture PR Gate",$/    "Evidence Architecture Gate",/' "$original_sync_script" >"$mutated_script" ;;
+    duplicate) sed 's/^    "Evidence Architecture PR Gate",$/    "Evidence Architecture PR Gate", "Evidence Architecture PR Gate",/' "$original_sync_script" >"$mutated_script" ;;
   esac
   SYNC_SCRIPT="$mutated_script"
   if "$SHELL_BIN" "$SYNC_SCRIPT" --repo .github --print-payload >/dev/null 2>&1; then
@@ -606,11 +672,11 @@ for mutation in missing substituted duplicate; do
 done
 SYNC_SCRIPT="$original_sync_script"
 
-# The canonical ten checks preserve positive and unbound bindings.
+# The canonical fifteen checks preserve positive and unbound bindings.
 # The already-activated state is idempotent.
-jq -e '.strict == true and (.checks | length) == 10 and
-  ([.checks[].context] | unique | length) == 10 and
-  ([.checks[] | select(.app_id == 15368)] | length) == 2 and
+jq -e '.strict == true and (.checks | length) == 15 and
+  ([.checks[].context] | unique | length) == 15 and
+  ([.checks[] | select(.app_id == 15368)] | length) == 7 and
   ([.checks[] | select(.app_id == -1)] | length) == 8' \
   <<<"$expected_status_payload" >/dev/null
 activated_state="$TMP_DIR/activated-state.json"
@@ -806,3 +872,35 @@ if grep -Fq 'repos/SecPal/api/' "$status_failure_log"; then
   cat "$status_failure_log" >&2
   exit 1
 fi
+
+# Activated safety requirements must survive the existing owner’s next sync.
+for safety_repo in .github contracts secpal.app; do
+  safety_payload="$(bash "$SYNC_SCRIPT" --repo "$safety_repo" --print-payload)"
+  jq -e '.checks | any(.context == "auto-merge / Dependabot Source Safety" and .app_id == 15368)' \
+    <<<"$safety_payload" >/dev/null || {
+    echo "Activated source safety is missing from the canonical inventory: $safety_repo" >&2
+    exit 1
+  }
+done
+
+for safety_repo in .github contracts secpal.app; do
+  jq '.checks |= map(if .context == "auto-merge / Dependabot Source Safety" then .app_id = 777 else . end)' \
+    "$state_dir/$safety_repo.json" >"$TMP_DIR/wrong-safety-producer.json"
+  assert_sync_rejects_state "wrong-safety-$safety_repo" "$TMP_DIR/wrong-safety-producer.json" "$safety_repo"
+done
+for pending_repo in api android frontend deployment; do
+  pending="$(bash "$SYNC_SCRIPT" --repo "$pending_repo" --print-pending-checks)"
+  jq -e --argjson pending "$pending" 'all(.checks[]; .context as $context | $pending | index($context) == null)' \
+    <<<"${payloads[$pending_repo]}" >/dev/null || {
+    echo "Unactivated identity leaked into apply payload: $pending_repo" >&2
+    exit 1
+  }
+done
+for expected_repo in "${expected_repositories[@]}"; do
+  jq -e 'all(.checks[]; .context != "auto-merge / Enable Auto-Merge" and
+    .context != "auto-merge / Skip Auto-Merge" and .context != "auto-merge / Check Auto-Merge Eligibility")' \
+    <<<"${payloads[$expected_repo]}" >/dev/null || {
+    echo "Informational enrollment job must not be required: $expected_repo" >&2
+    exit 1
+  }
+done

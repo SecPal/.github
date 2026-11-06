@@ -362,7 +362,7 @@ bash scripts/sync-required-checks.sh --apply
 - `secpal.app`
 
 Private `operations` retains its separately owned protection and is outside
-this public required-check inventory. Deployment's five existing checks remain
+this public required-check inventory. Deployment's existing checks remain
 bound to GitHub Actions App `15368`. The review-baseline mode retains its
 original six-repository scope and does not manage Deployment's review settings.
 
@@ -372,7 +372,9 @@ original six-repository scope and does not manage Deployment's review settings.
 2. Builds the exact JSON payload GitHub expects for branch protection updates
 3. Applies the payload through `gh api` using `--input` so booleans and arrays stay typed correctly
 4. Keeps the live branch-protection baseline repeatable after workflow or context drift
-5. Emits `strict: true` while preserving each managed repository's required
+5. Keeps unactivated conditional checks in a separate publication list that is
+   never included in an apply payload.
+6. Emits `strict: true` while preserving each managed repository's required
    checks and App bindings. Pull request branches must be up to date with
    protected `main` before merging.
 

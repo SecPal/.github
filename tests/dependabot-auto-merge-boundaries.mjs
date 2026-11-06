@@ -317,6 +317,7 @@ test("queued automation is revoked when eligibility changes, while manual reques
 test("caller reconciles label, draft and target changes", () => {
   const caller = yaml.load(readFileSync(".github/workflows/dependabot-auto-merge.yml", "utf8"));
   assert.equal(caller.jobs["auto-merge"].if, undefined);
+  assert.equal(caller.jobs["auto-merge"].with.phase, "2");
   assert.equal(caller.jobs["auto-merge"].with["allowed-ecosystems"], "github_actions");
   assert.equal(caller.concurrency["cancel-in-progress"], true);
   assert.equal(caller["cache-mode"], "none");
@@ -437,4 +438,8 @@ test("native required-check lookup has only the necessary read scopes", () => {
   assert.equal(workflow.permissions.statuses, "read");
   const eligibility = workflow.jobs["check-eligibility"].permissions;
   assert.deepEqual(eligibility, { contents: "read", "pull-requests": "read" });
+});
+
+test("callers remaining in phase one still refuse minor enrollment", () => {
+  assert.equal(eligible({ PHASE: "1", UPDATE_TYPE_RAW: "version-update:semver-minor" }), "false");
 });

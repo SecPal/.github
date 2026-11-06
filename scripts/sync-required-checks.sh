@@ -9,7 +9,24 @@ REQUIRED_APPROVING_REVIEW_COUNT=0
 # Publication inventory only. Successful hosted execution, exact check/source
 # authentication and separately authorized activation are still prerequisites.
 # This list is intentionally never consumed by an apply payload.
-PENDING_CONTEXTS_JSON='{}'
+PENDING_CONTEXTS_JSON='{
+  "api": [
+    "OCI Runtime Acceptance",
+    "auto-merge / Dependabot Source Safety"
+  ],
+  "android": [
+    "Android Smoke Acceptance",
+    "Enterprise Policy Acceptance",
+    "auto-merge / Dependabot Source Safety"
+  ],
+  "frontend": [
+    "Performance Audit",
+    "auto-merge / Dependabot Source Safety"
+  ],
+  "deployment": [
+    "auto-merge / Dependabot Source Safety"
+  ]
+}'
 
 REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
 {
@@ -23,7 +40,12 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Lint GitHub Actions Workflows",
     "CodeQL",
     "Validate Signed PR Commits",
-    "Evidence Architecture PR Gate"
+    "Evidence Architecture PR Gate",
+    "Verify Workflow Pin Provenance",
+    "Work-Graph Resolver",
+    "Vulnerability Policy",
+    "Dependabot Manifest Guard Contract",
+    "auto-merge / Dependabot Source Safety"
   ],
   "android": [
     "Check REUSE Compliance / Check REUSE Compliance",
@@ -35,13 +57,17 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Vitest Tests",
     "Analyze with CodeQL (javascript-typescript)",
     "Check PR Size / Check PR Size",
-    "AI Instructions / Validate AI Instructions",
     "Markdown Lint / Lint Markdown Files",
-    "Certificate transparency"
+    "AI Instructions / Validate AI Instructions",
+    "Certificate transparency",
+    "Android Lint",
+    "Android JVM Unit Tests",
+    "Android Release Network Security",
+    "Dependency Audit",
+    "Repository Security / Scan repository"
   ],
   "api": [
     "Check REUSE Compliance / Check REUSE Compliance",
-    "Check License Compatibility",
     "Laravel Pint / Check Code Style",
     "PHPStan / Static Analysis",
     "Formatting Check / Check Code Formatting",
@@ -49,7 +75,11 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Check PR Size / Check PR Size",
     "PEST Tests",
     "check-conflicts / Detect Git Conflict Markers",
-    "AI Instructions / Validate AI Instructions"
+    "AI Instructions / Validate AI Instructions",
+    "Check License Compatibility",
+    "Repository Security / Accept API Repository Security",
+    "Pre-commit Hook Smoke Test (ubuntu-latest)",
+    "Pre-commit Hook Smoke Test (macos-latest)"
   ],
   "contracts": [
     "REUSE Compliance / Check REUSE Compliance",
@@ -60,29 +90,40 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "License Compatibility / Check License Compatibility",
     "Markdown Lint / Lint Markdown Files",
     "check-conflicts / Detect Git Conflict Markers",
-    "AI Instructions / Validate AI Instructions"
+    "AI Instructions / Validate AI Instructions",
+    "Dependabot Manifest Guard / Manifest Coverage",
+    "Dependabot Manifest Guard / Cadence Policy",
+    "auto-merge / Dependabot Source Safety"
   ],
   "deployment": [
     "Repository Contract",
     "REUSE Compliance / Check REUSE Compliance",
     "Markdown and Shell",
     "Quadlet Contract (amd64)",
-    "Quadlet Contract (arm64)"
+    "Quadlet Contract (arm64)",
+    "Repository Security",
+    "OpenSSH Account Contract",
+    "DNF4 Exact NEVRA Contract",
+    "Architecture Gate (Python 3.12.13)",
+    "Architecture Gate (Python 3.13.14)"
   ],
   "frontend": [
     "Check REUSE Compliance / Check REUSE Compliance",
-    "Check License Compatibility",
     "Formatting Check / Check Code Formatting",
     "ESLint / Run Linter",
     "TypeScript Check / Build Project",
-    "Analyze with CodeQL (javascript-typescript)",
     "Markdown Lint / Lint Markdown Files",
     "Check PR Size / Check PR Size",
     "Vitest Tests",
     "check-conflicts / Detect Git Conflict Markers",
+    "Analyze with CodeQL (javascript-typescript)",
     "AI Instructions / Validate AI Instructions",
+    "Check License Compatibility",
     "Strict CSP",
-    "Container Contract"
+    "Container Contract",
+    "Repository Security / Repository Security",
+    "Dependabot Manifest Guard / Manifest Coverage",
+    "Dependabot Manifest Guard / Cadence Policy"
   ],
   "secpal.app": [
     "Check REUSE Compliance / Check REUSE Compliance",
@@ -94,9 +135,10 @@ REQUIRED_CONTEXTS_JSON="$(cat <<'EOF'
     "Astro Build / Build Project",
     "Check PR Size / Check PR Size",
     "check-conflicts / Detect Git Conflict Markers",
+    "Node Tests / Run Tests",
     "Analyze Code (javascript-typescript)",
     "AI Instructions / Validate AI Instructions",
-    "Node Tests / Run Tests"
+    "auto-merge / Dependabot Source Safety"
   ]
 }
 EOF
@@ -110,14 +152,49 @@ EOF
 REQUIRED_APP_BINDINGS_JSON='{
   ".github": {
     "Validate Signed PR Commits": 15368,
-    "Evidence Architecture PR Gate": 15368
+    "Evidence Architecture PR Gate": 15368,
+    "Verify Workflow Pin Provenance": 15368,
+    "Work-Graph Resolver": 15368,
+    "Vulnerability Policy": 15368,
+    "Dependabot Manifest Guard Contract": 15368,
+    "auto-merge / Dependabot Source Safety": 15368
   },
   "deployment": {
     "Repository Contract": 15368,
     "REUSE Compliance / Check REUSE Compliance": 15368,
     "Markdown and Shell": 15368,
     "Quadlet Contract (amd64)": 15368,
-    "Quadlet Contract (arm64)": 15368
+    "Quadlet Contract (arm64)": 15368,
+    "Repository Security": 15368,
+    "OpenSSH Account Contract": 15368,
+    "DNF4 Exact NEVRA Contract": 15368,
+    "Architecture Gate (Python 3.12.13)": 15368,
+    "Architecture Gate (Python 3.13.14)": 15368
+  },
+  "android": {
+    "Android Lint": 15368,
+    "Android JVM Unit Tests": 15368,
+    "Android Release Network Security": 15368,
+    "Dependency Audit": 15368,
+    "Repository Security / Scan repository": 15368
+  },
+  "api": {
+    "Repository Security / Accept API Repository Security": 15368,
+    "Pre-commit Hook Smoke Test (ubuntu-latest)": 15368,
+    "Pre-commit Hook Smoke Test (macos-latest)": 15368
+  },
+  "contracts": {
+    "Dependabot Manifest Guard / Manifest Coverage": 15368,
+    "Dependabot Manifest Guard / Cadence Policy": 15368,
+    "auto-merge / Dependabot Source Safety": 15368
+  },
+  "frontend": {
+    "Repository Security / Repository Security": 15368,
+    "Dependabot Manifest Guard / Manifest Coverage": 15368,
+    "Dependabot Manifest Guard / Cadence Policy": 15368
+  },
+  "secpal.app": {
+    "auto-merge / Dependabot Source Safety": 15368
   }
 }'
 
