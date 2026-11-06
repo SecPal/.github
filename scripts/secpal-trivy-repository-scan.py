@@ -313,10 +313,13 @@ def _verify_composer_severity_fallback(native: dict[str, Any] | None,
                 # provenance fields, not an explicit empty/null/malformed map.
                 if "VendorSeverity" in vulnerability:
                     raise ContractError("severity fallback native provenance is unqualified")
+            # Feed enrichment is qualified only when Red Hat corroborates the
+            # existing GHSA fallback; it cannot select or lower the severity.
             elif (not isinstance(vendors, dict) or not vendors
                     or any(not isinstance(k, str) or not k or type(v) is not int
                            or v not in range(5) for k, v in vendors.items())
-                    or set(vendors) - {"ghsa", "nvd"}
+                    or set(vendors) - {"ghsa", "nvd", "redhat"}
+                    or ("redhat" in vendors and vendors["redhat"] != vendors.get("ghsa"))
                     or vendors.get("nvd", 0) != 0
                     or ("UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL").index(
                         finding["severity"]) != vendors.get("ghsa")):

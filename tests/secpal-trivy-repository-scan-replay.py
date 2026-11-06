@@ -260,13 +260,19 @@ def replay_composer_severity_fallback(root: Path, action_path: Path, environment
     native = json.loads(native_path.read_text())
     findings = [v for item in native.get("Results", []) for v in item.get("Vulnerabilities", [])]
     diagnostics = scanned.stderr.decode("utf-8")
-    if (len(findings) != 1 or findings[0].get("VulnerabilityID") != "CVE-2026-108082"
-            or findings[0].get("Severity") != "HIGH"
-            or "SeveritySource" in findings[0]
-            or findings[0].get("VendorSeverity") != {"ghsa": 3}
+    high = [finding for finding in findings if finding.get("VulnerabilityID") == "CVE-2026-108082"]
+    if (len(high) != 1 or high[0].get("PkgName") != "symfony/http-foundation"
+            or high[0].get("InstalledVersion") != "v8.0.15" or high[0].get("Severity") != "HIGH"
+            or "SeveritySource" in high[0] or high[0].get("VendorSeverity", {}).get("ghsa") != 3
             or any(item.get("Secrets") for item in native.get("Results", []))
             or diagnostics.count("\tWARN\t" + module.SEVERITY_FALLBACK_DIAGNOSTIC) != 1):
         raise RuntimeError("live Composer HIGH fallback representation changed; requalify, never skip")
+    # Feed enrichment may add vendors or advisories. The unchanged admission
+    # validates every provenance field; all native findings must survive below.
+    native_identities = {(v["VulnerabilityID"], v["PkgName"], v["InstalledVersion"], v["Severity"])
+                         for v in findings}
+    native_unknown = sum(v["Severity"] == "UNKNOWN" for v in findings)
+    native_vendor_severity = high[0]["VendorSeverity"]
     scanner = {
         "name": "trivy", "version": TRIVY_VERSION,
         "immutable_id": "sha256:" + TRIVY_ARCHIVE_SHA256,
@@ -315,18 +321,18 @@ def replay_composer_severity_fallback(root: Path, action_path: Path, environment
             or result["scanner"] != scanner
             or result["policy"] != module._validate_policy(
                 json.loads(POLICY.read_text()), result["completed_at"])
-            or result["summary"] != {"total": 1, "actionable": 1, "review_required": 0, "excepted": 0}
-            or len(findings) != 1 or findings[0]["class"] != "VULNERABILITY"
-            or findings[0]["rule_id"] != "CVE-2026-108082" or findings[0]["severity"] != "HIGH"
-            or findings[0]["package"] != "symfony/http-foundation"
-            or findings[0]["installed_version"] != "v8.0.15"):
+            or result["summary"]["total"] != len(native_identities)
+            or result["summary"]["actionable"] < 1 or result["summary"]["excepted"] != 0
+            or result["summary"]["review_required"] < native_unknown
+            or any(f["class"] != "VULNERABILITY" for f in findings)
+            or {(f["rule_id"], f["package"], f["installed_version"], f["severity"]) for f in findings} != native_identities):
         raise RuntimeError("live Composer HIGH fallback fixture changed or lost ACTIONABLE; requalify, never skip")
     if ({path.name for path in evidence.iterdir()} != {"result.json"}
             or list(runner.glob("secpal-trivy-tool-*")) or list(runner.glob("secpal-trivy-cache-*"))
             or any(marker in (runner / "summary").read_bytes() for marker in (b'"Code"', b'"Match"'))):
         raise RuntimeError("Composer HIGH fallback replay retained private scanner material")
     return {"commit": commit, "gate_state": result["gate_state"], "summary": result["summary"],
-            "native_severity_source_omitted": True, "native_vendor_severity": {"ghsa": 3},
+            "native_severity_source_omitted": True, "native_vendor_severity": native_vendor_severity,
             "native_database": native_database,
             "database": result["database"], "scanner": result["scanner"],
             "policy": result["policy"], "cleanup": "PASS"}
