@@ -47,8 +47,8 @@ jobs:
     uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@cab90e4575c15a116afce584082b5830ca68102d # main
     # yamllint enable rule:line-length
     with:
-      # Phase 1: Only PATCH updates auto-merge
-      phase: "1"
+      # Phase 2: Verified PATCH and MINOR updates; Source Safety must be required
+      phase: "2"
       allowed-ecosystems: "github_actions"
       # Use squash merge for cleaner history
       merge-method: "squash"
