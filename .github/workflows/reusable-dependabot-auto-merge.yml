@@ -396,8 +396,8 @@ jobs:
             esac
           fi
           jq -e --arg run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/job/" '
-            [.[] | select(.name == "auto-merge / Dependabot Source Safety")] |
-            length == 1 and .[0].state == "SUCCESS" and (.[0].link | startswith($run))
+            [.[] | select(.name == "auto-merge / Dependabot Source Safety" and (.link | startswith($run)))] |
+            length == 1 and .[0].state == "SUCCESS"
           ' <<< "$checks"
           echo "🤖 Enabling auto-merge..."
           echo "PR: ${PR_URL}"
