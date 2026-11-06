@@ -138,11 +138,7 @@ async function verifySource(change = {}) {
         repo: { owner: "SecPal", repo: "frontend" },
         payload: { pull_request: { number: 1, head: { sha: head } } },
       },
-      {
-        setOutput: (key, value) => {
-          output[key] = value;
-        },
-      },
+      { setOutput: (key, value) => Object.assign(output, { [key]: value }) },
       createRequire(import.meta.url)
     );
     return output.verified;

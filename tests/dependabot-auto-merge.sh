@@ -435,6 +435,7 @@ assert_eligibility "github-actions-patch" "actions/one,actions/two" \
 assert_eligibility "github-actions-patch" "actions/one,actions/two" \
   "version-update:semver-patch" "3" "false" "grouped-update" \
   "npm_and_yarn"
+assert_eligibility "react-runtime" "react,react-dom" "version-update:semver-minor" "2" "true" "minor" "npm_and_yarn"
 mixed_group_json="$(
   jq -cn '[
     {

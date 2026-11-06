@@ -186,7 +186,8 @@ jobs:
                 github-actions-major:github_actions:version-update:semver-major)
                 ;;
               *)
-                return 1
+                [[ "${PACKAGE_ECOSYSTEM}" != "github_actions" &&
+                  "${DEPENDENCY_GROUP}" != github-actions-* ]] || return 1
                 ;;
             esac
 
