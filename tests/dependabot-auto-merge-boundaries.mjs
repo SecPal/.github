@@ -334,6 +334,21 @@ test("caller reconciles label, draft and target changes", () => {
 test("enrollment requires a successful protected safety check from this same run", () => {
   const step = workflow.jobs["auto-merge"].steps.find((step) => step.name === "Enable auto-merge");
   for (const [checks, expected] of [
+    [
+      [
+        {
+          name: "auto-merge / Dependabot Source Safety",
+          state: "SUCCESS",
+          link: "https://github.com/SecPal/test/actions/runs/41/job/1",
+        },
+        {
+          name: "auto-merge / Dependabot Source Safety",
+          state: "SUCCESS",
+          link: "https://github.com/SecPal/test/actions/runs/42/job/1",
+        },
+      ],
+      true,
+    ],
     [[], false],
     [
       [
