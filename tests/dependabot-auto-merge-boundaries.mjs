@@ -309,6 +309,7 @@ test("queued automation is revoked when eligibility changes, while manual reques
 
 test("caller reconciles label, draft and target changes", () => {
   const caller = yaml.load(readFileSync(".github/workflows/dependabot-auto-merge.yml", "utf8"));
+  assert.equal(caller.jobs["auto-merge"].if, undefined, "source safety must run on human PRs too");
   for (const event of ["labeled", "unlabeled", "edited", "converted_to_draft"]) {
     assert.ok(caller.on.pull_request_target.types.includes(event), `missing ${event}`);
   }

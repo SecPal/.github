@@ -186,13 +186,14 @@ grep -q '^  pull-requests: write$' "$CALLER_WORKFLOW" || {
   exit 1
 }
 
-# Gate on the PR author (github.event.pull_request.user.login) rather than the
-# event actor (github.actor). The actor is the user who triggered the latest
-# event, which for `reopened` / `ready_for_review` is often a maintainer rather
-# than Dependabot itself. Gating on the author preserves the Dependabot-only
-# scope while still enrolling maintainer-triggered events on Dependabot PRs.
-grep -q "^    if: github.event.pull_request.user.login == 'dependabot\\[bot\\]'$" "$CALLER_WORKFLOW" || {
-  echo "Dependabot caller workflow must gate on github.event.pull_request.user.login so maintainer-triggered reopened / ready_for_review events on Dependabot PRs are not skipped." >&2
+# Source safety must appear on human PRs too; eligibility stays bot-only in
+# the immutable callee. An author/actor job guard would skip required safety.
+if grep -qE "^[[:space:]]+if:.*github\.(event\.pull_request\.user\.login|actor)" "$CALLER_WORKFLOW"; then
+  echo "Caller must reconcile source safety on every PR." >&2
+  exit 1
+fi
+grep -q "^    if: github.event.pull_request.user.login == 'dependabot\\[bot\\]'$" "$REUSABLE_WORKFLOW" || {
+  echo "Reusable eligibility must remain restricted to Dependabot authors." >&2
   exit 1
 }
 
