@@ -24,9 +24,6 @@ on:
       - edited
       - converted_to_draft
 
-# Enrollment uses no Actions cache; prevent cache access across the reusable call.
-cache-mode: none
-
 permissions:
   contents: write
   pull-requests: write
@@ -34,21 +31,22 @@ permissions:
 # Ensure only one auto-merge runs at a time per PR
 concurrency:
   group: ${{ github.repository }}-dependabot-auto-merge-${{ github.event.pull_request.number }}
-  # A newer eligibility event invalidates an older enrollment attempt.
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   auto-merge:
-    # Reconcile source safety on every PR; the immutable callee restricts
-    # enrollment to authenticated Dependabot sources.
+    # Gate on the PR author rather than the event actor so maintainer-triggered
+    # `reopened` and `ready_for_review` events on Dependabot-authored PRs do not
+    # skip auto-merge enrollment. See:
+    # https://docs.github.com/en/code-security/dependabot/working-with-dependabot/automating-dependabot-with-github-actions#enable-auto-merge-on-a-pull-request
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
     # Keep auto-merge decisions on the reviewed immutable workflow revision so
     # Dependabot PRs cannot execute unreviewed policy changes from the same PR.
     # yamllint disable rule:line-length
-    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@d9d0bd62cb8b895b1b7784bf7d1a4d7c051638c5 # main
+    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@6982aa6d7e9d2b739d884f4987858efa97f5e9e5 # main
     # yamllint enable rule:line-length
     with:
       # Phase 1: Only PATCH updates auto-merge
       phase: "1"
-      allowed-ecosystems: "github_actions"
       # Use squash merge for cleaner history
       merge-method: "squash"
