@@ -15,8 +15,9 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 - Keep unknown semver metadata and unknown maintainer state on manual review;
   PR titles cannot authorize an automatic merge.
-- Verify every signed bot commit and the ecosystem-specific manifest/workflow
-  paths before enrollment, and bind enrollment to the verified head.
+- Require one signed bot commit with authenticated update classes and manifest
+  paths. Bind enrollment to its head; reconcile stale automated requests through
+  required source safety while preserving manual operator requests.
 - Allow callers to restrict dependency ecosystems; infrastructure updates remain
   manual until their classification and applicable checks are proven.
 - Preserve phase 1 for current callers pending complete required-check adoption.

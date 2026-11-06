@@ -14,6 +14,9 @@
 # For cross-repository callers, pin to a reviewed immutable commit SHA. A
 # moving branch ref or stale tag can silently preserve obsolete behavior.
 #
+# Callers must run on every PR. Before phase 2, require the source-safety check;
+# enrollment remains informational and manual operator requests stay untouched.
+#
 # Strategy:
 #   Phase 1 (default): PATCH updates auto-merge ✅, MINOR/MAJOR require review
 #   Phase 2: PATCH + MINOR auto-merge ✅, MAJOR requires review
@@ -42,7 +45,7 @@ on:
         type: string
         default: "[]"
       merge-method:
-        description: "Merge method: merge, squash, or rebase"
+        description: "Automatic merge method: squash"
         required: false
         default: "squash"
         type: string
@@ -296,45 +299,67 @@ jobs:
               ;;
           esac
 
-  # Enable auto-merge for eligible PRs
+  source-safety:
+    name: Dependabot Source Safety
+    needs: check-eligibility
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Reconcile automated enrollment against this exact head
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ELIGIBLE: >-
+            ${{ needs.check-eligibility.result == 'success' &&
+                needs.check-eligibility.outputs.should-auto-merge == 'true' && inputs.merge-method == 'squash' }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const expected = context.payload.pull_request.head.sha;
+            const read = async () => {
+              const pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
+              if (pr.head.sha !== expected || pr.base.ref !== 'main' || pr.state !== 'open' ||
+                  !Object.hasOwn(pr, 'auto_merge') || (pr.auto_merge && !pr.auto_merge.enabled_by?.login)) {
+                throw new Error('Current PR enrollment identity is unavailable or changed');
+              }
+              return pr;
+            };
+            const pr = await read();
+            if (pr.user.login === 'dependabot[bot]' &&
+                pr.auto_merge?.enabled_by.login === 'github-actions[bot]' &&
+                (process.env.ELIGIBLE !== 'true' || pr.auto_merge.merge_method !== 'squash')) {
+              await github.graphql('mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }',
+                { id: pr.node_id });
+              if ((await read()).auto_merge?.enabled_by.login === 'github-actions[bot]') {
+                throw new Error('Unsafe automated enrollment is still active');
+              }
+            }
+
+  # Enrollment is informational; branch protection owns quality admission.
   auto-merge:
     name: Enable Auto-Merge
     runs-on: ubuntu-latest
-    needs: check-eligibility
+    needs: [check-eligibility, source-safety]
     if: needs.check-eligibility.outputs.should-auto-merge == 'true'
     timeout-minutes: 20
     steps:
-      - name: Wait for CI checks
-        id: wait-for-checks
-        uses: lewagon/wait-on-check-action@369769072fe522a3a8a85c03c96af1e5242a1994 # v1.9.1
+      - name: Preserve existing operator enrollment
+        id: enrollment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          wait-interval: 10
-          # For reusable workflows, the check name format is "caller_job / callee_job"
-          # The caller job is named "auto-merge" and this job is "Enable Auto-Merge"
-          running-workflow-name: "auto-merge / Enable Auto-Merge"
-          allowed-conclusions: success,skipped,neutral
-          # Also ignore by explicit check name as backup
-          ignore-checks: >-
-            Dependabot Auto-Merge,
-            auto-merge / Enable Auto-Merge,
-            auto-merge / Check Auto-Merge Eligibility
-        continue-on-error: true
-
-      - name: Log wait result
-        run: |
-          echo "Wait for checks outcome: ${{ steps.wait-for-checks.outcome }}"
-          echo "Wait for checks conclusion: ${{ steps.wait-for-checks.conclusion }}"
-          if [[ "${{ steps.wait-for-checks.outcome }}" == "failure" ]]; then
-            echo "⚠️ Wait for checks failed or timed out"
-            echo "   This is expected if there are no other CI checks configured for this repository."
-            echo "   The workflow will continue with auto-merge since continue-on-error is set."
-          else
-            echo "✅ All CI checks passed or were skipped"
-          fi
+          script: |
+            const pr = (await github.rest.pulls.get({ ...context.repo,
+              pull_number: context.payload.pull_request.number })).data;
+            if (pr.head.sha !== context.payload.pull_request.head.sha || pr.base.ref !== 'main' ||
+                pr.state !== 'open' || pr.draft || !Object.hasOwn(pr, 'auto_merge')) throw new Error('PR changed');
+            core.setOutput('required', pr.auto_merge === null ? 'true' : 'false');
 
       - name: Enable auto-merge
+        if: steps.enrollment.outputs.required == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -352,12 +377,6 @@ jobs:
             squash)
               gh pr merge --auto --squash --match-head-commit "${EXPECTED_HEAD}" "${PR_URL}"
               ;;
-            rebase)
-              gh pr merge --auto --rebase --match-head-commit "${EXPECTED_HEAD}" "${PR_URL}"
-              ;;
-            merge)
-              gh pr merge --auto --merge --match-head-commit "${EXPECTED_HEAD}" "${PR_URL}"
-              ;;
             *)
               echo "❌ Invalid merge method: ${MERGE_METHOD}"
               exit 1
@@ -367,6 +386,7 @@ jobs:
           echo "✅ Auto-merge enabled! PR will merge when all checks pass."
 
       - name: Add comment
+        if: steps.enrollment.outputs.required == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |

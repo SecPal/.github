@@ -82,6 +82,18 @@ for (const [name, overrides] of [
 const sourceScript = workflow.jobs["check-eligibility"].steps.find((step) => step.id === "source")
   ?.with.script;
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+function botCommit(
+  message = "Bumps fixture from 1.2.3 to 1.2.4.\n\n---\nupdated-dependencies:\n- dependency-name: fixture\n  update-type: version-update:semver-patch\n...\n",
+  login = "dependabot[bot]"
+) {
+  return {
+    sha: "a".repeat(40),
+    author: { login },
+    committer: { login: "web-flow" },
+    commit: { verification: { verified: true }, message },
+    parents: [{}],
+  };
+}
 async function verifySource(change = {}) {
   assert.equal(typeof sourceScript, "string");
   const head = "a".repeat(40);
@@ -96,19 +108,7 @@ async function verifySource(change = {}) {
     changed_files: 2,
     ...change.pr,
   };
-  const commits = change.commits || [
-    {
-      sha: head,
-      author: { login: "dependabot[bot]" },
-      committer: { login: "web-flow" },
-      commit: {
-        verification: { verified: true },
-        message:
-          "Bumps fixture from 1.2.3 to 1.2.4.\n\n---\nupdated-dependencies:\n- dependency-name: fixture\n  update-type: version-update:semver-patch\n...\n",
-      },
-      parents: [{}],
-    },
-  ];
+  const commits = change.commits || [botCommit()];
   const files = change.files || [{ filename: "package.json" }, { filename: "package-lock.json" }];
   const output = {};
   let reads = 0;
@@ -154,21 +154,7 @@ test("authentic signed bot manifest update passes the source boundary", async ()
   assert.equal(await verifySource(), "true");
 });
 for (const [name, change] of [
-  [
-    "maintainer commit appended",
-    {
-      pr: { commits: 2 },
-      commits: [
-        {
-          sha: "a".repeat(40),
-          author: { login: "aroviqen" },
-          committer: { login: "web-flow" },
-          commit: { verification: { verified: true } },
-          parents: [{}],
-        },
-      ],
-    },
-  ],
+  ["maintainer commit", { commits: [botCommit(undefined, "aroviqen")] }],
   [
     "foreign head repository",
     { pr: { head: { sha: "a".repeat(40), repo: { full_name: "attacker/frontend" } } } },
@@ -213,34 +199,21 @@ test("deployment allows verified Actions metadata but excludes infrastructure ec
 test("auto-merge enrollment is bound to the verified exact head", () => {
   const step = workflow.jobs["auto-merge"].steps.find((step) => step.name === "Enable auto-merge");
   assert.match(step.env.EXPECTED_HEAD, /pull_request.head.sha/);
+  assert.equal(step.if, "steps.enrollment.outputs.required == 'true'");
   for (const command of step.run.split("\n").filter((line) => line.includes("gh pr merge"))) {
     assert.match(command, /--match-head-commit "\$\{EXPECTED_HEAD\}"/);
   }
 });
 
 test("multiple bot commits cannot reuse the first commit classification", async () => {
-  const commit = {
-    sha: "a".repeat(40),
-    author: { login: "dependabot[bot]" },
-    committer: { login: "web-flow" },
-    commit: { verification: { verified: true } },
-    parents: [{}],
-  };
+  const commit = botCommit();
   assert.equal(await verifySource({ pr: { commits: 2 }, commits: [commit, commit] }), "false");
 });
 
 test("calculated metadata from a mutable title cannot authenticate a SHA update", async () => {
-  const commit = {
-    sha: "a".repeat(40),
-    author: { login: "dependabot[bot]" },
-    committer: { login: "web-flow" },
-    commit: {
-      verification: { verified: true },
-      message:
-        "Bumps fixture from abcdef to bcdefa.\n\n---\nupdated-dependencies:\n- dependency-name: fixture\n  dependency-type: direct:production\n...\n",
-    },
-    parents: [{}],
-  };
+  const commit = botCommit(
+    "Bumps fixture from abcdef to bcdefa.\n\n---\nupdated-dependencies:\n- dependency-name: fixture\n  dependency-type: direct:production\n...\n"
+  );
   assert.equal(await verifySource({ commits: [commit] }), "false");
 });
 
@@ -269,15 +242,7 @@ test("a signed minor class passes the same source boundary", async () => {
         VERIFIED_DEPENDENCIES:
           '[{"dependencyName":"fixture","updateType":"version-update:semver-minor"}]',
       },
-      commits: [
-        {
-          sha: "a".repeat(40),
-          author: { login: "dependabot[bot]" },
-          committer: { login: "web-flow" },
-          commit: { message, verification: { verified: true } },
-          parents: [{}],
-        },
-      ],
+      commits: [botCommit(message)],
     }),
     "true"
   );
@@ -289,24 +254,59 @@ test("deployment's workflow allowlist keeps cloud execution paths manual", async
     PACKAGE_ECOSYSTEM: "github_actions",
     WORKFLOW_PATHS: '[".github/workflows/quality.yml",".github/workflows/local-integration.yml"]',
   };
-  assert.equal(
-    await verifySource({
-      env,
-      files: [
-        { filename: ".github/workflows/quality.yml" },
-        { filename: ".github/workflows/local-integration.yml" },
-      ],
-    }),
-    "true"
-  );
-  assert.equal(
-    await verifySource({
-      env,
-      files: [
-        { filename: ".github/workflows/quality.yml" },
-        { filename: ".github/workflows/cloud-janitor.yml" },
-      ],
-    }),
-    "false"
-  );
+  for (const [path, expected] of [
+    ["local-integration", "true"],
+    ["cloud-janitor", "false"],
+  ]) {
+    const files = [".github/workflows/quality.yml", `.github/workflows/${path}.yml`].map(
+      (filename) => ({ filename })
+    );
+    assert.equal(await verifySource({ env, files }), expected);
+  }
+});
+
+test("queued automation is revoked when eligibility changes, while manual requests survive", async () => {
+  const safety = workflow.jobs["source-safety"];
+  assert.ok(safety, "source safety must run before enrollment on every PR head");
+  assert.equal(safety.if, "${{ always() }}");
+  assert.ok(workflow.jobs["auto-merge"].needs.includes("source-safety"));
+  const script = safety.steps[0].with.script;
+  const head = "a".repeat(40);
+  for (const [eligible, owner, remains, expected] of [
+    ["false", "github-actions[bot]", null, true],
+    ["false", "aroviqen", "aroviqen", true],
+    ["true", "github-actions[bot]", "github-actions[bot]", true],
+    ["false", "github-actions[bot]", "github-actions[bot]", false],
+  ]) {
+    let mutations = 0;
+    const request = (login) => (login ? { enabled_by: { login }, merge_method: "squash" } : null);
+    const pr = {
+      head: { sha: head },
+      base: { ref: "main" },
+      state: "open",
+      node_id: "PR_1",
+      user: { login: "dependabot[bot]" },
+      auto_merge: request(owner),
+    };
+    const github = {
+      rest: {
+        pulls: {
+          get: async () => ({ data: mutations ? { ...pr, auto_merge: request(remains) } : pr }),
+        },
+      },
+      graphql: async () => {
+        mutations++;
+      },
+    };
+    process.env.ELIGIBLE = eligible;
+    const run = () =>
+      new AsyncFunction("github", "context", script)(github, {
+        repo: { owner: "SecPal", repo: "frontend" },
+        payload: { pull_request: { number: 1, head: { sha: head } } },
+      });
+    if (expected) await run();
+    else await assert.rejects(run());
+    assert.equal(mutations, eligible !== "true" && owner === "github-actions[bot]" ? 1 : 0);
+  }
+  delete process.env.ELIGIBLE;
 });
