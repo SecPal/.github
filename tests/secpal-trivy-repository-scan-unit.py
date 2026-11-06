@@ -481,6 +481,27 @@ class RepositoryScanContractTests(unittest.TestCase):
         self.assertEqual(failed["gate_state"], "UNKNOWN_STALE")
         self.assertEqual(failed["operation"]["failure_code"], "DIAGNOSTIC_ADMISSION_FAILURE")
 
+    def test_composer_matching_redhat_enrichment_preserves_high_and_unknown(self) -> None:
+        native = json.loads((FIXTURES / "composer-0.74.0-native.json").read_text())
+        native["Results"][0]["Vulnerabilities"][0]["VendorSeverity"]["redhat"] = 3
+        unknown = json.loads((FIXTURES / "composer-unknown-0.74.0-native.json").read_text())
+        native["Results"][0]["Vulnerabilities"].extend(unknown["Results"][0]["Vulnerabilities"])
+        diagnostic = "2026-10-04T12:00:00Z\tWARN\t" + self.module.SEVERITY_FALLBACK_DIAGNOSTIC + "\n"
+        process, result = run_evaluate_fixture(native, diagnostics=diagnostic)
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(result["gate_state"], "ACTIONABLE")
+        self.assertEqual(result["summary"]["actionable"], 1)
+        self.assertGreaterEqual(result["summary"]["review_required"], 1)
+        self.assertTrue(any(f["severity"] == "UNKNOWN" for f in result["findings"]))
+        for value in (0, 2, 4, True, "3", None):
+            with self.subTest(redhat=value):
+                changed = copy.deepcopy(native)
+                changed["Results"][0]["Vulnerabilities"][0]["VendorSeverity"]["redhat"] = value
+                process, failed = run_evaluate_fixture(changed, diagnostics=diagnostic)
+                self.assertNotEqual(process.returncode, 0)
+                self.assertEqual(failed["gate_state"], "UNKNOWN_STALE")
+                self.assertEqual(failed["operation"]["failure_code"], "DIAGNOSTIC_ADMISSION_FAILURE")
+
     def test_composer_unknown_advisory_requires_review_not_clean(self) -> None:
         native = json.loads((FIXTURES / "composer-unknown-0.74.0-native.json").read_text())
         advisory = "2026-10-04T12:00:00Z\tWARN\t" + self.module.SEVERITY_FALLBACK_DIAGNOSTIC + "\n"

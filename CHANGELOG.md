@@ -22,6 +22,16 @@ Log of notable changes to SecPal organization defaults (newest first).
   manual until their classification and applicable checks are proven.
 - Preserve phase 1 for current callers pending complete required-check adoption.
 
+## 2026-11-06 - Requalify Enriched Composer Advisory Provenance
+
+**Fixed:**
+
+- Admit the observed matching Red Hat/GHSA severity enrichment only when both
+  agree; missing, conflicting or unqualified provenance still fails closed.
+- Keep every live Composer canary advisory in normalized evidence, including
+  newly published UNKNOWN findings that require review. HIGH remains ACTIONABLE.
+- Preserve scanner identities, database freshness, thresholds and zero exceptions.
+
 ## 2026-11-04 - Preserve Collision-Selected Preview Names
 
 **Fixed:**

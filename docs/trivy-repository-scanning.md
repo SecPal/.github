@@ -291,8 +291,13 @@ fallback returns the database severity with an empty source and emits the full
 versioned documentation advisory through `sync.OnceFunc`. The known-severity Composer
 CVE representation has no severity for its advisory source, no usable NVD
 severity, and a GHSA `VendorSeverity` entry matching the emitted fallback severity.
-Only GHSA and an optional NVD UNKNOWN entry qualify this fallback; additional
-vendor sources require independent qualification and remain rejected.
+GHSA and an optional NVD UNKNOWN entry qualify this fallback. The independently
+replayed Red Hat enrichment also qualifies when its integer severity exactly
+matches GHSA. It never selects or lowers the emitted severity. Missing GHSA,
+conflicting Red Hat values, malformed fields and other vendor sources remain
+rejected. The live replay requires the observed GHSA HIGH plus Red Hat HIGH
+combination and preserves every additional native advisory, including UNKNOWN
+findings that still require review.
 An advisory-source entry, even UNKNOWN, would return before that warning; an
 NVD UNKNOWN entry can fall through. GHSA IDs and package-specific overrides are
 outside this bounded qualification. The native JSON omits empty
