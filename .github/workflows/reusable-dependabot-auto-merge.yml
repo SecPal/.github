@@ -4,7 +4,13 @@
 # Reusable Dependabot Auto-Merge Workflow
 # Automatically merges Dependabot PRs based on configurable phase/policy
 #
-# Usage in other repositories:
+# Usage in other repositories (explicit caller ceiling; reads cannot be added
+# by a reusable workflow when the caller grants none):
+#   permissions:
+#     contents: write
+#     pull-requests: write
+#     checks: read
+#     statuses: read
 #   jobs:
 #     auto-merge:
 #       uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@<trusted-commit-sha>
