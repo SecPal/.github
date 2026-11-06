@@ -264,6 +264,7 @@ def replay_composer_severity_fallback(root: Path, action_path: Path, environment
     if (len(high) != 1 or high[0].get("PkgName") != "symfony/http-foundation"
             or high[0].get("InstalledVersion") != "v8.0.15" or high[0].get("Severity") != "HIGH"
             or "SeveritySource" in high[0] or high[0].get("VendorSeverity", {}).get("ghsa") != 3
+            or high[0].get("VendorSeverity", {}).get("redhat") != 3
             or any(item.get("Secrets") for item in native.get("Results", []))
             or diagnostics.count("\tWARN\t" + module.SEVERITY_FALLBACK_DIAGNOSTIC) != 1):
         raise RuntimeError("live Composer HIGH fallback representation changed; requalify, never skip")
