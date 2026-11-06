@@ -14,7 +14,8 @@
 # For cross-repository callers, pin to a reviewed immutable commit SHA. A
 # moving branch ref or stale tag can silently preserve obsolete behavior.
 #
-# Callers must run on every PR. Before phase 2, require the source-safety check;
+# Callers must reconcile all PR head, label, draft and target changes. Require
+# source-safety before any enrollment (including phase 1);
 # enrollment remains informational and manual operator requests stay untouched.
 #
 # Strategy:
@@ -367,6 +368,22 @@ jobs:
           MERGE_METHOD: ${{ inputs.merge-method }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
+          set -euo pipefail
+          # A failed revocation must block merging. Never enroll before GitHub
+          # actually requires this run's successful safety check.
+          if checks=$(gh pr checks "$PR_URL" --required --json name,state,link); then
+            :
+          else
+            status=$?
+            case "$status" in
+              1|8) ;; # Other protected checks may still be failing or pending.
+              *) exit "$status" ;;
+            esac
+          fi
+          jq -e --arg run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/job/" '
+            [.[] | select(.name == "auto-merge / Dependabot Source Safety")] |
+            length == 1 and .[0].state == "SUCCESS" and (.[0].link | startswith($run))
+          ' <<< "$checks"
           echo "🤖 Enabling auto-merge..."
           echo "PR: ${PR_URL}"
           echo "Update type: ${{ needs.check-eligibility.outputs.update-type }}"

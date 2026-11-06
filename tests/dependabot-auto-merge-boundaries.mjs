@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 SecPal Contributors
 // SPDX-License-Identifier: MIT
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -305,4 +305,76 @@ test("queued automation is revoked when eligibility changes, while manual reques
     assert.equal(mutations, eligible !== "true" && owner === "github-actions[bot]" ? 1 : 0);
   }
   delete process.env.ELIGIBLE;
+});
+
+test("caller reconciles label, draft and target changes", () => {
+  const caller = yaml.load(readFileSync(".github/workflows/dependabot-auto-merge.yml", "utf8"));
+  for (const event of ["labeled", "unlabeled", "edited", "converted_to_draft"]) {
+    assert.ok(caller.on.pull_request_target.types.includes(event), `missing ${event}`);
+  }
+});
+test("enrollment requires a successful protected safety check from this same run", () => {
+  const step = workflow.jobs["auto-merge"].steps.find((step) => step.name === "Enable auto-merge");
+  for (const [checks, expected] of [
+    [[], false],
+    [
+      [
+        {
+          name: "auto-merge / Dependabot Source Safety",
+          state: "FAILURE",
+          link: "https://github.com/SecPal/test/actions/runs/42/job/1",
+        },
+      ],
+      false,
+    ],
+    [
+      [
+        {
+          name: "auto-merge / Dependabot Source Safety",
+          state: "SUCCESS",
+          link: "https://github.com/SecPal/test/actions/runs/41/job/1",
+        },
+      ],
+      false,
+    ],
+    [
+      [
+        {
+          name: "auto-merge / Dependabot Source Safety",
+          state: "SUCCESS",
+          link: "https://github.com/SecPal/test/actions/runs/42/job/1",
+        },
+      ],
+      true,
+    ],
+  ]) {
+    const dir = mkdtempSync(join(tmpdir(), "dependabot-enrollment-"));
+    try {
+      const record = join(dir, "merged");
+      writeFileSync(
+        join(dir, "gh"),
+        '#!/bin/sh\nif [ "$2" = checks ]; then printf "%s" "$CHECKS"; exit 8; fi\nprintf "merge" > "$RECORD"\n',
+        { mode: 0o700 }
+      );
+      const result = spawnSync("bash", ["-c", step.run.replace(/\$\{\{.*?\}\}/g, "fixture")], {
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH}`,
+          CHECKS: JSON.stringify(checks),
+          RECORD: record,
+          GITHUB_SERVER_URL: "https://github.com",
+          GITHUB_REPOSITORY: "SecPal/test",
+          GITHUB_RUN_ID: "42",
+          PR_URL: "https://github.com/SecPal/test/pull/1",
+          MERGE_METHOD: "squash",
+          EXPECTED_HEAD: "a".repeat(40),
+        },
+        encoding: "utf8",
+      });
+      assert.equal(result.status === 0, expected, result.stdout + result.stderr);
+      assert.equal(readFileSync(record, { encoding: "utf8", flag: "a+" }) === "merge", expected);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
 });

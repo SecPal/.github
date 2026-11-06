@@ -19,6 +19,10 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+      - labeled
+      - unlabeled
+      - edited
+      - converted_to_draft
 
 permissions:
   contents: write
