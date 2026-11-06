@@ -51,7 +51,8 @@ EXPECTED_APP_BINDINGS_JSON='{
     "Repository Security / Repository Security": 15368,
     "Dependabot Manifest Guard / Manifest Coverage": 15368,
     "Dependabot Manifest Guard / Cadence Policy": 15368,
-    "Performance Audit": 15368
+    "Performance Audit": 15368,
+    "auto-merge / Dependabot Source Safety": 15368
   },
   "secpal.app": {
     "auto-merge / Dependabot Source Safety": 15368
@@ -246,7 +247,8 @@ EXPECTED_CONTEXTS_JSON='{
     "Repository Security / Repository Security",
     "Dependabot Manifest Guard / Manifest Coverage",
     "Dependabot Manifest Guard / Cadence Policy",
-    "Performance Audit"
+    "Performance Audit",
+    "auto-merge / Dependabot Source Safety"
   ],
   "secpal.app": [
     "Check REUSE Compliance / Check REUSE Compliance",
@@ -876,7 +878,7 @@ if grep -Fq 'repos/SecPal/api/' "$status_failure_log"; then
 fi
 
 # Activated safety requirements must survive the existing owner’s next sync.
-for safety_repo in .github contracts secpal.app; do
+for safety_repo in .github contracts frontend secpal.app; do
   safety_payload="$(bash "$SYNC_SCRIPT" --repo "$safety_repo" --print-payload)"
   jq -e '.checks | any(.context == "auto-merge / Dependabot Source Safety" and .app_id == 15368)' \
     <<<"$safety_payload" >/dev/null || {
@@ -885,7 +887,7 @@ for safety_repo in .github contracts secpal.app; do
   }
 done
 
-for safety_repo in .github contracts secpal.app; do
+for safety_repo in .github contracts frontend secpal.app; do
   jq '.checks |= map(if .context == "auto-merge / Dependabot Source Safety" then .app_id = 777 else . end)' \
     "$state_dir/$safety_repo.json" >"$TMP_DIR/wrong-safety-producer.json"
   assert_sync_rejects_state "wrong-safety-$safety_repo" "$TMP_DIR/wrong-safety-producer.json" "$safety_repo"
