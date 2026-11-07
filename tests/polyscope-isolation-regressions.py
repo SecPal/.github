@@ -11,7 +11,7 @@ def load(name,file):
  m=importlib.util.module_from_spec(s);sys.modules[name]=m;s.loader.exec_module(m);return m
 iso=load('iso_reg','polyscope-isolation.py')
 class ReconcileTests(unittest.TestCase):
- def test_quarantine_precedes_all_bootstrap_and_preserves_runtime_ids(self):
+ def test_background_preserves_both_quarantined_and_ordinary_worktrees(self):
   m=load('rollout_reg','polyscope-rollout.py')
   with tempfile.TemporaryDirectory() as tmp:
    clone=Path(tmp)/'clones';target=clone/'api'/'new';target.mkdir(parents=True)
@@ -30,13 +30,12 @@ class ReconcileTests(unittest.TestCase):
    m.reconcile_api_runtime_units=Mock()
    m.deny_preview_nginx_access=Mock()
    m.provision_worktrees({'api':{'id':'api'}},{'api':{'path':Path(tmp),'_native_setup_commands':['false']}},clone)
-   self.assertEqual(m.is_provisionable_worktree.call_count,1)
-   self.assertEqual(m.is_provisionable_worktree.call_args.args[1],ordinary)
+   m.is_provisionable_worktree.assert_not_called()
    m.cleanup_removed_api_preview_databases.assert_not_called()
-   m.deny_preview_nginx_access.assert_called_once_with(clone,target)
+   m.deny_preview_nginx_access.assert_not_called()
    m.ensure_api_runtime_owner.assert_not_called()
    m.run_setup_commands.assert_not_called()
-   self.assertIn(m.build_api_runtime_id(target),m.reconcile_api_runtime_units.call_args.kwargs['preserve_runtime_ids'])
+   m.reconcile_api_runtime_units.assert_not_called()
  def test_wrapping_does_not_change_existing_setup_hash_inputs(self):
   m=load('rollout_hash','polyscope-rollout.py')
   with tempfile.TemporaryDirectory() as tmp:
@@ -48,7 +47,7 @@ class ReconcileTests(unittest.TestCase):
    self.assertEqual(config['scripts']['setup'],commands)
    self.assertNotEqual(wrapped['scripts']['setup'],commands)
    self.assertEqual(before,m.build_setup_hash(path,commands,linked_context={}))
- def test_sync_cannot_unwrap_hooks_when_default_policy_is_armed(self):
+ def test_sync_cannot_restore_service_hooks_when_default_policy_is_armed(self):
   m=load('rollout_default_authority','polyscope-rollout.py')
   specs={'api':{'path':Path('/fixture/api'),'local_config':{'scripts':{'setup':['echo never-unwrapped']}}}}
   m._isolation_context=({},[],False)
@@ -58,7 +57,7 @@ class ReconcileTests(unittest.TestCase):
   m.validate_repo_local_configs=lambda *a:None
   class Captured(Exception):pass
   captured=[]
-  def write(values):
+  def write(values, **kwargs):
    captured.append({'api':{'local_config':m.render_local_config(values['api'])}})
    raise Captured()
   m.require_repo_instruction_files=lambda spec:None
@@ -68,10 +67,7 @@ class ReconcileTests(unittest.TestCase):
   args=SimpleNamespace(workspace_root=Path('/fixture'),skip_local_configs=False)
   with patch.dict(os.environ,{},clear=True):
    with self.assertRaises(Captured):m.run_rollout(args)
-  setup=captured[0]['api']['local_config']['scripts']['setup']
-  self.assertEqual(len(setup),1)
-  self.assertIn('--command-base64',setup[0])
-  self.assertIn('/etc/secpal/workspace-isolation.json',setup[0])
+  self.assertEqual(captured[0]['api']['local_config']['scripts'], {'setup':'','run':[]})
  def test_snapshot_late_path_fails_closed_without_holding_create_lock(self):
   m=load('rollout_late','polyscope-rollout.py')
   row=dict(id='old',repo_id='api',path='/fixture/api/old',status='active',issue_number=1383,linked_worktree_ids=[],linked_from_worktree_id=None,is_repo_workspace=False)
@@ -129,7 +125,7 @@ class NativeExecutableTests(unittest.TestCase):
     self.assertEqual(json.loads(dispatch.call_args.kwargs['input'])['message']['model'],'gpt-5.3-codex')
 
 class RenderBoundaryTests(unittest.TestCase):
- def test_final_repo_and_container_actions_are_guarded_after_enrichment(self):
+ def test_final_repo_and_container_actions_are_empty_after_enrichment(self):
   m=load('final_render','polyscope-rollout.py')
   m._isolation_context=({},[],False)
   m.require_repo_instruction_files=lambda spec:None
@@ -140,10 +136,7 @@ class RenderBoundaryTests(unittest.TestCase):
    repo=m.render_local_config(spec)
    tree=json.loads(m.render_worktree_local_config(spec,Path('/fixture/clones/api/new'),container_preview=True))
   for config in [repo,tree]:
-   for action in config['scripts']['run']:
-    self.assertIn('--command-base64',action['command'])
-  pest=next(a for a in tree['scripts']['run'] if a['label']=='Pest')
-  self.assertEqual(base64.b64decode(shlex.split(pest['command'])[-1]).decode(),'polyscope-api-test')
+   self.assertEqual(config['scripts'], {'setup':'','run':[]})
   self.assertEqual(spec['local_config']['scripts']['setup'],['echo setup'])
  def test_refresh_only_withdraws_protected_acl_before_rendering(self):
   from types import SimpleNamespace

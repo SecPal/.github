@@ -3,10 +3,89 @@
 
 # Isolated Polyscope development
 
-This source change separates native workspace registration from setup and runtime
-activation for the already authorized `SecPal/api#2639` task. Polyscope remains the
-only workspace registry; `secpal-polyscope-workspace.py` remains the coordinator.
-The reservation is a single immutable before-ID fence, not another registry.
+Polyscope remains the only workspace registry;
+`secpal-polyscope-workspace.py` remains the coordinator. Repository registration,
+links, prompts and canonical configuration are service responsibilities. Executing
+mutable workspace code is not: dependency installation, builds and tests belong
+to the unprivileged development identity and its isolated toolchain.
+
+## Service execution is retired
+
+Previously, the periodic/path provisioner hashed candidate package manifests and
+reran setup when the hash changed or the candidate-owned marker disappeared.
+Deployment used `npm ci`, including lifecycle scripts; other repositories used
+Composer, application bootstrap and build commands. The same process also created
+API workers and readiness state. A writable workspace could therefore schedule
+code under the `secpal` service identity, bypassing direct sudo restrictions.
+
+The existing `--provision-worktrees` entry point is retained for installed callers,
+but its provisioning callback no longer reads, writes or executes candidate
+worktrees. It does not hash manifests, install hooks, copy environments, bootstrap
+databases, publish runtime admission or start workers. Its empty provision results
+report no execution. Independent route reconciliation can still read native
+registrations and existing preview metadata; it does not perform setup.
+Registration, links, prompts, canonical instruction/evidence validation and
+independent management functions remain available.
+
+Every managed canonical `polyscope.local.json`, including a registration-only
+repository, now contains `scripts.setup: ""`, `scripts.run: []` and
+`copyGitignored: false`. The entire scripts object is replaced after enrichment,
+so inherited archive hooks and generated runtime actions cannot survive. The empty
+setup string is deliberate: Polyscope 0.29.0 tests its truthiness before spawning;
+an empty array would still start an empty shell. Ignored canonical files such as
+local credentials and dependency trees are no longer copied into new clones.
+
+The qualified 0.29.0 native reader selects the canonical repository's local/config
+file before trying the workspace's files; it does not merge missing script keys
+from the candidate. Publishing a complete canonical override therefore also
+removes native setup and autostart execution, including linked repositories.
+Publication is atomic, preventing a partially written canonical JSON file from
+causing native fallback to candidate configuration. Unchanged output is not
+rewritten, so the configuration path watcher cannot requeue itself indefinitely.
+The canonical directories must
+remain outside every development grant. Even existing `--skip-local-configs`
+callers publish this safe override; that flag only skips optional auxiliary files.
+No candidate Git metadata or symlink is followed for publication.
+
+The old `registration_only` switch alone was insufficient: it skipped publication
+and could leave native execution hooks in place. It is still used to avoid
+inventing instructions/prompts for incomplete repositories, but they now receive
+an execution-free canonical override too. Do not restore automatic setup merely
+to recover a preview or make a test pass. Native agent/terminal execution as
+`secpal` is not an alternative to the unprivileged development environment.
+
+## Separate installation of this correction
+
+A source merge does not install the change or authorize a new mount. After regular
+protected acceptance, an operator must perform this bounded cutover separately:
+
+1. Close native creation and script-start entrances and pause the existing
+   provision/refresh triggers. Drain already queued/running service-side setup;
+   updating Python source does not stop a process that loaded the old version.
+2. Use the existing verified source/install path for the accepted immutable
+   revision. Run the existing rollout once so **all canonical repository** local
+   configurations are atomically replaced with execution-free overrides before
+   reopening native creation. No workspace database edits or new access catalog
+   are needed; candidate branches, files and registrations are not rewritten.
+3. Retire pre-existing managed worker/run processes and units that consume a tree
+   intended for unprivileged development, using their existing scoped stop/disable
+   procedures. Existing previews are separate consumers too: do not expose a
+   writable tree to a service-owned interpreter or resume an old autostart unit.
+   This change stops future provisioning; it cannot revoke an already running
+   consumer. Keep the API2639 quarantine, receipt, mount and runner unchanged.
+4. Verify canonical native configuration and an isolated create/read-back without
+   setup effects, then resume only safe metadata/management reconciliation. Use
+   UID1001's existing rootless environment for installs/builds/tests. A future
+   Deployment mount needs its own authorized positive/negative acceptance.
+
+Rollback must not restore the unsafe service-side executor while an unprivileged
+write grant exists. Retain execution-free canonical configuration and the existing
+API guard. If cutover is incomplete, keep script starts closed and leave new
+workspace access withdrawn. This source delivery performs none of these host steps.
+
+The remaining sections document the retained API2639 isolation contract and its
+historical qualification. Their setup wrapping and bootstrap helpers are not an
+authorization to resume the retired automatic provisioner.
 
 ## Source and operating boundaries
 

@@ -9,6 +9,18 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-07 - Remove Service-Side Workspace Execution
+
+**Security:**
+
+- Stop manifest changes and candidate-owned markers from scheduling dependency
+  installation, application bootstrap, hooks or workers as the Polyscope user.
+- Publish execution-free canonical native configuration atomically, including
+  registration-only repositories and existing skip-local-configs callers.
+- Preserve native registration, links, prompts, validation and the API2639
+  isolation boundary. Development commands require the unprivileged toolchain;
+  live installation and retirement of already running consumers remain separate.
+
 ## 2026-11-06 - Enable Protected Patch And Minor Auto-Merge
 
 - Enable phase 2 for organization configuration only after the actual Source

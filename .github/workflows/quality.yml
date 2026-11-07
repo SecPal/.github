@@ -150,6 +150,7 @@ jobs:
 
       - name: Prove active enforcement paths
         run: |
+          python3 tests/polyscope-registration-only.py
           python3 tests/secpal-evidence-architecture.py
           python3 tests/polyscope-evidence-architecture.py
           python3 tests/secpal-polyscope-workspace.py

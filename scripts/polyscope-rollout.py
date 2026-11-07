@@ -3513,6 +3513,11 @@ def guard_rendered_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def render_local_config(spec: dict[str, Any], *, guard: bool = True) -> dict[str, Any]:
+    if not is_workspace_automation_enabled(spec):
+        # A missing canonical file makes native Polyscope fall back to mutable
+        # workspace configuration. Registration-only repositories need this
+        # execution-free canonical file too, without adopting runtime policy.
+        return {"copyGitignored": False, "scripts": {"setup": "", "run": []}}
     require_repo_instruction_files(spec)
     config = copy.deepcopy(spec["local_config"])
     config = enrich_local_config(spec["path"].name, config)
@@ -3522,6 +3527,12 @@ def render_local_config(spec: dict[str, Any], *, guard: bool = True) -> dict[str
     )
     for task in config.get("tasks", []):
         task["prompt"] = collapse_spaces(f"{preamble} {task['prompt']}")
+    # Native Polyscope runs these actions under its service identity. A
+    # workspace is mutable development input, never service-side executable
+    # authority. Clear the actions after enrichment so neither inherited setup
+    # nor generated run/autostart actions can restore that authority.
+    config["copyGitignored"] = False
+    config["scripts"] = {"setup": "", "run": []}
     return guard_rendered_config(config) if guard else config
 
 
@@ -3684,7 +3695,9 @@ def validate_repo_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
         repo_path = pathlib.Path(spec["path"])
         if not is_workspace_automation_enabled(spec):
             continue
-        config = render_local_config(spec, guard=False)
+        # Keep validating the retained explicit-tool definitions even though
+        # native configuration no longer exposes them as service-side actions.
+        config = enrich_local_config(repo_path.name, copy.deepcopy(spec["local_config"]))
         package_scripts = load_package_scripts(repo_path)
         composer_scripts = load_composer_scripts(repo_path)
 
@@ -3902,22 +3915,19 @@ def ensure_exclude(repo_path: pathlib.Path, entries: set[str] | None = None) -> 
                 handle.write(f"{entry}\n")
 
 
-def write_local_configs(repo_specs: dict[str, dict[str, Any]]) -> None:
+def write_local_configs(repo_specs: dict[str, dict[str, Any]], *, auxiliary: bool = True) -> None:
     for repo_name, spec in repo_specs.items():
         repo_path = pathlib.Path(spec["path"])
-        if not is_workspace_automation_enabled(spec):
-            continue
-        config_path = repo_path / POLYSCOPE_LOCAL_CONFIG_NAME
-        config_path.write_text(render_pretty_json(render_local_config(spec)) + "\n")
-        sync_repo_auxiliary_files(repo_name, repo_path)
-        ensure_exclude(repo_path)
+        sync_worktree_local_config(repo_path, render_pretty_json(render_local_config(spec)) + "\n")
+        if auxiliary and is_workspace_automation_enabled(spec):
+            sync_repo_auxiliary_files(repo_name, repo_path)
+            ensure_exclude(repo_path)
 
 
 def render_local_configs(repo_specs: dict[str, dict[str, Any]]) -> dict[str, str]:
     return {
         repo_name: render_pretty_json(render_local_config(spec)) + "\n"
         for repo_name, spec in repo_specs.items()
-        if is_workspace_automation_enabled(spec)
     }
 
 
@@ -4062,11 +4072,22 @@ def container_preview_admission():
 def sync_worktree_local_config(
     worktree_path: pathlib.Path, config_text: str, *, container_preview: bool = False
 ) -> None:
-    (worktree_path / POLYSCOPE_LOCAL_CONFIG_NAME).write_text(config_text)
-    excluded = {POLYSCOPE_LOCAL_CONFIG_NAME, PROVISION_MARKER_FILENAME}
-    if container_preview:
-        excluded.add(container_preview_admission().API_PREVIEW_ADMISSION_FILENAME)
-    ensure_exclude(worktree_path, excluded)
+    # The candidate may replace its config or Git metadata with symlinks.
+    # Replace only this root-level directory entry; never follow it or write
+    # .git/info/exclude as the service user.
+    target = worktree_path / POLYSCOPE_LOCAL_CONFIG_NAME
+    # Canonical config changes are watched by the installed path unit. Avoid
+    # re-queuing that unit indefinitely when its safe output is unchanged.
+    if not target.is_symlink() and target.is_file() and target.read_text() == config_text:
+        return
+    fd, temporary = tempfile.mkstemp(prefix=".polyscope-config-", dir=worktree_path)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(config_text)
+            os.fchmod(handle.fileno(), 0o644)
+        os.replace(temporary, target)
+    finally:
+        pathlib.Path(temporary).unlink(missing_ok=True)
 
 
 def workspace_alias_registry_path(repo_clone_root: pathlib.Path) -> pathlib.Path:
@@ -5189,340 +5210,13 @@ def provision_worktrees(
     validated_instruction_roots: set[tuple[pathlib.Path, str]] | None = None,
     container_preview: bool = False,
 ) -> tuple[list[str], list[str], list[dict[str, str]]]:
-    validation_cache = validated_instruction_roots if validated_instruction_roots is not None else set()
-    resolved_db_path = db_path or default_polyscope_db_path()
-    failed_provision_worktrees: list[dict[str, str]] = []
-    manage_api_runtimes = should_manage_api_runtime_units(clone_root, resolved_db_path)
-    desired_api_runtime_units: dict[str, str] = {}
+    """Retain the installed trigger without consuming or executing worktrees.
 
-    registered_worktrees = load_registered_worktree_paths(
-        resolved_db_path,
-        repo_state,
-        clone_root,
-    )
-    blocked_paths = {str(path) for paths in registered_worktrees.values() for path in paths
-                     if isolation_path_blocked(path)}
-    isolation_active = isolation_state() is not None
-    admission = container_preview_admission() if container_preview else None
-
-    def withdraw_if_api(repo_name: str, worktree: pathlib.Path) -> None:
-        if admission is not None and repo_name == "api":
-            admission.withdraw_api_preview(worktree)
-
-    # Remove only our managed token from inactive physical API directories.
-    if admission is not None and "api" in repo_state:
-        api_root = clone_root / str(repo_state["api"]["id"])
-        active_api_paths = set(registered_worktrees.get("api", []))
-        if api_root.is_dir() and not api_root.is_symlink():
-            for candidate in api_root.iterdir():
-                if candidate.is_dir() and not candidate.is_symlink() and candidate not in active_api_paths:
-                    admission.withdraw_api_preview(candidate)
-
-    unreconciled_api_runtime_ids = (
-        {
-            build_api_runtime_id(worktree_path)
-            for worktree_path in registered_worktrees["api"]
-        }
-        if manage_api_runtimes
-        else set()
-    )
-
-    def prune_api_runtime_units_after_blocking_failure() -> None:
-        if not manage_api_runtimes:
-            return
-        try:
-            reconcile_api_runtime_units(
-                {},
-                preserve_runtime_ids=unreconciled_api_runtime_ids,
-            )
-        except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
-            error_message = f"failed to prune API runtime services: {error}"
-            print(error_message, file=sys.stderr)
-            failed_provision_worktrees.append(
-                {
-                    "repo": "api",
-                    "workspace": "runtime-services",
-                    "path": str(API_RUNTIME_UNIT_DIRECTORY),
-                    "error": error_message,
-                }
-            )
-
-    if not container_preview:
-        try:
-            withdraw_isolated_host_previews(clone_root, blocked_paths)
-            revoke_unregistered_preview_nginx_access(clone_root, registered_worktrees)
-        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
-            error_message = f"failed to reconcile preview access: {error}"
-            print(error_message, file=sys.stderr)
-            failed_provision_worktrees.append(
-                {
-                    "repo": "preview",
-                    "workspace": "access-reconciliation",
-                    "path": str(clone_root),
-                    "error": error_message,
-                }
-            )
-            prune_api_runtime_units_after_blocking_failure()
-            return [], [], failed_provision_worktrees
-
-    provisionable_worktrees: list[
-        tuple[str, dict[str, Any], pathlib.Path, list[str], list[str]]
-    ] = []
-    canonical_validation_failed = False
-
-    for repo_name, spec in repo_specs.items():
-        if not is_workspace_automation_enabled(spec):
-            continue
-        validation_commands = list(spec[NATIVE_SETUP_COMMANDS_KEY])
-        setup_commands = validation_commands
-
-        for worktree_path in registered_worktrees[repo_name]:
-            if str(worktree_path) in blocked_paths:
-                continue
-            if not worktree_path.is_dir() or worktree_path.is_symlink():
-                print(
-                    f"Skipping registered {repo_name} worktree at {worktree_path}: path is missing or not a real directory"
-                )
-                continue
-            try:
-                if not is_provisionable_worktree(
-                    repo_name,
-                    worktree_path,
-                    validation_commands,
-                    validated_instruction_roots=validation_cache,
-                    architecture_arguments=spec.get(EVIDENCE_VALIDATION_ARGUMENTS_SPEC_KEY),
-                ):
-                    withdraw_if_api(repo_name, worktree_path)
-                    continue
-            except CanonicalInstructionValidationError as error:
-                withdraw_if_api(repo_name, worktree_path)
-                canonical_validation_failed = True
-                error_message = str(error)
-                print(
-                    f"Failed to provision {repo_name} worktree {worktree_path.name} at "
-                    f"{worktree_path}: {error_message}",
-                    file=sys.stderr,
-                )
-                failed_provision_worktrees.append(
-                    {
-                        "repo": repo_name,
-                        "workspace": worktree_path.name,
-                        "path": str(worktree_path),
-                        "error": error_message,
-                    }
-                )
-                continue
-            except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
-                withdraw_if_api(repo_name, worktree_path)
-                error_message = str(error)
-                print(
-                    f"Failed to provision {repo_name} worktree {worktree_path.name} at "
-                    f"{worktree_path}: {error_message}",
-                    file=sys.stderr,
-                )
-                failed_provision_worktrees.append(
-                    {
-                        "repo": repo_name,
-                        "workspace": worktree_path.name,
-                        "path": str(worktree_path),
-                        "error": error_message,
-                    }
-                )
-                continue
-
-            provisionable_worktrees.append(
-                (repo_name, spec, worktree_path, validation_commands, setup_commands)
-            )
-
-    if canonical_validation_failed:
-        prune_api_runtime_units_after_blocking_failure()
-        return [], [], failed_provision_worktrees
-
-    removed_workspace_aliases = cleanup_removed_workspace_aliases(
-        repo_state,
-        clone_root,
-        registered_worktrees,
-    )
-    for removed_alias in removed_workspace_aliases:
-        print(f"Removed stale managed workspace alias {removed_alias}")
-
-    cleaned_preview_storage_targets = [] if isolation_active else cleanup_removed_api_preview_databases(
-        repo_state,
-        repo_specs,
-        clone_root,
-        db_path=db_path,
-        validated_instruction_roots=validation_cache,
-        registered_api_worktrees=registered_worktrees["api"],
-    )
-    provisioned_worktrees: list[str] = []
-
-    for repo_name, spec, worktree_path, _validation_commands, setup_commands in provisionable_worktrees:
-        preview_prefix = spec.get("preview_prefix")
-        preview_enabled = isinstance(preview_prefix, str) and bool(preview_prefix) and not container_preview
-        try:
-            preserve_registered_workspace_physical_path(worktree_path, db_path=db_path)
-            config_text = render_worktree_local_config(
-                spec, worktree_path, db_path=db_path, container_preview=container_preview
-            )
-            sync_worktree_local_config(worktree_path, config_text, container_preview=container_preview)
-            ensure_workspace_alias(worktree_path, db_path=db_path)
-            sync_worktree_auxiliary_files(repo_name, worktree_path)
-            ensure_worktree_hooks(worktree_path)
-            lock_context = (
-                acquire_api_worktree_bootstrap_lock(worktree_path)
-                if repo_name == "api"
-                else contextlib.nullcontext(worktree_path)
-            )
-            with lock_context as locked_worktree_path:
-                # API state is intentionally derived only after the same lock
-                # used by native setup, direct bootstrap, and refresh callers.
-                linked_setup_context = collect_linked_setup_context(locked_worktree_path, db_path=db_path)
-                workspace = resolve_current_workspace_name(locked_worktree_path, db_path=db_path)
-                setup_hash = build_setup_hash(
-                    locked_worktree_path,
-                    setup_commands,
-                    db_path=db_path,
-                    linked_context=linked_setup_context,
-                )
-
-                preview_storage_target: str | None = None
-                preview_storage_reset_required = False
-                if repo_name == "api":
-                    ready, preview_storage_target = ensure_api_worktree_ready(
-                        locked_worktree_path,
-                        spec["path"],
-                        db_path=db_path,
-                    )
-                    if not ready:
-                        withdraw_if_api(repo_name, locked_worktree_path)
-                        continue
-                    preview_storage_reset_required = (
-                        load_env_assignments(locked_worktree_path / ".env")
-                        .get(PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY, "")
-                        .strip()
-                        == "1"
-                    )
-
-                marker_path = locked_worktree_path / PROVISION_MARKER_FILENAME
-                marker = load_provision_marker(marker_path)
-                if marker is not None and marker.get("setup_hash") == setup_hash:
-                    if repo_name != "api" or (
-                        marker.get("preview_storage_target") == preview_storage_target
-                        and not preview_storage_reset_required
-                    ):
-                        if repo_name == "api" and manage_api_runtimes:
-                            runtime_units = ensure_api_runtime_owner(
-                                clone_root,
-                                locked_worktree_path,
-                                pathlib.Path(spec["path"]),
-                                workspace=workspace,
-                                preview_enabled=preview_enabled,
-                            )
-                            desired_api_runtime_units.update(runtime_units)
-                            unreconciled_api_runtime_ids.discard(
-                                build_api_runtime_id(locked_worktree_path)
-                            )
-                        if admission is not None and repo_name == "api" and manage_api_runtimes:
-                            admission.admit_api_preview(locked_worktree_path)
-                        if preview_enabled:
-                            ensure_preview_nginx_access(clone_root, locked_worktree_path)
-                        continue
-
-                withdraw_if_api(repo_name, locked_worktree_path)
-                if setup_commands:
-                    print(
-                        f"Provisioning {repo_name} worktree {locked_worktree_path.name} "
-                        f"at {locked_worktree_path}"
-                    )
-                    if repo_name == "api":
-                        ready, preview_storage_target = _bootstrap_api_worktree_locked(
-                            locked_worktree_path,
-                            spec["path"],
-                            db_path=db_path,
-                            preview_storage_target=preview_storage_target,
-                        )
-                        if not ready:
-                            continue
-                    else:
-                        run_setup_commands(locked_worktree_path, setup_commands, db_path=db_path)
-
-                marker_payload: dict[str, Any] = {
-                    "repo": repo_name,
-                    "workspace": workspace,
-                    "physical_workspace": locked_worktree_path.name,
-                    "setup_hash": setup_hash,
-                    "provisioned_at": datetime.now(timezone.utc).isoformat(),
-                }
-                if repo_name == "api" and preview_storage_target is not None:
-                    marker_payload["preview_storage_target"] = preview_storage_target
-                if linked_setup_context:
-                    marker_payload["linked_workspaces"] = linked_setup_context
-
-                if repo_name == "api" and manage_api_runtimes:
-                    runtime_units = ensure_api_runtime_owner(
-                        clone_root,
-                        locked_worktree_path,
-                        pathlib.Path(spec["path"]),
-                        workspace=workspace,
-                        preview_enabled=preview_enabled,
-                    )
-                    desired_api_runtime_units.update(runtime_units)
-                    unreconciled_api_runtime_ids.discard(
-                        build_api_runtime_id(locked_worktree_path)
-                    )
-
-                if preview_enabled:
-                    try:
-                        ensure_preview_nginx_access(clone_root, locked_worktree_path)
-                        write_provision_marker(marker_path, marker_payload)
-                    except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
-                        try:
-                            deny_preview_nginx_access(clone_root, locked_worktree_path)
-                        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as rollback_error:
-                            raise RuntimeError(
-                                f"{error}; additionally failed to revoke preview access: {rollback_error}"
-                            ) from rollback_error
-                        raise
-                else:
-                    write_provision_marker(marker_path, marker_payload)
-                if admission is not None and repo_name == "api" and manage_api_runtimes:
-                    admission.admit_api_preview(locked_worktree_path)
-                provisioned_worktrees.append(f"{repo_name}:{workspace}")
-        except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
-            withdraw_if_api(repo_name, worktree_path)
-            error_message = str(error)
-            print(
-                f"Failed to provision {repo_name} worktree {worktree_path.name} at {worktree_path}: {error_message}",
-                file=sys.stderr,
-            )
-            failed_provision_worktrees.append(
-                {
-                    "repo": repo_name,
-                    "workspace": worktree_path.name,
-                    "path": str(worktree_path),
-                    "error": error_message,
-                }
-            )
-
-    if manage_api_runtimes:
-        try:
-            reconcile_api_runtime_units(
-                desired_api_runtime_units,
-                preserve_runtime_ids=unreconciled_api_runtime_ids,
-            )
-        except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
-            error_message = f"failed to reconcile API runtime services: {error}"
-            print(error_message, file=sys.stderr)
-            failed_provision_worktrees.append(
-                {
-                    "repo": "api",
-                    "workspace": "runtime-services",
-                    "path": str(API_RUNTIME_UNIT_DIRECTORY),
-                    "error": error_message,
-                }
-            )
-
-    return provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees
+    Registration, links, prompts and safe canonical configuration remain owned
+    by run_rollout(). Candidate changes never schedule setup, bootstrap,
+    auxiliary writes, runtime units or database provisioning as the service.
+    """
+    return [], [], []
 
 
 def request_json(api_base: str, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
@@ -6447,10 +6141,16 @@ def parse_args() -> argparse.Namespace:
         help="HTTP/2 syntax for rendered nginx config; install mode always auto-detects the host-safe syntax.",
     )
     parser.add_argument("--summary-output", type=pathlib.Path)
-    parser.add_argument("--skip-local-configs", action="store_true")
+    parser.add_argument(
+        "--skip-local-configs", action="store_true",
+        help="Skip auxiliary files; safe canonical native configuration is always published.",
+    )
     parser.add_argument("--skip-db-sync", action="store_true")
     parser.add_argument("--install-nginx", action="store_true")
-    parser.add_argument("--provision-worktrees", action="store_true")
+    parser.add_argument(
+        "--provision-worktrees", action="store_true",
+        help="Retained metadata reconcile trigger; workspace setup and runtimes are never executed.",
+    )
     parser.add_argument("--refresh-nginx", action="store_true")
     parser.add_argument("--container-preview", action="store_true", help="Reconcile the rootless container preview service instead of host nginx.")
     parser.add_argument("--skip-if-provision-locked", action="store_true")
@@ -6557,8 +6257,9 @@ def run_rollout(args: argparse.Namespace) -> int:
         print(error, file=sys.stderr)
         return 1
     validate_repo_local_configs(repo_specs)
-    if not args.skip_local_configs:
-        write_local_configs(repo_specs)
+    # Even installed --skip-local-configs callers must retire unsafe native
+    # setup/run hooks. The option only skips the optional auxiliary-file sync.
+    write_local_configs(repo_specs, auxiliary=not args.skip_local_configs)
 
     if args.repo_state_file is not None:
         repo_state = load_repo_state(args.repo_state_file)
