@@ -56,7 +56,7 @@ checkout with persisted credentials disabled. Successful execution and exactly
 `CLEAN` are both required before candidate validation tooling runs. Missing,
 skipped, cancelled, failed and non-clean scans cannot admit that job.
 
-The action runtime, policy and v4 result contract come from the separately
+The action runtime, policy and v5 result contract come from the separately
 accepted immutable action archive. Candidate scanner and policy files are
 untrusted scan input; they are never the executing scanner's authority. The job
 uses only `contents: read` and retains bounded, secret-safe evidence for 14 days.
@@ -139,11 +139,11 @@ captures never enter this fact transport.
 
 Each action invocation uploads one uniquely named normalized result for 14 days.
 Its schema is
-[`secpal-trivy-repository-scan-v4.schema.json`](schemas/secpal-trivy-repository-scan-v4.schema.json).
-The public result version is `secpal-trivy-repository-scan-v4`; every `SECRET`
-requires `source_blob`. The published closed v1, v2 and v3 schemas are preserved unchanged.
-Consumers adopting this action revision must select the v4 schema from the same
-reviewed governance revision; strict v1/v2/v3 consumers reject the new version rather
+[`secpal-trivy-repository-scan-v5.schema.json`](schemas/secpal-trivy-repository-scan-v5.schema.json).
+The public result version is `secpal-trivy-repository-scan-v5`; every `SECRET`
+requires `source_blob`. The published closed v1, v2, v3 and v4 schemas are preserved unchanged.
+Consumers adopting this action revision must select the v5 schema from the same
+reviewed governance revision; strict v1/v2/v3/v4 consumers reject the new version rather
 than silently interpreting an incompatible finding shape.
 It records the exact repository commit, scanner version and archive identity,
 vulnerability database identity and freshness, policy identity, deterministic
@@ -162,18 +162,45 @@ after native execution succeeded. `MALFORMED_OUTPUT` identifies missing,
 truncated, malformed or unqualified native evidence. These outcomes all remain
 `UNKNOWN_STALE`; process success alone cannot establish healthy evidence.
 Database, target, scanner-identity and policy failures retain their existing codes.
-The diagnostic distinction introduced in v3 is preserved in the v4 closed enum.
-Consumers must adopt the v4 schema and action from the same reviewed revision;
-older validators reject v4 explicitly instead of silently interpreting a changed result.
+The diagnostic distinction introduced in v3 is preserved in the v5 closed enum.
+Consumers must adopt the v5 schema and action from the same reviewed revision;
+older validators reject v5 explicitly instead of silently interpreting a changed result.
 
-The Terraform parser's missing-variable warning remains unqualified except for
-the exact source-bound deployment qualification described below. Otherwise a zero
-exit with this warning remains `DIAGNOSTIC_ADMISSION_FAILURE`, without publishing
-the warning or source. Runtime-only variables are not supplied by the scanner;
-the pinned parser substitutes unknown typed values before module evaluation.
-Absence of findings cannot establish complete evaluation of dependent resource
-relationships, such as a runtime-selected management source range. Earlier retained `SCANNER_FAILURE` results do not
-establish which boundary failed when private native evidence is unavailable.
+Terraform scans bind every current `.tf`, `.tf.json`, `.tofu` and `.tofu.json`
+file to its independently observed raw Git blob. Every file must appear in the
+pinned parser's private evaluation trace under a native root with actual check
+counts. The preliminary module-graph parse alone is insufficient. Local child
+modules are mapped to their evaluated files rather than incorrectly requiring a
+second root. Missing or unexpected files/roots, substituted source, unknown
+warnings, genuine parse errors and partial scans fail closed.
+
+Every resolution request must have a matching completed local resolution to a
+canonical Git-owned source directory. Every native root must finish evaluation;
+truncated traces and escaping relative paths reject even without new file events.
+
+Tracked `.terraform` initialization caches are rejected before scanning. Native
+resolution of external or absolute-path modules is not admissible, even when it
+produces no findings; every accepted evaluated file belongs to the exact Git
+subject. Trivy 0.74.0 exposes no CLI no-download switch: this is a fail-closed
+evidence boundary, not a claim of network isolation. Debug diagnostics stay
+private and are deleted, including on rejection; no resolver URLs or source
+values enter retained coverage. The v5 `modules` map records native roots and
+their evaluated Git file paths.
+
+Pinned Trivy 0.74.0's `setFallbackValuesForMissingVars` creates typed unknowns for
+unsupplied inputs. Only its exact missing-variable diagnostic is accepted, once
+per observed root module, with a bounded unique list of variable identifiers.
+There is no generic parser-warning allowance. The result records unresolved
+input names and `REPOSITORY_STATIC` / `NOT_EXECUTED`: this is neither a successful
+plan nor admission of actual IPs, keys, provider resources or target execution.
+The deployment-owned actual-input, SSH, metadata, identity-removal and cleanup
+contracts continue to govern their operations; repository scanning does not
+replace them. No runtime values are invented or injected into the scan.
+
+The current v5 contract replaces deployment-specific tree enrollment and its
+expired deadline with these current-source/native-result checks. It does not
+renew the eight retired dispositions or suppress their findings. The immutable
+v1-v4 schemas and qualification records below remain historical evidence.
 
 Native scanner JSON is temporary and is deleted before upload. Secret
 normalization allowlists only rule ID, severity, repository-relative path,
@@ -372,6 +399,8 @@ diagnostics/database were not retained, so neither qualification establishes
 the historical record-level failure cause.
 
 ## Exact deployment source qualification and run-bound controls
+
+## Historical source/control qualification (superseded by v5)
 
 The following records preserve the historical source/control qualification.
 Under [#1300](trivy-policy-disposition-retirement-1300.md), all eight finding

@@ -99,6 +99,7 @@ runs:
         native="$tool_root/native.json"
         if [ -z "$failure_code" ]; then
           if ! env -i HOME="$tool_root" "$tool_root/trivy" --config "$trusted_config" fs \
+            --debug \
             --scanners vuln,secret,misconfig --include-dev-deps --show-suppressed \
             --format json --exit-code 0 \
             --skip-db-update --skip-java-db-update --skip-check-update --skip-version-check \
@@ -171,7 +172,7 @@ runs:
         print(f"Gate state: `{result['gate_state']}`")
         print()
         if "coverage" in result:
-            print("Scope: repository-static. Run-bound controls: REQUIRED_NOT_EXECUTED.")
+            print("Scope: repository-static. Concrete cloud inputs and operations: NOT_EXECUTED.")
             print("This result does not authorize cloud/resource operations or target execution.")
             print()
         print(

@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "secpal-trivy-repository-scan.py"
 POLICY = ROOT / "policies" / "trivy-repository-scan-v1.json"
-SCHEMA = ROOT / "docs" / "schemas" / "secpal-trivy-repository-scan-v4.schema.json"
+SCHEMA = ROOT / "docs" / "schemas" / "secpal-trivy-repository-scan-v5.schema.json"
 ACTION = ROOT / ".github" / "actions" / "trivy-repository-scan" / "action.yml"
 FIXTURES = ROOT / "tests" / "fixtures" / "trivy-repository-scan"
 HISTORICAL_POLICY = FIXTURES / "historical-policy-20261104.json"
@@ -360,7 +360,7 @@ class RepositoryScanContractTests(unittest.TestCase):
             self.assertNotEqual(process.returncode, 0)
             self.assertEqual(rejected["gate_state"], "UNKNOWN_STALE")
             self.assertEqual(rejected["operation"]["failure_code"], "DIAGNOSTIC_ADMISSION_FAILURE")
-            self.assertEqual(rejected["schema_version"], "secpal-trivy-repository-scan-v4")
+            self.assertEqual(rejected["schema_version"], "secpal-trivy-repository-scan-v5")
             public = process.stdout + process.stderr + json.dumps(rejected).encode()
             self.assertNotIn(diagnostic.encode(), public)
             self.assertNotIn(SYNTHETIC_SECRET.encode(), public)
@@ -1178,7 +1178,7 @@ class RepositoryScanContractTests(unittest.TestCase):
                 self.assertTrue(SYNTHETIC_SECRET.encode() not in public, "native content must remain private")
                 self.assertTrue(b"9" * 5000 not in public, "raw numeric input must remain private")
                 result = json.loads(public)
-                self.assertEqual(result["schema_version"], "secpal-trivy-repository-scan-v4")
+                self.assertEqual(result["schema_version"], "secpal-trivy-repository-scan-v5")
                 self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
                 self.assertEqual(result["operation"]["failure_code"], failure_code)
                 jsonschema.validate(result, json.loads(SCHEMA.read_text()))
@@ -2065,7 +2065,7 @@ class SecretSourceBindingTests(unittest.TestCase):
         import jsonschema
 
         result = self.module.admit(self.observation(), self.policy)
-        self.assertEqual(result["schema_version"], "secpal-trivy-repository-scan-v4")
+        self.assertEqual(result["schema_version"], "secpal-trivy-repository-scan-v5")
         old = json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v1.schema.json").read_text())
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.validate(result, old)
@@ -2108,585 +2108,223 @@ class SecretSourceBindingTests(unittest.TestCase):
 
 
 
-class DeploymentTerraformCoverageTests(unittest.TestCase):
-    """Source fixtures prove admission behavior, never a real cloud execution."""
+class NativeTerraformCoverageTests(unittest.TestCase):
+    """Current Git sources and the pinned parser own static scan completeness."""
 
     def setUp(self):
         self.module = load_module()
-        self.commit = "d" * 40
-        self.time = "2026-10-20T18:00:00Z"
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.workspace = self.root / "workspace"
+        self.workspace.mkdir()
+        self.source = self.workspace / "infra/main.tf"
+        self.source.parent.mkdir()
+        self.source.write_text('variable "project_id" { type = string }\n')
+        self.git("init", "--quiet")
+        self.commit = self.commit_source()
+        self.scanner = {"name": "trivy", "version": "0.74.0",
+                        "immutable_id": self.module.TRIVY_ARCHIVE_ID,
+                        "configuration_sha256": "sha256:" + "1" * 64}
+        self.native = {"SchemaVersion": 2, "ArtifactType": "filesystem",
+                       "ArtifactName": str(self.workspace), "Results": [
+                           {"Target": "infra", "Class": "config", "Type": "terraform",
+                            "MisconfSummary": {"Successes": 51, "Failures": 0}}]}
 
-    def facts(self):
-        return {
-            "commit": self.commit,
-            "bindings": dict(self.module.DEPLOYMENT_TERRAFORM_BINDINGS),
-            "terraform_paths": list(self.module.DEPLOYMENT_TERRAFORM_PATHS),
-        }
+    def git(self, *arguments):
+        return subprocess.check_output(["git", "-C", str(self.workspace), *arguments], text=True).strip()
+
+    def commit_source(self):
+        self.git("add", ".")
+        self.git("-c", "user.name=SecPal Test", "-c", "user.email=test@secpal.app",
+                 "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "static scan fixture")
+        return self.git("rev-parse", "HEAD")
 
     def coverage(self):
-        return self.module.qualify_deployment_terraform(
-            self.facts(), "SecPal/deployment", self.commit, self.time
-        )
+        return self.module.observe_terraform_sources(self.workspace, self.commit, self.native)
 
-    def test_known_source_has_explicit_unexecuted_run_bound_scope(self):
-        c = self.coverage()
-        self.assertEqual(c["scope"], "REPOSITORY_STATIC")
-        self.assertEqual(c["run_bound_status"], "REQUIRED_NOT_EXECUTED")
-        self.assertEqual(c["source_commit"], self.commit)
-        self.assertNotIn("values", c)
-        self.assertEqual(len(c["required_at_operation"]), 4)
+    def diagnostics(self, extra=""):
+        return ('2026-11-07T12:00:00Z\tERROR\t[misconfig] Falling back to embedded checks\terr='
+                + json.dumps('failed to check cache: cache does not exist at '
+                             + json.dumps(str(self.root / "policy/content"))) + '\n'
+                '2026-11-07T12:00:00Z\tINFO\t[terraform scanner] Scanning root module'
+                '\tfile_path="infra"\n'
+                '2026-11-07T12:00:00Z\tDEBUG\t[terraform parser] Added file'
+                '\tmodule="root" file_path="infra/main.tf"\n' + extra +
+                '2026-11-07T12:00:00Z\tDEBUG\t[terraform parser] Finished parsing module\tmodule="root"\n')
 
-        # Requalification includes the source/control proof, not just policy JSON.
-        for now in ("2026-10-27T00:00:00Z", "2026-11-03T23:59:59.999999Z"):
-            with self.subTest(completed_at=now):
-                current = self.module.qualify_deployment_terraform(
-                    self.facts(), "SecPal/deployment", self.commit, now
-                )
-                self.assertEqual(current["run_bound_status"], "REQUIRED_NOT_EXECUTED")
-                self.assertEqual(current["source_bindings"], c["source_bindings"])
+    def warning(self, variables="project_id"):
+        return ('2026-11-07T12:00:00Z\tWARN\t[terraform parser] Variable values were not found '
+                'in the environment or variable files. Evaluating may not work correctly.'
+                '\tmodule="root" variables=' + json.dumps(variables) + '\n')
 
-    def test_changed_source_added_module_expiry_and_wrong_identity_fail_closed(self):
-        for changed in self.module.DEPLOYMENT_TERRAFORM_BINDINGS:
-            facts = self.facts()
-            facts["bindings"][changed] = "0" * 40
-            with self.subTest(path=changed), self.assertRaises(self.module.ContractError):
-                self.module.qualify_deployment_terraform(facts, "SecPal/deployment", self.commit, self.time)
-        facts = self.facts()
-        facts["terraform_paths"].append("extra/unsafe.tf")
+    def verify(self, diagnostic, native=None, scanner=None, coverage=None):
+        selected = self.coverage() if coverage is None else coverage
+        self.module.verify_diagnostics(diagnostic, self.root,
+            native=self.native if native is None else native,
+            scanner=self.scanner if scanner is None else scanner,
+            workspace=str(self.workspace), coverage=selected)
+        return selected
+
+    def test_current_native_scan_needs_no_repository_allowlist_or_expiry(self):
+        coverage = self.verify(self.diagnostics(self.warning()))
+        self.assertEqual(coverage["source_commit"], self.commit)
+        self.assertEqual(coverage["terraform_files"], {"infra/main.tf": self.git("rev-parse", "HEAD:infra/main.tf")})
+        self.assertEqual(coverage["unresolved_inputs"], {"infra": ["project_id"]})
+        self.assertEqual(coverage["run_bound_status"], "NOT_EXECUTED")
+        self.assertNotIn("expires_at", coverage)
+        for repository in ("SecPal/deployment", "SecPal/another-consumer"):
+            for completed in ("2026-11-07T12:00:00Z", "2027-01-01T12:00:00Z"):
+                self.module._validate_coverage(coverage, repository, self.commit, completed)
+
+    def test_concrete_variables_need_no_missing_value_warning(self):
+        self.assertEqual(self.verify(self.diagnostics())["unresolved_inputs"], {})
+
+    def test_all_pinned_native_terraform_and_opentofu_suffixes_are_bound(self):
+        for suffix in (".tf", ".tf.json", ".tofu", ".tofu.json"):
+            self.source.unlink()
+            self.source = self.workspace / ("infra/main" + suffix)
+            self.source.write_text('{"variable":{"project_id":{"type":"string"}}}\n'
+                                   if suffix.endswith(".json") else 'variable "project_id" { type = string }\n# source suffix fixture\n')
+            self.commit = self.commit_source()
+            path = "infra/main" + suffix
+            coverage = self.verify(self.diagnostics().replace("infra/main.tf", path))
+            self.assertEqual(set(coverage["terraform_files"]), {path})
+
+    def test_native_evaluated_local_module_sources_need_no_second_root(self):
+        child = self.workspace / "infra/modules/net/main.tf"
+        child.parent.mkdir(parents=True)
+        child.write_text('resource "google_compute_network" "test" {}\n')
+        self.commit = self.commit_source()
+        trace = ('2026-11-07T12:00:00Z\tDEBUG\t[module resolver] Resolving module'
+                 '\tmodule="root" name="module.child" source="./modules/net"\n'
+                 '2026-11-07T12:00:00Z\tDEBUG\t[module resolver] Module resolved locally'
+                 '\tmodule="root" name="module.child" file_path="infra/modules/net"\n'
+                 '2026-11-07T12:00:00Z\tDEBUG\t[terraform parser] Added file'
+                 '\tmodule="root" module="child" file_path="infra/modules/net/main.tf"\n')
+        coverage = self.verify(self.diagnostics(trace))
+        self.assertEqual(coverage["modules"], {"infra": ["infra/main.tf", "infra/modules/net/main.tf"]})
+
+    def test_external_module_resolution_and_untraced_files_fail_closed(self):
+        for source in ("git::file:///outside", "github.com/unbound/module", "/outside", "bucket/module/google", "../../outside"):
+            trace = ('2026-11-07T12:00:00Z\tDEBUG\t[module resolver] Resolving module'
+                     '\tmodule="root" name="module.external" source=' + json.dumps(source) + '\n')
+            with self.subTest(source=source), self.assertRaises(self.module.ContractError):
+                self.verify(self.diagnostics(trace))
         with self.assertRaises(self.module.ContractError):
-            self.module.qualify_deployment_terraform(facts, "SecPal/deployment", self.commit, self.time)
-        for repository, commit, time in (
-            ("SecPal/other", self.commit, self.time),
-            ("SecPal/deployment", "c" * 40, self.time),
-            ("SecPal/deployment", self.commit, self.module.DEPLOYMENT_TERRAFORM_EXPIRES),
-        ):
-            with self.subTest(repository=repository, commit=commit, time=time), self.assertRaises(self.module.ContractError):
-                self.module.qualify_deployment_terraform(self.facts(), repository, commit, time)
+            self.verify(self.diagnostics().replace(
+                '2026-11-07T12:00:00Z\tDEBUG\t[terraform parser] Added file'
+                '\tmodule="root" file_path="infra/main.tf"\n', ""))
 
-    def test_reviewed_dependabot_candidates_preserve_scope_and_fail_on_source_drift(self):
-        python_facts = self.facts()
-        python_facts["bindings"] = dict(self.module.DEPLOYMENT_GOOGLE_ROCKY_BINDINGS)
-        python_facts["bindings"][".github"] = "sha256:eabfd254fff92561be8559c0f03bc6aaec51c8b6e2733d8b98215e9396ccb8f5"
-        caddy_facts = self.facts()
-        caddy_facts["bindings"] = dict(self.module.DEPLOYMENT_GOOGLE_ROCKY_BINDINGS)
-        caddy_facts["bindings"]["containers/phase-b-gateway/Containerfile"] = "5acb622fa60472f641fbc2b88dc3338665258a9e"
-        combined = copy.deepcopy(python_facts)
-        combined["bindings"]["containers/phase-b-gateway/Containerfile"] = caddy_facts["bindings"]["containers/phase-b-gateway/Containerfile"]
-        now = "2026-10-28T19:00:00Z"
-        for facts in (python_facts, caddy_facts, combined):
-            coverage = self.module.qualify_deployment_terraform(
-                facts, "SecPal/deployment", self.commit, now)
-            self.assertEqual(coverage["source_bindings"], facts["bindings"])
-            self.assertEqual(coverage["scope"], "REPOSITORY_STATIC")
-            self.assertEqual(coverage["run_bound_status"], "REQUIRED_NOT_EXECUTED")
-            self.assertEqual(coverage["expires_at"], "2026-11-04T00:00:00Z")
-            self.assertEqual(coverage["required_at_operation"], list(self.module.DEPLOYMENT_RUN_BOUND_CONTROLS))
-            for field in facts["bindings"]:
-                drift = copy.deepcopy(facts)
-                drift["bindings"][field] = "0" * 40
-                with self.subTest(field=field), self.assertRaises(self.module.ContractError):
-                    self.module.qualify_deployment_terraform(drift, "SecPal/deployment", self.commit, now)
-            for invalid_time in ("2026-10-27T23:59:59Z", "2026-11-04T00:00:00Z"):
-                with self.assertRaises(self.module.ContractError):
-                    self.module.qualify_deployment_terraform(facts, "SecPal/deployment", self.commit, invalid_time)
-        hybrid = copy.deepcopy(combined)
-        hybrid["bindings"]["infra/ci-cloud"] = self.module.DEPLOYMENT_TERRAFORM_BINDINGS["infra/ci-cloud"]
+    def test_incomplete_or_escaping_local_resolution_cannot_claim_coverage(self):
+        start = ('2026-11-07T12:00:00Z\tDEBUG\t[module resolver] Resolving module'
+                 '\tmodule="root" name="module.local" source="./modules/local"\n')
+        escaped = ('2026-11-07T12:00:00Z\tDEBUG\t[module resolver] Module resolved locally'
+                   '\tmodule="root" name="module.local" file_path="../../outside"\n')
+        for diagnostic in (self.diagnostics(start), self.diagnostics(start + escaped),
+                           self.diagnostics().replace(
+                               '2026-11-07T12:00:00Z\tDEBUG\t[terraform parser] Finished parsing module\tmodule="root"\n', "")):
+            with self.subTest(diagnostic=diagnostic), self.assertRaises(self.module.ContractError):
+                self.verify(diagnostic)
+
+    def test_evaluate_ignores_caller_forged_coverage_and_observes_git(self):
+        native = copy.deepcopy(self.native)
+        native["coverage"] = {
+            "scope": "REPOSITORY_STATIC", "run_bound_status": "NOT_EXECUTED",
+            "source_commit": self.commit, "terraform_files": {"infra/main.tf": "b" * 40},
+            "modules": {"infra": ["infra/main.tf"]}, "unresolved_inputs": {},
+        }
+        (self.root / "native.json").write_text(json.dumps(native))
+        (self.root / "database.json").write_text(json.dumps(valid_database()))
+        (self.root / "stderr").write_text(self.diagnostics(self.warning()))
+        process = subprocess.run([
+            "python3", str(SCRIPT), "evaluate", "--native", str(self.root / "native.json"),
+            "--database", str(self.root / "database.json"), "--diagnostics", str(self.root / "stderr"),
+            "--cache-dir", str(self.root), "--policy", str(POLICY), "--repository", "SecPal/deployment",
+            "--commit", self.commit, "--workspace", str(self.workspace),
+            "--scanner-version", "0.74.0", "--scanner-identity", self.module.TRIVY_ARCHIVE_ID,
+            "--completed-at", "2026-09-16T10:10:00Z", "--output", str(self.root / "result.json"),
+        ], capture_output=True, check=False)
+        result = json.loads((self.root / "result.json").read_text())
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertNotEqual(result["coverage"]["terraform_files"], native["coverage"]["terraform_files"])
+        self.assertEqual(result["coverage"]["terraform_files"], {"infra/main.tf": self.git("rev-parse", "HEAD:infra/main.tf")})
+        self.assertEqual(result["coverage"]["unresolved_inputs"], {"infra": ["project_id"]})
+        self.assertEqual(result["coverage"]["source_commit"], result["subject"]["commit"])
+
+    def test_tracked_module_cache_is_rejected_before_native_execution(self):
+        cache = self.workspace / ".terraform/modules/modules.json"
+        cache.parent.mkdir(parents=True)
+        cache.write_text('{"Modules":[]}\n')
+        self.commit = self.commit_source()
         with self.assertRaises(self.module.ContractError):
-            self.module.qualify_deployment_terraform(hybrid, "SecPal/deployment", self.commit, now)
+            self.module.verify_target(self.workspace, self.commit)
 
-    def test_reviewed_phase_one_candidate_retains_exact_static_scope_and_expiry(self):
-        facts = self.facts()
-        facts["commit"] = "6c3f7d517526c34223065eba5d81f7924974ee35"
-        facts["bindings"]["scripts"] = "0b3e423fb58643001b3332d543af8ccd73fa7cba"
-        coverage = self.module.qualify_deployment_terraform(
-            facts, "SecPal/deployment", facts["commit"], "2026-10-24T18:00:00Z")
-        self.assertEqual(coverage["source_commit"], facts["commit"])
-        self.assertEqual(coverage["source_bindings"], facts["bindings"])
-        self.assertEqual(coverage["scope"], "REPOSITORY_STATIC")
-        self.assertEqual(coverage["run_bound_status"], "REQUIRED_NOT_EXECUTED")
-        self.assertEqual(coverage["expires_at"], "2026-11-04T00:00:00Z")
-        self.assertEqual(coverage["required_at_operation"],
-                         list(self.module.DEPLOYMENT_RUN_BOUND_CONTROLS))
-        # Main is still qualified during the bounded adoption transition.
-        self.coverage()
-
-    def test_phase_one_candidate_rejects_other_scripts_controls_identity_and_expiry(self):
-        facts = self.facts()
-        facts["commit"] = "6c3f7d517526c34223065eba5d81f7924974ee35"
-        facts["bindings"]["scripts"] = "0b3e423fb58643001b3332d543af8ccd73fa7cba"
-        for path in facts["bindings"]:
-            changed = copy.deepcopy(facts)
-            changed["bindings"][path] = "0" * 40
-            with self.subTest(path=path), self.assertRaises(self.module.ContractError):
-                self.module.qualify_deployment_terraform(
-                    changed, "SecPal/deployment", facts["commit"], "2026-10-24T18:00:00Z")
-        for repository, commit, now in (
-            ("SecPal/other", facts["commit"], "2026-10-24T18:00:00Z"),
-            ("SecPal/deployment", "a" * 40, "2026-10-24T18:00:00Z"),
-            ("SecPal/deployment", facts["commit"], "2026-10-23T23:59:59Z"),
-            ("SecPal/deployment", facts["commit"], "2026-11-04T00:00:00Z"),
-            ("SecPal/deployment", facts["commit"], "2026-11-05T00:00:00Z"),
-        ):
-            with self.subTest(repository=repository, commit=commit, now=now):
-                with self.assertRaises(self.module.ContractError):
-                    self.module.qualify_deployment_terraform(facts, repository, commit, now)
-        facts["terraform_paths"].append("unexpected/main.tf")
+    def test_source_changes_are_observed_without_manual_tree_enrollment(self):
+        old = self.coverage()
+        self.source.write_text('variable "new_input" { type = string }\n')
         with self.assertRaises(self.module.ContractError):
-            self.module.qualify_deployment_terraform(
-                facts, "SecPal/deployment", facts["commit"], "2026-10-24T18:00:00Z")
-
-    def xdg_facts(self):
-        facts = self.facts()
-        facts["commit"] = "5ad1e5ba0f8a203745b6b709d8c5123f359e51df"
-        facts["bindings"]["scripts"] = "4c6d4144cfc7849196e01e5c4204792f3355dfd2"
-        return facts
-
-    def test_reviewed_xdg_candidate_preserves_exact_scope_controls_and_expiry(self):
-        facts = self.xdg_facts()
-        coverage = self.module.qualify_deployment_terraform(
-            facts, "SecPal/deployment", facts["commit"], "2026-10-25T10:00:00Z")
-        self.assertEqual(coverage["source_bindings"], facts["bindings"])
-        self.assertEqual(coverage["source_commit"], facts["commit"])
-        self.assertEqual(coverage["scope"], "REPOSITORY_STATIC")
-        self.assertEqual(coverage["run_bound_status"], "REQUIRED_NOT_EXECUTED")
-        self.assertEqual(coverage["expires_at"], "2026-11-04T00:00:00Z")
-        self.assertEqual(coverage["required_at_operation"],
-                         list(self.module.DEPLOYMENT_RUN_BOUND_CONTROLS))
-        self.module._validate_coverage(coverage, "SecPal/deployment",
-                                      facts["commit"], "2026-10-25T10:00:00Z")
-        self.coverage()  # Existing qualified sources remain accepted.
-        facts["bindings"] = dict(self.module.DEPLOYMENT_PHASE_ONE_BINDINGS)
-        self.module.qualify_deployment_terraform(
-            facts, "SecPal/deployment", facts["commit"], "2026-10-25T10:00:00Z")
-
-    def test_xdg_candidate_rejects_other_scripts_controls_subject_and_expiry(self):
-        facts = self.xdg_facts()
-        now = "2026-10-25T10:00:00Z"
-        for path in facts["bindings"]:
-            changed = copy.deepcopy(facts)
-            changed["bindings"][path] = "0" * 40
-            with self.subTest(path=path), self.assertRaises(self.module.ContractError):
-                self.module.qualify_deployment_terraform(
-                    changed, "SecPal/deployment", facts["commit"], now)
-        for repo, subject, completed in (
-            ("SecPal/other", facts["commit"], now),
-            ("SecPal/deployment", "a" * 40, now),
-            ("SecPal/deployment", facts["commit"], "2026-10-24T23:59:59Z"),
-            ("SecPal/deployment", facts["commit"], "2026-11-04T00:00:00Z"),
-            ("SecPal/deployment", facts["commit"], "2026-11-05T00:00:00Z"),
-        ):
-            with self.subTest(repo=repo, subject=subject, completed=completed):
-                with self.assertRaises(self.module.ContractError):
-                    self.module.qualify_deployment_terraform(facts, repo, subject, completed)
-        facts["terraform_paths"].append("unexpected/main.tf")
+            self.coverage()
+        self.commit = self.commit_source()
+        new = self.verify(self.diagnostics(self.warning("new_input")))
+        self.assertNotEqual(old["terraform_files"], new["terraform_files"])
+        self.assertEqual(new["source_commit"], self.commit)
         with self.assertRaises(self.module.ContractError):
-            self.module.qualify_deployment_terraform(
-                facts, "SecPal/deployment", facts["commit"], now)
+            self.module._validate_coverage(old, "SecPal/deployment", self.commit, "2026-11-07T12:00:00Z")
 
-    def dispatch_facts(self):
-        facts = self.facts()
-        facts["commit"] = "40de3c43774fef79652de780f636e087ec4c7391"
-        facts["bindings"].update({
-            "scripts": "ce6c93f9854ca2938509298f3120981ed992b069",
-            ".secpal": "c9144f481e6148c42ecd8f8c73552bdbb137d66a",
-        })
-        return facts
-
-    def test_reviewed_dispatch_source_binds_actual_architecture_controls(self):
-        facts = self.dispatch_facts()
-        coverage = self.module.qualify_deployment_terraform(
-            facts, "SecPal/deployment", facts["commit"], "2026-10-25T13:00:00Z")
-        self.assertEqual(coverage["source_bindings"], facts["bindings"])
-        self.assertEqual(len(coverage["source_bindings"]), 7)
-        self.assertEqual(coverage["scope"], "REPOSITORY_STATIC")
-        self.assertEqual(coverage["run_bound_status"], "REQUIRED_NOT_EXECUTED")
-        self.assertEqual(coverage["expires_at"], "2026-11-04T00:00:00Z")
-        self.assertEqual(coverage["required_at_operation"],
-                         list(self.module.DEPLOYMENT_RUN_BOUND_CONTROLS))
-        self.module._validate_coverage(coverage, "SecPal/deployment",
-                                      facts["commit"], "2026-10-25T13:00:00Z")
-        # Current protected main remains usable during bounded adoption.
-        self.module.qualify_deployment_terraform(
-            self.xdg_facts(), "SecPal/deployment", self.xdg_facts()["commit"],
-            "2026-10-25T13:00:00Z")
-
-    def test_dispatch_qualification_rejects_changed_missing_controls_and_expiry(self):
-        facts = self.dispatch_facts()
-        for path in facts["bindings"]:
-            for change in ("missing", "changed"):
-                changed = copy.deepcopy(facts)
-                if change == "missing":
-                    del changed["bindings"][path]
-                else:
-                    changed["bindings"][path] = "0" * 40
-                with self.subTest(path=path, change=change), self.assertRaises(self.module.ContractError):
-                    self.module.qualify_deployment_terraform(
-                        changed, "SecPal/deployment", facts["commit"], "2026-10-25T13:00:00Z")
-        for repo, subject, now in (
-            ("SecPal/other", facts["commit"], "2026-10-25T13:00:00Z"),
-            ("SecPal/deployment", "a" * 40, "2026-10-25T13:00:00Z"),
-            ("SecPal/deployment", facts["commit"], "2026-10-24T23:59:59Z"),
-            ("SecPal/deployment", facts["commit"], "2026-11-04T00:00:00Z"),
-            ("SecPal/deployment", facts["commit"], "2026-11-05T00:00:00Z"),
-        ):
-            with self.subTest(repo=repo, subject=subject, now=now), self.assertRaises(self.module.ContractError):
-                self.module.qualify_deployment_terraform(facts, repo, subject, now)
-        facts["terraform_paths"].append("unexpected/main.tf")
+    def test_missing_native_module_or_unscanned_new_source_fails_closed(self):
+        for results in ([], [{**self.native["Results"][0], "Target": "different"}],
+                        [{**self.native["Results"][0], "MisconfSummary": {"Successes": 0, "Failures": 0}}]):
+            with self.subTest(results=results), self.assertRaises(self.module.ContractError):
+                self.module.observe_terraform_sources(self.workspace, self.commit, {**self.native, "Results": results})
+        extra = self.workspace / "new/main.tf"
+        extra.parent.mkdir()
+        extra.write_text('resource "google_compute_network" "new" {}\n')
+        self.commit = self.commit_source()
         with self.assertRaises(self.module.ContractError):
-            self.module.qualify_deployment_terraform(
-                facts, "SecPal/deployment", facts["commit"], "2026-10-25T13:00:00Z")
+            self.verify(self.diagnostics())
 
-
-    def operator_native_facts(self):
-        facts = self.dispatch_facts()
-        facts["commit"] = "042ab9b5060763b78f36369ae549829eb14aed21"
-        facts["bindings"].update({
-            "scripts": "c17a475b7185349018086ca8683dcf751a339a5a",
-            ".secpal": "18745a3e7a93c9990e023b8ed5da4031025c631c",
-        })
-        return facts
-
-    def test_operator_native_source_preserves_all_static_and_unexecuted_obligations(self):
-        facts = self.operator_native_facts()
-        coverage = self.module.qualify_deployment_terraform(
-            facts, "SecPal/deployment", facts["commit"], "2026-10-25T16:48:00Z")
-        self.assertEqual(facts["bindings"], coverage["source_bindings"])
-        self.assertEqual(7, len(coverage["source_bindings"]))
-        self.assertEqual(facts["commit"], coverage["source_commit"])
-        self.assertEqual("REPOSITORY_STATIC", coverage["scope"])
-        self.assertEqual("REQUIRED_NOT_EXECUTED", coverage["run_bound_status"])
-        self.assertEqual("2026-11-04T00:00:00Z", coverage["expires_at"])
-        self.assertEqual(list(self.module.DEPLOYMENT_RUN_BOUND_CONTROLS),
-                         coverage["required_at_operation"])
-        self.module._validate_coverage(coverage, "SecPal/deployment",
-                                      facts["commit"], "2026-10-25T16:48:00Z")
-        for previous in (self.facts(), self.xdg_facts(), self.dispatch_facts()):
-            self.module.qualify_deployment_terraform(previous, "SecPal/deployment",
-                previous["commit"], "2026-10-25T16:48:00Z")
-
-    def test_operator_native_source_rejects_other_scripts_controls_subject_and_expiry(self):
-        facts = self.operator_native_facts()
-        for path in facts["bindings"]:
-            for change in ("missing", "changed"):
-                changed = copy.deepcopy(facts)
-                if change == "missing":
-                    del changed["bindings"][path]
-                else:
-                    changed["bindings"][path] = "0" * 40
-                with self.subTest(path=path, change=change), self.assertRaises(self.module.ContractError):
-                    self.module.qualify_deployment_terraform(
-                        changed, "SecPal/deployment", facts["commit"], "2026-10-25T16:48:00Z")
-        for repo, subject, now in (
-            ("SecPal/other", facts["commit"], "2026-10-25T16:48:00Z"),
-            ("SecPal/deployment", "a" * 40, "2026-10-25T16:48:00Z"),
-            ("SecPal/deployment", facts["commit"], "2026-10-24T23:59:59Z"),
-            ("SecPal/deployment", facts["commit"], "2026-11-04T00:00:00Z"),
-            ("SecPal/deployment", facts["commit"], "2026-11-05T00:00:00Z"),
-        ):
-            with self.subTest(repo=repo, subject=subject, now=now), self.assertRaises(self.module.ContractError):
-                self.module.qualify_deployment_terraform(facts, repo, subject, now)
-        facts["terraform_paths"].append("unexpected/main.tf")
+    def test_real_parser_errors_partial_parse_and_unknown_diagnostics_fail_closed(self):
+        invalid = [
+            self.diagnostics(self.warning() + '2026-11-07T12:00:00Z\tERROR\t[terraform parser] failed to parse\n'),
+            self.diagnostics('2026-11-07T12:00:00Z\tWARN\t[terraform parser] failed to evaluate\n'),
+            self.diagnostics(self.warning("project_id, project_id")),
+            self.diagnostics(self.warning("../secret")),
+            self.diagnostics(self.warning() * 2),
+            self.diagnostics(self.warning()).replace('file_path="infra"', 'file_path="missing"'),
+            self.diagnostics(self.warning()).replace('module="root"', 'module="unobserved"'),
+            self.diagnostics(self.warning()).replace('file_path="infra"', 'file_path="../infra"'),
+        ]
+        for content in invalid:
+            with self.subTest(content=content), self.assertRaises(self.module.ContractError):
+                self.verify(content)
         with self.assertRaises(self.module.ContractError):
-            self.module.qualify_deployment_terraform(
-                facts, "SecPal/deployment", facts["commit"], "2026-10-25T16:48:00Z")
+            self.verify(self.diagnostics(self.warning()), scanner={**self.scanner, "version": "0.75.0"})
 
-    def certbot_refresh_facts(self):
-        facts = self.operator_native_facts()
-        facts["commit"] = "017082a85d7fee5a7577927fc7e002ee6a036652"
-        facts["bindings"].update({
-            "config": "68bd29a7c4c159e9ae1f1c9f0b05fda8b95eb012",
-            "schemas": "1f594b1bb40c9fa415204aa11fce78c3962e1bad",
-        })
-        return facts
-
-    def test_certbot_refresh_preserves_static_scope_obligations_and_previous_sources(self):
-        facts = self.certbot_refresh_facts()
-        now = "2026-10-28T00:00:00Z"
-        coverage = self.module.qualify_deployment_terraform(
-            facts, "SecPal/deployment", facts["commit"], now)
-        self.assertEqual(facts["bindings"], coverage["source_bindings"])
-        self.assertEqual("REPOSITORY_STATIC", coverage["scope"])
-        self.assertEqual("REQUIRED_NOT_EXECUTED", coverage["run_bound_status"])
-        self.assertEqual("2026-11-04T00:00:00Z", coverage["expires_at"])
-        self.assertEqual(list(self.module.DEPLOYMENT_RUN_BOUND_CONTROLS),
-                         coverage["required_at_operation"])
-        self.module._validate_coverage(coverage, "SecPal/deployment", facts["commit"], now)
-        for previous in (self.facts(), self.xdg_facts(), self.dispatch_facts(), self.operator_native_facts()):
-            self.module.qualify_deployment_terraform(previous, "SecPal/deployment", previous["commit"], now)
-
-    def test_certbot_refresh_rejects_partial_bindings_other_subjects_and_expiry(self):
-        facts = self.certbot_refresh_facts()
-        for path in facts["bindings"]:
-            for replacement in (None, "0" * 40):
-                changed = copy.deepcopy(facts)
-                if replacement is None:
-                    del changed["bindings"][path]
-                else:
-                    changed["bindings"][path] = replacement
-                with self.subTest(path=path, replacement=replacement), self.assertRaises(self.module.ContractError):
-                    self.module.qualify_deployment_terraform(changed, "SecPal/deployment", facts["commit"], "2026-10-28T00:00:00Z")
-        # Neither half of the refreshed tuple is independently interchangeable.
-        for path in ("config", "schemas"):
-            changed = copy.deepcopy(facts)
-            changed["bindings"][path] = self.operator_native_facts()["bindings"][path]
-            with self.subTest(hybrid=path), self.assertRaises(self.module.ContractError):
-                self.module.qualify_deployment_terraform(changed, "SecPal/deployment", facts["commit"], "2026-10-28T00:00:00Z")
-        for repo, subject, now in (
-            ("SecPal/other", facts["commit"], "2026-10-28T00:00:00Z"),
-            ("SecPal/deployment", "a" * 40, "2026-10-28T00:00:00Z"),
-            ("SecPal/deployment", facts["commit"], "2026-10-27T23:59:59Z"),
-            ("SecPal/deployment", facts["commit"], "2026-11-04T00:00:00Z"),
-        ):
-            with self.subTest(repo=repo, subject=subject, now=now), self.assertRaises(self.module.ContractError):
-                self.module.qualify_deployment_terraform(facts, repo, subject, now)
-        facts["terraform_paths"].append("unexpected/main.tf")
-        with self.assertRaises(self.module.ContractError):
-            self.module.qualify_deployment_terraform(facts, "SecPal/deployment", facts["commit"], "2026-10-28T00:00:00Z")
-
-
-    def google_provider_refresh_facts(self):
-        cleanup = self.certbot_refresh_facts()
-        cleanup["commit"] = "bd4789f49eed97bbaa25f8a817797cb125d5f70d"
-        cleanup["bindings"]["infra/ci-cloud"] = "5b7aa70eceb3b9dbc2903b95507b4e9a935ce5b1"
-        rocky = copy.deepcopy(cleanup)
-        rocky["commit"] = "c3bd77d12ac76a11cf3005067e911f630b7c6fef"
-        rocky["bindings"].update({
-            "infra/ci-cloud": "b2980196040355b883a77b5f1011dc4b890af3d0",
-            "scripts": "036dd0f359dacef017b32f32971cf106bf57e93f",
-            "schemas": "de6c64e49a24a017a12ed204285dbbc11c9d8d25",
-        })
-        return cleanup, rocky
-
-    def test_google_provider_refresh_preserves_static_scope_and_prior_sources(self):
-        for facts in self.google_provider_refresh_facts():
-            with self.subTest(commit=facts["commit"]):
-                coverage = self.module.qualify_deployment_terraform(
-                    facts, "SecPal/deployment", facts["commit"], "2026-10-28T14:00:00Z")
-                self.assertEqual(facts["bindings"], coverage["source_bindings"])
-                self.assertEqual("REPOSITORY_STATIC", coverage["scope"])
-                self.assertEqual("REQUIRED_NOT_EXECUTED", coverage["run_bound_status"])
-                self.assertEqual("2026-11-04T00:00:00Z", coverage["expires_at"])
-                self.assertEqual(list(self.module.DEPLOYMENT_RUN_BOUND_CONTROLS),
-                                 coverage["required_at_operation"])
-                self.module._validate_coverage(
-                    coverage, "SecPal/deployment", facts["commit"], "2026-10-28T14:00:00Z")
-        previous = self.certbot_refresh_facts()
-        self.module.qualify_deployment_terraform(
-            previous, "SecPal/deployment", previous["commit"], "2026-10-28T14:00:00Z")
-
-    def test_google_provider_refresh_rejects_partial_hybrid_subject_and_expiry(self):
-        for facts in self.google_provider_refresh_facts():
-            for path in facts["bindings"]:
-                for replacement in (None, "0" * 40):
-                    changed = copy.deepcopy(facts)
-                    if replacement is None:
-                        del changed["bindings"][path]
-                    else:
-                        changed["bindings"][path] = replacement
-                    with self.subTest(path=path, replacement=replacement), self.assertRaises(self.module.ContractError):
-                        self.module.qualify_deployment_terraform(
-                            changed, "SecPal/deployment", facts["commit"], "2026-10-28T14:00:00Z")
-            for repository, subject, now in (
-                ("SecPal/other", facts["commit"], "2026-10-28T14:00:00Z"),
-                ("SecPal/deployment", "a" * 40, "2026-10-28T14:00:00Z"),
-                ("SecPal/deployment", facts["commit"], "2026-10-27T23:59:59Z"),
-                ("SecPal/deployment", facts["commit"], "2026-11-04T00:00:00Z"),
-            ):
-                with self.subTest(repository=repository, subject=subject, now=now), self.assertRaises(self.module.ContractError):
-                    self.module.qualify_deployment_terraform(facts, repository, subject, now)
-        cleanup, rocky = self.google_provider_refresh_facts()
-        for base, path, other in (
-            (cleanup, "schemas", rocky),
-            (rocky, "scripts", cleanup),
-            (rocky, "infra/ci-cloud", cleanup),
-        ):
-            changed = copy.deepcopy(base)
-            changed["bindings"][path] = other["bindings"][path]
-            with self.subTest(hybrid=path), self.assertRaises(self.module.ContractError):
-                self.module.qualify_deployment_terraform(
-                    changed, "SecPal/deployment", changed["commit"], "2026-10-28T14:00:00Z")
-
-    def diagnostics(self, cache, variables=None):
-        fallback = '2026-10-20T18:00:00Z\tERROR\t[misconfig] Falling back to embedded checks\terr=' + json.dumps(
-            'failed to check cache: cache does not exist at ' + json.dumps(str(cache / "policy/content"))
-        ) + '\n'
-        names = sorted(self.module.DEPLOYMENT_TERRAFORM_VARIABLES) if variables is None else variables
-        warning = '2026-10-20T18:00:00Z\tWARN\t[terraform parser] Variable values were not found in the environment or variable files. Evaluating may not work correctly.\tmodule="root" variables=' + json.dumps(", ".join(names)) + '\n'
-        return fallback + warning
-
-    def test_warning_needs_exact_source_proof_scanner_and_complete_variable_set(self):
-        with tempfile.TemporaryDirectory() as d:
-            cache = Path(d)
-            c = self.coverage()
-            scanner = {"name": "trivy", "version": "0.74.0",
-                       "immutable_id": self.module.TRIVY_ARCHIVE_ID,
-                       "configuration_sha256": "sha256:" + "1" * 64}
-            self.module.verify_diagnostics(self.diagnostics(cache), cache, scanner=scanner, coverage=c)
-            for text, proof, identity in (
-                (self.diagnostics(cache), None, scanner),
-                (self.diagnostics(cache, ["unexpected"]), c, scanner),
-                (self.diagnostics(cache, sorted(self.module.DEPLOYMENT_TERRAFORM_VARIABLES) * 2), c, scanner),
-                (self.diagnostics(cache) + "2026-10-20T18:00:00Z\tWARN\tunreviewed\n", c, scanner),
-                (self.diagnostics(cache), c, {**scanner, "version": "0.75.0"}),
-            ):
-                with self.subTest(text=text[-45:]), self.assertRaises(self.module.ContractError):
-                    self.module.verify_diagnostics(text, cache, scanner=identity, coverage=proof)
-
-    def test_all_eight_observations_remain_and_need_exact_scoped_dispositions(self):
+    def test_partial_native_file_findings_and_synthetic_coverage_cannot_hide_high_findings(self):
+        native = copy.deepcopy(self.native)
+        native["Results"].append({"Target": "infra/main.tf", "Class": "config", "Type": "terraform",
+            "MisconfSummary": {"Successes": 0, "Failures": 1}, "Misconfigurations": [{
+                "ID": "GCP-0031", "AVDID": "AVD-GCP-0031", "Title": "public IP", "Description": "public IP",
+                "Message": "public IP", "Severity": "HIGH", "Status": "FAIL",
+                "CauseMetadata": {"StartLine": 1, "EndLine": 1},
+            }]})
+        coverage = self.module.observe_terraform_sources(self.workspace, self.commit, native)
+        self.module.verify_diagnostics(self.diagnostics(self.warning()), self.root,
+            native=native, scanner=self.scanner, workspace=str(self.workspace), coverage=coverage)
+        observation = self.module.normalize_native(native, repository="SecPal/deployment", commit=self.commit,
+            workspace=str(self.workspace), scanner=self.scanner, database=valid_database(),
+            completed_at="2026-09-16T10:10:00Z")
+        observation["coverage"] = coverage
+        result = self.module.admit(observation, json.loads(POLICY.read_text()))
+        self.assertEqual(result["gate_state"], "ACTIONABLE")
+        self.assertEqual(result["summary"]["excepted"], 0)
+        self.assertEqual(result["schema_version"], "secpal-trivy-repository-scan-v5")
         import jsonschema
-        native = {"SchemaVersion": 2, "ArtifactType": "filesystem", "ArtifactName": ".",
-                  "Results": []}
-        rules = ("DS-0026", "GCP-0029", "GCP-0031", "GCP-0033", "GCP-0034",
-                 "GCP-0036", "GCP-0075", "GCP-0076")
-        for rule in rules:
-            path = ("containers/phase-b-gateway/Containerfile" if rule == "DS-0026"
-                    else "infra/ci-cloud/gcp-rocky/main.tf")
-            native["Results"].append({"Target": path, "Class": "config",
-                "Type": "dockerfile" if rule == "DS-0026" else "terraform",
-                "Misconfigurations": [{"ID": rule, "Severity": "HIGH" if rule == "GCP-0031" else ("MEDIUM" if rule in {"GCP-0036", "GCP-0076"} else "LOW"),
-                                      "Status": "FAIL"}]})
-        database = {**valid_database(), "updated_at": "2026-10-20T00:00:00Z",
-                    "downloaded_at": "2026-10-20T17:00:00Z", "next_update": "2026-10-21T00:00:00Z"}
-        observation = self.module.normalize_native(native, repository="SecPal/deployment",
-            commit=self.commit, workspace=".", completed_at=self.time,
-            scanner={"name": "trivy", "version": "0.74.0",
-                     "immutable_id": self.module.TRIVY_ARCHIVE_ID,
-                     "configuration_sha256": "sha256:" + "1" * 64}, database=database)
-        policy = json.loads(HISTORICAL_POLICY.read_text())
-        with self.assertRaises(self.module.ContractError):
-            self.module.admit(observation, policy)
-        observation["coverage"] = self.coverage()
-        current=self.module.admit(observation,json.loads(POLICY.read_text()))
-        self.assertEqual(current["gate_state"],"ACTIONABLE")
-        self.assertEqual(current["summary"],{"total":8,"actionable":1,"review_required":7,"excepted":0})
-        self.assertEqual({f["rule_id"] for f in current["findings"]},set(rules))
-        accepted = self.module.admit(observation, policy)
-        self.assertEqual(accepted["gate_state"], "CLEAN")
-        self.assertEqual(accepted["summary"], {"total": 8, "actionable": 0,
-                                              "review_required": 0, "excepted": 8})
-        self.assertEqual({f["rule_id"] for f in accepted["findings"]}, set(rules))
-        self.assertEqual(accepted["coverage"]["run_bound_status"], "REQUIRED_NOT_EXECUTED")
-        jsonschema.validate(accepted, json.loads(SCHEMA.read_text()))
-        unrelated = copy.deepcopy(observation)
-        unrelated["findings"].append({**unrelated["findings"][0],
-            "rule_id": "GCP-UNREVIEWED", "severity": "HIGH"})
-        self.assertEqual(self.module.admit(unrelated, policy)["gate_state"], "ACTIONABLE")
-        stale = {**observation, "database": {**observation["database"], "status": "STALE"}}
-        self.assertEqual(self.module.admit(stale, policy)["gate_state"], "UNKNOWN_STALE")
-        wrong = copy.deepcopy(observation)
-        wrong["coverage"]["source_bindings"]["scripts"] = "0" * 40
-        with self.assertRaises(self.module.ContractError):
-            self.module.admit(wrong, policy)
-        unscoped = copy.deepcopy(policy)
-        for exception in unscoped["exceptions"]:
-            if exception.get("qualification_id"):
-                exception["qualification_id"] = "unreviewed"
-        with self.assertRaises(self.module.ContractError):
-            self.module.admit(observation, unscoped)
+        jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v5.schema.json").read_text()))
 
-    def test_new_or_changed_automation_invalidates_real_git_source_facts(self):
-        from unittest.mock import patch
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for path in self.module.DEPLOYMENT_TERRAFORM_PATHS:
-                file = root / path
-                file.parent.mkdir(parents=True, exist_ok=True)
-                file.write_text("# source-observation fixture, not cloud input\n")
-            for name in ("scripts", "config", "schemas"):
-                (root / name).mkdir(exist_ok=True)
-                (root / name / "fixture").write_text("source-observation fixture\n")
-            cloud = root / ".github/workflows/rocky-cloud-qualification.yml"
-            cloud.parent.mkdir(parents=True)
-            cloud.write_text("permissions: {}\n")
-            container = root / "containers/phase-b-gateway/Containerfile"
-            container.parent.mkdir(parents=True)
-            container.write_text("# source-observation fixture\n")
-            quality = root / ".github/workflows/quality.yml"
-            original = ("permissions: contents:read\n"
-                        "        uses: SecPal/.github/.github/actions/trivy-repository-scan@"
-                        + "1" * 40 + " # main\n"
-                        "  reuse:\n"
-                        "    name: REUSE Compliance\n"
-                        "    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@"
-                        + "3" * 40 + " # main\n")
-            quality.write_text(original)
-            def git(*args):
-                return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
-            def commit():
-                git("add", ".")
-                git("-c", "user.name=SecPal Test", "-c", "user.email=test@secpal.app",
-                    "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "observation fixture")
-                return git("rev-parse", "HEAD")
-            git("init", "--quiet")
-            revision = commit()
-            baseline = self.module.observe_deployment_terraform(root, revision)
-            with patch.dict(self.module.DEPLOYMENT_TERRAFORM_BINDINGS, baseline["bindings"], clear=True):
-                self.module.qualify_deployment_terraform(baseline, "SecPal/deployment", revision, self.time)
-                quality.write_text(original.replace("1" * 40, "2" * 40))
-                revision = commit()
-                facts = self.module.observe_deployment_terraform(root, revision)
-                self.module.qualify_deployment_terraform(facts, "SecPal/deployment", revision, self.time)
-                # Only the independent immutable revision may vary. Native
-                # provenance approval is exercised separately below.
-                quality.write_text(original.replace("3" * 40, "4" * 40))
-                revision = commit()
-                facts = self.module.observe_deployment_terraform(root, revision)
-                self.module.qualify_deployment_terraform(facts, "SecPal/deployment", revision, self.time)
-                for invalid in (
-                    original.replace("3" * 40, "main"),
-                    original.replace("3" * 40, "0" * 40),
-                    original.replace("SecPal/.github/.github/workflows/reusable-reuse.yml@",
-                                     "foreign/.github/.github/workflows/reusable-reuse.yml@"),
-                    original.replace("    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@"
-                                     + "3" * 40 + " # main\n", ""),
-                    original + "    uses: SecPal/.github/.github/workflows/reusable-reuse.yml@"
-                    + "3" * 40 + " # main\n",
-                    original.replace("    name: REUSE Compliance", "    if: false\n    name: REUSE Compliance"),
-                    original.replace("  reuse:", "  other:"),
-                    original.replace("permissions: contents:read", "permissions: write-all"),
-                ):
-                    quality.write_text(invalid)
-                    revision = commit()
-                    with self.subTest(quality=invalid), self.assertRaises(self.module.ContractError):
-                        facts = self.module.observe_deployment_terraform(root, revision)
-                        self.module.qualify_deployment_terraform(facts, "SecPal/deployment", revision, self.time)
-                quality.write_text(original)
-                extra = root / ".github/workflows/unsafe.yml"
-                extra.write_text("permissions: id-token:write\n")
-                revision = commit()
-                facts = self.module.observe_deployment_terraform(root, revision)
-                with self.assertRaises(self.module.ContractError):
-                    self.module.qualify_deployment_terraform(facts, "SecPal/deployment", revision, self.time)
-                extra.unlink()
-                # New dispatch evidence is a security control, not unbound
-                # documentation. Observe its Git tree and reject old profiles.
-                control = root / ".secpal/evidence-architecture.json"
-                control.parent.mkdir()
-                control.write_text('{"source-observation": "fixture"}\n')
-                revision = commit()
-                facts = self.module.observe_deployment_terraform(root, revision)
-                self.assertEqual(facts["bindings"][".secpal"], git("rev-parse", revision + ":.secpal"))
-                with self.assertRaises(self.module.ContractError):
-                    self.module.qualify_deployment_terraform(facts, "SecPal/deployment", revision, self.time)
-                control.unlink()
-                control.parent.rmdir()
-                # A file or symlink may not masquerade as the control tree.
-                (root / ".secpal").write_text("not a directory\n")
-                revision = commit()
-                with self.assertRaises(self.module.ContractError):
-                    self.module.observe_deployment_terraform(root, revision)
-                (root / ".secpal").unlink()
-                (root / ".secpal").symlink_to("config", target_is_directory=True)
-                revision = commit()
-                with self.assertRaises(self.module.ContractError):
-                    self.module.observe_deployment_terraform(root, revision)
-                (root / ".secpal").unlink()
-                quality.write_text(original + "permissions: id-token:write\n")
-                revision = commit()
-                facts = self.module.observe_deployment_terraform(root, revision)
-                with self.assertRaises(self.module.ContractError):
-                    self.module.qualify_deployment_terraform(facts, "SecPal/deployment", revision, self.time)
 
+class IndependentDeliveryProvenanceTests(unittest.TestCase):
     def test_independent_workflow_provenance_requires_accepted_repository_ancestry(self):
         # Reuse the delivery provenance owner, not a second list of approved SHAs.
         helper = ROOT / "tests/android-consumed-workflow-action-pins.sh"
