@@ -2150,7 +2150,8 @@ class NativeTerraformCoverageTests(unittest.TestCase):
                 '2026-11-07T12:00:00Z\tINFO\t[terraform scanner] Scanning root module'
                 '\tfile_path="infra"\n'
                 '2026-11-07T12:00:00Z\tDEBUG\t[terraform parser] Added file'
-                '\tmodule="root" file_path="infra/main.tf"\n' + extra)
+                '\tmodule="root" file_path="infra/main.tf"\n' + extra +
+                '2026-11-07T12:00:00Z\tDEBUG\t[terraform parser] Finished parsing module\tmodule="root"\n')
 
     def warning(self, variables="project_id"):
         return ('2026-11-07T12:00:00Z\tWARN\t[terraform parser] Variable values were not found '
@@ -2197,13 +2198,15 @@ class NativeTerraformCoverageTests(unittest.TestCase):
         self.commit = self.commit_source()
         trace = ('2026-11-07T12:00:00Z\tDEBUG\t[module resolver] Resolving module'
                  '\tmodule="root" name="module.child" source="./modules/net"\n'
+                 '2026-11-07T12:00:00Z\tDEBUG\t[module resolver] Module resolved locally'
+                 '\tmodule="root" name="module.child" file_path="infra/modules/net"\n'
                  '2026-11-07T12:00:00Z\tDEBUG\t[terraform parser] Added file'
                  '\tmodule="root" module="child" file_path="infra/modules/net/main.tf"\n')
         coverage = self.verify(self.diagnostics(trace))
         self.assertEqual(coverage["modules"], {"infra": ["infra/main.tf", "infra/modules/net/main.tf"]})
 
     def test_external_module_resolution_and_untraced_files_fail_closed(self):
-        for source in ("git::file:///outside", "github.com/unbound/module", "/outside", "bucket/module/google"):
+        for source in ("git::file:///outside", "github.com/unbound/module", "/outside", "bucket/module/google", "../../outside"):
             trace = ('2026-11-07T12:00:00Z\tDEBUG\t[module resolver] Resolving module'
                      '\tmodule="root" name="module.external" source=' + json.dumps(source) + '\n')
             with self.subTest(source=source), self.assertRaises(self.module.ContractError):
@@ -2212,6 +2215,42 @@ class NativeTerraformCoverageTests(unittest.TestCase):
             self.verify(self.diagnostics().replace(
                 '2026-11-07T12:00:00Z\tDEBUG\t[terraform parser] Added file'
                 '\tmodule="root" file_path="infra/main.tf"\n', ""))
+
+    def test_incomplete_or_escaping_local_resolution_cannot_claim_coverage(self):
+        start = ('2026-11-07T12:00:00Z\tDEBUG\t[module resolver] Resolving module'
+                 '\tmodule="root" name="module.local" source="./modules/local"\n')
+        escaped = ('2026-11-07T12:00:00Z\tDEBUG\t[module resolver] Module resolved locally'
+                   '\tmodule="root" name="module.local" file_path="../../outside"\n')
+        for diagnostic in (self.diagnostics(start), self.diagnostics(start + escaped),
+                           self.diagnostics().replace(
+                               '2026-11-07T12:00:00Z\tDEBUG\t[terraform parser] Finished parsing module\tmodule="root"\n', "")):
+            with self.subTest(diagnostic=diagnostic), self.assertRaises(self.module.ContractError):
+                self.verify(diagnostic)
+
+    def test_evaluate_ignores_caller_forged_coverage_and_observes_git(self):
+        native = copy.deepcopy(self.native)
+        native["coverage"] = {
+            "scope": "REPOSITORY_STATIC", "run_bound_status": "NOT_EXECUTED",
+            "source_commit": self.commit, "terraform_files": {"infra/main.tf": "b" * 40},
+            "modules": {"infra": ["infra/main.tf"]}, "unresolved_inputs": {},
+        }
+        (self.root / "native.json").write_text(json.dumps(native))
+        (self.root / "database.json").write_text(json.dumps(valid_database()))
+        (self.root / "stderr").write_text(self.diagnostics(self.warning()))
+        process = subprocess.run([
+            "python3", str(SCRIPT), "evaluate", "--native", str(self.root / "native.json"),
+            "--database", str(self.root / "database.json"), "--diagnostics", str(self.root / "stderr"),
+            "--cache-dir", str(self.root), "--policy", str(POLICY), "--repository", "SecPal/deployment",
+            "--commit", self.commit, "--workspace", str(self.workspace),
+            "--scanner-version", "0.74.0", "--scanner-identity", self.module.TRIVY_ARCHIVE_ID,
+            "--completed-at", "2026-09-16T10:10:00Z", "--output", str(self.root / "result.json"),
+        ], capture_output=True, check=False)
+        result = json.loads((self.root / "result.json").read_text())
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertNotEqual(result["coverage"]["terraform_files"], native["coverage"]["terraform_files"])
+        self.assertEqual(result["coverage"]["terraform_files"], {"infra/main.tf": self.git("rev-parse", "HEAD:infra/main.tf")})
+        self.assertEqual(result["coverage"]["unresolved_inputs"], {"infra": ["project_id"]})
+        self.assertEqual(result["coverage"]["source_commit"], result["subject"]["commit"])
 
     def test_tracked_module_cache_is_rejected_before_native_execution(self):
         cache = self.workspace / ".terraform/modules/modules.json"

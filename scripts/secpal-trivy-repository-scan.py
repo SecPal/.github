@@ -385,7 +385,10 @@ def verify_diagnostics(content: str, cache_directory: Path, *,
     current_module = None
     unresolved = {}
     evaluated: dict[str, set[str]] = {}
+    finished = set()
+    pending_resolutions: set[tuple[str, str]] = set()
     quoted = r'"(?:[^"\\]|\\.)*"'
+    resolver_context = r'(module="root" (?:module=' + quoted + r' )*name=' + quoted + r')'
     if coverage is not None:
         if native is None or workspace is None or scanner is None:
             raise ContractError("Terraform scan context is unavailable")
@@ -408,6 +411,8 @@ def verify_diagnostics(content: str, cache_directory: Path, *,
             prefix = '[terraform scanner] Scanning root module\tfile_path='
             if coverage is None or not fields[2].startswith(prefix):
                 raise ContractError("Terraform module diagnostics are unavailable")
+            if current_module is not None and current_module not in finished:
+                raise ContractError("Terraform evaluation diagnostics are incomplete")
             current_module = json.loads(fields[2][len(prefix):])
             if (not isinstance(current_module, str) or current_module not in coverage["modules"]
                     or current_module in modules):
@@ -429,13 +434,36 @@ def verify_diagnostics(content: str, cache_directory: Path, *,
                 evaluated[current_module].add(path)
         elif fields[1] == "DEBUG" and fields[2].startswith("[module resolver] Resolving module"):
             match = re.fullmatch(
-                r'\[module resolver\] Resolving module\tmodule="root" (?:module=' + quoted
-                + r' )*name=' + quoted + r' source=(' + quoted + r')', fields[2])
+                r'\[module resolver\] Resolving module\t' + resolver_context
+                + r' source=(' + quoted + r')', fields[2])
             if coverage is None or current_module is None or match is None:
                 raise ContractError("Terraform module resolution is unqualified")
-            source = json.loads(match[1])
+            source = json.loads(match[2])
             if not source.startswith(("./", "../")):
                 raise ContractError("external Terraform module evidence is not admitted")
+            key = (current_module, match[1])
+            if key in pending_resolutions or current_module in finished:
+                raise ContractError("Terraform module resolution is incomplete")
+            pending_resolutions.add(key)
+        elif fields[1] == "DEBUG" and fields[2].startswith("[module resolver] Module resolved locally"):
+            match = re.fullmatch(
+                r'\[module resolver\] Module resolved locally\t' + resolver_context
+                + r' file_path=(' + quoted + r')', fields[2])
+            if coverage is None or current_module is None or match is None:
+                raise ContractError("Terraform local resolution is unqualified")
+            path = json.loads(match[2])
+            directories = {str(PurePosixPath(file).parent) for file in coverage["terraform_files"]}
+            if _path(path) != path or path not in directories:
+                raise ContractError("Terraform local module is outside the Git source inventory")
+            key = (current_module, match[1])
+            if key not in pending_resolutions:
+                raise ContractError("Terraform local resolution has no observed request")
+            pending_resolutions.remove(key)
+        elif fields[1] == "DEBUG" and fields[2] == '[terraform parser] Finished parsing module\tmodule="root"':
+            if (current_module is None or current_module in finished
+                    or any(root == current_module for root, _ in pending_resolutions)):
+                raise ContractError("Terraform evaluation diagnostics are incomplete")
+            finished.add(current_module)
         elif fields[1] == "DEBUG" and fields[2].startswith(
                 "[terraform parser] Loaded module metadata for modules"):
             raise ContractError("Terraform cached module evidence is not admitted")
@@ -448,7 +476,7 @@ def verify_diagnostics(content: str, cache_directory: Path, *,
     if fallbacks != 1:
         raise ContractError("pinned embedded check selection is unavailable")
     if coverage is not None:
-        if modules != set(coverage["modules"]):
+        if modules != set(coverage["modules"]) or finished != modules or pending_resolutions:
             raise ContractError("Terraform parser module coverage is incomplete")
         coverage["modules"] = {root: sorted(paths) for root, paths in sorted(evaluated.items())}
         coverage["unresolved_inputs"] = dict(sorted(unresolved.items()))
@@ -1081,7 +1109,11 @@ def _apply_exception(
 
 
 def admit(observation: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
-    """Purely apply the reviewed organization policy to one observation."""
+    """Pure policy over canonical facts; _evaluate owns observation/publication.
+
+    Importing this function is not a publication capability. The action invokes
+    only evaluate, which constructs source facts independently of native fields.
+    """
     if not isinstance(observation, dict) or observation.get("schema_version") != OBSERVATION_VERSION:
         raise ContractError("observation schema is invalid")
     policy_identity = _validate_policy(policy, observation["completed_at"])

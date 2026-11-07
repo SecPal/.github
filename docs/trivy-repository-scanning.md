@@ -174,6 +174,10 @@ modules are mapped to their evaluated files rather than incorrectly requiring a
 second root. Missing or unexpected files/roots, substituted source, unknown
 warnings, genuine parse errors and partial scans fail closed.
 
+Every resolution request must have a matching completed local resolution to a
+canonical Git-owned source directory. Every native root must finish evaluation;
+truncated traces and escaping relative paths reject even without new file events.
+
 Tracked `.terraform` initialization caches are rejected before scanning. Native
 resolution of external or absolute-path modules is not admissible, even when it
 produces no findings; every accepted evaluated file belongs to the exact Git

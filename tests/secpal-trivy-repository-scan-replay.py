@@ -511,6 +511,21 @@ def replay_terraform_static(root: Path, trivy: Path, trusted_config: Path, cache
         raise RuntimeError("foreign native module bypassed the subject identity")
     source.write_text(original)
     commit()
+    # An escaping target can be empty and produce no Added-file event.
+    (root / "outside-empty").mkdir()
+    source.write_text(original + '\nmodule "escape" { source = "../../outside-empty" }\n')
+    escaped = commit()
+    native, diagnostic = scan()
+    try:
+        unbound = module.observe_terraform_sources(workspace, escaped, native)
+        module.verify_diagnostics(diagnostic, cache, native=native, scanner=scanner,
+                                  workspace=str(workspace), coverage=unbound)
+    except module.ContractError:
+        pass
+    else:
+        raise RuntimeError("escaping local resolution was admitted without owned source")
+    source.write_text(original)
+    commit()
     (source.parent / "broken.tf").write_text('resource "google_compute_instance" "broken" {\n')
     broken = commit()
     native, diagnostic = scan()
@@ -526,6 +541,7 @@ def replay_terraform_static(root: Path, trivy: Path, trusted_config: Path, cache
             "changed_source_rescanned": True, "actual_parse_failure_rejected": True,
             "opentofu_and_json_sources_bound": True, "nested_local_module_bound": True,
             "resolved_external_module_rejected": True,
+            "escaping_empty_local_module_rejected": True,
             "cloud_operations": "NOT_EXECUTED"}
 
 
