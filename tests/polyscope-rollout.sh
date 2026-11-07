@@ -1559,9 +1559,8 @@ if second.poll() is None:
 assert different_worktree_overlapped, command_log.read_text()
 assert first.returncode == second.returncode == 0, (first_output, second_output)
 
-# A service-style background provision call and direct setup call meet at the
-# same per-worktree boundary even though only the background process also owns
-# the existing global provision lock.
+# Background reconciliation must finish without entering the explicit API
+# bootstrap boundary, even while a development bootstrap holds its lock.
 reset_case_state(race_state)
 background_db = fixture / "background-polyscope.db"
 with sqlite3.connect(background_db) as connection:
@@ -1631,7 +1630,7 @@ with module.provision_worktree_lock(global_lock):
         db_path=db_path,
     )
 assert failures == [], failures
-assert provisioned == ["api:quiet-finch"], provisioned
+assert provisioned == [], provisioned
 """
 first = start_api_mode(physical_worktree, "direct-before-background", hold=True)
 assert wait_for(race_state / "direct-before-background-pending", 10)
@@ -1664,19 +1663,27 @@ background = subprocess.Popen(
     stderr=subprocess.STDOUT,
     text=True,
 )
-assert wait_for(background_lock_attempted, 10), "background provision did not reach the API lock"
-background_commands_while_held = command_log.read_text()
+background_completed_without_bootstrap = False
+try:
+    background_output, _ = background.communicate(timeout=3)
+    background_completed_without_bootstrap = True
+except subprocess.TimeoutExpired:
+    background_output = ""
+finally:
+    with release_first.open("wb") as release:
+        release.write(b"1")
+first_output, _ = first.communicate(timeout=10)
+if background.poll() is None:
+    background_output, _ = background.communicate(timeout=20)
+assert background_completed_without_bootstrap, background_output
+assert not background_lock_attempted.exists()
 assert not any(
     line.startswith(("background:php:", "background:composer"))
-    for line in background_commands_while_held.splitlines()
-), background_commands_while_held
-with release_first.open("wb") as release:
-    release.write(b"1")
-first_output, _ = first.communicate(timeout=10)
-background_output, _ = background.communicate(timeout=20)
+    for line in command_log.read_text().splitlines()
+), command_log.read_text()
 assert first.returncode == background.returncode == 0, (first_output, background_output)
-assert race_state.joinpath("background-revalidated").is_file()
-assert physical_worktree.joinpath(".polyscope-secpal-provisioned.json").is_file()
+assert not race_state.joinpath("background-revalidated").exists()
+assert not physical_worktree.joinpath(".polyscope-secpal-provisioned.json").exists()
 
 # Lock identities are canonical, deterministic, private, and secret-free.
 module_spec = importlib.util.spec_from_file_location("polyscope_rollout_locking", script_path)
@@ -1936,122 +1943,27 @@ PY
 grep -q 'https://api-{{worktree}}.preview.secpal.dev' "$workspace_root/api/polyscope.local.json"
 grep -q 'Apply the current SecPal instructions from ' "$workspace_root/api/polyscope.local.json"
 grep -q 'AGENTS.md' "$workspace_root/api/polyscope.local.json"
-grep -qF "python3 $PYTHON_SCRIPT --bootstrap-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
-if grep -qF -- '--prepare-api-worktree' "$workspace_root/api/polyscope.local.json" \
-    || grep -qF 'test -d vendor || composer install' "$workspace_root/api/polyscope.local.json"; then
-    echo "generated API setup must enter the locked bootstrap boundary exactly once" >&2
-    exit 1
-fi
-grep -qF "python3 $PYTHON_SCRIPT --run-api-runtime-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --runtime-role queue" "$workspace_root/api/polyscope.local.json"
-grep -qF '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json"
-grep -qF "python3 $PYTHON_SCRIPT --run-api-runtime-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --runtime-role scheduler" "$workspace_root/api/polyscope.local.json"
-grep -qF "python3 $PYTHON_SCRIPT --run-api-runtime-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api --runtime-role pail" "$workspace_root/api/polyscope.local.json"
-if grep -A3 '"label": "Scheduler"' "$workspace_root/api/polyscope.local.json" | grep -qF '"autostart": true'; then
-    echo "preview API scheduler must have only the persistent systemd runtime owner" >&2
-    exit 1
-fi
-if grep -qF 'php artisan queue:listen --tries=1' "$workspace_root/api/polyscope.local.json"; then
-    echo "preview API queue worker must use combined queue:work and not queue:listen" >&2
-    exit 1
-fi
-if grep -qF '"command": "php artisan schedule:work"' "$workspace_root/api/polyscope.local.json"; then
-    echo "preview API scheduler must run through the rollout runtime env wrapper" >&2
-    exit 1
-fi
-python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace_root"
-import importlib.util
-import pathlib
+python3 - "$workspace_root" <<'PYCONFIG'
+import json
 import sys
+from pathlib import Path
 
-script_path = pathlib.Path(sys.argv[1])
-workspace_root = pathlib.Path(sys.argv[2])
-spec = importlib.util.spec_from_file_location("polyscope_rollout", script_path)
-module = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(module)
-
-api_run_actions = module.REPO_SETTINGS["api"]["local_config"]["scripts"]["run"]
-queue_worker_action = next(
-    (action for action in api_run_actions if action["label"] == "Queue Worker"),
-    None,
-)
-assert queue_worker_action is not None, api_run_actions
-assert queue_worker_action.get("autostart") is False, queue_worker_action
-assert "--max-time" not in queue_worker_action["command"], queue_worker_action
-api_run_actions[0]["label"] = "Background Queue"
-api_run_actions[1]["label"] = "Cron Loop"
-api_run_actions[2]["label"] = "Log Tail"
-api_spec = module.build_repo_specs(workspace_root)["api"]
-runtime_commands = [
-    action["command"]
-    for action in api_spec["local_config"]["scripts"]["run"][:3]
-]
-assert all("--run-api-runtime-worktree" in command for command in runtime_commands), runtime_commands
-PY
-grep -qF 'Preview Only: Refresh DB + E2E User' "$workspace_root/api/polyscope.local.json"
-grep -qF "python3 $PYTHON_SCRIPT --refresh-api-worktree \\\"\$PWD\\\" --source-repo-path $workspace_root/api" "$workspace_root/api/polyscope.local.json"
-grep -qF '"label": "All Checks"' "$workspace_root/api/polyscope.local.json"
-grep -qF '"command": "php artisan test && vendor/bin/pint --dirty && vendor/bin/phpstan analyse --no-progress"' "$workspace_root/api/polyscope.local.json"
-assert_no_generated_preflight_action "$workspace_root/api/polyscope.local.json"
-grep -qF '"label": "Fix current findings"' "$workspace_root/api/polyscope.local.json"
-grep -qF 'Run the smallest relevant validation actions for this repo while iterating.' "$workspace_root/api/polyscope.local.json"
-grep -qF '"copyGitignored": false' "$workspace_root/api/polyscope.local.json"
-if grep -qF '"command": "php artisan migrate:fresh --seed"' "$workspace_root/api/polyscope.local.json"; then
-    echo "preview API refresh command must use the hardened reseed flow and not raw migrate:fresh --seed" >&2
-    exit 1
-fi
+root = Path(sys.argv[1])
+for name in ("api", "frontend", "contracts", "android", "secpal.app", "deployment", ".github", "operations"):
+    config = json.loads((root / name / "polyscope.local.json").read_text())
+    assert config["scripts"] == {"setup": "", "run": []}, (name, config["scripts"])
+    assert config["copyGitignored"] is False
+    for task in config.get("tasks", []):
+        assert "AGENTS.md" in task["prompt"]
+PYCONFIG
+# Runtime bindings are no longer published, but independent instruction profiles
+# and preview metadata must remain intact.
 grep -q 'frontend/AGENTS.md before taking action' "$workspace_root/frontend/polyscope.local.json"
 grep -q 'https://frontend-{{worktree}}.preview.secpal.dev' "$workspace_root/frontend/polyscope.local.json"
 grep -qF '# Org Instructions' "$workspace_root/.github/.github/copilot-instructions.md"
-# shellcheck disable=SC2016 # Backticks are literal Markdown in the expected text.
-if grep -qF 'mirrors the authoritative root `AGENTS.md`' \
-    "$workspace_root/.github/.github/copilot-instructions.md"; then
-    echo "rollout must not introduce the obsolete Copilot mirror declaration" >&2
-    exit 1
-fi
 grep -q '## Always-On Rules' "$workspace_root/frontend/.github/copilot-instructions.md"
 grep -q 'https://secpal-app-{{worktree}}.preview.secpal.dev' "$workspace_root/secpal.app/polyscope.local.json"
-grep -qF '.env.local' "$workspace_root/frontend/polyscope.local.json"
-grep -qF 'VITE_API_URL' "$workspace_root/frontend/polyscope.local.json"
-grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$workspace_root/frontend/polyscope.local.json"
-grep -qF 'Watching frontend preview sources for changes...' "$workspace_root/frontend/polyscope.local.json"
-grep -qF '"command": "npm run lint && npm run typecheck && npm run test:run:all && npm run build"' "$workspace_root/frontend/polyscope.local.json"
-assert_no_generated_preflight_action "$workspace_root/frontend/polyscope.local.json"
-grep -qF '"label": "Fix current findings"' "$workspace_root/frontend/polyscope.local.json"
-if grep -qF 'test:preview:pwa-headers' "$workspace_root/frontend/polyscope.local.json"; then
-    echo "rollout must not reference an unavailable frontend npm script" >&2
-    exit 1
-fi
-if grep -qF "npx vite build --watch --mode preview" "$workspace_root/frontend/polyscope.local.json"; then
-    echo "generated frontend Polyscope config must not rely on Vite watch mode for preview rebuilds" >&2
-    exit 1
-fi
-grep -q 'npm run test:e2e:ci' "$workspace_root/frontend/polyscope.local.json"
-grep -qF 'PLAYWRIGHT_BASE_URL' "$workspace_root/frontend/polyscope.local.json"
-grep -qF 'PLAYWRIGHT_API_BASE_URL' "$workspace_root/frontend/polyscope.local.json"
-grep -qF 'POLYSCOPE_WORKSPACE' "$workspace_root/frontend/polyscope.local.json"
-grep -qF 'tests/e2e/smoke.spec.ts' "$workspace_root/frontend/polyscope.local.json"
-grep -qF -- '--project=chromium' "$workspace_root/frontend/polyscope.local.json"
-grep -qF -- '--project=mobile-chrome' "$workspace_root/frontend/polyscope.local.json"
-grep -qF 'TEST_USER_EMAIL' "$workspace_root/frontend/polyscope.local.json"
-if grep -q 'test:e2e:staging' "$workspace_root/frontend/polyscope.local.json"; then
-    echo "generated frontend Polyscope config must not reference the removed test:e2e:staging script" >&2
-    exit 1
-fi
 grep -q 'polyscope.local.json' "$workspace_root/api/.git/info/exclude"
-if grep -q 'TEST_USER_EMAIL=test@password\.com' "$workspace_root/frontend/polyscope.local.json"; then
-    echo "generated frontend Polyscope preview commands must not use the obsolete test@password.com credential" >&2
-    exit 1
-fi
-if grep -q 'npm install' "$workspace_root/api/polyscope.local.json"; then
-    echo "api polyscope config must not run npm install" >&2
-    exit 1
-fi
-
-if grep -q 'npm run build' "$workspace_root/api/polyscope.local.json"; then
-    echo "api polyscope config must not run npm build" >&2
-    exit 1
-fi
 
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace" "$REPO_ROOT"
 import importlib.util
@@ -4656,20 +4568,13 @@ assert "FRONTEND_URL=https://frontend-azure-cheetah.preview.secpal.dev" in api_e
 )
 PY
 
-grep -qF '"command": "npm run validate"' "$workspace_root/contracts/polyscope.local.json"
 assert_no_generated_preflight_action "$workspace_root/contracts/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/contracts/polyscope.local.json"
-grep -qF '"command": "npm run lint && npm run typecheck && npm run test:run && npm run native:verify"' "$workspace_root/android/polyscope.local.json"
 assert_no_generated_preflight_action "$workspace_root/android/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/android/polyscope.local.json"
 grep -q '^sdk\.dir=' "$workspace_root/android/android/local.properties"
-grep -qF '"command": "npm run check && npm run lint && npm run test && npm run build"' "$workspace_root/secpal.app/polyscope.local.json"
 assert_no_generated_preflight_action "$workspace_root/secpal.app/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/secpal.app/polyscope.local.json"
-grep -qF '"label": "Build Watch"' "$workspace_root/secpal.app/polyscope.local.json"
-grep -qF 'Watching secpal.app preview sources for changes...' "$workspace_root/secpal.app/polyscope.local.json"
-grep -qF 'public/og-default.svg' "$workspace_root/secpal.app/polyscope.local.json"
-grep -qF 'public/og-de.png' "$workspace_root/secpal.app/polyscope.local.json"
 assert_no_generated_preflight_action "$workspace_root/.github/polyscope.local.json"
 grep -qF '"label": "Fix current findings"' "$workspace_root/.github/polyscope.local.json"
 
@@ -5361,1216 +5266,62 @@ summary = json.loads(Path(sys.argv[1]).read_text())
 assert summary['db_backup'] is None
 PY
 
-provision_log="$workspace/provision.log"
-fake_psql_log="$workspace/psql.log"
-fake_pg_state="$workspace/postgres-state.json"
-fake_exec_dir="$workspace/fake-exec"
-service_path="$fake_exec_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
-api_clone="$home_dir/.polyscope/clones/api12345/auto-hawk"
-broken_api_clone="$home_dir/.polyscope/clones/api12345/fix"
-garbled_git_api_clone="$home_dir/.polyscope/clones/api12345/chore"
-frontend_clone="$home_dir/.polyscope/clones/fe123456/auto-hawk"
-broken_frontend_clone="$home_dir/.polyscope/clones/fe123456/feat"
-broken_android_clone="$home_dir/.polyscope/clones/an123456/feat"
-android_clone="$home_dir/.polyscope/clones/an123456/auto-hawk"
-mkdir -p "$fake_exec_dir" "$api_clone/.git/info" "$api_clone/.git/hooks" "$api_clone/scripts" "$broken_api_clone/.git" "$garbled_git_api_clone" "$frontend_clone/.git/info" "$frontend_clone/.git/hooks" "$frontend_clone/scripts" "$broken_frontend_clone" "$broken_android_clone/.git/info" "$broken_android_clone/.git/hooks" "$android_clone/.git/info" "$android_clone/.git/hooks"
-git -C "$api_clone" init --quiet
-git -C "$frontend_clone" init --quiet
-git -C "$android_clone" init --quiet
-printf 'not-a-git-pointer\n' > "$garbled_git_api_clone/.git"
-mkdir -p "$home_dir/.local/bin"
-
-python3 - <<'PY' "$fake_pg_state"
-import json
-import sys
-from pathlib import Path
-
-Path(sys.argv[1]).write_text(json.dumps({"databases": ["secpal"], "schemas": [], "rolcreatedb": True}))
-PY
-
-cat >"$fake_exec_dir/composer" <<'STUB'
-#!/usr/bin/env bash
-printf 'composer:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
-mkdir -p vendor
-STUB
-chmod +x "$fake_exec_dir/composer"
-
-cat >"$fake_exec_dir/php" <<'STUB'
-#!/usr/bin/env bash
-printf 'php:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
-if [[ "$*" == "artisan keys:generate-kek" ]]; then
-    mkdir -p "$(dirname "$KEK_PATH")"
-    printf 'generated-preview-kek' > "$KEK_PATH"
-    chmod 0600 "$KEK_PATH"
-fi
-if [[ -n "${FAIL_ON_WORKTREE:-}" && "$PWD" == "$FAIL_ON_WORKTREE" ]]; then
-    exit 23
-fi
-exit 0
-STUB
-chmod +x "$fake_exec_dir/php"
-
-cat >"$fake_exec_dir/npm" <<'STUB'
-#!/usr/bin/env bash
-printf 'npm:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
-if [[ "$*" == *" ci"* || "$1" == "ci" ]]; then
-    mkdir -p node_modules/typescript/lib node_modules/@types/node node_modules/.bin
-    printf '{}\n' > node_modules/.package-lock.json
-    printf '// fake lib\n' > node_modules/typescript/lib/lib.es2020.d.ts
-    printf '// fake lib\n' > node_modules/typescript/lib/lib.dom.d.ts
-    printf '{ "name": "@types/node" }\n' > node_modules/@types/node/package.json
-    for binary in cross-env vite; do
-        printf '#!/usr/bin/env bash\nexit 0\n' > "node_modules/.bin/$binary"
-        chmod +x "node_modules/.bin/$binary"
-    done
-fi
-if [[ "$*" == *"run build"* ]]; then
-    out_dir="dist"
-    prev=""
-    for arg in "$@"; do
-        if [[ "$prev" == "--outDir" ]]; then
-            out_dir="$arg"
-            break
-        fi
-        prev="$arg"
-    done
-    mkdir -p "$out_dir/assets" "$out_dir/.well-known"
-    printf '<!doctype html>\n' > "$out_dir/index.html"
-    printf 'self.skipWaiting();\n' > "$out_dir/sw.js"
-    printf '{}\n' > "$out_dir/manifest.webmanifest"
-    printf 'console.log("chunk");\n' > "$out_dir/assets/index-abc123.js"
-    printf '{}\n' > "$out_dir/.well-known/assetlinks.json"
-fi
-exit 0
-STUB
-chmod +x "$fake_exec_dir/npm"
-
-cat >"$fake_exec_dir/psql" <<'STUB'
-#!/usr/bin/env python3
+# Complete installed-style reconciliation must leave mutable workspaces alone,
+# even with stale markers, invalid instructions, lifecycle scripts or symlinks.
+python3 - "$PYTHON_SCRIPT" "$workspace" "$workspace_root" "$home_dir" "$db_path" "$repos_json" <<'PYSERVICE'
+import hashlib
 import json
 import os
-import re
-import shlex
-import sys
 from pathlib import Path
-
-log_path = Path(os.environ["FAKE_PSQL_LOG"])
-state_path = Path(os.environ["FAKE_PSQL_STATE"])
-
-state = {"databases": [], "schemas": [], "rolcreatedb": True}
-if state_path.exists():
-    state = json.loads(state_path.read_text())
-
-args = sys.argv[1:]
-sql = ""
-if "-Atqc" in args:
-    sql = args[args.index("-Atqc") + 1]
-elif "-c" in args:
-    sql = args[args.index("-c") + 1]
-
-with log_path.open("a") as handle:
-    handle.write(f"psql:{os.getcwd()}:{shlex.join(args)}:{sql}\n")
-
-databases = state.get("databases", [])
-schemas = state.get("schemas", [])
-role_match = re.search(r"SELECT rolcreatedb FROM pg_roles WHERE rolname = current_user", sql)
-exists_match = re.search(r"SELECT 1 FROM pg_database WHERE datname = '([^']+)'", sql)
-list_match = re.search(r"SELECT datname FROM pg_database WHERE datname LIKE '([^']+)'", sql)
-create_match = re.search(r'CREATE DATABASE "([^"]+)"', sql)
-drop_match = re.search(r'DROP DATABASE IF EXISTS "([^"]+)"(?: WITH \(FORCE\))?', sql)
-schema_list_match = re.search(r"SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE '([^']+)'", sql)
-create_schema_match = re.search(r'CREATE SCHEMA IF NOT EXISTS "([^"]+)"', sql)
-drop_schema_match = re.search(r'DROP SCHEMA IF EXISTS "([^"]+)" CASCADE', sql)
-
-if role_match:
-    sys.stdout.write("t\n" if state.get("rolcreatedb", False) else "f\n")
-elif exists_match:
-    database_name = exists_match.group(1)
-    if database_name in databases:
-        sys.stdout.write("1\n")
-elif list_match:
-    prefix = list_match.group(1).replace("%", "")
-    matches = sorted(database_name for database_name in databases if database_name.startswith(prefix))
-    if matches:
-        sys.stdout.write("\n".join(matches) + "\n")
-elif schema_list_match:
-    prefix = schema_list_match.group(1).replace("%", "")
-    matches = sorted(schema_name for schema_name in schemas if schema_name.startswith(prefix))
-    if matches:
-        sys.stdout.write("\n".join(matches) + "\n")
-elif create_match:
-    database_name = create_match.group(1)
-    if database_name not in databases:
-        databases.append(database_name)
-elif drop_match:
-    database_name = drop_match.group(1)
-    databases = [entry for entry in databases if entry != database_name]
-elif create_schema_match:
-    schema_name = create_schema_match.group(1)
-    if schema_name not in schemas:
-        schemas.append(schema_name)
-elif drop_schema_match:
-    schema_name = drop_schema_match.group(1)
-    schemas = [entry for entry in schemas if entry != schema_name]
-
-state["databases"] = sorted(databases)
-state["schemas"] = sorted(schemas)
-state_path.write_text(json.dumps(state))
-STUB
-chmod +x "$fake_exec_dir/psql"
-
-cat >"$home_dir/.local/bin/pre-commit" <<'STUB'
-#!/usr/bin/env bash
-printf 'pre-commit:%s:%s\n' "$PWD" "$*" >> "$PROVISION_LOG"
-mkdir -p .git/hooks
-cat > .git/hooks/pre-commit <<'HOOK'
-#!/usr/bin/env bash
-exit 0
-HOOK
-chmod +x .git/hooks/pre-commit
-exit 0
-STUB
-chmod +x "$home_dir/.local/bin/pre-commit"
-# Keep the provisioning double ahead of pre-commit installed on the test host.
-ln -s "$home_dir/.local/bin/pre-commit" "$fake_exec_dir/pre-commit"
-
-cat >"$workspace_root/api/.env" <<'EOF'
-APP_URL=https://api.secpal.dev
-FRONTEND_URL=https://app.secpal.dev
-DB_CONNECTION=pgsql
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_DATABASE=secpal
-DB_USERNAME=secpal
-DB_PASSWORD=
-SESSION_DOMAIN=.secpal.dev
-SANCTUM_STATEFUL_DOMAINS=app.secpal.dev
-CORS_ALLOWED_ORIGINS=https://app.secpal.dev
-EOF
-
-seed_api_worktree_files "$api_clone"
-write_valid_worktree_instructions "$broken_api_clone" CC0-1.0
-printf '{"name":"secpal/api"}\n' >"$broken_api_clone/composer.json"
-seed_node_worktree_files "$frontend_clone" "frontend-auto-hawk"
-seed_node_worktree_files "$broken_android_clone" "android-feat"
-seed_node_worktree_files "$android_clone" "android-auto-hawk"
-mkdir -p "$android_clone/android"
-touch "$android_clone/android/settings.gradle"
-cat >"$android_clone/android/local.properties" <<'EOF'
-ndk.dir=/opt/android-ndk
-sdk.dir=/tmp/obsolete-sdk
-cmake.dir=/opt/android-cmake
-EOF
-
-cp "$workspace_root/api/.env" "$api_clone/.env"
-: > "$broken_api_clone/.env"
-
-cat >"$api_clone/.pre-commit-config.yaml" <<'EOF'
-repos: []
-EOF
-
-cat >"$api_clone/scripts/preflight.sh" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-chmod +x "$api_clone/scripts/preflight.sh"
-
-cat >"$frontend_clone/.env.local" <<'EOF'
-VITE_API_URL=https://api.secpal.dev
-EOF
-
-cat >"$frontend_clone/.env.preview.local" <<'EOF'
-VITE_API_URL=https://api.secpal.dev
-EOF
-
-cat >"$frontend_clone/.env.production.local" <<'EOF'
-VITE_API_URL=https://api.secpal.dev
-EOF
-
-cat >"$frontend_clone/.pre-commit-config.yaml" <<'EOF'
-repos: []
-EOF
-
-cat >"$frontend_clone/scripts/preflight.sh" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-chmod +x "$frontend_clone/scripts/preflight.sh"
-
-mkdir -p "$api_clone/.git/hooks" "$frontend_clone/.git/hooks"
-ln -s ../../scripts/preflight.sh "$api_clone/.git/hooks/pre-push"
-cat >"$frontend_clone/.git/hooks/pre-push" <<'EOF'
-#!/usr/bin/env bash
-echo custom pre-push
-EOF
-chmod +x "$frontend_clone/.git/hooks/pre-push"
-
-shared_android_sdk_root="$workspace/shared-android-sdk"
-mkdir -p "$shared_android_sdk_root/platform-tools" "$shared_android_sdk_root/cmdline-tools/latest"
-
-# Canonical validation of all candidate worktrees must finish before the first
-# worktree-local configuration, setup, alias, hook, or provision-marker write.
-assert_invalid_candidate_blocks_provisioning() {
-    local fixture_name="$1"
-    local target_file="$2"
-    local fixture_mode="$3"
-    local expected_reason="$4"
-    local invalid_instruction_clone="$home_dir/.polyscope/clones/fe123456/$fixture_name"
-    local invalid_candidate_summary="$workspace/$fixture_name-summary.json"
-    local invalid_candidate_stdout="$workspace/$fixture_name.stdout"
-    local invalid_candidate_stderr="$workspace/$fixture_name.stderr"
-    local api_env_hash_before_invalid_candidate
-    local db_hash_before_invalid_candidate
-    local pg_state_hash_before_invalid_candidate
-
-    mkdir -p "$invalid_instruction_clone/.git/info"
-    seed_node_worktree_files "$invalid_instruction_clone" "frontend-$fixture_name"
-    case "$fixture_mode" in
-        duplicate-heading)
-            printf '\n# Duplicate Top-Level Heading\n' \
-                >>"$invalid_instruction_clone/$target_file"
-            ;;
-        missing-spdx)
-            sed -i '/SPDX-License''-Identifier:/d' \
-                "$invalid_instruction_clone/$target_file"
-            ;;
-        *)
-            echo "unsupported invalid candidate fixture: $fixture_mode" >&2
-            exit 1
-            ;;
-    esac
-
-    replace_registered_worktrees "fe123456" "$invalid_instruction_clone"
-    api_env_hash_before_invalid_candidate="$(file_sha256 "$api_clone/.env")"
-    db_hash_before_invalid_candidate="$(file_sha256 "$db_path")"
-    pg_state_hash_before_invalid_candidate="$(file_sha256 "$fake_pg_state")"
-
-    if env HOME="$home_dir" \
-            PATH="$service_path" \
-            POLYSCOPE_ANDROID_SDK_ROOT="$shared_android_sdk_root" \
-            PROVISION_LOG="$provision_log" \
-            FAKE_PSQL_LOG="$fake_psql_log" \
-            FAKE_PSQL_STATE="$fake_pg_state" \
-            python3 "$PYTHON_SCRIPT" \
-            --workspace-root "$workspace_root" \
-            --db-path "$db_path" \
-            --repo-state-file "$repos_json" \
-            --nginx-output "$nginx_output" \
-            --summary-output "$invalid_candidate_summary" \
-            --skip-local-configs \
-            --skip-db-sync \
-            --provision-worktrees \
-            >"$invalid_candidate_stdout" 2>"$invalid_candidate_stderr"; then
-        echo "rollout must fail when candidate $fixture_name has invalid instructions" >&2
-        exit 1
-    fi
-
-    grep -qF "canonical AI-instruction validation failed for $invalid_instruction_clone" \
-        "$invalid_candidate_stderr"
-    grep -qF "$(basename "$target_file")" "$invalid_candidate_stderr"
-    grep -qF "$expected_reason" "$invalid_candidate_stderr"
-    test "$(file_sha256 "$api_clone/.env")" = "$api_env_hash_before_invalid_candidate"
-    test "$(file_sha256 "$db_path")" = "$db_hash_before_invalid_candidate"
-    test "$(file_sha256 "$fake_pg_state")" = "$pg_state_hash_before_invalid_candidate"
-    test ! -s "$provision_log"
-    test ! -e "$api_clone/polyscope.local.json"
-    test ! -e "$api_clone/.polyscope-secpal-provisioned.json"
-    test ! -e "$frontend_clone/polyscope.local.json"
-    test ! -e "$frontend_clone/.polyscope-secpal-provisioned.json"
-    test ! -e "$invalid_instruction_clone/polyscope.local.json"
-    test ! -e "$invalid_instruction_clone/.polyscope-secpal-provisioned.json"
-    python3 - "$invalid_candidate_summary" "$invalid_instruction_clone" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-summary = json.loads(Path(sys.argv[1]).read_text())
-invalid_path = sys.argv[2]
-assert summary.get("provisioned_worktrees", []) == [], summary
-failures = summary.get("failed_provision_worktrees", [])
-assert len(failures) == 1, failures
-assert failures[0]["path"] == invalid_path, failures
-assert "canonical AI-instruction validation failed" in failures[0]["error"], failures
-PY
-    replace_registered_worktrees
-    rm -rf "$invalid_instruction_clone"
-}
-
-assert_invalid_candidate_blocks_provisioning \
-    "invalid-agents" "AGENTS.md" "duplicate-heading" \
-    "instruction Markdown passes lint"
-assert_invalid_candidate_blocks_provisioning \
-    "invalid-copilot" ".github/copilot-instructions.md" "missing-spdx" \
-    "copilot-instructions.md must declare exactly one complete permitted SPDX expression: AGPL-3.0-or-later"
-
-replace_registered_worktrees \
-    "api12345" "$api_clone" \
-    "api12345" "$broken_api_clone" \
-    "api12345" "$garbled_git_api_clone" \
-    "fe123456" "$frontend_clone" \
-    "fe123456" "$broken_frontend_clone" \
-    "an123456" "$broken_android_clone" \
-    "an123456" "$android_clone"
-
-provision_summary_json="$workspace/provision-summary.json"
-env HOME="$home_dir" \
-    PATH="$service_path" \
-    POLYSCOPE_ANDROID_SDK_ROOT="$shared_android_sdk_root" \
-    PROVISION_LOG="$provision_log" \
-    FAKE_PSQL_LOG="$fake_psql_log" \
-    FAKE_PSQL_STATE="$fake_pg_state" \
-    python3 "$PYTHON_SCRIPT" \
-    --workspace-root "$workspace_root" \
-    --db-path "$db_path" \
-    --repo-state-file "$repos_json" \
-    --nginx-output "$nginx_output" \
-    --summary-output "$provision_summary_json" \
-    --skip-local-configs \
-    --skip-db-sync \
-    --provision-worktrees \
-    > /dev/null
-
-python3 - "$provision_summary_json" <<'PY'
-import json, sys
-summary = json.loads(open(sys.argv[1]).read())
-provisioned = summary.get('provisioned_worktrees', [])
-cleaned = summary.get('cleaned_preview_storage_targets', [])
-assert 'api:auto-hawk' in provisioned, f"expected api:auto-hawk in provisioned_worktrees, got {provisioned}"
-assert 'frontend:auto-hawk' in provisioned, f"expected frontend:auto-hawk in provisioned_worktrees, got {provisioned}"
-assert 'android:auto-hawk' in provisioned, f"expected android:auto-hawk in provisioned_worktrees, got {provisioned}"
-assert 'api:fix' not in provisioned, f"did not expect api:fix in provisioned_worktrees, got {provisioned}"
-assert 'api:chore' not in provisioned, f"did not expect api:chore in provisioned_worktrees, got {provisioned}"
-assert 'frontend:feat' not in provisioned, f"did not expect frontend:feat in provisioned_worktrees, got {provisioned}"
-assert 'android:feat' not in provisioned, f"did not expect android:feat in provisioned_worktrees, got {provisioned}"
-assert cleaned == [], f"expected no cleaned preview databases on first provisioning run, got {cleaned}"
-PY
-
-grep -qF 'APP_URL=https://api-auto-hawk.preview.secpal.dev' "$api_clone/.env"
-grep -qF 'FRONTEND_URL=https://frontend-auto-hawk.preview.secpal.dev' "$api_clone/.env"
-grep -qF 'DB_CONNECTION=pgsql' "$api_clone/.env"
-grep -qF 'DB_DATABASE=secpal__preview__auto_hawk' "$api_clone/.env"
-grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$api_clone/.env"
-grep -qF "KEK_PATH=$api_clone/storage/app/keys/kek.key" "$api_clone/.env"
-grep -qF 'SANCTUM_STATEFUL_DOMAINS=frontend-auto-hawk.preview.secpal.dev,auto-hawk.preview.secpal.dev,app.secpal.dev' "$api_clone/.env"
-grep -qF 'CORS_ALLOWED_ORIGINS=https://frontend-auto-hawk.preview.secpal.dev,https://auto-hawk.preview.secpal.dev,https://app.secpal.dev' "$api_clone/.env"
-grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.local"
-grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.preview.local"
-grep -qF 'VITE_API_URL=https://api-auto-hawk.preview.secpal.dev' "$frontend_clone/.env.production.local"
-test -f "$api_clone/polyscope.local.json"
-test -f "$frontend_clone/polyscope.local.json"
-grep -qF 'bootstrap-api-worktree' "$api_clone/polyscope.local.json"
-if grep -qF 'prepare-api-worktree' "$api_clone/polyscope.local.json"; then
-    echo "provisioned API config must not split readiness from locked bootstrap" >&2
-    exit 1
-fi
-grep -qF 'source-repo-path' "$api_clone/polyscope.local.json"
-grep -qF 'resolve_linked_workspace(\"SecPal/api\", workspace)' "$frontend_clone/polyscope.local.json"
-python3 - "$api_clone/.polyscope-secpal-provisioned.json" "$frontend_clone/.polyscope-secpal-provisioned.json" <<'PY'
-import json
+import sqlite3
+import subprocess
 import sys
 
-for marker_path in sys.argv[1:]:
-    marker = json.loads(open(marker_path).read())
-    assert marker["workspace"] == "auto-hawk", marker
-PY
-grep -q '^sdk\.dir='"$shared_android_sdk_root"'$' "$android_clone/android/local.properties"
-grep -q '^ndk\.dir=/opt/android-ndk$' "$android_clone/android/local.properties"
-grep -q '^cmake\.dir=/opt/android-cmake$' "$android_clone/android/local.properties"
-grep -q '^polyscope.local.json$' "$api_clone/.git/info/exclude"
-grep -qF '.polyscope-secpal-provisioned.json' "$api_clone/.git/info/exclude"
-grep -q '^android/local\.properties$' "$android_clone/.git/info/exclude"
-test -x "$api_clone/.git/hooks/pre-commit"
-test ! -e "$api_clone/.git/hooks/pre-push"
-test -L "$api_clone/.git/hooks/commit-msg"
-readlink "$api_clone/.git/hooks/commit-msg" | grep -qF 'strip-ai-trailers.sh'
-test -x "$frontend_clone/.git/hooks/pre-commit"
-test -f "$frontend_clone/.git/hooks/pre-push"
-grep -qF 'echo custom pre-push' "$frontend_clone/.git/hooks/pre-push"
-test -L "$frontend_clone/.git/hooks/commit-msg"
-readlink "$frontend_clone/.git/hooks/commit-msg" | grep -qF 'strip-ai-trailers.sh'
-test -f "$api_clone/.polyscope-secpal-provisioned.json"
-test -f "$frontend_clone/.polyscope-secpal-provisioned.json"
-test ! -f "$broken_api_clone/polyscope.local.json"
-test ! -f "$broken_api_clone/.polyscope-secpal-provisioned.json"
-test ! -f "$garbled_git_api_clone/polyscope.local.json"
-test ! -f "$garbled_git_api_clone/.polyscope-secpal-provisioned.json"
-test ! -f "$broken_frontend_clone/polyscope.local.json"
-test ! -f "$broken_frontend_clone/.polyscope-secpal-provisioned.json"
-test ! -f "$broken_android_clone/android/local.properties"
-test ! -f "$broken_android_clone/.polyscope-secpal-provisioned.json"
-grep -qF "composer:$api_clone:install" "$provision_log"
-grep -qF "php:$api_clone:artisan config:clear" "$provision_log"
-grep -qF "php:$api_clone:artisan migrate --force" "$provision_log"
-grep -qF "php:$api_clone:artisan addresses:import --if-empty --setup-only --no-interaction" "$provision_log"
-grep -qF "php:$api_clone:artisan db:seed --force" "$provision_log"
-grep -qF "php:$api_clone:artisan tinker --execute=" "$provision_log"
-grep -qF "npm:$frontend_clone:ci" "$provision_log"
-grep -qF "npm:$frontend_clone:run build -- --mode preview" "$provision_log"
-grep -qF "pre-commit:$api_clone:install --install-hooks --hook-type pre-commit" "$provision_log"
-grep -qF "pre-commit:$frontend_clone:install --install-hooks --hook-type pre-commit" "$provision_log"
-grep -qF "SELECT 1 FROM pg_database WHERE datname = 'secpal__preview__auto_hawk'" "$fake_psql_log"
-grep -qF 'CREATE DATABASE "secpal__preview__auto_hawk"' "$fake_psql_log"
-grep -qF -- '-h 127.0.0.1 -p 5432 -U secpal -d secpal -Atqc' "$fake_psql_log"
-
-if grep -qF "$broken_api_clone" "$provision_log"; then
-    echo "provisioning must skip invalid api stub directories" >&2
-    exit 1
-fi
-
-if grep -qF "$garbled_git_api_clone" "$provision_log"; then
-    echo "provisioning must skip api worktrees with garbled .git files" >&2
-    exit 1
-fi
-
-if grep -qF "$broken_frontend_clone" "$provision_log"; then
-    echo "provisioning must skip invalid frontend stub directories" >&2
-    exit 1
-fi
-
-python3 - <<'PY' "$fake_pg_state"
-import json
-import sys
-
-state = json.loads(open(sys.argv[1]).read())
-assert 'secpal' in state['databases']
-assert 'secpal__preview__auto_hawk' in state['databases']
-PY
-
-python3 - <<'PY' "$fake_pg_state"
-import json
-import sys
-
-state = json.loads(open(sys.argv[1]).read())
-state['databases'].append('secpal__preview__fix')
-open(sys.argv[1], 'w').write(json.dumps(state))
-PY
-
-invalid_dir_cleanup_summary_json="$workspace/invalid-dir-cleanup-summary.json"
-replace_registered_worktrees \
-    "api12345" "$api_clone" \
-    "fe123456" "$frontend_clone" \
-    "an123456" "$android_clone"
-env HOME="$home_dir" \
-    PATH="$service_path" \
-    PROVISION_LOG="$provision_log" \
-    FAKE_PSQL_LOG="$fake_psql_log" \
-    FAKE_PSQL_STATE="$fake_pg_state" \
-    python3 "$PYTHON_SCRIPT" \
-    --workspace-root "$workspace_root" \
-    --db-path "$db_path" \
-    --repo-state-file "$repos_json" \
-    --nginx-output "$nginx_output" \
-    --summary-output "$invalid_dir_cleanup_summary_json" \
-    --skip-local-configs \
-    --skip-db-sync \
-    --provision-worktrees \
-    > /dev/null
-
-python3 - "$invalid_dir_cleanup_summary_json" "$fake_pg_state" <<'PY'
-import json
-import sys
-
-summary = json.loads(open(sys.argv[1]).read())
-state = json.loads(open(sys.argv[2]).read())
-
-assert summary.get('provisioned_worktrees', []) == [], summary.get('provisioned_worktrees', [])
-assert summary.get('cleaned_preview_storage_targets', []) == ['secpal__preview__fix'], summary.get('cleaned_preview_storage_targets', [])
-assert 'secpal__preview__fix' not in state['databases'], state['databases']
-PY
-
-grep -qF 'DROP DATABASE IF EXISTS "secpal__preview__fix" WITH (FORCE)' "$fake_psql_log"
-
-# An active API registration may briefly precede its filesystem materialization.
-# Its deterministic preview target remains live until the registration itself
-# becomes inactive, regardless of provisioning eligibility.
-missing_active_api_clone="$home_dir/.polyscope/clones/api12345/pending-otter"
-python3 - <<'PY' "$fake_pg_state"
-import json
-import sys
-
-state = json.loads(open(sys.argv[1]).read())
-state['databases'].append('secpal__preview__pending_otter')
-open(sys.argv[1], 'w').write(json.dumps(state))
-PY
-
-missing_active_summary_json="$workspace/missing-active-summary.json"
-replace_registered_worktrees \
-    "api12345" "$api_clone" \
-    "api12345" "$missing_active_api_clone" \
-    "fe123456" "$frontend_clone" \
-    "an123456" "$android_clone"
-env HOME="$home_dir" \
-    PATH="$service_path" \
-    PROVISION_LOG="$provision_log" \
-    FAKE_PSQL_LOG="$fake_psql_log" \
-    FAKE_PSQL_STATE="$fake_pg_state" \
-    python3 "$PYTHON_SCRIPT" \
-    --workspace-root "$workspace_root" \
-    --db-path "$db_path" \
-    --repo-state-file "$repos_json" \
-    --nginx-output "$nginx_output" \
-    --summary-output "$missing_active_summary_json" \
-    --skip-local-configs \
-    --skip-db-sync \
-    --provision-worktrees \
-    > /dev/null
-
-python3 - "$missing_active_summary_json" "$fake_pg_state" <<'PY'
-import json
-import sys
-
-summary = json.loads(open(sys.argv[1]).read())
-state = json.loads(open(sys.argv[2]).read())
-assert summary.get('cleaned_preview_storage_targets', []) == [], summary
-assert 'secpal__preview__pending_otter' in state['databases'], state['databases']
-PY
-
-missing_removed_summary_json="$workspace/missing-removed-summary.json"
-replace_registered_worktrees \
-    "api12345" "$api_clone" \
-    "fe123456" "$frontend_clone" \
-    "an123456" "$android_clone"
-env HOME="$home_dir" \
-    PATH="$service_path" \
-    PROVISION_LOG="$provision_log" \
-    FAKE_PSQL_LOG="$fake_psql_log" \
-    FAKE_PSQL_STATE="$fake_pg_state" \
-    python3 "$PYTHON_SCRIPT" \
-    --workspace-root "$workspace_root" \
-    --db-path "$db_path" \
-    --repo-state-file "$repos_json" \
-    --nginx-output "$nginx_output" \
-    --summary-output "$missing_removed_summary_json" \
-    --skip-local-configs \
-    --skip-db-sync \
-    --provision-worktrees \
-    > /dev/null
-
-python3 - "$missing_removed_summary_json" "$fake_pg_state" <<'PY'
-import json
-import sys
-
-summary = json.loads(open(sys.argv[1]).read())
-state = json.loads(open(sys.argv[2]).read())
-assert summary.get('cleaned_preview_storage_targets', []) == ['secpal__preview__pending_otter'], summary
-assert 'secpal__preview__pending_otter' not in state['databases'], state['databases']
-PY
-
-legacy_hashed_api_clone="$home_dir/.polyscope/clones/api12345/legacy-hawk-165552b7"
-mkdir -p "$legacy_hashed_api_clone/.git/info" "$legacy_hashed_api_clone/.git/hooks" "$legacy_hashed_api_clone/scripts"
-git -C "$legacy_hashed_api_clone" init --quiet
-seed_api_worktree_files "$legacy_hashed_api_clone"
-cat >"$legacy_hashed_api_clone/.env" <<'EOF'
-APP_URL=https://api-legacy-hawk.preview.secpal.dev
-FRONTEND_URL=https://frontend-legacy-hawk.preview.secpal.dev
-DB_CONNECTION=pgsql
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_DATABASE=secpal__preview__legacy_hawk_165552b7
-DB_USERNAME=secpal
-DB_PASSWORD=
-SESSION_DOMAIN=.secpal.dev
-SANCTUM_STATEFUL_DOMAINS=frontend-legacy-hawk.preview.secpal.dev,legacy-hawk.preview.secpal.dev,app.secpal.dev
-CORS_ALLOWED_ORIGINS=https://frontend-legacy-hawk.preview.secpal.dev,https://legacy-hawk.preview.secpal.dev,https://app.secpal.dev
-EOF
-cat >"$legacy_hashed_api_clone/.pre-commit-config.yaml" <<'EOF'
-repos: []
-EOF
-cat >"$legacy_hashed_api_clone/scripts/preflight.sh" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-chmod +x "$legacy_hashed_api_clone/scripts/preflight.sh"
-
-python3 - <<'PY' "$fake_pg_state"
-import json
-import sys
-
-state = json.loads(open(sys.argv[1]).read())
-state['databases'].append('secpal__preview__legacy_hawk_165552b7')
-open(sys.argv[1], 'w').write(json.dumps(state))
-PY
-
-stale_api_clone="$home_dir/.polyscope/clones/api12345/stale-otter"
-mkdir -p "$stale_api_clone/.git/info" "$stale_api_clone/.git/hooks" "$stale_api_clone/scripts"
-git -C "$stale_api_clone" init --quiet
-seed_api_worktree_files "$stale_api_clone"
-cp "$workspace_root/api/.env" "$stale_api_clone/.env"
-
-cat >"$stale_api_clone/.pre-commit-config.yaml" <<'EOF'
-repos: []
-EOF
-
-cat >"$stale_api_clone/scripts/preflight.sh" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-chmod +x "$stale_api_clone/scripts/preflight.sh"
-
-stale_provision_summary_json="$workspace/stale-provision-summary.json"
-replace_registered_worktrees \
-    "api12345" "$api_clone" \
-    "fe123456" "$frontend_clone" \
-    "an123456" "$android_clone" \
-    "api12345" "$legacy_hashed_api_clone" \
-    "api12345" "$stale_api_clone"
-env HOME="$home_dir" \
-    PATH="$service_path" \
-    PROVISION_LOG="$provision_log" \
-    FAKE_PSQL_LOG="$fake_psql_log" \
-    FAKE_PSQL_STATE="$fake_pg_state" \
-    python3 "$PYTHON_SCRIPT" \
-    --workspace-root "$workspace_root" \
-    --db-path "$db_path" \
-    --repo-state-file "$repos_json" \
-    --nginx-output "$nginx_output" \
-    --summary-output "$stale_provision_summary_json" \
-    --skip-local-configs \
-    --skip-db-sync \
-    --provision-worktrees \
-    > /dev/null
-
-python3 - "$stale_provision_summary_json" <<'PY'
-import json, sys
-summary = json.loads(open(sys.argv[1]).read())
-provisioned = summary.get('provisioned_worktrees', [])
-cleaned = summary.get('cleaned_preview_storage_targets', [])
-assert 'api:stale-otter' in provisioned, f"expected api:stale-otter in provisioned_worktrees, got {provisioned}"
-assert 'api:legacy-hawk' in provisioned, f"expected legacy hashed api worktree to reprovision as api:legacy-hawk, got {provisioned}"
-assert cleaned == [], f"expected no cleaned preview databases while stale-otter still exists, got {cleaned}"
-PY
-
-grep -qF 'APP_URL=https://api-stale-otter.preview.secpal.dev' "$stale_api_clone/.env"
-grep -qF 'FRONTEND_URL=https://frontend-stale-otter.preview.secpal.dev' "$stale_api_clone/.env"
-grep -qF 'DB_DATABASE=secpal__preview__stale_otter' "$stale_api_clone/.env"
-grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$stale_api_clone/.env"
-grep -qxF 'DB_DATABASE=secpal__preview__legacy_hawk' "$legacy_hashed_api_clone/.env"
-if grep -qF 'DB_DATABASE=secpal__preview__legacy_hawk_165552b7__preview__legacy_hawk' "$legacy_hashed_api_clone/.env"; then
-    echo "legacy hashed preview database migration must not derive a nested preview database name" >&2
-    exit 1
-fi
-grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$legacy_hashed_api_clone/.env"
-test -f "$stale_api_clone/.polyscope-secpal-provisioned.json"
-grep -qF 'CREATE DATABASE "secpal__preview__stale_otter"' "$fake_psql_log"
-
-python3 - <<'PY' "$fake_pg_state"
-import json
-import sys
-
-state = json.loads(open(sys.argv[1]).read())
-assert 'secpal__preview__stale_otter' in state['databases']
-assert 'secpal__preview__legacy_hawk_165552b7' in state['databases']
-PY
-
-rm -rf "$stale_api_clone"
-rm -rf "$legacy_hashed_api_clone"
-
-# Inject a stale schema alongside the stale database to verify that in database mode
-# (rolcreatedb=true) the cleanup also prunes orphaned schemas from a previous schema-mode run.
-python3 - "$fake_pg_state" <<'PY'
-import json, sys
-state = json.loads(open(sys.argv[1]).read())
-state.setdefault("schemas", []).append("secpal__preview__legacy_schema_otter")
-open(sys.argv[1], "w").write(json.dumps(state))
-PY
-
-cleanup_summary_json="$workspace/cleanup-summary.json"
-replace_registered_worktrees \
-    "api12345" "$api_clone" \
-    "fe123456" "$frontend_clone" \
-    "an123456" "$android_clone"
-env HOME="$home_dir" \
-    PATH="$service_path" \
-    PROVISION_LOG="$provision_log" \
-    FAKE_PSQL_LOG="$fake_psql_log" \
-    FAKE_PSQL_STATE="$fake_pg_state" \
-    python3 "$PYTHON_SCRIPT" \
-    --workspace-root "$workspace_root" \
-    --db-path "$db_path" \
-    --repo-state-file "$repos_json" \
-    --nginx-output "$nginx_output" \
-    --summary-output "$cleanup_summary_json" \
-    --skip-local-configs \
-    --skip-db-sync \
-    --provision-worktrees \
-    > /dev/null
-
-python3 - "$cleanup_summary_json" "$fake_pg_state" <<'PY'
-import json
-import sys
-
-summary = json.loads(open(sys.argv[1]).read())
-state = json.loads(open(sys.argv[2]).read())
-
-assert summary.get('provisioned_worktrees', []) == [], summary.get('provisioned_worktrees', [])
-cleaned = summary.get('cleaned_preview_storage_targets', [])
-assert 'secpal__preview__stale_otter' in cleaned, f"expected stale db in cleaned, got {cleaned}"
-assert 'secpal__preview__legacy_hawk_165552b7' in cleaned, f"expected migrated legacy hashed db in cleaned after worktree removal, got {cleaned}"
-assert 'secpal__preview__legacy_schema_otter' in cleaned, f"expected stale schema in cleaned even in database mode, got {cleaned}"
-assert 'secpal__preview__auto_hawk' in state['databases']
-assert 'secpal__preview__stale_otter' not in state['databases']
-assert 'secpal__preview__legacy_hawk_165552b7' not in state['databases']
-assert 'secpal__preview__legacy_schema_otter' not in state.get('schemas', [])
-PY
-
-grep -qF 'SELECT datname FROM pg_database WHERE datname LIKE '"'"'secpal__preview__%'"'" "$fake_psql_log"
-grep -qF 'DROP DATABASE IF EXISTS "secpal__preview__stale_otter" WITH (FORCE)' "$fake_psql_log"
-
-provision_log_lines_before="$(wc -l < "$provision_log")"
-idempotent_summary_json="$workspace/idempotent-summary.json"
-env HOME="$home_dir" \
-    PATH="$service_path" \
-    PROVISION_LOG="$provision_log" \
-    FAKE_PSQL_LOG="$fake_psql_log" \
-    FAKE_PSQL_STATE="$fake_pg_state" \
-    python3 "$PYTHON_SCRIPT" \
-    --workspace-root "$workspace_root" \
-    --db-path "$db_path" \
-    --repo-state-file "$repos_json" \
-    --nginx-output "$nginx_output" \
-    --summary-output "$idempotent_summary_json" \
-    --skip-local-configs \
-    --skip-db-sync \
-    --provision-worktrees \
-    > /dev/null
-
-test "$provision_log_lines_before" -eq "$(wc -l < "$provision_log")"
-
-python3 - "$idempotent_summary_json" <<'PY'
-import json
-import sys
-
-summary = json.loads(open(sys.argv[1]).read())
-assert summary.get('provisioned_worktrees', []) == [], summary.get('provisioned_worktrees', [])
-assert summary.get('cleaned_preview_storage_targets', []) == [], summary.get('cleaned_preview_storage_targets', [])
-PY
-
-failing_api_clone="$home_dir/.polyscope/clones/api12345/abort-hawk"
-failing_api_cleanup_clone="$home_dir/.polyscope/clones/api12345/broken-mole"
-failing_api_alias_clone="$home_dir/.polyscope/clones/api12345/Steady Otter"
-failing_frontend_manifest_clone="$home_dir/.polyscope/clones/fe123456/broken-ibis"
-failing_frontend_io_clone="$home_dir/.polyscope/clones/fe123456/locked-oryx"
-healthy_api_clone="$home_dir/.polyscope/clones/api12345/clear-water"
-failure_isolation_summary_json="$workspace/failure-isolation-summary.json"
-failing_api_alias_workspace="$(python3 - <<'PY'
-import hashlib
-print("steady-otter-" + hashlib.sha1("Steady Otter".encode("utf-8")).hexdigest()[:8])
-PY
-)"
-
-mkdir -p "$failing_api_clone/.git/info" "$failing_api_clone/.git/hooks" "$failing_api_clone/scripts"
-mkdir -p "$failing_api_cleanup_clone/.git/info" "$failing_api_cleanup_clone/.git/hooks" "$failing_api_cleanup_clone/scripts"
-mkdir -p "$failing_api_alias_clone/.git/info" "$failing_api_alias_clone/.git/hooks" "$failing_api_alias_clone/scripts"
-mkdir -p "$failing_frontend_manifest_clone/.git/info" "$failing_frontend_manifest_clone/.git/hooks" "$failing_frontend_manifest_clone/scripts"
-mkdir -p "$failing_frontend_io_clone/.git/info" "$failing_frontend_io_clone/.git/hooks" "$failing_frontend_io_clone/scripts"
-mkdir -p "$healthy_api_clone/.git/info" "$healthy_api_clone/.git/hooks" "$healthy_api_clone/database"
-for fixture_repo in \
-    "$failing_api_clone" \
-    "$failing_api_cleanup_clone" \
-    "$failing_api_alias_clone" \
-    "$failing_frontend_manifest_clone" \
-    "$failing_frontend_io_clone" \
-    "$healthy_api_clone"; do
-    git -C "$fixture_repo" init --quiet
-done
-
-seed_api_worktree_files "$failing_api_clone"
-seed_api_worktree_files "$failing_api_cleanup_clone"
-seed_api_worktree_files "$failing_api_alias_clone"
-seed_node_worktree_files "$failing_frontend_manifest_clone" "frontend-broken-ibis"
-seed_node_worktree_files "$failing_frontend_io_clone" "frontend-locked-oryx"
-seed_api_worktree_files "$healthy_api_clone"
-cp "$workspace_root/api/.env" "$failing_api_clone/.env"
-mkdir -p "$home_dir/.polyscope/clones/api12345/$failing_api_alias_workspace"
-printf '{\n  "packages": []\n}\n' > "$healthy_api_clone/composer.lock"
-printf '{"scripts": ' > "$failing_api_cleanup_clone/composer.json"
-printf '{"scripts": ' > "$failing_frontend_manifest_clone/package.json"
-rm -rf "$failing_frontend_io_clone/.git/info"
-printf 'not a directory\n' > "$failing_frontend_io_clone/.git/info"
-cp "$workspace_root/api/.env" "$healthy_api_clone/.env"
-
-python3 - <<'PY' "$fake_pg_state"
-import json
-import sys
-
-state = json.loads(open(sys.argv[1]).read())
-state['databases'].append('secpal__preview__broken_mole')
-state.setdefault('schemas', []).append('secpal__preview__broken_mole')
-open(sys.argv[1], 'w').write(json.dumps(state))
-PY
-
-replace_registered_worktrees \
-    "api12345" "$failing_api_clone" \
-    "api12345" "$failing_api_cleanup_clone" \
-    "api12345" "$failing_api_alias_clone" \
-    "fe123456" "$failing_frontend_manifest_clone" \
-    "fe123456" "$failing_frontend_io_clone" \
-    "api12345" "$healthy_api_clone"
-
-env HOME="$home_dir" \
-    PATH="$service_path" \
-    PROVISION_LOG="$provision_log" \
-    FAKE_PSQL_LOG="$fake_psql_log" \
-    FAKE_PSQL_STATE="$fake_pg_state" \
-    FAIL_ON_WORKTREE="$failing_api_clone" \
-    python3 "$PYTHON_SCRIPT" \
-    --workspace-root "$workspace_root" \
-    --db-path "$db_path" \
-    --repo-state-file "$repos_json" \
-    --nginx-output "$nginx_output" \
-    --summary-output "$failure_isolation_summary_json" \
-    --skip-local-configs \
-    --skip-db-sync \
-    --provision-worktrees \
-    > /dev/null || failure_isolation_exit=$?
-
-test "${failure_isolation_exit:-0}" -eq 1
-
-python3 - "$failure_isolation_summary_json" <<'PY'
-import json
-import sys
-
-summary = json.loads(open(sys.argv[1]).read())
-provisioned = summary.get('provisioned_worktrees', [])
-failed = summary.get('failed_provision_worktrees', [])
-cleaned = summary.get('cleaned_preview_storage_targets', [])
-
-assert 'api:clear-water' in provisioned, provisioned
-assert 'api:abort-hawk' not in provisioned, provisioned
-assert 'api:broken-mole' not in provisioned, provisioned
-assert 'api:steady-otter' not in provisioned, provisioned
-assert 'frontend:broken-ibis' not in provisioned, provisioned
-assert 'frontend:locked-oryx' not in provisioned, provisioned
-assert 'secpal__preview__broken_mole' not in cleaned, cleaned
-assert any(
-    entry.get('repo') == 'api'
-    and entry.get('workspace') == 'abort-hawk'
-    and "Command '['php', 'artisan', 'config:clear']'" in entry.get('error', '')
-    for entry in failed
-), failed
-assert any(
-    entry.get('repo') == 'api'
-    and entry.get('workspace') == 'broken-mole'
-    and 'invalid composer.json for rollout validation' in entry.get('error', '')
-    for entry in failed
-), failed
-assert any(
-    entry.get('repo') == 'api'
-    and entry.get('workspace') == 'Steady Otter'
-    and 'already exists and does not point' in entry.get('error', '')
-    for entry in failed
-), failed
-assert any(
-    entry.get('repo') == 'frontend'
-    and entry.get('workspace') == 'broken-ibis'
-    and 'invalid package.json for rollout validation' in entry.get('error', '')
-    for entry in failed
-), failed
-assert any(
-    entry.get('repo') == 'frontend'
-    and entry.get('workspace') == 'locked-oryx'
-    and 'File exists' in entry.get('error', '')
-    for entry in failed
-), failed
-PY
-
-python3 - <<'PY' "$fake_pg_state"
-import json
-import sys
-
-state = json.loads(open(sys.argv[1]).read())
-assert 'secpal__preview__broken_mole' in state['databases'], state['databases']
-assert 'secpal__preview__broken_mole' in state.get('schemas', []), state.get('schemas', [])
-PY
-
-grep -qF "php:$failing_api_clone:artisan config:clear" "$provision_log"
-grep -qF "composer:$healthy_api_clone:install" "$provision_log"
-test -f "$healthy_api_clone/.polyscope-secpal-provisioned.json"
-test ! -f "$failing_api_clone/.polyscope-secpal-provisioned.json"
-test ! -f "$failing_api_cleanup_clone/.polyscope-secpal-provisioned.json"
-test ! -f "$failing_api_alias_clone/.polyscope-secpal-provisioned.json"
-test ! -f "$failing_frontend_manifest_clone/.polyscope-secpal-provisioned.json"
-test ! -f "$failing_frontend_io_clone/.polyscope-secpal-provisioned.json"
-
-python3 - <<'PY' "$healthy_api_clone/composer.lock"
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-payload = json.loads(path.read_text())
-payload["packages"].append({"name": "secpal/api", "version": "1.0.1"})
-path.write_text(json.dumps(payload, indent=2) + "\n")
-PY
-
-api_lockfile_summary_json="$workspace/api-lockfile-summary.json"
-api_composer_install_count_before="$(grep -cF "composer:$healthy_api_clone:install" "$provision_log" || true)"
-env HOME="$home_dir" \
-    PATH="$service_path" \
-    PROVISION_LOG="$provision_log" \
-    FAKE_PSQL_LOG="$fake_psql_log" \
-    FAKE_PSQL_STATE="$fake_pg_state" \
-    FAIL_ON_WORKTREE="$failing_api_clone" \
-    python3 "$PYTHON_SCRIPT" \
-    --workspace-root "$workspace_root" \
-    --db-path "$db_path" \
-    --repo-state-file "$repos_json" \
-    --nginx-output "$nginx_output" \
-    --summary-output "$api_lockfile_summary_json" \
-    --skip-local-configs \
-    --skip-db-sync \
-    --provision-worktrees \
-    > /dev/null || api_lockfile_exit=$?
-
-test "${api_lockfile_exit:-0}" -eq 1
-
-python3 - "$api_lockfile_summary_json" <<'PY'
-import json
-import sys
-
-summary = json.loads(open(sys.argv[1]).read())
-provisioned = summary.get('provisioned_worktrees', [])
-assert 'api:clear-water' in provisioned, provisioned
-PY
-
-test "$api_composer_install_count_before" -lt "$(grep -cF "composer:$healthy_api_clone:install" "$provision_log")"
-
-schema_home_dir="$workspace/schema-home"
-schema_api_clone="$schema_home_dir/.polyscope/clones/api12345/schema-badger"
-schema_frontend_clone="$schema_home_dir/.polyscope/clones/fe123456/schema-badger"
-schema_pg_state="$workspace/postgres-schema-state.json"
-schema_summary_json="$workspace/schema-summary.json"
-schema_cleanup_summary_json="$workspace/schema-cleanup-summary.json"
-
-mkdir -p "$schema_home_dir/.local/bin" "$schema_api_clone/.git/info" "$schema_api_clone/.git/hooks" "$schema_api_clone/scripts" "$schema_frontend_clone/.git/info" "$schema_frontend_clone/.git/hooks" "$schema_frontend_clone/scripts"
-git -C "$schema_api_clone" init --quiet
-git -C "$schema_frontend_clone" init --quiet
-cp "$home_dir/.local/bin/pre-commit" "$schema_home_dir/.local/bin/pre-commit"
-seed_api_worktree_files "$schema_api_clone"
-seed_node_worktree_files "$schema_frontend_clone" "frontend-schema-badger"
-
-python3 - <<'PY' "$schema_pg_state"
-import json
-import sys
-from pathlib import Path
-
-Path(sys.argv[1]).write_text(json.dumps({"databases": ["secpal"], "schemas": [], "rolcreatedb": False}))
-PY
-
-cp "$workspace_root/api/.env" "$schema_api_clone/.env"
-
-cat >"$schema_api_clone/.pre-commit-config.yaml" <<'EOF'
-repos: []
-EOF
-
-cat >"$schema_api_clone/scripts/preflight.sh" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-chmod +x "$schema_api_clone/scripts/preflight.sh"
-
-cat >"$schema_frontend_clone/.env.local" <<'EOF'
-VITE_API_URL=https://api.secpal.dev
-EOF
-
-cat >"$schema_frontend_clone/.pre-commit-config.yaml" <<'EOF'
-repos: []
-EOF
-
-cat >"$schema_frontend_clone/scripts/preflight.sh" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-chmod +x "$schema_frontend_clone/scripts/preflight.sh"
-
-replace_registered_worktrees \
-    "api12345" "$schema_api_clone" \
-    "fe123456" "$schema_frontend_clone"
-
-env HOME="$schema_home_dir" \
-    PATH="$service_path" \
-    PROVISION_LOG="$provision_log" \
-    FAKE_PSQL_LOG="$fake_psql_log" \
-    FAKE_PSQL_STATE="$schema_pg_state" \
-    python3 "$PYTHON_SCRIPT" \
-    --workspace-root "$workspace_root" \
-    --db-path "$db_path" \
-    --repo-state-file "$repos_json" \
-    --nginx-output "$nginx_output" \
-    --summary-output "$schema_summary_json" \
-    --skip-local-configs \
-    --skip-db-sync \
-    --provision-worktrees \
-    > /dev/null
-
-python3 - "$schema_summary_json" <<'PY'
-import json
-import sys
-
-summary = json.loads(open(sys.argv[1]).read())
-provisioned = summary.get('provisioned_worktrees', [])
-cleaned = summary.get('cleaned_preview_storage_targets', [])
-assert 'api:schema-badger' in provisioned, provisioned
-assert 'frontend:schema-badger' in provisioned, provisioned
-assert cleaned == [], cleaned
-PY
-
-grep -qF 'DB_DATABASE=secpal' "$schema_api_clone/.env"
-grep -qF 'DB_URL=postgresql://secpal@127.0.0.1:5432/secpal?search_path=secpal__preview__schema_badger' "$schema_api_clone/.env"
-grep -qF 'POLYSCOPE_BASE_DB_DATABASE=secpal' "$schema_api_clone/.env"
-grep -qF 'POLYSCOPE_PREVIEW_STORAGE_MODE=schema' "$schema_api_clone/.env"
-grep -qF 'POLYSCOPE_PREVIEW_SCHEMA=secpal__preview__schema_badger' "$schema_api_clone/.env"
-grep -qF 'VITE_API_URL=https://api-schema-badger.preview.secpal.dev' "$schema_frontend_clone/.env.local"
-grep -qF 'SELECT rolcreatedb FROM pg_roles WHERE rolname = current_user' "$fake_psql_log"
-grep -qF 'CREATE SCHEMA IF NOT EXISTS "secpal__preview__schema_badger"' "$fake_psql_log"
-
-python3 - <<'PY' "$schema_pg_state"
-import json
-import sys
-
-state = json.loads(open(sys.argv[1]).read())
-assert state['databases'] == ['secpal'], state['databases']
-assert 'secpal__preview__schema_badger' in state['schemas'], state['schemas']
-PY
-
-python3 - <<'PY' "$schema_api_clone/.polyscope-secpal-provisioned.json"
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-marker = json.loads(path.read_text())
-marker.pop('preview_storage_target', None)
-path.write_text(json.dumps(marker, indent=2) + "\n")
-PY
-
-cat >"$schema_api_clone/.env" <<'EOF'
-APP_URL=https://api-daring-mouse.preview.secpal.dev
-FRONTEND_URL=https://frontend-daring-mouse.preview.secpal.dev
-DB_CONNECTION=pgsql
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_DATABASE=secpal
-DB_URL=postgresql://secpal@127.0.0.1:5432/secpal?search_path=secpal__preview__daring_mouse
-DB_USERNAME=secpal
-DB_PASSWORD=
-SESSION_DOMAIN=.secpal.dev
-SANCTUM_STATEFUL_DOMAINS=frontend-daring-mouse.preview.secpal.dev,daring-mouse.preview.secpal.dev,app.secpal.dev
-CORS_ALLOWED_ORIGINS=https://frontend-daring-mouse.preview.secpal.dev,https://daring-mouse.preview.secpal.dev,https://app.secpal.dev
-POLYSCOPE_BASE_DB_DATABASE=secpal
-POLYSCOPE_PREVIEW_STORAGE_MODE=schema
-POLYSCOPE_PREVIEW_SCHEMA=secpal__preview__daring_mouse
-EOF
-
-schema_recovery_summary_json="$workspace/schema-recovery-summary.json"
-schema_provision_log_lines_before_recovery="$(wc -l < "$provision_log")"
-env HOME="$schema_home_dir" \
-    PATH="$service_path" \
-    PROVISION_LOG="$provision_log" \
-    FAKE_PSQL_LOG="$fake_psql_log" \
-    FAKE_PSQL_STATE="$schema_pg_state" \
-    python3 "$PYTHON_SCRIPT" \
-    --workspace-root "$workspace_root" \
-    --db-path "$db_path" \
-    --repo-state-file "$repos_json" \
-    --nginx-output "$nginx_output" \
-    --summary-output "$schema_recovery_summary_json" \
-    --skip-local-configs \
-    --skip-db-sync \
-    --provision-worktrees \
-    > /dev/null
-
-python3 - <<'PY' "$schema_recovery_summary_json"
-import json
-import sys
-
-summary = json.loads(open(sys.argv[1]).read())
-provisioned = summary.get('provisioned_worktrees', [])
-assert 'api:schema-badger' in provisioned, provisioned
-PY
-
-test "$schema_provision_log_lines_before_recovery" -lt "$(wc -l < "$provision_log")"
-grep -qF 'APP_URL=https://api-schema-badger.preview.secpal.dev' "$schema_api_clone/.env"
-grep -qF 'FRONTEND_URL=https://frontend-schema-badger.preview.secpal.dev' "$schema_api_clone/.env"
-grep -qF 'DB_URL=postgresql://secpal@127.0.0.1:5432/secpal?search_path=secpal__preview__schema_badger' "$schema_api_clone/.env"
-grep -qF 'POLYSCOPE_PREVIEW_SCHEMA=secpal__preview__schema_badger' "$schema_api_clone/.env"
-
-test "$(grep -cF "php:$schema_api_clone:artisan migrate --force" "$provision_log")" -eq 2
-test "$(grep -cF 'CREATE SCHEMA IF NOT EXISTS "secpal__preview__schema_badger"' "$fake_psql_log")" -eq 2
-
-python3 - <<'PY' "$schema_frontend_clone/package-lock.json"
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-payload = json.loads(path.read_text())
-payload["packages"][""] = {"name": "frontend-schema-badger", "version": "0.0.2"}
-path.write_text(json.dumps(payload, indent=2) + "\n")
-PY
-
-schema_lockfile_summary_json="$workspace/schema-lockfile-summary.json"
-schema_frontend_npm_ci_count_before="$(grep -cF "npm:$schema_frontend_clone:ci" "$provision_log" || true)"
-env HOME="$schema_home_dir" \
-    PATH="$service_path" \
-    PROVISION_LOG="$provision_log" \
-    FAKE_PSQL_LOG="$fake_psql_log" \
-    FAKE_PSQL_STATE="$schema_pg_state" \
-    python3 "$PYTHON_SCRIPT" \
-    --workspace-root "$workspace_root" \
-    --db-path "$db_path" \
-    --repo-state-file "$repos_json" \
-    --nginx-output "$nginx_output" \
-    --summary-output "$schema_lockfile_summary_json" \
-    --skip-local-configs \
-    --skip-db-sync \
-    --provision-worktrees \
-    > /dev/null
-
-python3 - <<'PY' "$schema_lockfile_summary_json"
-import json
-import sys
-
-summary = json.loads(open(sys.argv[1]).read())
-provisioned = summary.get('provisioned_worktrees', [])
-assert 'frontend:schema-badger' in provisioned, provisioned
-PY
-
-test "$schema_frontend_npm_ci_count_before" -lt "$(grep -cF "npm:$schema_frontend_clone:ci" "$provision_log")"
-
-rm -rf "$schema_api_clone" "$schema_frontend_clone"
-replace_registered_worktrees
-
-env HOME="$schema_home_dir" \
-    PATH="$service_path" \
-    PROVISION_LOG="$provision_log" \
-    FAKE_PSQL_LOG="$fake_psql_log" \
-    FAKE_PSQL_STATE="$schema_pg_state" \
-    python3 "$PYTHON_SCRIPT" \
-    --workspace-root "$workspace_root" \
-    --db-path "$db_path" \
-    --repo-state-file "$repos_json" \
-    --nginx-output "$nginx_output" \
-    --summary-output "$schema_cleanup_summary_json" \
-    --skip-local-configs \
-    --skip-db-sync \
-    --provision-worktrees \
-    > /dev/null
-
-python3 - "$schema_cleanup_summary_json" "$schema_pg_state" <<'PY'
-import json
-import sys
-
-summary = json.loads(open(sys.argv[1]).read())
-state = json.loads(open(sys.argv[2]).read())
-
-assert summary.get('provisioned_worktrees', []) == [], summary.get('provisioned_worktrees', [])
-assert summary.get('cleaned_preview_storage_targets', []) == ['secpal__preview__schema_badger'], summary.get('cleaned_preview_storage_targets', [])
-assert 'secpal__preview__schema_badger' not in state['schemas'], state['schemas']
-PY
-
-grep -qF 'SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE '"'"'secpal__preview__%'"'" "$fake_psql_log"
-grep -qF 'DROP SCHEMA IF EXISTS "secpal__preview__schema_badger" CASCADE' "$fake_psql_log"
+script, fixture, canonical, home, database, state_file = map(Path, sys.argv[1:])
+state = json.loads(state_file.read_text())
+with sqlite3.connect(database) as connection:
+    original = connection.execute("select * from worktrees").fetchall()
+
+def snapshot(root):
+    return {str(p.relative_to(root)): (os.readlink(p) if p.is_symlink() else hashlib.sha256(p.read_bytes()).hexdigest())
+            for p in root.rglob("*") if p.is_symlink() or p.is_file()}
+
+try:
+    for name in ("deployment", "frontend", "api"):
+        candidate = home / ".polyscope/clones" / state[name]["id"] / "untrusted-candidate"
+        candidate.mkdir(parents=True)
+        (candidate / "AGENTS.md").write_text("Invalid candidate instructions are not service input\n")
+        (candidate / "package.json").write_text(json.dumps({"scripts": {"postinstall": "python3 lifecycle.py"}}))
+        (candidate / "composer.json").write_text(json.dumps({"scripts": {"post-install-cmd": "python3 lifecycle.py"}}))
+        (candidate / "lifecycle.py").write_text("raise RuntimeError('must never execute as service')\n")
+        (candidate / ".env").write_text("CONTROLLED_FIXTURE=leave-untouched\n")
+        (candidate / ".git").symlink_to(fixture / "not-a-git-directory")
+        (candidate / "polyscope.local.json").write_text(json.dumps({"scripts": {"setup": "python3 lifecycle.py", "run": [{"command": "python3 lifecycle.py", "autostart": True}]}}))
+        before = snapshot(candidate)
+        with sqlite3.connect(database) as connection:
+            connection.execute("delete from worktrees")
+            connection.execute("insert into worktrees (id,repo_id,branch,path,status) values (?,?,?,?,?)", ("untrusted", state[name]["id"], "fixture", str(candidate), "active"))
+        db_before = hashlib.sha256(database.read_bytes()).hexdigest()
+        summary = fixture / "service-no-execution-summary.json"
+        environment = dict(os.environ, HOME=str(home))
+        subprocess.run([sys.executable, str(script), "--workspace-root", str(canonical), "--db-path", str(database),
+            "--repo-state-file", str(state_file), "--clone-root", str(home / ".polyscope/clones"),
+            "--nginx-output", str(fixture / "no-execution-nginx.conf"), "--summary-output", str(summary),
+            "--skip-local-configs", "--skip-db-sync", "--provision-worktrees"], env=environment, check=True,
+            stdout=subprocess.DEVNULL)
+        result = json.loads(summary.read_text())
+        assert result["provisioned_worktrees"] == result["cleaned_preview_storage_targets"] == result["failed_provision_worktrees"] == []
+        assert snapshot(candidate) == before, name
+        assert hashlib.sha256(database.read_bytes()).hexdigest() == db_before
+        config = json.loads((canonical / name / "polyscope.local.json").read_text())
+        assert config["scripts"] == {"setup": "", "run": []}
+finally:
+    with sqlite3.connect(database) as connection:
+        connection.execute("delete from worktrees")
+        if original:
+            placeholders = ",".join("?" for _ in original[0])
+            connection.executemany(f"insert into worktrees values ({placeholders})", original)
+PYSERVICE
 
 assert_rollout_rejects_invalid_local_config \
     "$PYTHON_SCRIPT" \
@@ -7389,9 +6140,10 @@ if command -v systemd-analyze >/dev/null 2>&1; then
     exit 1
   fi
 fi
-grep -qF 'fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)' "$workspace_root/frontend/polyscope.local.json"
-grep -qF '.polyscope-preview-stage' "$workspace_root/frontend/polyscope.local.json"
-grep -qF 'build.lock' "$workspace_root/frontend/polyscope.local.json"
+if grep -qE 'fcntl.flock|polyscope-preview-stage|build.lock' "$workspace_root/frontend/polyscope.local.json"; then
+    echo "native configuration must not restore service-side build watchers" >&2
+    exit 1
+fi
 python3 - "$PYTHON_SCRIPT" <<'PY'
 import importlib.util
 import os
@@ -7719,194 +6471,8 @@ assert spec.loader is not None
 spec.loader.exec_module(module)
 
 
-def run_case(
-    *,
-    marker_hit: bool,
-    setup_fails: bool,
-    grant_fails: bool = False,
-    marker_write_fails: bool = False,
-    provisionable: bool = True,
-    canonical_validation_fails: bool = False,
-    registered_worktree_count: int = 1,
-) -> tuple[list[str], list[str], list[dict[str, str]], bool]:
-    temporary_directory = tempfile.TemporaryDirectory()
-    case_root = Path(temporary_directory.name)
-    clone_root = case_root / ".polyscope" / "clones"
-    worktree = clone_root / "repository-id" / "workspace"
-    worktree.mkdir(parents=True)
-    registered_worktrees = [worktree]
-    for index in range(1, registered_worktree_count):
-        additional_worktree = clone_root / "repository-id" / f"workspace-{index}"
-        additional_worktree.mkdir()
-        registered_worktrees.append(additional_worktree)
-    order: list[str] = []
-
-    module.load_registered_worktree_paths = lambda *_args, **_kwargs: {
-        "api": [],
-        "frontend": registered_worktrees,
-    }
-
-    def is_provisionable(*_args, **_kwargs) -> bool:
-        order.append("validate")
-        if canonical_validation_fails:
-            raise module.CanonicalInstructionValidationError("expected validation failure")
-        return provisionable
-
-    module.is_provisionable_worktree = is_provisionable
-    module.cleanup_removed_workspace_aliases = lambda *_args, **_kwargs: []
-    module.cleanup_removed_api_preview_databases = lambda *_args, **_kwargs: []
-    module.preserve_registered_workspace_physical_path = lambda *_args, **_kwargs: None
-    module.render_worktree_local_config = lambda *_args, **_kwargs: "{}\n"
-    module.sync_worktree_local_config = lambda *_args, **_kwargs: None
-    module.ensure_workspace_alias = lambda *_args, **_kwargs: None
-    module.sync_worktree_auxiliary_files = lambda *_args, **_kwargs: None
-    module.ensure_worktree_hooks = lambda *_args, **_kwargs: None
-    module.collect_linked_setup_context = lambda *_args, **_kwargs: {}
-    module.resolve_current_workspace_name = lambda *_args, **_kwargs: "workspace"
-    module.build_setup_hash = lambda *_args, **_kwargs: "setup-hash"
-    module.load_provision_marker = lambda _path: {"setup_hash": "setup-hash"} if marker_hit else None
-
-    def grant_access(*_args, **_kwargs) -> None:
-        order.append("grant")
-        if grant_fails:
-            raise RuntimeError("expected preview ACL failure")
-
-    module.ensure_preview_nginx_access = grant_access
-    module.deny_preview_nginx_access = lambda *_args, **_kwargs: order.append("deny")
-
-    def write_marker(marker_path: Path, marker_payload: dict[str, object]) -> None:
-        if marker_write_fails:
-            order.append("marker")
-            raise OSError("expected provision marker failure")
-        marker_path.write_text(__import__("json").dumps(marker_payload, indent=2) + "\n")
-
-    module.write_provision_marker = write_marker
-
-    def run_setup(*_args, **_kwargs) -> None:
-        order.append("setup")
-        if setup_fails:
-            raise RuntimeError("expected setup failure")
-
-    module.run_setup_commands = run_setup
-    repo_state = {
-        "frontend": {
-            "id": "repository-id",
-            "name": "SecPal/frontend",
-            "path": str(case_root / "source-frontend"),
-        }
-    }
-    repo_specs = {
-        "frontend": {
-            module.NATIVE_SETUP_COMMANDS_KEY: ["npm run build"],
-            "path": str(case_root / "source-frontend"),
-            "preview_prefix": "frontend",
-        }
-    }
-    provisioned, _cleaned, failures = module.provision_worktrees(
-        repo_state,
-        repo_specs,
-        clone_root,
-        db_path=case_root / "polyscope.db",
-    )
-    marker_exists = (worktree / module.PROVISION_MARKER_FILENAME).exists()
-    temporary_directory.cleanup()
-    return order, provisioned, failures, marker_exists
-
-
-failure_order, failure_provisioned, failure_details, failure_marker_exists = run_case(
-    marker_hit=False,
-    setup_fails=True,
-)
-assert failure_order == [
-    "validate",
-    "setup",
-], failure_order
-assert failure_provisioned == []
-assert len(failure_details) == 1
-assert not failure_marker_exists
-
-marker_order, marker_provisioned, marker_failures, marker_marker_exists = run_case(
-    marker_hit=True,
-    setup_fails=False,
-)
-assert marker_order == [
-    "validate",
-    "grant",
-], marker_order
-assert marker_provisioned == []
-assert marker_failures == []
-assert not marker_marker_exists
-
-success_order, success_provisioned, success_failures, success_marker_exists = run_case(
-    marker_hit=False,
-    setup_fails=False,
-)
-assert success_order == [
-    "validate",
-    "setup",
-    "grant",
-], success_order
-assert success_provisioned == ["frontend:workspace"]
-assert success_failures == []
-assert success_marker_exists
-
-acl_failure_order, acl_failure_provisioned, acl_failure_details, acl_failure_marker_exists = run_case(
-    marker_hit=False,
-    setup_fails=False,
-    grant_fails=True,
-)
-assert acl_failure_order == [
-    "validate",
-    "setup",
-    "grant",
-    "deny",
-], acl_failure_order
-assert acl_failure_provisioned == []
-assert len(acl_failure_details) == 1
-assert not acl_failure_marker_exists
-
-marker_write_failure_order, marker_write_failure_provisioned, marker_write_failure_details, marker_write_failure_exists = run_case(
-    marker_hit=False,
-    setup_fails=False,
-    marker_write_fails=True,
-)
-assert marker_write_failure_order == [
-    "validate",
-    "setup",
-    "grant",
-    "marker",
-    "deny",
-], marker_write_failure_order
-assert marker_write_failure_provisioned == []
-assert len(marker_write_failure_details) == 1
-assert not marker_write_failure_exists
-
-invalid_order, invalid_provisioned, invalid_failures, invalid_marker_exists = run_case(
-    marker_hit=False,
-    setup_fails=False,
-    provisionable=False,
-)
-assert invalid_order == [
-    "validate",
-], invalid_order
-assert invalid_provisioned == []
-assert invalid_failures == []
-assert not invalid_marker_exists
-
-canonical_order, canonical_provisioned, canonical_failures, canonical_marker_exists = run_case(
-    marker_hit=False,
-    setup_fails=False,
-    canonical_validation_fails=True,
-    registered_worktree_count=2,
-)
-assert canonical_order == [
-    "validate",
-    "validate",
-], canonical_order
-assert canonical_provisioned == []
-assert len(canonical_failures) == 2
-assert not canonical_marker_exists
-
+# Background setup/marker/runtime ordering was retired. The registration-only
+# suite exercises stale manifests and executable inputs without service effects.
 
 def run_revoke_case(
     *,
@@ -8187,6 +6753,8 @@ with tempfile.TemporaryDirectory() as temporary_directory:
 
     module.build_repo_specs = lambda _workspace_root: {}
     module.revoke_all_preview_nginx_access = lambda _clone_root: rollout_order.append("revoke")
+    module.load_registered_worktree_paths = lambda *_args: {}
+    module.revoke_unregistered_preview_nginx_access = lambda *_args: rollout_order.append("reconcile")
     module.validate_repo_instruction_files = lambda *_args: rollout_order.append("validate")
     module.validate_repo_local_configs = lambda _repo_specs: None
     module.load_repo_state = lambda _path: {}
@@ -8206,7 +6774,7 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     assert module.run_rollout(args) == 0
     assert rollout_order == [
         "validate",
-        "revoke",
+        "reconcile",
         "provision",
         "manifest",
         "install",
@@ -8235,6 +6803,7 @@ with tempfile.TemporaryDirectory() as temporary_directory:
 
     module.build_repo_specs = lambda _workspace_root: {}
     module.revoke_all_preview_nginx_access = lambda _clone_root: provision_order.append("revoke")
+    module.revoke_unregistered_preview_nginx_access = lambda *_args: provision_order.append("reconcile")
     module.validate_repo_instruction_files = lambda *_args: provision_order.append("validate")
     module.validate_repo_local_configs = lambda _repo_specs: None
     module.load_repo_state = lambda _path: {}
@@ -8245,7 +6814,7 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     module.build_summary = lambda *_args: {}
 
     assert module.run_rollout(args) == 0
-    assert provision_order == ["validate", "provision"], provision_order
+    assert provision_order == ["validate", "reconcile", "provision"], provision_order
 PY
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"
@@ -8580,6 +7149,7 @@ grep -q 'share https://example.com:443' "$fake_expose_real_log"
 
 # Keep the package-1 security boundaries attached to the established rollout
 # regression entry point used by repository validation.
+python3 "$SCRIPT_DIR/polyscope-registration-only.py"
 bash "$SCRIPT_DIR/polyscope-package-1-closure.sh"
 bash "$SCRIPT_DIR/polyscope-nginx-helper.sh"
 bash "$SCRIPT_DIR/polyscope-system-installer.sh"

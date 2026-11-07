@@ -284,75 +284,28 @@ assert "does not match managed repository source path state" in unsupported_lega
     unsupported_legacy_result.stderr,
 )
 
+# Native creation is registration only. The service must not enter repository
+# setup even for candidates whose instructions or executable files are invalid.
+# Explicit validation remains available and rejects the invalid candidate.
 for repo_name, generated_spec in generated_specs.items():
+    config = module.render_local_config(generated_spec)
+    assert config["scripts"] == {"setup": "", "run": []}, repo_name
+    assert config["copyGitignored"] is False
     if not module.is_workspace_automation_enabled(generated_spec):
         assert repo_name == "operations", repo_name
-        assert generated_spec.get(module.REGISTRATION_ONLY_SPEC_KEY) is True
         assert "agent_instructions" not in generated_spec
         continue
-
-    setup_commands = module.render_local_config(generated_spec).get("scripts", {}).get("setup", [])
-    assert setup_commands, repo_name
-    assert "--validate-instruction-worktree" in setup_commands[0], (repo_name, setup_commands)
-    assert f"--instruction-repository-name {repo_name}" in setup_commands[0], (repo_name, setup_commands)
-
-    invalid_root = workspace / "native setup ; invalid roots" / repo_name
+    invalid_root = workspace / "invalid native candidate" / repo_name
     write_valid_instructions(invalid_root, repo_name)
     invalid_root.joinpath("AGENTS.md").write_text("# Missing SPDX metadata\n")
-    invalid_root.joinpath("package.json").write_text(
-        json.dumps({"name": f"invalid-{repo_name}", "private": True}) + "\n"
-    )
-    invalid_root.joinpath("package-lock.json").write_text(
-        json.dumps(
-            {
-                "name": f"invalid-{repo_name}",
-                "lockfileVersion": 3,
-                "requires": True,
-                "packages": {},
-            }
-        )
-        + "\n"
-    )
-    unrelated = invalid_root / "unrelated-sentinel"
-    unrelated.write_bytes(b"unchanged")
-    result = run_polyscope_setup(invalid_root, setup_commands, native_env)
+    command = module.build_workspace_instruction_validation_command(repo_name, native_source_workspace)
+    result = run_polyscope_setup(invalid_root, [command], native_env)
     assert result.returncode != 0, (repo_name, result.stdout, result.stderr)
-    assert "canonical AI-instruction validation failed" in result.stderr, (
-        repo_name,
-        result.stdout,
-        result.stderr,
-    )
-    assert "Canonical AI-instruction validation passed" not in result.stdout, result.stdout
+    assert "canonical AI-instruction validation failed" in result.stderr
+    assert not any(invalid_root.glob(".native-*-invoked"))
 
-    for forbidden in (
-        ".env",
-        "node_modules",
-        "vendor",
-        "database.sqlite",
-        ".native-composer-invoked",
-        ".native-npm-invoked",
-        ".native-php-invoked",
-        ".polyscope-secpal-provisioned.json",
-    ):
-        assert not invalid_root.joinpath(forbidden).exists(), (
-            repo_name,
-            forbidden,
-            setup_commands,
-            result.stdout,
-            result.stderr,
-            native_setup_log.read_text() if native_setup_log.exists() else "",
-        )
-    assert unrelated.read_bytes() == b"unchanged"
-
-# The generated setup contract must be a single native-runner entry. Within
-# that entry, multiline commands remain ordered and any failure stops every
-# later command.
-for repo_name, generated_spec in generated_specs.items():
-    if not module.is_workspace_automation_enabled(generated_spec):
-        continue
-    setup_commands = module.render_local_config(generated_spec)["scripts"]["setup"]
-    assert len(setup_commands) == 1, (repo_name, setup_commands)
-
+# Keep the explicit fail-closed shell helper's ordering contract. It is no
+# longer emitted as a native service setup action.
 ordered_root = workspace / "ordered setup root with spaces ; and shell chars"
 ordered_root.mkdir(parents=True)
 ordered_log = ordered_root / "order.log"
@@ -376,50 +329,10 @@ failing_result = run_polyscope_setup(ordered_root, [failing_setup], os.environ.c
 assert failing_result.returncode != 0
 assert ordered_root.joinpath("failure-order.log").read_text().splitlines() == ["first", "failed"]
 
-# Fully valid candidates retain the generated setup behavior for every managed
-# repository after entering the single fail-closed boundary.
-for repo_name, generated_spec in generated_specs.items():
-    if not module.is_workspace_automation_enabled(generated_spec):
-        continue
-    valid_root = workspace / "native setup valid roots with spaces" / repo_name
-    write_valid_instructions(valid_root, repo_name)
-    valid_root.joinpath("package.json").write_text(
-        json.dumps({"name": f"valid-{repo_name}", "private": True}) + "\n"
-    )
-    valid_root.joinpath("package-lock.json").write_text(
-        json.dumps(
-            {
-                "name": f"valid-{repo_name}",
-                "lockfileVersion": 3,
-                "requires": True,
-                "packages": {},
-            }
-        )
-        + "\n"
-    )
-    if repo_name == "api":
-        valid_root.joinpath("composer.json").write_text(
-            json.dumps({"name": f"secpal/{repo_name.lower().replace('.', '-')}", "scripts": {}}) + "\n"
-        )
-        valid_root.joinpath("composer.lock").write_text("{}\n")
-    valid_root.joinpath(".env.example").write_text(
-        "APP_KEY=base64:test-key\nDB_CONNECTION=sqlite\nDB_DATABASE=database/database.sqlite\n"
-    )
-    valid_root.joinpath("database").mkdir()
-
-    setup_commands = module.render_local_config(generated_spec)["scripts"]["setup"]
-    result = run_polyscope_setup(valid_root, setup_commands, native_env)
-    assert result.returncode == 0, (repo_name, result.stdout, result.stderr)
-
-    native_commands = generated_spec[module.NATIVE_SETUP_COMMANDS_KEY]
-    command_text = "\n".join(native_commands)
-    if "npm " in command_text:
-        assert valid_root.joinpath(".native-npm-invoked").is_file(), repo_name
-    if "composer " in command_text:
-        assert valid_root.joinpath(".native-composer-invoked").is_file(), repo_name
-    if "php " in command_text or "--bootstrap-api-worktree" in command_text:
-        assert valid_root.joinpath(".native-php-invoked").is_file(), repo_name
-
+# A valid candidate does not confer service-side execution authority either.
+for generated_spec in generated_specs.values():
+    assert module.render_local_config(generated_spec)["scripts"] == {"setup": "", "run": []}
+assert not native_setup_log.exists()
 
 # Provisioning must use current active database registrations as its allowlist.
 source_workspace = workspace / "source roots"
@@ -501,6 +414,7 @@ fake_setfacl = fake_bin / "setfacl"
 fake_setfacl.write_text("#!/usr/bin/env bash\nexit 0\n")
 fake_setfacl.chmod(0o755)
 setup_log = workspace / "setup.log"
+setup_log.write_text("")
 fake_npm = fake_bin / "npm"
 fake_npm.write_text(
     "#!/usr/bin/env bash\n"
@@ -553,10 +467,12 @@ provisioned, cleaned, failures = module.provision_worktrees(
     clone_root,
     db_path=db_path,
 )
-assert provisioned == [".github:registered-valid"], provisioned
+assert provisioned == [], provisioned
 assert cleaned == [], cleaned
 assert failures == [], failures
-assert valid_candidate.joinpath(module.PROVISION_MARKER_FILENAME).is_file()
+assert not valid_candidate.joinpath(module.PROVISION_MARKER_FILENAME).exists()
+# Alias bookkeeping remains an explicit metadata operation, not setup.
+module.ensure_workspace_alias(valid_candidate, db_path=db_path)
 assert not unregistered_candidate.joinpath(module.PROVISION_MARKER_FILENAME).exists()
 assert unregistered_sentinel.read_bytes() == b"unchanged"
 assert str(unregistered_candidate) not in setup_log.read_text()
@@ -629,7 +545,8 @@ provisioned, cleaned, failures = module.provision_worktrees(
     clone_root,
     db_path=db_path,
 )
-assert provisioned == [".github:registered-delete"], provisioned
+assert provisioned == [], provisioned
+module.ensure_workspace_alias(deletion_candidate, db_path=db_path)
 assert cleaned == []
 assert failures == []
 
@@ -641,7 +558,7 @@ assert pathlib.Path(registered_path) == deletion_candidate
 primary_alias = github_clone_root / "registered-delete"
 assert primary_alias.is_symlink()
 assert os.readlink(primary_alias) == deletion_candidate.name
-assert deletion_candidate.joinpath(module.PROVISION_MARKER_FILENAME).is_file()
+assert not deletion_candidate.joinpath(module.PROVISION_MARKER_FILENAME).exists()
 deletion_candidate.joinpath("node_modules").mkdir()
 deletion_candidate.joinpath("node_modules", "dependency-sentinel").write_text("installed")
 
@@ -857,9 +774,13 @@ provisioned, cleaned, failures = module.provision_worktrees(
 )
 assert provisioned == [], provisioned
 assert cleaned == [], cleaned
-assert len(failures) == 1, failures
-assert failures[0]["path"] == str(invalid_candidate), failures
-assert "canonical AI-instruction validation failed" in failures[0]["error"], failures
+assert failures == [], failures
+try:
+    module.validate_instruction_root(invalid_candidate, set(), ".github")
+except module.CanonicalInstructionValidationError:
+    pass
+else:
+    raise AssertionError("explicit instruction validation must still reject invalid input")
 assert setup_log.read_bytes() == log_before
 assert not invalid_candidate.joinpath(module.PROVISION_MARKER_FILENAME).exists()
 assert not unregistered_candidate.joinpath(module.PROVISION_MARKER_FILENAME).exists()
@@ -872,7 +793,7 @@ with sqlite3.connect(db_path) as connection:
     )
 
 try:
-    module.provision_worktrees(repo_state, repo_specs, clone_root, db_path=db_path)
+    module.load_registered_worktree_paths(db_path, repo_state, clone_root)
 except (RuntimeError, SystemExit, ValueError) as error:
     assert "outside" in str(error).lower() or "clone root" in str(error).lower(), error
 else:

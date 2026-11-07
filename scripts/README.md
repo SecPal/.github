@@ -529,17 +529,17 @@ bundle before publishing the new producer manifest.
 Environment-selected helper paths cannot authorize publication. This permits
 consumer-first schema upgrades and allows a malformed active manifest to be
 replaced without leaving Nginx on an unreadable manifest. Both system- and
-user-scope server startup hooks skip repository config and database
-synchronization; they perform only the Nginx convergence needed before the
-service reports ready. If the full provisioner already holds the shared lock,
+user-scope server startup hooks publish execution-free canonical native config,
+while skipping optional auxiliary files and database synchronization. They perform
+management convergence without executing workspace setup. If the full provisioner already holds the shared lock,
 the startup hook exits successfully because that in-flight provisioner performs
 the same final Nginx convergence. User-scope startup also receives the exact
 sudo binary validated by the installer. Startup and routine refreshes use the
 same configured clone root and provision lock as the full provisioner. A
 system-scope installation accepts only the exact reviewed nonblocking startup
 hook from the privileged component installer. Routine instruction/config
-synchronization refreshes Nginx without reprovisioning every worktree;
-provisioning remains owned by its path/timer service. The path unit deliberately
+synchronization refreshes Nginx without executing workspace code; the existing
+path/timer service is now a management reconciliation trigger. The path unit deliberately
 ignores the broad SQLite WAL stream so ordinary Polyscope activity cannot create
 a provisioning loop; the main database, generated configs, and periodic timer
 remain convergence inputs.
@@ -553,72 +553,47 @@ loads the pinned parser and verifies its required API before any installation
 writes, then watches the runtime files and npm lock state for rollout changes
 and dependency-install recovery.
 
-After installation, the user-level `polyscope-rollout-sync.service` and
-`polyscope-worktree-provision.service` units take care of provisioning new
-managed repositories automatically when the canonical repo list changes. Both
-the provision path and the three-minute fallback timer are enabled. The
-provisioner reads only active `worktrees` registrations from `polyscope.db`,
-resolves them beneath the matching repository clone root, and never scans an
-unregistered clone as a setup candidate. The physical hash directory remains
-the database's authoritative deletion path. Stable aliases are direct sibling
-symlinks recorded in a strict per-repository registry; after official deletion
-removes the physical path and registration, the next database-triggered
-reconciliation removes only those recorded broken aliases.
+After installation, the existing user-level rollout/provision services, path
+units and three-minute fallback timer reconcile native registration and management
+metadata. `--provision-worktrees` retains that installed trigger but its candidate
+provisioning callback is empty: manifest changes and missing markers never run
+npm, Composer, application bootstrap, hooks, database setup or builds as the
+service. No new API runtime units or native setup/run/archive actions are emitted.
+All canonical repositories, including registration-only roots and skip-config
+callers, receive an atomic execution-free override with ignored-file copying
+disabled. Generated configuration is excluded in canonical Git metadata; symlinked
+`.git` entries are rejected. Canonical roots must remain outside development write
+grants. Native registrations keep their physical deletion paths, and existing
+explicit alias helpers remain available without automatic candidate setup.
 
-On the canonical host, `--provision-worktrees` execution always includes Nginx
-refresh even when an older installed unit does not yet contain
-`--refresh-nginx`. Registered API previews receive two managed user services,
-one scheduler and one combined queue worker. The services inherit the
-installer-controlled tool `PATH`, resolve database credentials at process start
-through the rollout wrapper, restart on failure, disappear when their worktree
-registration is removed, and must produce a scheduler heartbeat before new
-preview access is granted. Failed runtime-owner activation or heartbeat checks
-revoke any access retained from an earlier successful provision. Stale services
-for removed registrations are still pruned when another worktree fails canonical
-instruction or routine ACL reconciliation. They are also restarted when the
-worktree revision, dirty tracked code, untracked source metadata, or
-source/worktree environment metadata changes. The corresponding Polyscope run
-actions remain available for explicit diagnostics and do not autostart while
-the managed services own the runtime. Noncanonical clone-root or database
-installations instead keep those actions autostarted because no persistent
-systemd owner is managed there. A failed reconciliation preserves existing units
-only for still-registered physical worktrees; units belonging to removed
-registrations remain eligible for pruning. Stale unit files are removed only
-after systemd confirms that their services stopped successfully; a failure
-preserves that unit without blocking later independent stale-unit cleanup.
-Desired unit names are validated before cleanup starts, unreadable contents plus
-ownership or permission drift are replaced, and independent cleanup and
-activation failures are reported together. Routine preview ACL reconciliation
-likewise attempts every unregistered physical worktree before reporting any
-individual denial or repository-integrity failures. The paired daily
-`polyscope-clone-reaper.timer` removes only aged orphan clone roots after checking
-the live database allowlist, locks, and processes.
+On the existing canonical clone-root/database pair, management reconciliation
+first retires legacy API runtime units through `reconcile_api_runtime_units({})`.
+The empty desired set only stops/disables/removes old managed units. No start,
+restart, enable or worker creation is allowed. Failed stops retain their unit files
+for retry and prevent native registration/preview refresh from resuming; later
+independent stale units are still attempted by the existing reconciler. Unrelated
+services and UID1001's isolated toolchain remain outside that ownership. Operators
+must account for those planned worker stops during the separately authorized
+installation; a source merge performs no live stop.
 
-Every generated repository setup sequence starts with the validation-only
-`--validate-instruction-worktree` command and explicit repository name inside
-one strict shell entry. Cached setup definitions without that identity argument
-remain compatible during rollout convergence by resolving the repository from
-the worktree's active Polyscope database registration. The installed user
-service exports the configured workspace root to those cached commands, so
-nondefault installations retain the same managed-source identity boundary.
-Missing, ambiguous, and unmanaged registrations fail closed instead of trusting
-ambient identity or
-mutable worktree manifests. The entry groups the complete native setup with
-fail-fast semantics, so validation or any later command failure prevents every
-remaining npm, Composer, `.env`, database, migration, seed, build, or repository
-setup command. The external provisioner applies the same canonical contract
-before its local configuration, hook, alias, setup, and marker writes.
+Host preview reconciliation still reads active native workspace registrations and
+withdraws stale grants using the existing ACL helper. It preserves established
+active preview access during Nginx install/reinstall, grants no new access and
+fails before route installation on native-read or ACL errors. Container previews
+do not acquire host Nginx ACLs. The paired clone reaper remains conservative about
+native registrations, locks and processes. Explicit instruction/API helper entry
+points retain their validation and isolation checks but are not generated native
+service actions. Dependency installation, builds and tests belong to the
+unprivileged isolated development identity.
 
-The worktree provision service waits three seconds before each activation to
-coalesce SQLite event bursts and takes a process-shared lock before provisioning.
-Its 15-minute start budget leaves the provisioner time to record scheduler
-readiness failures and perform final ACL/runtime cleanup before systemd ends the
-oneshot.
-The path and fallback timer both target that serialized service. Five starts per
-ten seconds cannot be exhausted by the three-second activations, while genuine
-service failures remain visible. A deliberate user-installer convergence clears
-only historical failed state for the provision path and service before enabling
-the new unit contract; it does not hide later failures.
+The provision service retains its existing three-second event coalescing, shared
+lock, timeout and path/timer contract. Canonical config publication is idempotent,
+so an unchanged output cannot endlessly trigger its own watcher. Before activation,
+close native script-start/creation inputs and drain old loaded setup/refresh
+processes; cleanup of legacy API units does not stop unrelated old interpreters or
+previews consuming writable trees. Follow the bounded installation and rollback
+contract in `docs/polyscope-isolated-development.md`. No rollback may restore the
+unsafe executor while an unprivileged write grant exists.
 
 ### `install-polyscope-system-components.sh`
 
