@@ -1182,6 +1182,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
                 validate_repo_local_configs=mock.Mock(),
                 load_repo_state=mock.Mock(return_value={}),
                 build_preview_workspace_redirects=mock.Mock(side_effect=redirects),
+                load_registered_worktree_paths=mock.Mock(return_value={}),
                 render_nginx_config=mock.Mock(
                     side_effect=lambda *_args, **kwargs: json.dumps(
                         kwargs["workspace_redirects"], sort_keys=True

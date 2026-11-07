@@ -17,6 +17,8 @@ Log of notable changes to SecPal organization defaults (newest first).
   installation, application bootstrap, hooks or workers as the Polyscope user.
 - Publish execution-free canonical native configuration atomically, including
   registration-only repositories and existing skip-local-configs callers.
+- Retain non-executing stale-preview ACL withdrawal without globally denying
+  established previews, and exclude generated canonical config in every Git root.
 - Preserve native registration, links, prompts, validation and the API2639
   isolation boundary. Development commands require the unprivileged toolchain;
   live installation and retirement of already running consumers remain separate.

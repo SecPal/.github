@@ -11,6 +11,8 @@ import os
 from argparse import Namespace
 from pathlib import Path
 import shlex
+import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest.mock
@@ -45,6 +47,7 @@ class RegistrationOnlyTests(unittest.TestCase):
             root = Path(directory)
             repo = root / "operations"
             repo.mkdir()
+            subprocess.run(["git", "init", "--quiet", "--template=", str(repo)], check=True)
             specs = {"operations": {"path": repo, rollout.REGISTRATION_ONLY_SPEC_KEY: True}}
             args = Namespace(workspace_root=root, polyscope_api_base="http://127.0.0.1:1/api", skip_local_configs=True, skip_db_sync=True,
                 repo_state_file=None, container_preview=True, install_nginx=False,
@@ -56,6 +59,80 @@ class RegistrationOnlyTests(unittest.TestCase):
             config = json.loads((repo / "polyscope.local.json").read_text())
             self.assertEqual(config["scripts"], {"setup": "", "run": []})
             self.assertFalse(config["copyGitignored"])
+            ignored = subprocess.run(["git", "-C", str(repo), "check-ignore", "polyscope.local.json"],
+                                     capture_output=True, text=True)
+            self.assertEqual(ignored.returncode, 0, ignored.stderr)
+            self.assertEqual(ignored.stdout.strip(), "polyscope.local.json")
+            # Publication in a non-Git fixture must not manufacture Git metadata.
+            plain = root / "plain"
+            plain.mkdir()
+            rollout.write_local_configs({"plain": {"path": plain, rollout.REGISTRATION_ONLY_SPEC_KEY: True}})
+            self.assertFalse((plain / ".git").exists())
+
+    def test_host_route_reconciliation_revokes_only_orphans_and_fails_closed(self):
+        for mode in ("refresh", "install", "db-failure", "acl-failure"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                clones = root / "clones"
+                active = clones / "frontend-id" / "active"
+                orphan = active.parent / "orphan"
+                active.mkdir(parents=True)
+                orphan.mkdir()
+                (active / "package.json").write_text('{"scripts":{"postinstall":"exit 99"}}')
+                database = root / "polyscope.db"
+                with sqlite3.connect(database) as connection:
+                    connection.execute("create table worktrees (id text, repo_id text, path text, status text)")
+                    connection.executemany("insert into worktrees values (?,?,?,?)", [
+                        ("live", "frontend-id", str(active), "active"),
+                        ("retired", "frontend-id", str(orphan), "archived"),
+                    ])
+                state = {"frontend": {"id": "frontend-id"}}
+                args = Namespace(workspace_root=root, db_path=database, clone_root=clones,
+                    polyscope_api_base="http://127.0.0.1:1/api", repo_state_file=None,
+                    skip_local_configs=True, skip_db_sync=True, container_preview=False,
+                    install_nginx=mode == "install", refresh_nginx=mode != "install",
+                    provision_worktrees=True, nginx_http2_syntax="modern",
+                    nginx_output=root / "nginx.conf", nginx_manifest_output=root / "manifest.json",
+                    summary_output=None)
+                granted = {active, orphan}
+
+                def deny(_root, path):
+                    if mode == "acl-failure":
+                        raise RuntimeError("fixture ACL failure")
+                    granted.discard(path)
+
+                forbidden = unittest.mock.Mock(side_effect=AssertionError("workspace code execution"))
+                revoke_all = unittest.mock.Mock(side_effect=lambda _root: granted.clear())
+                install = unittest.mock.Mock()
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(unittest.mock.patch.multiple(rollout,
+                        build_repo_specs=unittest.mock.Mock(return_value={}),
+                        validate_repo_instruction_files=unittest.mock.Mock(),
+                        validate_repo_local_configs=unittest.mock.Mock(),
+                        ensure_repositories_registered=unittest.mock.Mock(return_value=state),
+                        isolation_blocked_paths=unittest.mock.Mock(return_value=set()),
+                        build_preview_workspace_redirects=unittest.mock.Mock(return_value={}),
+                        render_nginx_config=unittest.mock.Mock(return_value="fixture nginx\n"),
+                        detect_nginx_http2_syntax=unittest.mock.Mock(return_value="modern"),
+                        deny_preview_nginx_access=unittest.mock.Mock(side_effect=deny),
+                        revoke_all_preview_nginx_access=revoke_all,
+                        write_compatible_nginx_manifest=unittest.mock.Mock(),
+                        install_nginx_config=install, run_setup_commands=forbidden,
+                        ensure_api_runtime_owner=forbidden, ensure_worktree_hooks=forbidden))
+                    stack.enter_context(unittest.mock.patch.dict(sys.modules, {"polyscope_nginx": Namespace(
+                        build_manifest=unittest.mock.Mock(return_value={}),
+                        write_manifest_atomic=unittest.mock.Mock())}))
+                    if mode == "db-failure":
+                        stack.enter_context(unittest.mock.patch.object(rollout, "load_registered_worktree_paths",
+                            side_effect=RuntimeError("fixture native read failure")))
+                    result = rollout.run_rollout(args)
+                self.assertEqual(result, 1 if mode.endswith("failure") else 0)
+                self.assertIn(active, granted, "installation revoked an established preview")
+                if mode in ("refresh", "install"):
+                    self.assertNotIn(orphan, granted, "unregistered preview retained its ACL")
+                revoke_all.assert_not_called()
+                forbidden.assert_not_called()
+                self.assertEqual(install.call_count, int(mode in ("refresh", "install")))
 
     def test_config_publication_cannot_follow_candidate_or_git_metadata_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:

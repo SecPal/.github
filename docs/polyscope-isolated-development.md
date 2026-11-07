@@ -27,6 +27,13 @@ registrations and existing preview metadata; it does not perform setup.
 Registration, links, prompts, canonical instruction/evidence validation and
 independent management functions remain available.
 
+Host preview reconciliation still withdraws stale ACLs using the existing native
+active-workspace allowlist. It preserves established active grants, including on
+Nginx install/reinstall, and never grants new workspace access or executes setup.
+A failed native read or ACL withdrawal prevents route installation. The existing
+protected-group withdrawal remains in place; container preview reconciliation
+does not acquire host Nginx ACLs.
+
 Every managed canonical `polyscope.local.json`, including a registration-only
 repository, now contains `scripts.setup: ""`, `scripts.run: []` and
 `copyGitignored: false`. The entire scripts object is replaced after enrichment,
@@ -45,7 +52,9 @@ rewritten, so the configuration path watcher cannot requeue itself indefinitely.
 The canonical directories must
 remain outside every development grant. Even existing `--skip-local-configs`
 callers publish this safe override; that flag only skips optional auxiliary files.
-No candidate Git metadata or symlink is followed for publication.
+For every canonical Git repository, the generated file is also kept in the existing
+Git exclude regardless of that flag or registration-only mode. No candidate Git
+metadata or symlink is followed for publication.
 
 The old `registration_only` switch alone was insufficient: it skipped publication
 and could leave native execution hooks in place. It is still used to avoid

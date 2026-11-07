@@ -6753,6 +6753,8 @@ with tempfile.TemporaryDirectory() as temporary_directory:
 
     module.build_repo_specs = lambda _workspace_root: {}
     module.revoke_all_preview_nginx_access = lambda _clone_root: rollout_order.append("revoke")
+    module.load_registered_worktree_paths = lambda *_args: {}
+    module.revoke_unregistered_preview_nginx_access = lambda *_args: rollout_order.append("reconcile")
     module.validate_repo_instruction_files = lambda *_args: rollout_order.append("validate")
     module.validate_repo_local_configs = lambda _repo_specs: None
     module.load_repo_state = lambda _path: {}
@@ -6772,7 +6774,7 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     assert module.run_rollout(args) == 0
     assert rollout_order == [
         "validate",
-        "revoke",
+        "reconcile",
         "provision",
         "manifest",
         "install",
@@ -6801,6 +6803,7 @@ with tempfile.TemporaryDirectory() as temporary_directory:
 
     module.build_repo_specs = lambda _workspace_root: {}
     module.revoke_all_preview_nginx_access = lambda _clone_root: provision_order.append("revoke")
+    module.revoke_unregistered_preview_nginx_access = lambda *_args: provision_order.append("reconcile")
     module.validate_repo_instruction_files = lambda *_args: provision_order.append("validate")
     module.validate_repo_local_configs = lambda _repo_specs: None
     module.load_repo_state = lambda _path: {}
@@ -6811,7 +6814,7 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     module.build_summary = lambda *_args: {}
 
     assert module.run_rollout(args) == 0
-    assert provision_order == ["validate", "provision"], provision_order
+    assert provision_order == ["validate", "reconcile", "provision"], provision_order
 PY
 grep -q 'daemon-reload' "$fake_systemctl_log"
 grep -q 'enable --now polyscope-server.service' "$fake_systemctl_log"

@@ -3919,9 +3919,10 @@ def write_local_configs(repo_specs: dict[str, dict[str, Any]], *, auxiliary: boo
     for repo_name, spec in repo_specs.items():
         repo_path = pathlib.Path(spec["path"])
         sync_worktree_local_config(repo_path, render_pretty_json(render_local_config(spec)) + "\n")
+        if (repo_path / ".git").exists():
+            ensure_exclude(repo_path)
         if auxiliary and is_workspace_automation_enabled(spec):
             sync_repo_auxiliary_files(repo_name, repo_path)
-            ensure_exclude(repo_path)
 
 
 def render_local_configs(repo_specs: dict[str, dict[str, Any]]) -> dict[str, str]:
@@ -6295,16 +6296,15 @@ def run_rollout(args: argparse.Namespace) -> int:
     provisioned_worktrees: list[str] = []
     cleaned_preview_storage_targets: list[str] = []
     failed_provision_worktrees: list[dict[str, str]] = []
-    if args.install_nginx:
-        # The routine worktree provisioner must preserve established previews:
-        # new worktrees inherit a deny-by-default ACL, while a global revoke
-        # would let one failed bootstrap take every preview offline. A full
-        # Nginx rollout reconciles that broader boundary only after all its
-        # prerequisites have completed.
+    if not container:
+        # Route access is management metadata, independent of retired setup.
+        # Withdraw stale grants without re-granting any workspace or globally
+        # denying established previews during an install/reinstall.
         try:
-            revoke_all_preview_nginx_access(args.clone_root)
+            registered_worktrees = load_registered_worktree_paths(args.db_path, repo_state, args.clone_root)
+            revoke_unregistered_preview_nginx_access(args.clone_root, registered_worktrees)
         except (OSError, RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
-            print(f"Failed to revoke preview access: {error}", file=sys.stderr)
+            print(f"Failed to reconcile preview access: {error}", file=sys.stderr)
             return 1
     if args.provision_worktrees or args.install_nginx:
         provisioned_worktrees, cleaned_preview_storage_targets, failed_provision_worktrees = provision_worktrees(
