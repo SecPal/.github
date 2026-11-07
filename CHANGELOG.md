@@ -15,6 +15,8 @@ Log of notable changes to SecPal organization defaults (newest first).
   identities corroborated by pinned Trivy module diagnostics and native checks.
 - Keep real parser errors, incomplete scans and source substitution fail closed;
   record unresolved static inputs without fabricating values or approving a run.
+- Bind OpenTofu/JSON and local nested-module evaluation through native traces;
+  reject initialization caches and unbound external-module evidence.
 - Publish the v5 result schema while preserving v1-v4 history. Retired finding
   dispositions remain retired; real security findings and policy thresholds stay
   unchanged.

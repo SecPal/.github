@@ -166,11 +166,22 @@ The diagnostic distinction introduced in v3 is preserved in the v5 closed enum.
 Consumers must adopt the v5 schema and action from the same reviewed revision;
 older validators reject v5 explicitly instead of silently interpreting a changed result.
 
-Terraform scans bind every current `.tf` and `.tf.json` file to its independently
-observed raw Git blob. Each source directory must have both the pinned parser's
-root-module diagnostic and a matching native Terraform result with actual check
-counts. Missing or unexpected modules, untracked or substituted source, unknown
+Terraform scans bind every current `.tf`, `.tf.json`, `.tofu` and `.tofu.json`
+file to its independently observed raw Git blob. Every file must appear in the
+pinned parser's private evaluation trace under a native root with actual check
+counts. The preliminary module-graph parse alone is insufficient. Local child
+modules are mapped to their evaluated files rather than incorrectly requiring a
+second root. Missing or unexpected files/roots, substituted source, unknown
 warnings, genuine parse errors and partial scans fail closed.
+
+Tracked `.terraform` initialization caches are rejected before scanning. Native
+resolution of external or absolute-path modules is not admissible, even when it
+produces no findings; every accepted evaluated file belongs to the exact Git
+subject. Trivy 0.74.0 exposes no CLI no-download switch: this is a fail-closed
+evidence boundary, not a claim of network isolation. Debug diagnostics stay
+private and are deleted, including on rejection; no resolver URLs or source
+values enter retained coverage. The v5 `modules` map records native roots and
+their evaluated Git file paths.
 
 Pinned Trivy 0.74.0's `setFallbackValuesForMissingVars` creates typed unknowns for
 unsupplied inputs. Only its exact missing-variable diagnostic is accepted, once

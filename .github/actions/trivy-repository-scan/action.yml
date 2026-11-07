@@ -99,6 +99,7 @@ runs:
         native="$tool_root/native.json"
         if [ -z "$failure_code" ]; then
           if ! env -i HOME="$tool_root" "$tool_root/trivy" --config "$trusted_config" fs \
+            --debug \
             --scanners vuln,secret,misconfig --include-dev-deps --show-suppressed \
             --format json --exit-code 0 \
             --skip-db-update --skip-java-db-update --skip-check-update --skip-version-check \

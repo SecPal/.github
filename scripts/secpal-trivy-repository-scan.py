@@ -43,6 +43,7 @@ RFC3339_RE = re.compile(
 )
 TRIVY_VERSION = "0.74.0"
 TRIVY_ARCHIVE_ID = "sha256:2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a"
+TERRAFORM_SUFFIXES = (".tf", ".tf.json", ".tofu", ".tofu.json")
 SEVERITY_FALLBACK_DIAGNOSTIC = (
     "Using severities from other vendors for some vulnerabilities. Read "
     "https://trivy.dev/docs/v0.74/guide/scanner/vulnerability#severity-selection for details."
@@ -116,6 +117,9 @@ def verify_target(workspace: Path, commit: str) -> None:
     entries = _git(resolved_workspace, ["ls-tree", "-r", "-z", commit])
     if any(record.startswith(b"160000 ") for record in entries.split(b"\0")):
         raise ContractError("gitlinks cannot be completely scanned as local files")
+    if any(b".terraform" in record.split(b"\t", 1)[1].split(b"/")
+           for record in entries.split(b"\0") if record):
+        raise ContractError("Terraform initialization caches are not repository source")
 
     # The pinned scanner drops inline-ignored IaC findings before native JSON.
     # No caller-owned source directive may replace reviewed central exceptions.
@@ -270,16 +274,22 @@ def observe_terraform_sources(workspace: Path, commit: str,
             continue
         metadata, raw_path = record.split(b"\t", 1)
         path = raw_path.decode("utf-8")
-        if not path.endswith((".tf", ".tf.json")):
+        if not path.endswith(TERRAFORM_SUFFIXES):
             continue
         mode, kind, identity = metadata.split(b" ")
         if mode not in {b"100644", b"100755"} or kind != b"blob" or _path(path) != path:
             raise ContractError("Terraform source must be a regular tracked file")
         files[path] = _source_blob(identity.decode("ascii"))
+    directories = {str(PurePosixPath(path).parent) for path in files}
+    roots = sorted({_path(result.get("Target")) for result in native["Results"]
+                    if result.get("Type") == "terraform"
+                    and _path(result.get("Target")) in directories})
+    if files and not roots:
+        raise ContractError("Terraform native root modules are unavailable")
     coverage = {
         "scope": "REPOSITORY_STATIC", "run_bound_status": "NOT_EXECUTED",
         "source_commit": commit, "terraform_files": files,
-        "modules": sorted({str(PurePosixPath(path).parent) for path in files}),
+        "modules": {root: [] for root in roots},
         "unresolved_inputs": {},
     }
     _validate_terraform_results(native, coverage)
@@ -302,14 +312,25 @@ def _validate_coverage(coverage: dict[str, Any], repository: str, commit: str,
     if not isinstance(files, dict) or not files:
         raise ContractError("Terraform source inventory is unavailable")
     for path, blob in files.items():
-        if _path(path) != path or not path.endswith((".tf", ".tf.json")):
+        if _path(path) != path or not path.endswith(TERRAFORM_SUFFIXES):
             raise ContractError("Terraform source inventory is malformed")
         _source_blob(blob)
-    modules = sorted({str(PurePosixPath(path).parent) for path in files})
+    directories = {str(PurePosixPath(path).parent) for path in files}
+    modules = coverage["modules"]
     unresolved = coverage["unresolved_inputs"]
-    if (coverage["modules"] != modules or not isinstance(unresolved, dict)
+    if (not isinstance(modules, dict) or not modules or set(modules) - directories
+            or not isinstance(unresolved, dict)
             or set(unresolved) - set(modules)):
         raise ContractError("Terraform module inventory is malformed")
+    evaluated = set()
+    for root, paths in modules.items():
+        if (not isinstance(paths, list) or not paths or paths != sorted(set(paths))
+                or set(paths) - set(files)
+                or not any(str(PurePosixPath(path).parent) == root for path in paths)):
+            raise ContractError("Terraform evaluated source coverage is malformed")
+        evaluated.update(paths)
+    if evaluated != set(files):
+        raise ContractError("Terraform evaluated source coverage is incomplete")
     for names in unresolved.values():
         _validate_variable_names(names)
         if names != sorted(names):
@@ -363,6 +384,8 @@ def verify_diagnostics(content: str, cache_directory: Path, *,
     modules = set()
     current_module = None
     unresolved = {}
+    evaluated: dict[str, set[str]] = {}
+    quoted = r'"(?:[^"\\]|\\.)*"'
     if coverage is not None:
         if native is None or workspace is None or scanner is None:
             raise ContractError("Terraform scan context is unavailable")
@@ -390,6 +413,32 @@ def verify_diagnostics(content: str, cache_directory: Path, *,
                     or current_module in modules):
                 raise ContractError("Terraform parser module differs from current source")
             modules.add(current_module)
+            evaluated[current_module] = set()
+        elif fields[1] == "DEBUG" and fields[2].startswith("[terraform parser] Added file"):
+            match = re.fullmatch(
+                r'\[terraform parser\] Added file\tmodule="root" (?:module=' + quoted
+                + r' )*file_path=(' + quoted + r')', fields[2])
+            if coverage is None or match is None:
+                raise ContractError("Terraform parsed-file diagnostic is unqualified")
+            path = json.loads(match[1])
+            if path not in coverage["terraform_files"]:
+                raise ContractError("Terraform parsed a source outside the Git inventory")
+            # FindRootModules first parses the module graph. Only subsequent
+            # evaluation under a native root proves the source was checked.
+            if current_module is not None:
+                evaluated[current_module].add(path)
+        elif fields[1] == "DEBUG" and fields[2].startswith("[module resolver] Resolving module"):
+            match = re.fullmatch(
+                r'\[module resolver\] Resolving module\tmodule="root" (?:module=' + quoted
+                + r' )*name=' + quoted + r' source=(' + quoted + r')', fields[2])
+            if coverage is None or current_module is None or match is None:
+                raise ContractError("Terraform module resolution is unqualified")
+            source = json.loads(match[1])
+            if not source.startswith(("./", "../")):
+                raise ContractError("external Terraform module evidence is not admitted")
+        elif fields[1] == "DEBUG" and fields[2].startswith(
+                "[terraform parser] Loaded module metadata for modules"):
+            raise ContractError("Terraform cached module evidence is not admitted")
         elif fields[1] == "WARN" and fields[2].startswith("[terraform parser]"):
             if coverage is None or current_module is None or current_module in unresolved:
                 raise ContractError("Terraform warning has no unique scanned module")
@@ -401,7 +450,11 @@ def verify_diagnostics(content: str, cache_directory: Path, *,
     if coverage is not None:
         if modules != set(coverage["modules"]):
             raise ContractError("Terraform parser module coverage is incomplete")
+        coverage["modules"] = {root: sorted(paths) for root, paths in sorted(evaluated.items())}
         coverage["unresolved_inputs"] = dict(sorted(unresolved.items()))
+        if (any(not paths for paths in evaluated.values())
+                or set().union(*evaluated.values()) != set(coverage["terraform_files"])):
+            raise ContractError("Terraform evaluated source coverage is incomplete")
     if advisories:
         if advisories != 1:
             raise ContractError("severity fallback diagnostic count is unqualified")

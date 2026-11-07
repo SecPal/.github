@@ -425,12 +425,15 @@ def replay_terraform_static(root: Path, trivy: Path, trusted_config: Path, cache
         git("-c", "user.name=SecPal Test", "-c", "user.email=test@secpal.app",
             "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "native static parser fixture")
         return git("rev-parse", "HEAD")
-    def scan():
+    def scan(*, git_available=False):
+        environment = {"HOME": str(root)}
+        if git_available:
+            environment["PATH"] = os.defpath
         process = subprocess.run([
-            str(trivy), "--config", str(trusted_config), "fs", "--scanners", "misconfig",
+            str(trivy), "--config", str(trusted_config), "fs", "--debug", "--scanners", "misconfig",
             "--skip-check-update", "--skip-version-check", "--cache-dir", str(cache),
             "--format", "json", "--output", str(root / "terraform-native.json"), str(workspace),
-        ], env={"HOME": str(root)}, capture_output=True, check=False)
+        ], env=environment, capture_output=True, check=False)
         if process.returncode:
             raise RuntimeError("native Terraform parser process failed")
         return json.loads((root / "terraform-native.json").read_text()), process.stderr.decode()
@@ -457,6 +460,57 @@ def replay_terraform_static(root: Path, trivy: Path, trusted_config: Path, cache
     if (coverage["terraform_files"] == changed["terraform_files"]
             or changed["unresolved_inputs"] != {"infra": ["new_input", "project_id"]}):
         raise RuntimeError("fresh native source coverage did not follow the exact source")
+    # Real OpenTofu/JSON roots and a referenced local child have different
+    # native root structure; prove file evaluation instead of guessing a graph.
+    for directory, filename in (("tofu", "main.tofu"), ("json-tf", "main.tf.json"),
+                                ("json-tofu", "main.tofu.json")):
+        file = workspace / directory / filename
+        file.parent.mkdir()
+        file.write_text('{"variable":{"additional":{"type":"string"}}}\n'
+                        if filename.endswith(".json") else 'variable "additional" { type = string }\n')
+    child = source.parent / "modules/net/main.tf"
+    child.parent.mkdir(parents=True)
+    child.write_text('output "local" { value = "public-test-fixture" }\n')
+    independent = source.parent / "unreferenced/main.tf"
+    independent.parent.mkdir()
+    independent.write_text('output "independent" { value = "also-scanned" }\n')
+    source.write_text(source.read_text() + '\nmodule "child" { source = "./modules/net" }\n')
+    local = commit()
+    native, diagnostic = scan()
+    complete = module.observe_terraform_sources(workspace, local, native)
+    module.verify_diagnostics(diagnostic, cache, native=native, scanner=scanner,
+                              workspace=str(workspace), coverage=complete)
+    if (set(complete["modules"]) != {"infra", "infra/unreferenced", "tofu", "json-tf", "json-tofu"}
+            or "infra/modules/net/main.tf" not in complete["modules"]["infra"]
+            or len(complete["terraform_files"]) != 6):
+        raise RuntimeError("native nested/local/OpenTofu/JSON source coverage is incomplete")
+    # The foreign module genuinely resolves with no network. Its files are
+    # outside the subject even if they yield no findings. Never admit them.
+    foreign = root / "foreign-module"
+    foreign.mkdir()
+    (foreign / "main.tf").write_text('output "foreign" { value = "outside-subject" }\n')
+    for args in (("init", "--quiet"), ("add", "."),
+                 ("-c", "user.name=SecPal Test", "-c", "user.email=test@secpal.app",
+                  "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "foreign test fixture")):
+        subprocess.run(["git", "-C", str(foreign), *args], check=True)
+    original = source.read_text()
+    source.write_text(original + '\nmodule "foreign" { source = '
+                      + json.dumps("git::file://" + str(foreign)) + ' }\n')
+    external = commit()
+    native, diagnostic = scan(git_available=True)
+    if 'prefix="git::file:' not in diagnostic:
+        raise RuntimeError("foreign native module was not actually resolved")
+    try:
+        unbound = module.observe_terraform_sources(workspace, external, native)
+        module.verify_diagnostics(diagnostic, cache, native=native, scanner=scanner,
+                                  workspace=str(workspace), coverage=unbound)
+    except module.ContractError as error:
+        if str(error) != "external Terraform module evidence is not admitted":
+            raise
+    else:
+        raise RuntimeError("foreign native module bypassed the subject identity")
+    source.write_text(original)
+    commit()
     (source.parent / "broken.tf").write_text('resource "google_compute_instance" "broken" {\n')
     broken = commit()
     native, diagnostic = scan()
@@ -470,6 +524,8 @@ def replay_terraform_static(root: Path, trivy: Path, trusted_config: Path, cache
         raise RuntimeError("a successful process with a genuine parse failure was admitted")
     return {"typed_unknowns_observed": True, "public_ip_high_preserved": True,
             "changed_source_rescanned": True, "actual_parse_failure_rejected": True,
+            "opentofu_and_json_sources_bound": True, "nested_local_module_bound": True,
+            "resolved_external_module_rejected": True,
             "cloud_operations": "NOT_EXECUTED"}
 
 

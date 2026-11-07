@@ -2148,7 +2148,9 @@ class NativeTerraformCoverageTests(unittest.TestCase):
                 + json.dumps('failed to check cache: cache does not exist at '
                              + json.dumps(str(self.root / "policy/content"))) + '\n'
                 '2026-11-07T12:00:00Z\tINFO\t[terraform scanner] Scanning root module'
-                '\tfile_path="infra"\n' + extra)
+                '\tfile_path="infra"\n'
+                '2026-11-07T12:00:00Z\tDEBUG\t[terraform parser] Added file'
+                '\tmodule="root" file_path="infra/main.tf"\n' + extra)
 
     def warning(self, variables="project_id"):
         return ('2026-11-07T12:00:00Z\tWARN\t[terraform parser] Variable values were not found '
@@ -2177,6 +2179,48 @@ class NativeTerraformCoverageTests(unittest.TestCase):
     def test_concrete_variables_need_no_missing_value_warning(self):
         self.assertEqual(self.verify(self.diagnostics())["unresolved_inputs"], {})
 
+    def test_all_pinned_native_terraform_and_opentofu_suffixes_are_bound(self):
+        for suffix in (".tf", ".tf.json", ".tofu", ".tofu.json"):
+            self.source.unlink()
+            self.source = self.workspace / ("infra/main" + suffix)
+            self.source.write_text('{"variable":{"project_id":{"type":"string"}}}\n'
+                                   if suffix.endswith(".json") else 'variable "project_id" { type = string }\n# source suffix fixture\n')
+            self.commit = self.commit_source()
+            path = "infra/main" + suffix
+            coverage = self.verify(self.diagnostics().replace("infra/main.tf", path))
+            self.assertEqual(set(coverage["terraform_files"]), {path})
+
+    def test_native_evaluated_local_module_sources_need_no_second_root(self):
+        child = self.workspace / "infra/modules/net/main.tf"
+        child.parent.mkdir(parents=True)
+        child.write_text('resource "google_compute_network" "test" {}\n')
+        self.commit = self.commit_source()
+        trace = ('2026-11-07T12:00:00Z\tDEBUG\t[module resolver] Resolving module'
+                 '\tmodule="root" name="module.child" source="./modules/net"\n'
+                 '2026-11-07T12:00:00Z\tDEBUG\t[terraform parser] Added file'
+                 '\tmodule="root" module="child" file_path="infra/modules/net/main.tf"\n')
+        coverage = self.verify(self.diagnostics(trace))
+        self.assertEqual(coverage["modules"], {"infra": ["infra/main.tf", "infra/modules/net/main.tf"]})
+
+    def test_external_module_resolution_and_untraced_files_fail_closed(self):
+        for source in ("git::file:///outside", "github.com/unbound/module", "/outside", "bucket/module/google"):
+            trace = ('2026-11-07T12:00:00Z\tDEBUG\t[module resolver] Resolving module'
+                     '\tmodule="root" name="module.external" source=' + json.dumps(source) + '\n')
+            with self.subTest(source=source), self.assertRaises(self.module.ContractError):
+                self.verify(self.diagnostics(trace))
+        with self.assertRaises(self.module.ContractError):
+            self.verify(self.diagnostics().replace(
+                '2026-11-07T12:00:00Z\tDEBUG\t[terraform parser] Added file'
+                '\tmodule="root" file_path="infra/main.tf"\n', ""))
+
+    def test_tracked_module_cache_is_rejected_before_native_execution(self):
+        cache = self.workspace / ".terraform/modules/modules.json"
+        cache.parent.mkdir(parents=True)
+        cache.write_text('{"Modules":[]}\n')
+        self.commit = self.commit_source()
+        with self.assertRaises(self.module.ContractError):
+            self.module.verify_target(self.workspace, self.commit)
+
     def test_source_changes_are_observed_without_manual_tree_enrollment(self):
         old = self.coverage()
         self.source.write_text('variable "new_input" { type = string }\n')
@@ -2199,7 +2243,7 @@ class NativeTerraformCoverageTests(unittest.TestCase):
         extra.write_text('resource "google_compute_network" "new" {}\n')
         self.commit = self.commit_source()
         with self.assertRaises(self.module.ContractError):
-            self.coverage()
+            self.verify(self.diagnostics())
 
     def test_real_parser_errors_partial_parse_and_unknown_diagnostics_fail_closed(self):
         invalid = [
