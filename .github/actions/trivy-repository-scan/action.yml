@@ -171,7 +171,7 @@ runs:
         print(f"Gate state: `{result['gate_state']}`")
         print()
         if "coverage" in result:
-            print("Scope: repository-static. Run-bound controls: REQUIRED_NOT_EXECUTED.")
+            print("Scope: repository-static. Concrete cloud inputs and operations: NOT_EXECUTED.")
             print("This result does not authorize cloud/resource operations or target execution.")
             print()
         print(

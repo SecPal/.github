@@ -19,7 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-SCHEMA_VERSION = "secpal-trivy-repository-scan-v4"
+SCHEMA_VERSION = "secpal-trivy-repository-scan-v5"
 OBSERVATION_VERSION = "secpal-trivy-repository-observation-v3"
 POLICY_ID = "secpal-trivy-repository-policy-v1"
 GATE_STATES = {"CLEAN", "ACTIONABLE", "REVIEW_REQUIRED", "UNKNOWN_STALE"}
@@ -47,104 +47,10 @@ SEVERITY_FALLBACK_DIAGNOSTIC = (
     "Using severities from other vendors for some vulnerabilities. Read "
     "https://trivy.dev/docs/v0.74/guide/scanner/vulnerability#severity-selection for details."
 )
-# Deployment#124 proof: #1236, requalified by #1244 on 2026-10-21.
-# #1249 excludes only the independently provenance-approved REUSE revision.
-# Exact source facts and unexecuted run obligations remain unchanged.
-# The named existing control path validates concrete values before operations.
-# Changes to any bound control/module or expiry require independent requalification.
+# Historical exception validation only; no current scan is enrolled in a
+# source/control allowlist and no historical qualification can be renewed here.
 DEPLOYMENT_TERRAFORM_ID = "deployment-ephemeral-1236"
 DEPLOYMENT_TERRAFORM_EXPIRES = "2026-11-04T00:00:00Z"
-DEPLOYMENT_TERRAFORM_BINDINGS = {
-    "containers/phase-b-gateway/Containerfile": "7ddb40ddbd863f5150cfc261ff0049485ea3018d",
-    "config": "2d4766e35ebea3e8cab85c35e77db5ce09a52f49",
-    "infra/ci-cloud": "5a6905f320172fb5f6fc170c039a0bc8b7cf8684",
-    "schemas": "2a793d4d0773656f2cfea6b489a7d5149d97c2f8",
-    "scripts": "26a857dca06796c241fa155f36f513cc15a1bdd8",
-    ".github": "sha256:f6de216e2ff4934a36e9796bf8ab73d0fbdfd4778b857930c3dbd5a8f1afc0bb"
-}
-# #1258 independently qualifies deployment#361's public-only Phase-1 composition.
-# The five other bindings and all Terraform paths are identical to protected main.
-# Retain that main state only through the same existing qualification expiry.
-DEPLOYMENT_PHASE_ONE_BINDINGS = {
-    **DEPLOYMENT_TERRAFORM_BINDINGS,
-    "scripts": "0b3e423fb58643001b3332d543af8ccd73fa7cba",
-}
-# #1260 qualifies deployment#362's reviewed rootless XDG correction only.
-# All other source/control identities, obligations and the original expiry hold.
-DEPLOYMENT_PHASE_ONE_XDG_BINDINGS = {
-    **DEPLOYMENT_TERRAFORM_BINDINGS,
-    "scripts": "4c6d4144cfc7849196e01e5c4204792f3355dfd2",
-}
-# #1264 qualifies deployment#363's reviewed bounded diagnostics and dispatch
-# evidence. Bind the new versioned control tree as well as the exact scripts.
-DEPLOYMENT_PHASE_ONE_DISPATCH_BINDINGS = {
-    **DEPLOYMENT_TERRAFORM_BINDINGS,
-    "scripts": "ce6c93f9854ca2938509298f3120981ed992b069",
-    ".secpal": "c9144f481e6148c42ecd8f8c73552bdbb137d66a",
-}
-# #1266 qualifies deployment#365's independently reviewed native #80 composition.
-# Keep all other source/control identities, dispositions and the original expiry.
-DEPLOYMENT_PHASE_ONE_NATIVE_BINDINGS = {
-    **DEPLOYMENT_PHASE_ONE_DISPATCH_BINDINGS,
-    "scripts": "c17a475b7185349018086ca8683dcf751a339a5a",
-    ".secpal": "18745a3e7a93c9990e023b8ed5da4031025c631c",
-}
-# #1284 qualifies only deployment#376's exact Certbot security-closure refresh.
-# Native package evidence is separate from the unchanged source-static scope.
-# The existing Terraform controls, dispositions and expiry remain authoritative.
-DEPLOYMENT_CERTBOT_REFRESH_BINDINGS = {
-    **DEPLOYMENT_PHASE_ONE_NATIVE_BINDINGS,
-    "config": "68bd29a7c4c159e9ae1f1c9f0b05fda8b95eb012",
-    "schemas": "1f594b1bb40c9fa415204aa11fce78c3962e1bad",
-}
-# #1286 qualifies the exact Google 8.8.1 cleanup and combined Rocky sources.
-# Provider package/producer evidence does not replace concrete cloud-run controls.
-# Preserve prior tuples, existing dispositions and the original expiry.
-DEPLOYMENT_GOOGLE_CLEANUP_BINDINGS = {
-    **DEPLOYMENT_CERTBOT_REFRESH_BINDINGS,
-    "infra/ci-cloud": "5b7aa70eceb3b9dbc2903b95507b4e9a935ce5b1",
-}
-DEPLOYMENT_GOOGLE_ROCKY_BINDINGS = {
-    **DEPLOYMENT_GOOGLE_CLEANUP_BINDINGS,
-    "infra/ci-cloud": "b2980196040355b883a77b5f1011dc4b890af3d0",
-    "scripts": "036dd0f359dacef017b32f32971cf106bf57e93f",
-    "schemas": "de6c64e49a24a017a12ed204285dbbc11c9d8d25",
-}
-# #1288 qualifies only the reviewed Dependabot Python/Caddy inputs and their
-# composition; every other source identity, disposition and expiry is unchanged.
-DEPLOYMENT_DEPENDABOT_PYTHON_BINDINGS = {
-    **DEPLOYMENT_GOOGLE_ROCKY_BINDINGS,
-    ".github": "sha256:eabfd254fff92561be8559c0f03bc6aaec51c8b6e2733d8b98215e9396ccb8f5",
-}
-DEPLOYMENT_DEPENDABOT_CADDY_BINDINGS = {
-    **DEPLOYMENT_GOOGLE_ROCKY_BINDINGS,
-    "containers/phase-b-gateway/Containerfile": "5acb622fa60472f641fbc2b88dc3338665258a9e",
-}
-DEPLOYMENT_DEPENDABOT_COMBINED_BINDINGS = {
-    **DEPLOYMENT_DEPENDABOT_PYTHON_BINDINGS,
-    "containers/phase-b-gateway/Containerfile": "5acb622fa60472f641fbc2b88dc3338665258a9e",
-}
-DEPLOYMENT_TERRAFORM_PATHS = (
-    'infra/ci-cloud/digitalocean/versions.tf',
-    'infra/ci-cloud/gcp-rocky/main.tf',
-    'infra/ci-cloud/gcp-rocky/metadata.tf',
-    'infra/ci-cloud/gcp-rocky/outputs.tf',
-    'infra/ci-cloud/gcp-rocky/variables.tf',
-    'infra/ci-cloud/gcp-rocky/versions.tf',
-    'infra/ci-cloud/gcp/versions.tf',
-)
-DEPLOYMENT_TERRAFORM_VARIABLES = frozenset((
-    "project_id", "bootstrap_service_account", "trusted_control_sha", "target_sha",
-    "profile", "zone", "machine_type", "disk_type", "disk_size_gib",
-    "exact_image_self_link", "run_id", "run_attempt", "runner_ipv4",
-    "ssh_public_key", "created_at", "expires_at",
-))
-DEPLOYMENT_RUN_BOUND_CONTROLS = (
-    "actual-input-validation-and-metadata-admission",
-    "exact-peer-management-access",
-    "cloud-identity-removal-before-target",
-    "bounded-lifetime-and-exact-run-cleanup",
-)
 
 Timestamp = tuple[datetime, int]
 
@@ -329,152 +235,110 @@ def _verify_composer_severity_fallback(native: dict[str, Any] | None,
         raise ContractError("severity fallback vulnerability is unavailable")
 
 
-def github_source_fingerprint(identities: dict[str, str], quality: bytes) -> str:
-    """Bind automation semantics, excluding two independently approved revisions.
-
-    Scanned bytes are never changed. Every other automation byte/mode remains
-    bound, including new workflows, local actions, permissions and commands.
-    """
-    caller = ".github/workflows/quality.yml"
-    if caller not in identities:
-        raise ContractError("repository security caller identity is unavailable")
-    pattern = rb"(?m)^(        uses: SecPal/\.github/\.github/actions/trivy-repository-scan@)[0-9a-f]{40}( # main)$"
-    normalized, count = re.subn(pattern, rb"\g<1>" + b"0" * 40 + rb"\g<2>", quality)
-    if count != 1:
-        raise ContractError("repository security caller pin representation is unqualified")
-    # REUSE is independent licensing CI. This removes only its immutable
-    # revision from the Terraform proof, not its job, owner, permissions or
-    # execution. Native protected delivery owns accepted-main provenance;
-    # normalization is not approval of a referenced workflow (see #1249).
-    reuse_pattern = rb"(?m)^(    uses: SecPal/\.github/\.github/workflows/reusable-reuse\.yml@)([0-9a-f]{40})( # main)$"
-    reuse_pins = re.findall(reuse_pattern, quality)
-    if len(reuse_pins) != 1 or reuse_pins[0][1] == b"0" * 40:
-        raise ContractError("independent REUSE pin representation is unqualified")
-    normalized = re.sub(reuse_pattern, rb"\g<1>" + b"0" * 40 + rb"\g<3>", normalized)
-    sources = dict(identities)
-    mode, kind, _ = sources[caller].split(" ", 2)
-    sources[caller] = mode + " " + kind + " " + _sha256(normalized)
-    return _sha256(sources)
+def _validate_terraform_results(native: dict[str, Any], coverage: dict[str, Any]) -> None:
+    """Corroborate every current source directory with real native check results."""
+    expected = set(coverage["modules"])
+    observed = set()
+    for result in native["Results"]:
+        if result.get("Type") != "terraform":
+            continue
+        target = _path(result.get("Target"))
+        if (target not in expected and target not in coverage["terraform_files"]
+                or result.get("Class") != "config"):
+            raise ContractError("Terraform native target differs from current source")
+        summary = result.get("MisconfSummary")
+        if (not isinstance(summary, dict) or set(summary) != {"Successes", "Failures"}
+                or any(type(n) is not int or n < 0 for n in summary.values())
+                or not sum(summary.values())):
+            raise ContractError("Terraform native checks are unavailable")
+        if target in expected:
+            if target in observed:
+                raise ContractError("Terraform native module is duplicated")
+            observed.add(target)
+    if observed != expected:
+        raise ContractError("Terraform native module coverage is incomplete")
 
 
-def observe_deployment_terraform(workspace: Path, commit: str) -> dict[str, Any]:
-    """Observe source identities only; no Terraform interpretation or execution."""
-    directories = {"infra/ci-cloud", "scripts", "config", "schemas"}
-    caller = ".github/workflows/quality.yml"
-    files = [path for path in DEPLOYMENT_TERRAFORM_BINDINGS
-             if path not in directories and path != ".github"]
-    # Reuse the existing raw-Git/byte observation owner for regular files.
-    facts = observe_secret_sources(workspace, commit, [*files, caller])
-    quality_blob = facts["blobs"].pop(caller)
-    bindings = dict(facts["blobs"])
-    # Old accepted sources have no dispatch-control tree. When present, it is
-    # mandatory source evidence, and the existing type check rejects impostors.
-    if _git(workspace, ["ls-tree", "-z", commit, "--", ".secpal"]):
-        directories.add(".secpal")
-    for path in sorted(directories):
-        entry = _git(workspace, ["ls-tree", "-z", commit, "--", path]).split(b"\0")
-        if len(entry) != 2 or entry[-1]:
-            raise ContractError("control tree identity is unavailable")
-        metadata, name = entry[0].split(b"\t", 1)
-        mode, kind, identity = metadata.split(b" ")
-        if mode != b"040000" or kind != b"tree" or name != path.encode():
-            raise ContractError("control source is not a Git tree")
-        bindings[path] = _source_blob(identity.decode("ascii"))
-    terraform_paths = []
-    github_sources = {}
+def observe_terraform_sources(workspace: Path, commit: str,
+                              native: dict[str, Any]) -> dict[str, Any] | None:
+    """Bind current raw Git sources; never supply values or execute Terraform."""
+    verify_target(workspace, commit)
+    _validate_scan_surface(native, str(workspace))
+    files = {}
     for record in _git(workspace, ["ls-tree", "-r", "-z", commit]).split(b"\0"):
-        if record:
-            metadata, path = record.split(b"\t", 1)
-            name = path.decode("utf-8")
-            if name.endswith((".tf", ".tf.json")):
-                terraform_paths.append(name)
-            if name.startswith(".github/"):
-                github_sources[name] = metadata.decode("ascii")
-    bindings[".github"] = github_source_fingerprint(
-        github_sources, _observe_blob(workspace, quality_blob))
-    return {"commit": commit, "bindings": bindings, "terraform_paths": sorted(terraform_paths)}
-
-
-def qualify_deployment_terraform(
-    facts: dict[str, Any], repository: str, commit: str, completed_at: str,
-) -> dict[str, Any]:
-    """Purely admit the reviewed source/control proof, never concrete run values."""
-    if (repository != "SecPal/deployment" or not COMMIT_RE.fullmatch(commit)
-            or not isinstance(facts, dict)
-            or set(facts) != {"commit", "bindings", "terraform_paths"}
-            or facts["commit"] != commit
-            or not (
-                facts["bindings"] == DEPLOYMENT_TERRAFORM_BINDINGS
-                or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_BINDINGS
-                    and _timestamp(completed_at) >= _timestamp("2026-10-24T00:00:00Z"))
-                or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_XDG_BINDINGS
-                    and _timestamp(completed_at) >= _timestamp("2026-10-25T00:00:00Z"))
-                or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_DISPATCH_BINDINGS
-                    and _timestamp(completed_at) >= _timestamp("2026-10-25T00:00:00Z"))
-                or (facts["bindings"] == DEPLOYMENT_PHASE_ONE_NATIVE_BINDINGS
-                    and _timestamp(completed_at) >= _timestamp("2026-10-25T00:00:00Z"))
-                or (facts["bindings"] == DEPLOYMENT_CERTBOT_REFRESH_BINDINGS
-                    and _timestamp(completed_at) >= _timestamp("2026-10-28T00:00:00Z"))
-                or (facts["bindings"] in (DEPLOYMENT_GOOGLE_CLEANUP_BINDINGS,
-                                          DEPLOYMENT_GOOGLE_ROCKY_BINDINGS,
-                                          DEPLOYMENT_DEPENDABOT_PYTHON_BINDINGS,
-                                          DEPLOYMENT_DEPENDABOT_CADDY_BINDINGS,
-                                          DEPLOYMENT_DEPENDABOT_COMBINED_BINDINGS)
-                    and _timestamp(completed_at) >= _timestamp("2026-10-28T00:00:00Z"))
-            )
-            or facts["terraform_paths"] != list(DEPLOYMENT_TERRAFORM_PATHS)
-            or not _timestamp("2026-10-20T00:00:00Z") <= _timestamp(completed_at)
-            < _timestamp(DEPLOYMENT_TERRAFORM_EXPIRES)):
-        raise ContractError("Terraform source/run-bound qualification is unavailable")
-    return {
-        "qualification_id": DEPLOYMENT_TERRAFORM_ID,
-        "scope": "REPOSITORY_STATIC",
-        "run_bound_status": "REQUIRED_NOT_EXECUTED",
-        "source_commit": commit,
-        "source_bindings": dict(facts["bindings"]),
-        "terraform_paths": list(facts["terraform_paths"]),
-        "required_at_operation": list(DEPLOYMENT_RUN_BOUND_CONTROLS),
-        "expires_at": DEPLOYMENT_TERRAFORM_EXPIRES,
+        if not record:
+            continue
+        metadata, raw_path = record.split(b"\t", 1)
+        path = raw_path.decode("utf-8")
+        if not path.endswith((".tf", ".tf.json")):
+            continue
+        mode, kind, identity = metadata.split(b" ")
+        if mode not in {b"100644", b"100755"} or kind != b"blob" or _path(path) != path:
+            raise ContractError("Terraform source must be a regular tracked file")
+        files[path] = _source_blob(identity.decode("ascii"))
+    coverage = {
+        "scope": "REPOSITORY_STATIC", "run_bound_status": "NOT_EXECUTED",
+        "source_commit": commit, "terraform_files": files,
+        "modules": sorted({str(PurePosixPath(path).parent) for path in files}),
+        "unresolved_inputs": {},
     }
+    _validate_terraform_results(native, coverage)
+    return coverage if files else None
 
 
 def _validate_coverage(coverage: dict[str, Any], repository: str, commit: str,
                        completed_at: str) -> dict[str, Any]:
-    if not isinstance(coverage, dict):
-        raise ContractError("Terraform coverage is malformed")
-    expected = qualify_deployment_terraform(
-        {"commit": coverage.get("source_commit"), "bindings": coverage.get("source_bindings"),
-         "terraform_paths": coverage.get("terraform_paths")},
-        repository, commit, completed_at,
-    )
-    if coverage != expected:
-        raise ContractError("Terraform coverage differs from the reviewed contract")
-    return expected
+    """Validate captured static facts, without approving a concrete cloud run."""
+    _timestamp(completed_at)
+    if (not REPOSITORY_RE.fullmatch(repository) or not COMMIT_RE.fullmatch(commit)
+            or not isinstance(coverage, dict)
+            or set(coverage) != {"scope", "run_bound_status", "source_commit",
+                                 "terraform_files", "modules", "unresolved_inputs"}
+            or coverage["source_commit"] != commit
+            or coverage["scope"] != "REPOSITORY_STATIC"
+            or coverage["run_bound_status"] != "NOT_EXECUTED"):
+        raise ContractError("Terraform static source identity is malformed")
+    files = coverage["terraform_files"]
+    if not isinstance(files, dict) or not files:
+        raise ContractError("Terraform source inventory is unavailable")
+    for path, blob in files.items():
+        if _path(path) != path or not path.endswith((".tf", ".tf.json")):
+            raise ContractError("Terraform source inventory is malformed")
+        _source_blob(blob)
+    modules = sorted({str(PurePosixPath(path).parent) for path in files})
+    unresolved = coverage["unresolved_inputs"]
+    if (coverage["modules"] != modules or not isinstance(unresolved, dict)
+            or set(unresolved) - set(modules)):
+        raise ContractError("Terraform module inventory is malformed")
+    for names in unresolved.values():
+        _validate_variable_names(names)
+        if names != sorted(names):
+            raise ContractError("Terraform unresolved inputs are not canonical")
+    return coverage
 
 
-def _verify_terraform_warning(message: str, coverage: dict[str, Any] | None,
-                              scanner: dict[str, Any] | None) -> None:
-    # The pinned parser uses typed unknowns. Acknowledging their scope requires
-    # the exact source/control proof and explicit unexecuted run-bound status.
-    if coverage is None or scanner is None:
-        raise ContractError("Terraform diagnostic coverage is unqualified")
-    identity = _validate_scanner(scanner)
-    if (identity["version"] != TRIVY_VERSION
-            or identity["immutable_id"] != TRIVY_ARCHIVE_ID
-            or coverage.get("qualification_id") != DEPLOYMENT_TERRAFORM_ID
-            or coverage.get("run_bound_status") != "REQUIRED_NOT_EXECUTED"):
-        raise ContractError("Terraform diagnostic identity is unqualified")
+def _validate_variable_names(names: Any) -> None:
+    if (not isinstance(names, list) or not 1 <= len(names) <= 1024
+            or any(not isinstance(name, str)
+                   or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,127}", name) is None
+                   for name in names)
+            or len(set(names)) != len(names)):
+        raise ContractError("Terraform diagnostic variables are malformed")
+
+
+def _terraform_warning_variables(message: str) -> list[str]:
+    # Pinned parser.go:setFallbackValuesForMissingVars supplies typed unknowns,
+    # not fake concrete values. This is static analysis, not a successful plan.
     prefix = ("[terraform parser] Variable values were not found in the environment or "
               'variable files. Evaluating may not work correctly.\tmodule="root" variables=')
     if not message.startswith(prefix):
-        raise ContractError("Terraform diagnostic representation is unqualified")
-    names = json.loads(message[len(prefix):])
-    if not isinstance(names, str):
+        raise ContractError("Terraform parser diagnostic is unqualified")
+    value = json.loads(message[len(prefix):])
+    if not isinstance(value, str):
         raise ContractError("Terraform diagnostic variables are malformed")
-    variables = names.split(", ")
-    if (len(variables) != len(DEPLOYMENT_TERRAFORM_VARIABLES)
-            or set(variables) != DEPLOYMENT_TERRAFORM_VARIABLES):
-        raise ContractError("Terraform diagnostic coverage differs from source proof")
+    names = value.split(", ")
+    _validate_variable_names(names)
+    return sorted(names)
 
 
 def verify_diagnostics(content: str, cache_directory: Path, *,
@@ -496,7 +360,17 @@ def verify_diagnostics(content: str, cache_directory: Path, *,
     )
     fallbacks = 0
     advisories = 0
-    terraform_warnings = 0
+    modules = set()
+    current_module = None
+    unresolved = {}
+    if coverage is not None:
+        if native is None or workspace is None or scanner is None:
+            raise ContractError("Terraform scan context is unavailable")
+        identity = _validate_scanner(scanner)
+        if identity["version"] != TRIVY_VERSION or identity["immutable_id"] != TRIVY_ARCHIVE_ID:
+            raise ContractError("Terraform scanner identity is unqualified")
+        _validate_scan_surface(native, workspace)
+        _validate_terraform_results(native, coverage)
     for line in content.splitlines():
         fields = line.split("\t", 2)
         if len(fields) != 3 or re.fullmatch(
@@ -507,15 +381,27 @@ def verify_diagnostics(content: str, cache_directory: Path, *,
             fallbacks += 1
         elif fields[1] == "WARN" and fields[2] == SEVERITY_FALLBACK_DIAGNOSTIC:
             advisories += 1
+        elif fields[1] == "INFO" and fields[2].startswith("[terraform scanner] Scanning root module"):
+            prefix = '[terraform scanner] Scanning root module\tfile_path='
+            if coverage is None or not fields[2].startswith(prefix):
+                raise ContractError("Terraform module diagnostics are unavailable")
+            current_module = json.loads(fields[2][len(prefix):])
+            if (not isinstance(current_module, str) or current_module not in coverage["modules"]
+                    or current_module in modules):
+                raise ContractError("Terraform parser module differs from current source")
+            modules.add(current_module)
         elif fields[1] == "WARN" and fields[2].startswith("[terraform parser]"):
-            _verify_terraform_warning(fields[2], coverage, scanner)
-            terraform_warnings += 1
+            if coverage is None or current_module is None or current_module in unresolved:
+                raise ContractError("Terraform warning has no unique scanned module")
+            unresolved[current_module] = _terraform_warning_variables(fields[2])
         elif fields[1] not in {"INFO", "DEBUG"} or not fields[2]:
             raise ContractError("scanner diagnostics indicate unknown scan health")
     if fallbacks != 1:
         raise ContractError("pinned embedded check selection is unavailable")
-    if terraform_warnings != (1 if coverage is not None else 0):
-        raise ContractError("Terraform diagnostic count differs from qualified scope")
+    if coverage is not None:
+        if modules != set(coverage["modules"]):
+            raise ContractError("Terraform parser module coverage is incomplete")
+        coverage["unresolved_inputs"] = dict(sorted(unresolved.items()))
     if advisories:
         if advisories != 1:
             raise ContractError("severity fallback diagnostic count is unqualified")
@@ -1131,7 +1017,7 @@ def _apply_exception(
         matches = [exception for exception in matches if exception["source_blob"] == blob]
     if matches and "qualification_id" in matches[0]:
         matches = [exception for exception in matches if coverage is not None
-                   and exception["qualification_id"] == coverage["qualification_id"]]
+                   and exception["qualification_id"] == coverage.get("qualification_id")]
     if matches:
         result["exception"] = {
             "id": matches[0]["id"],
@@ -1147,8 +1033,6 @@ def admit(observation: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]
         raise ContractError("observation schema is invalid")
     policy_identity = _validate_policy(policy, observation["completed_at"])
     coverage = None
-    if observation["subject"]["repository"] == "SecPal/deployment" and "coverage" not in observation:
-        raise ContractError("deployment source coverage is required")
     if "coverage" in observation:
         coverage = _validate_coverage(observation["coverage"], observation["subject"]["repository"],
                                       observation["subject"]["commit"], observation["completed_at"])
@@ -1356,11 +1240,9 @@ def _evaluate(arguments: argparse.Namespace) -> int:
             ))
             return 1
         try:
-            coverage = None
-            if arguments.repository == "SecPal/deployment":
-                facts = observe_deployment_terraform(Path(observed_workspace), arguments.commit)
-                coverage = qualify_deployment_terraform(
-                    facts, arguments.repository, arguments.commit, completed_at)
+            coverage = observe_terraform_sources(
+                Path(observed_workspace), arguments.commit, observed_native)
+            if coverage is not None:
                 observation["coverage"] = coverage
             verify_diagnostics(
                 arguments.diagnostics.read_text(encoding="utf-8"), arguments.cache_dir,

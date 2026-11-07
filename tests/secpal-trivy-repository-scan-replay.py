@@ -198,7 +198,7 @@ def replay_source_binding(root: Path, action_path: Path, environment: dict) -> d
         evidence = Path(outputs["evidence-path"])
         result = json.loads((evidence / "result.json").read_text())
         import jsonschema
-        jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v4.schema.json").read_text()))
+        jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v5.schema.json").read_text()))
         if (result["gate_state"] != expected or result["operation"]["status"] != "SUCCEEDED"
                 or result["database"]["status"] != "FRESH" or result["summary"]["total"] != 1
                 or result["summary"]["excepted"] != (1 if expected == "CLEAN" else 0)
@@ -314,7 +314,7 @@ def replay_composer_severity_fallback(root: Path, action_path: Path, environment
     evidence = Path(outputs["evidence-path"])
     result = json.loads((evidence / "result.json").read_text())
     import jsonschema
-    jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v4.schema.json").read_text()))
+    jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v5.schema.json").read_text()))
     findings = result["findings"]
     if (result["operation"]["status"] != "SUCCEEDED" or result["gate_state"] != "ACTIONABLE"
             or result["subject"] != {"repository": "SecPal/repository-scan-fixture", "commit": commit}
@@ -385,7 +385,7 @@ def replay_native_interruption(root: Path, script: str, environment: dict) -> di
     evidence = Path(outputs["evidence-path"])
     result = json.loads((evidence / "result.json").read_text())
     import jsonschema
-    jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v4.schema.json").read_text()))
+    jsonschema.validate(result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v5.schema.json").read_text()))
     if (result["gate_state"] != "UNKNOWN_STALE"
             or result["operation"]["failure_code"] != "SCANNER_FAILURE"
             or result["findings"]):
@@ -399,6 +399,78 @@ def replay_native_interruption(root: Path, script: str, environment: dict) -> di
         raise RuntimeError("interrupted execution exposed or retained private scanner material")
     return {"native_process": "INTERRUPTED_NONZERO", "gate_state": result["gate_state"],
             "failure_code": result["operation"]["failure_code"], "private_cleanup": "PASS"}
+
+
+def replay_terraform_static(root: Path, trivy: Path, trusted_config: Path, cache: Path) -> dict:
+    """Real parser regression; no provider initialization, values or cloud calls."""
+    module = load_module()
+    workspace = root / "terraform-static"
+    source = workspace / "infra/main.tf"
+    source.parent.mkdir(parents=True)
+    source.write_text(dedent('''\
+        variable "project_id" { type = string }
+        resource "google_compute_instance" "test" {
+          project = var.project_id
+          name = "scanner-fixture-never-provisioned"
+          network_interface {
+            network = "default"
+            access_config {}
+          }
+        }
+    '''))
+    def git(*arguments):
+        return subprocess.check_output(["git", "-C", str(workspace), *arguments], text=True).strip()
+    def commit():
+        git("add", ".")
+        git("-c", "user.name=SecPal Test", "-c", "user.email=test@secpal.app",
+            "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "native static parser fixture")
+        return git("rev-parse", "HEAD")
+    def scan():
+        process = subprocess.run([
+            str(trivy), "--config", str(trusted_config), "fs", "--scanners", "misconfig",
+            "--skip-check-update", "--skip-version-check", "--cache-dir", str(cache),
+            "--format", "json", "--output", str(root / "terraform-native.json"), str(workspace),
+        ], env={"HOME": str(root)}, capture_output=True, check=False)
+        if process.returncode:
+            raise RuntimeError("native Terraform parser process failed")
+        return json.loads((root / "terraform-native.json").read_text()), process.stderr.decode()
+    scanner = {"name": "trivy", "version": TRIVY_VERSION,
+               "immutable_id": "sha256:" + TRIVY_ARCHIVE_SHA256,
+               "configuration_sha256": module.configuration_identity()}
+    git("init", "--quiet")
+    first = commit()
+    native, diagnostic = scan()
+    coverage = module.observe_terraform_sources(workspace, first, native)
+    module.verify_diagnostics(diagnostic, cache, native=native, scanner=scanner,
+                              workspace=str(workspace), coverage=coverage)
+    if (coverage["unresolved_inputs"] != {"infra": ["project_id"]}
+            or not any(finding["ID"] == "GCP-0031" and finding["Severity"] == "HIGH"
+                       for result in native["Results"] for finding in result.get("Misconfigurations", []))):
+        raise RuntimeError("typed unknown inputs hid a real public-IP finding")
+    # A reviewed source update needs a fresh scan, not a manually enrolled tuple.
+    source.write_text(source.read_text() + '\nvariable "new_input" { type = string }\n')
+    second = commit()
+    native, diagnostic = scan()
+    changed = module.observe_terraform_sources(workspace, second, native)
+    module.verify_diagnostics(diagnostic, cache, native=native, scanner=scanner,
+                              workspace=str(workspace), coverage=changed)
+    if (coverage["terraform_files"] == changed["terraform_files"]
+            or changed["unresolved_inputs"] != {"infra": ["new_input", "project_id"]}):
+        raise RuntimeError("fresh native source coverage did not follow the exact source")
+    (source.parent / "broken.tf").write_text('resource "google_compute_instance" "broken" {\n')
+    broken = commit()
+    native, diagnostic = scan()
+    try:
+        partial = module.observe_terraform_sources(workspace, broken, native)
+        module.verify_diagnostics(diagnostic, cache, native=native, scanner=scanner,
+                                  workspace=str(workspace), coverage=partial)
+    except module.ContractError:
+        pass
+    else:
+        raise RuntimeError("a successful process with a genuine parse failure was admitted")
+    return {"typed_unknowns_observed": True, "public_ip_high_preserved": True,
+            "changed_source_rescanned": True, "actual_parse_failure_rejected": True,
+            "cloud_operations": "NOT_EXECUTED"}
 
 
 def main() -> int:
@@ -498,6 +570,7 @@ def main() -> int:
         native = root / "native.json"
         trusted_config = root / "trivy.yaml"
         trusted_config.write_text("{}\n", encoding="utf-8")
+        terraform_static = replay_terraform_static(root, trivy, trusted_config, cache)
         subprocess.run([
             str(trivy), "--config", str(trusted_config), "image",
             "--download-db-only", "--cache-dir", str(cache), "--quiet",
@@ -699,7 +772,7 @@ def main() -> int:
         evidence_root = Path(outputs["evidence-path"])
         action_result = json.loads((evidence_root / "result.json").read_text())
         import jsonschema
-        jsonschema.validate(action_result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v4.schema.json").read_text()))
+        jsonschema.validate(action_result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v5.schema.json").read_text()))
         if (action_result["gate_state"] != "ACTIONABLE"
                 or {f["class"] for f in action_result["findings"]} != classes
                 or action_result["subject"] != {"repository": "SecPal/repository-scan-fixture", "commit": commit}
@@ -765,7 +838,7 @@ def main() -> int:
             "--completed-at", completed_at, "--output", str(rejected_path),
         ], capture_output=True, check=False)
         rejected = json.loads(rejected_path.read_text())
-        jsonschema.validate(rejected, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v4.schema.json").read_text()))
+        jsonschema.validate(rejected, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v5.schema.json").read_text()))
         if (evaluated.returncode == 0 or rejected["gate_state"] != "UNKNOWN_STALE"
                 or rejected["operation"]["failure_code"] != "DIAGNOSTIC_ADMISSION_FAILURE"
                 or failed.stderr in evaluated.stdout + evaluated.stderr + rejected_path.read_bytes()):
@@ -789,6 +862,7 @@ def main() -> int:
                     "composer_advisory_qualified": True,
                     "composer_severity_fallback": composer_fallback,
                     "generic_replay_passed": True,
+                    "terraform_static": terraform_static,
                     "short_line_redaction": "PASS",
                     "long_line_redaction": "PASS",
                     "crlf_threshold_redaction": "PASS",

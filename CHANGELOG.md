@@ -9,6 +9,16 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-07 - Observe Current Terraform Scan Coverage
+
+- Replace expired deployment source/control enrollment with current Git blob
+  identities corroborated by pinned Trivy module diagnostics and native checks.
+- Keep real parser errors, incomplete scans and source substitution fail closed;
+  record unresolved static inputs without fabricating values or approving a run.
+- Publish the v5 result schema while preserving v1-v4 history. Retired finding
+  dispositions remain retired; real security findings and policy thresholds stay
+  unchanged.
+
 ## 2026-11-07 - Remove Service-Side Workspace Execution
 
 **Security:**
