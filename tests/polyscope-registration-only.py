@@ -49,7 +49,8 @@ class RegistrationOnlyTests(unittest.TestCase):
             repo.mkdir()
             subprocess.run(["git", "init", "--quiet", "--template=", str(repo)], check=True)
             specs = {"operations": {"path": repo, rollout.REGISTRATION_ONLY_SPEC_KEY: True}}
-            args = Namespace(workspace_root=root, polyscope_api_base="http://127.0.0.1:1/api", skip_local_configs=True, skip_db_sync=True,
+            args = Namespace(workspace_root=root, clone_root=root / "clones", db_path=root / "db",
+                polyscope_api_base="http://127.0.0.1:1/api", skip_local_configs=True, skip_db_sync=True,
                 repo_state_file=None, container_preview=True, install_nginx=False,
                 refresh_nginx=False, provision_worktrees=False, summary_output=None)
             with unittest.mock.patch.object(rollout, "build_repo_specs", return_value=specs), \
@@ -68,6 +69,24 @@ class RegistrationOnlyTests(unittest.TestCase):
             plain.mkdir()
             rollout.write_local_configs({"plain": {"path": plain, rollout.REGISTRATION_ONLY_SPEC_KEY: True}})
             self.assertFalse((plain / ".git").exists())
+
+    def test_canonical_git_exclusion_rejects_symlinks_but_accepts_worktree_pointers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "canonical"
+            repo.mkdir()
+            outside = root / "private-git-dir"
+            outside.mkdir()
+            git = repo / ".git"
+            git.symlink_to(outside, target_is_directory=True)
+            specs = {"operations": {"path": repo, rollout.REGISTRATION_ONLY_SPEC_KEY: True}}
+            with self.assertRaisesRegex(RuntimeError, "symlink"):
+                rollout.write_local_configs(specs, auxiliary=False)
+            self.assertFalse((outside / "info").exists())
+            git.unlink()
+            git.write_text(f"gitdir: {outside}\n")
+            rollout.write_local_configs(specs, auxiliary=False)
+            self.assertEqual((outside / "info/exclude").read_text(), "polyscope.local.json\n")
 
     def test_host_route_reconciliation_revokes_only_orphans_and_fails_closed(self):
         for mode in ("refresh", "install", "db-failure", "acl-failure"):
@@ -134,6 +153,56 @@ class RegistrationOnlyTests(unittest.TestCase):
                 forbidden.assert_not_called()
                 self.assertEqual(install.call_count, int(mode in ("refresh", "install")))
 
+    def test_legacy_runtime_retirement_is_cleanup_only_and_blocks_on_stop_failure(self):
+        for fail_stop in (False, True):
+            with self.subTest(fail_stop=fail_stop), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                units = root / "units"
+                units.mkdir()
+                stale = units / "polyscope-api-worktree-fixture-123456abcdef-queue.service"
+                stale.write_text("[Service]\nExecStart=php artisan queue:work\n")
+                unrelated = units / "unrelated.service"
+                unrelated.write_text("unrelated fixture\n")
+                commands = []
+
+                def systemctl(command, **_kwargs):
+                    commands.append(command)
+                    if fail_stop and "disable" in command:
+                        raise subprocess.CalledProcessError(1, command)
+                    return Namespace(returncode=0)
+
+                manager = rollout.reconcile_api_runtime_units
+                def retire(desired):
+                    manager(desired, unit_directory=units, systemctl_runner=systemctl)
+
+                def register(*_args):
+                    self.assertFalse(stale.exists(), "registration resumed before legacy workers stopped")
+                    return {}
+
+                args = Namespace(workspace_root=root, clone_root=root / "clones", db_path=root / "db",
+                    polyscope_api_base="http://127.0.0.1:1/api", repo_state_file=None,
+                    skip_local_configs=True, skip_db_sync=True, container_preview=True,
+                    install_nginx=False, refresh_nginx=False, provision_worktrees=True, summary_output=None)
+                registration = unittest.mock.Mock(side_effect=register)
+                refresh = unittest.mock.Mock()
+                cleanup = unittest.mock.Mock(side_effect=retire)
+                with unittest.mock.patch.multiple(rollout,
+                    build_repo_specs=unittest.mock.Mock(return_value={}),
+                    validate_repo_instruction_files=unittest.mock.Mock(),
+                    validate_repo_local_configs=unittest.mock.Mock(),
+                    should_manage_api_runtime_units=unittest.mock.Mock(return_value=True),
+                    reconcile_api_runtime_units=cleanup, ensure_repositories_registered=registration,
+                    refresh_container_preview=refresh):
+                    result = rollout.run_rollout(args)
+                self.assertEqual(result, int(fail_stop))
+                cleanup.assert_called_once_with({})
+                self.assertEqual(stale.exists(), fail_stop)
+                self.assertEqual(unrelated.read_text(), "unrelated fixture\n")
+                self.assertFalse(any(part in command for command in commands
+                                     for part in ("enable", "start", "restart")), commands)
+                self.assertEqual(registration.call_count, int(not fail_stop))
+                self.assertEqual(refresh.call_count, int(not fail_stop))
+
     def test_config_publication_cannot_follow_candidate_or_git_metadata_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -152,6 +221,9 @@ class RegistrationOnlyTests(unittest.TestCase):
             with unittest.mock.patch.object(rollout.os, "replace", side_effect=AssertionError("unchanged config was rewritten")):
                 rollout.sync_worktree_local_config(repo, target.read_text())
             self.assertEqual(target.stat().st_mtime_ns, before)
+            target.write_bytes(b"\xff\xfe")
+            rollout.sync_worktree_local_config(repo, '{"scripts":{"setup":"","run":[]}}\n')
+            self.assertEqual(json.loads(target.read_text())["scripts"], {"setup": "", "run": []})
             self.assertEqual(sorted(p.name for p in root.iterdir()), ["canonical", "untouched"])
 
     def test_manifest_and_executable_changes_never_reach_service_setup(self):

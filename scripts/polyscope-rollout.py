@@ -3919,6 +3919,8 @@ def write_local_configs(repo_specs: dict[str, dict[str, Any]], *, auxiliary: boo
     for repo_name, spec in repo_specs.items():
         repo_path = pathlib.Path(spec["path"])
         sync_worktree_local_config(repo_path, render_pretty_json(render_local_config(spec)) + "\n")
+        if (repo_path / ".git").is_symlink():
+            raise RuntimeError(f"canonical Git metadata is a symlink: {repo_path / '.git'}")
         if (repo_path / ".git").exists():
             ensure_exclude(repo_path)
         if auxiliary and is_workspace_automation_enabled(spec):
@@ -4079,7 +4081,7 @@ def sync_worktree_local_config(
     target = worktree_path / POLYSCOPE_LOCAL_CONFIG_NAME
     # Canonical config changes are watched by the installed path unit. Avoid
     # re-queuing that unit indefinitely when its safe output is unchanged.
-    if not target.is_symlink() and target.is_file() and target.read_text() == config_text:
+    if not target.is_symlink() and target.is_file() and target.read_bytes() == config_text.encode("utf-8"):
         return
     fd, temporary = tempfile.mkstemp(prefix=".polyscope-config-", dir=worktree_path)
     try:
@@ -6261,6 +6263,14 @@ def run_rollout(args: argparse.Namespace) -> int:
     # Even installed --skip-local-configs callers must retire unsafe native
     # setup/run hooks. The option only skips the optional auxiliary-file sync.
     write_local_configs(repo_specs, auxiliary=not args.skip_local_configs)
+    if should_manage_api_runtime_units(args.clone_root, args.db_path):
+        # Upgrade cleanup only: old enabled units must not keep executing
+        # mutable worktrees after native actions and provisioning are retired.
+        try:
+            reconcile_api_runtime_units({})
+        except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+            print(f"Failed to retire legacy API runtime units: {error}", file=sys.stderr)
+            return 1
 
     if args.repo_state_file is not None:
         repo_state = load_repo_state(args.repo_state_file)

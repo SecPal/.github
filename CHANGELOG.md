@@ -19,6 +19,8 @@ Log of notable changes to SecPal organization defaults (newest first).
   registration-only repositories and existing skip-local-configs callers.
 - Retain non-executing stale-preview ACL withdrawal without globally denying
   established previews, and exclude generated canonical config in every Git root.
+- Retire legacy managed API units through the existing cleanup-only reconciler;
+  failed stops block further management reconciliation.
 - Preserve native registration, links, prompts, validation and the API2639
   isolation boundary. Development commands require the unprivileged toolchain;
   live installation and retirement of already running consumers remain separate.

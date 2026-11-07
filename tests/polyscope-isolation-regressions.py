@@ -153,7 +153,7 @@ class RenderBoundaryTests(unittest.TestCase):
    m.deny_preview_nginx_access=Mock()
    class Captured(Exception):pass
    m.build_preview_workspace_redirects=Mock(side_effect=Captured)
-   args=SimpleNamespace(workspace_root=clone,skip_local_configs=True,repo_state_file=clone/'state',skip_db_sync=True,nginx_http2_syntax='modern',install_nginx=False,refresh_nginx=True,clone_root=clone)
+   args=SimpleNamespace(workspace_root=clone,skip_local_configs=True,repo_state_file=clone/'state',skip_db_sync=True,nginx_http2_syntax='modern',install_nginx=False,refresh_nginx=True,clone_root=clone,db_path=clone/'db')
    with self.assertRaises(Captured):m.run_rollout(args)
    m.deny_preview_nginx_access.assert_called_once_with(clone,target)
  def test_host_redirects_exclude_protected_members_but_preserve_ordinary_aliases(self):

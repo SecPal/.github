@@ -34,6 +34,15 @@ A failed native read or ACL withdrawal prevents route installation. The existing
 protected-group withdrawal remains in place; container preview reconciliation
 does not acquire host Nginx ACLs.
 
+On the existing canonical clone-root/database pair, rollout also invokes the
+existing runtime-unit reconciler with an empty desired set before resuming native
+registration or preview refresh. This is cleanup only: it stops/disables/removes
+legacy managed API units without creating, enabling, starting or restarting any
+unit. A failed stop retains the unit for retry and makes rollout fail. Unrelated
+units and the separate UID1001 development environment are not touched. This
+upgrade step deliberately retires old service-owned workers at later activation;
+it is not performed by merging this source change.
+
 Every managed canonical `polyscope.local.json`, including a registration-only
 repository, now contains `scripts.setup: ""`, `scripts.run: []` and
 `copyGitignored: false`. The entire scripts object is replaced after enrichment,
@@ -76,9 +85,11 @@ protected acceptance, an operator must perform this bounded cutover separately:
    configurations are atomically replaced with execution-free overrides before
    reopening native creation. No workspace database edits or new access catalog
    are needed; candidate branches, files and registrations are not rewritten.
-3. Retire pre-existing managed worker/run processes and units that consume a tree
-   intended for unprivileged development, using their existing scoped stop/disable
-   procedures. Existing previews are separate consumers too: do not expose a
+3. Confirm the first canonical rollout successfully retired the legacy managed
+   API units through cleanup-only reconciliation. Account for those planned worker
+   stops in the cutover inventory. Retire any other pre-existing worker/run process
+   consuming a tree intended for unprivileged development using its existing
+   scoped stop procedure. Existing previews are separate consumers too: do not expose a
    writable tree to a service-owned interpreter or resume an old autostart unit.
    This change stops future provisioning; it cannot revoke an already running
    consumer. Keep the API2639 quarantine, receipt, mount and runner unchanged.
