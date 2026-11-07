@@ -13,8 +13,7 @@ from pathlib import Path
 import shlex
 import sys
 import tempfile
-import unittest
-from unittest import mock
+import unittest.mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("registration_rollout", ROOT / "scripts/polyscope-rollout.py")
@@ -27,9 +26,9 @@ class RegistrationOnlyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             specs = rollout.build_repo_specs(root)
-            with mock.patch.object(rollout, "require_repo_instruction_files"), \
-                    mock.patch.object(rollout, "should_manage_api_runtime_units", return_value=False), \
-                    mock.patch.object(rollout, "resolve_current_workspace_name", return_value="fixture"):
+            with unittest.mock.patch.object(rollout, "require_repo_instruction_files"), \
+                    unittest.mock.patch.object(rollout, "should_manage_api_runtime_units", return_value=False), \
+                    unittest.mock.patch.object(rollout, "resolve_current_workspace_name", return_value="fixture"):
                 for name, config in specs.items():
                     with self.subTest(repository=name):
                         # Exercise enrichment too: it must not reintroduce run actions.
@@ -50,9 +49,9 @@ class RegistrationOnlyTests(unittest.TestCase):
             args = Namespace(workspace_root=root, polyscope_api_base="http://127.0.0.1:1/api", skip_local_configs=True, skip_db_sync=True,
                 repo_state_file=None, container_preview=True, install_nginx=False,
                 refresh_nginx=False, provision_worktrees=False, summary_output=None)
-            with mock.patch.object(rollout, "build_repo_specs", return_value=specs), \
-                    mock.patch.object(rollout, "ensure_repositories_registered", return_value={"operations": {"id": "ops"}}), \
-                    mock.patch.object(rollout, "refresh_container_preview"):
+            with unittest.mock.patch.object(rollout, "build_repo_specs", return_value=specs), \
+                    unittest.mock.patch.object(rollout, "ensure_repositories_registered", return_value={"operations": {"id": "ops"}}), \
+                    unittest.mock.patch.object(rollout, "refresh_container_preview"):
                 self.assertEqual(rollout.run_rollout(args), 0)
             config = json.loads((repo / "polyscope.local.json").read_text())
             self.assertEqual(config["scripts"], {"setup": "", "run": []})
@@ -73,7 +72,7 @@ class RegistrationOnlyTests(unittest.TestCase):
             self.assertEqual(json.loads(target.read_text())["scripts"], {"setup": "", "run": []})
             self.assertEqual(outside.read_text(), "private fixture data\n")
             before = target.stat().st_mtime_ns
-            with mock.patch.object(rollout.os, "replace", side_effect=AssertionError("unchanged config was rewritten")):
+            with unittest.mock.patch.object(rollout.os, "replace", side_effect=AssertionError("unchanged config was rewritten")):
                 rollout.sync_worktree_local_config(repo, target.read_text())
             self.assertEqual(target.stat().st_mtime_ns, before)
             self.assertEqual(sorted(p.name for p in root.iterdir()), ["canonical", "untouched"])
@@ -121,9 +120,9 @@ class RegistrationOnlyTests(unittest.TestCase):
                         "write_provision_marker": None,
                     }
                     for name, result in patches.items():
-                        stack.enter_context(mock.patch.object(rollout, name, return_value=result))
+                        stack.enter_context(unittest.mock.patch.object(rollout, name, return_value=result))
                     # Fixtures are controlled and offline; do not expose delivery credentials.
-                    stack.enter_context(mock.patch.dict(os.environ,
+                    stack.enter_context(unittest.mock.patch.dict(os.environ,
                         {"PATH": os.environ["PATH"], "HOME": str(root)}, clear=True))
                     settings = {"deployment": {"path": root, "preview_prefix": None,
                         rollout.NATIVE_SETUP_COMMANDS_KEY: [command]}}
