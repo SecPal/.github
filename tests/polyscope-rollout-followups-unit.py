@@ -67,13 +67,13 @@ class PolyscopeRolloutFollowupTests(TestCase):
             sudoers = root / "sudoers"
             sudoers.write_text("old grant")
             systemctl = root / "systemctl"
-            systemctl.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_LOG"\n')
+            systemctl.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_LOG"\nif [ "$1" = stop ]; then exit "${TEST_STOP_EXIT:-0}"; fi\n')
             systemctl.chmod(0o755)
             # Exercise the real recovery function with disposable targets and a
             # logged systemctl boundary, never the machine's live service manager.
             rollback = rollback.replace("/usr/bin/systemctl", str(systemctl))
             result = subprocess.run(["bash", "-c",
-                'restore_target() { printf "%s %s\\n" "$1" "$2" >> "$TEST_RESTORES"; };\n'
+                'restore_target() { printf "%s %s\\n" "$1" "$2" >> "$TEST_RESTORES"; echo restore >> "$TEST_LOG"; };\n'
                 + rollback + "\nfalse; rollback"],
                 env={**os.environ, "TEST_LOG": str(root / "log"), "TEST_RESTORES": str(root / "restores"),
                      "HELPER_TARGET": "helper", "LIBRARY_TARGET": "library", "ROLLOUT_TARGET": "rollout",
@@ -84,8 +84,29 @@ class PolyscopeRolloutFollowupTests(TestCase):
             self.assertFalse(sudoers.exists())
             self.assertIn("stop polyscope-server.service", (root / "log").read_text())
             self.assertNotIn("restart", (root / "log").read_text())
+            self.assertEqual((root / "log").read_text().splitlines()[0], "stop polyscope-server.service")
             self.assertNotIn("sudoers", (root / "restores").read_text())
             self.assertNotIn("old-service-identity", (root / "restores").read_text())
+
+    def test_failed_stop_keeps_files_intact_and_sudo_revoked(self):
+        source = (REPO_ROOT / "scripts/install-polyscope-system-components.sh").read_text()
+        rollback = re.search(r"^rollback\(\) \{.*?^\}", source, re.MULTILINE | re.DOTALL).group(0)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sudoers = root / "sudoers"
+            sudoers.write_text("old grant")
+            systemctl = root / "systemctl"
+            systemctl.write_text("#!/bin/sh\nexit 1\n")
+            systemctl.chmod(0o755)
+            rollback = rollback.replace("/usr/bin/systemctl", str(systemctl))
+            result = subprocess.run(["bash", "-c",
+                'restore_target() { touch "$RESTORED"; };\n' + rollback + "\nfalse; rollback"],
+                env={**os.environ, "SUDOERS_TARGET": str(sudoers), "RESTORED": str(root / "restored")},
+                capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("stop failed", result.stderr)
+            self.assertFalse(sudoers.exists())
+            self.assertFalse((root / "restored").exists())
 
     def test_root_alias_cannot_install_the_unprivileged_service(self):
         with tempfile.TemporaryDirectory() as directory:

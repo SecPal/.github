@@ -267,11 +267,16 @@ backup_target "$ROLLOUT_TARGET" rollout
 backup_target "$WORKSPACE_TARGET" workspace
 backup_target "$WORKSPACE_WS_TARGET" workspace_ws
 backup_target "$ISOLATION_TARGET" isolation
-backup_target "$DROPIN_TARGET" dropin
 
 rollback() {
     local status=$?
     trap - ERR
+    # Revoke the retired delegation and drain before restoring any program.
+    rm -f -- "$SUDOERS_TARGET"
+    if ! /usr/bin/systemctl stop polyscope-server.service; then
+        echo "Error: Polyscope stop failed; retain installed files for administrative recovery." >&2
+        exit "$status"
+    fi
     restore_target "$HELPER_TARGET" helper
     restore_target "$LIBRARY_TARGET" library
     restore_target "$ROLLOUT_TARGET" rollout
@@ -279,9 +284,6 @@ rollback() {
     restore_target "$WORKSPACE_WS_TARGET" workspace_ws
     restore_target "$ISOLATION_TARGET" isolation
     /usr/bin/systemctl daemon-reload >/dev/null 2>&1 || true
-    # A failed cutover stays stopped; never restart the old service identity.
-    /usr/bin/systemctl stop polyscope-server.service >/dev/null 2>&1 || true
-    rm -f -- "$SUDOERS_TARGET"
     exit "$status"
 }
 trap rollback ERR
