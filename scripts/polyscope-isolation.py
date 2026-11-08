@@ -12,6 +12,7 @@ import importlib.util
 import importlib.machinery
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import stat
@@ -276,13 +277,19 @@ def arm(policy_path, model, server_bin):
     if os.geteuid() != 0 or not re.fullmatch(r"[a-z0-9._:-]{1,128}", model) or model.startswith("claude-"):
         raise IsolationError("arm-authority-or-model")
     owner = coordinator()
-    # Root publishes authority for secpal; it must not inherit root's home.
-    owner.configure_paths(1003)
+    # Root publishes for the dedicated service, never its own or the app home.
+    try:
+        service_uid = pwd.getpwnam("polyscope").pw_uid
+    except KeyError:
+        raise IsolationError("polyscope-service-account-missing") from None
+    if service_uid == 0:
+        raise IsolationError("polyscope-service-account-root")
+    owner.configure_paths(service_uid)
     lock = owner.LOCK_PATH
     fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != 1003 or info.st_mode & 0o077 or info.st_nlink != 1:
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != service_uid or info.st_mode & 0o077 or info.st_nlink != 1:
             raise IsolationError("creation-fence-owner-mode")
         fcntl.flock(fd, fcntl.LOCK_EX)
         if os.read(fd, 4096).strip():

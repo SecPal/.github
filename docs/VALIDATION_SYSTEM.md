@@ -198,39 +198,33 @@ boundary.
 
 ## Polyscope Privilege Boundary
 
-The rollout never installs arbitrary nginx text. It atomically writes a strict,
-size-bounded JSON manifest to one fixed user-owned path. The root-owned
-`secpal-polyscope-nginx-apply` helper accepts only apply with no arguments or a
-non-mutating `--check`. It validates manifest type, ownership, mode, keys,
-repository identifiers, fixed preview domain and clone root, and loopback-only
-PHP upstream before rendering the fixed nginx target from its root-owned
-template bundle. The helper validates the manifest library's exact path,
-ownership, and mode before importing it, so an unsafe dependency cannot run
-privileged top-level code before rejection.
+Polyscope runs as its dedicated `polyscope` account. Independent `codex` and
+SecPal application users remain separate. None receives sudo or access to another
+account's private files, sockets or management interface. Automatic execution of
+mutable workspace setup/run/archive hooks and service-owned API workers remains
+retired.
 
-Only the exact helper command forms are eligible for passwordless sudo. The
-user service cannot invoke a shell, Python interpreter, `systemctl`, or general
-file utility through that rule. The helper writes the fixed target atomically,
-runs `/usr/sbin/nginx -t`, and reloads nginx only on success. A validation or
-reload failure restores the prior configuration and reactivates it when
-necessary. Direct root execution remains available for the root-driven rollout
-and administrator troubleshooting; when sudo identity is present, it must
-match the exact `secpal` account and UID.
+Existing mixed-account installations require the compatible data/path/credential
+transition documented in
+[`polyscope-isolated-development.md`](polyscope-isolated-development.md).
+The administrator quiesces Polyscope and installs only accepted immutable sources
+with `scripts/install-polyscope-system-components.sh`; this installer validates
+the existing dedicated home, uses it as the working directory, verifies the
+canonical `/home/polyscope/code/SecPal/.github/` toolchain and removes the retired
+Nginx sudoers rule. Recovery never restores that grant, the former service identity
+or an automatic restart. Failure to stop leaves programs intact for recovery.
 
-Installation is deliberately split. An administrator runs
-`scripts/install-polyscope-system-components.sh` through a real interactive
-sudo prompt to install the root-owned helper bundle, exact sudoers drop-in, and
-system server drop-in. Before activation it verifies the canonical rollout
-source bundle under `/home/secpal/code/SecPal/.github/scripts/`; the drop-in
-executes that source directly after its pinned Markdown and YAML validator
-dependencies, required parser API, and a `secpal`-executable Node.js path have
-been checked and does not depend on a user-local link that has not been installed
-yet. The `secpal` user then runs
-`scripts/install-polyscope-rollout.sh` without sudo to install and enable the
-rollout path, worktree provision path and timer, and clone reaper timer. The
-user installer resets cached sudo credentials before checking the exact fixed
-helper `--check`; a helper override, non-fixed manifest path, missing helper,
-authorization, validator dependency, or Markdownlint blocks installation.
+The `polyscope` account installs its own user units using
+`scripts/install-polyscope-rollout.sh` without sudo. Generated commands explicitly
+name the dedicated native database and clone root and select the existing rootless
+container-preview backend. The shared canonical cleanup predicate and managed-unit
+directory use the same dedicated home; the old account's units must be drained and
+retired in the old account before migration, not controlled across user buses.
+
+Host Nginx modification remains an administrator operation. The retained legacy
+root-owned manifest/helper validation still rejects unsafe files, dependencies,
+fields and routes, but it grants no service privilege and is not required by the
+rootless preview path. Do not recreate its former passwordless sudo command forms.
 
 The rollout sync path watches the rollout, canonical validator, manifest
 library and helper sources, instruction roots and Codex template, committed

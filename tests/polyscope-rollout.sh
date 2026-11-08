@@ -5403,16 +5403,16 @@ chmod +x "$fake_systemctl_dir/readlink"
 
 cat >"$fake_systemctl_dir/id" <<'STUB'
 #!/usr/bin/env bash
-if [[ "${1:-}" == "-u" && "${2:-}" == "secpal" ]]; then
-    printf '1000\n'
+if [[ "${1:-}" == "-u" && "${2:-}" == "polyscope" ]]; then
+    printf '1002\n'
     exit 0
 fi
 if [[ "${1:-}" == "-u" && $# -eq 1 ]]; then
-    printf '1000\n'
+    printf '1002\n'
     exit 0
 fi
 if [[ "${1:-}" == "-un" && $# -eq 1 ]]; then
-    printf 'secpal\n'
+    printf 'polyscope\n'
     exit 0
 fi
 exec "$REAL_ID_BIN" "$@"
@@ -5452,10 +5452,9 @@ fi
 exit 64
 STUB
 chmod +x "$fake_nginx_helper"
-export POLYSCOPE_NGINX_HELPER="$fake_nginx_helper"
-export POLYSCOPE_TEST_ALLOW_NGINX_HELPER_OVERRIDE=1
+unset POLYSCOPE_NGINX_HELPER
 
-# The unprivileged installer owns secpal-specific paths and units. A different
+# The unprivileged installer owns polyscope-specific paths and units. A different
 # caller must fail before any installation writes, independently of HOME.
 wrong_user_id_dir="$workspace/wrong-user-id"
 wrong_user_home_dir="$workspace/wrong-user-home"
@@ -5466,8 +5465,8 @@ wrong_user_exit=0
 mkdir -p "$wrong_user_id_dir" "$wrong_user_home_dir/.polyscope/bin"
 cat >"$wrong_user_id_dir/id" <<'STUB'
 #!/usr/bin/env bash
-if [[ "${1:-}" == "-u" && "${2:-}" == "secpal" ]]; then
-    printf '1000\n'
+if [[ "${1:-}" == "-u" && "${2:-}" == "polyscope" ]]; then
+    printf '1002\n'
     exit 0
 fi
 if [[ "${1:-}" == "-u" && $# -eq 1 ]]; then
@@ -5486,14 +5485,14 @@ env HOME="$wrong_user_home_dir" \
         2>"$wrong_user_error" \
     || wrong_user_exit=$?
 if [[ "$wrong_user_exit" -eq 0 ]]; then
-    echo "unprivileged installer must require the secpal account" >&2
+    echo "unprivileged installer must require the polyscope account" >&2
     exit 1
 fi
-grep -qF 'must be run as the secpal user' "$wrong_user_error"
+grep -qF 'must be run as the polyscope user' "$wrong_user_error"
 test ! -e "$wrong_user_unit_dir/polyscope-rollout-sync.service"
 
-# Production installation must persist the one fixed root-owned helper path,
-# even if an older broad sudo rule would make an arbitrary override executable.
+# Service installation rejects host-Nginx overrides even if an older broad
+# sudo rule would have made the requested helper executable.
 custom_helper_home_dir="$workspace/custom-helper-home"
 custom_helper_bin_dir="$workspace/custom-helper-bin"
 custom_helper_unit_dir="$workspace/custom-helper-units"
@@ -5513,7 +5512,7 @@ if [[ "$custom_helper_exit" -eq 0 ]]; then
     echo "installer must reject a non-fixed nginx helper path" >&2
     exit 1
 fi
-grep -qF 'nginx helper path is fixed' "$custom_helper_error"
+grep -qF 'privileged nginx overrides are not supported' "$custom_helper_error"
 test ! -e "$custom_helper_unit_dir/polyscope-rollout-sync.service"
 
 # A custom rollout source is only executable as an instruction-dependent
@@ -5662,8 +5661,8 @@ grep -qF 'resolved rollout source script path must not contain whitespace' \
 test ! -e "$spaced_bin_dir/polyscope-secpal-rollout.py"
 test ! -e "$spaced_unit_dir/polyscope-rollout-sync.path"
 
-# The privileged helper accepts one fixed manifest path. Reject an override
-# before installing a user unit that could never complete successfully.
+# The service installer no longer owns a host-Nginx manifest. Reject legacy
+# overrides before writing units instead of reviving the privileged path.
 custom_manifest_home_dir="$workspace/custom-manifest-home"
 custom_manifest_bin_dir="$workspace/custom-manifest-bin"
 custom_manifest_unit_dir="$workspace/custom-manifest-units"
@@ -5695,7 +5694,7 @@ if [[ "$custom_manifest_exit" -eq 0 ]]; then
     echo "installer must reject a non-fixed nginx manifest path" >&2
     exit 1
 fi
-grep -qF 'nginx manifest path is fixed' "$custom_manifest_error"
+grep -qF 'privileged nginx overrides are not supported' "$custom_manifest_error"
 test ! -e "$custom_manifest_bin_dir/polyscope-secpal-rollout.py"
 test ! -e "$custom_manifest_unit_dir/polyscope-rollout-sync.service"
 
@@ -5897,7 +5896,7 @@ system_systemctl_log="$workspace/system-systemctl.log"
 system_sudo_log="$workspace/system-sudo.log"
 system_fragment_dir="$workspace/system-fragments"
 system_fragment_path="$system_fragment_dir/polyscope-server.service"
-system_server_user="secpal"
+system_server_user="polyscope"
 system_node_dir="$workspace/system-node/bin"
 system_node_bin="$system_node_dir/node"
 mkdir -p "$system_bin_dir" "$system_user_unit_dir" "$system_polyscope_bin_dir" "$system_polyscope_git_dir" "$system_fragment_dir" "$system_node_dir"
@@ -5972,7 +5971,7 @@ if [[ "$legacy_startup_exit" -eq 0 ]]; then
     echo "unprivileged installer must reject a blocking system startup refresh" >&2
     exit 1
 fi
-grep -qF 'lacks constrained nginx activation' "$legacy_startup_error"
+grep -qF 'lacks bounded container-preview convergence' "$legacy_startup_error"
 test ! -e "$legacy_startup_bin_dir/polyscope-secpal-rollout.py"
 test ! -e "$legacy_startup_unit_dir/polyscope-rollout-sync.service"
 
@@ -6000,14 +5999,14 @@ env HOME="$system_home_dir" \
 test ! -e "$system_user_unit_dir/polyscope-server.service"
 test -f "$system_dropin_dir/zz-secpal-runtime.conf"
 test "$(file_sha256 "$system_dropin_dir/zz-secpal-runtime.conf")" = "$system_dropin_hash_before"
-grep -q 'ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321' "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q 'ExecStart=/home/polyscope/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$system_dropin_dir/zz-secpal-runtime.conf"
-grep -q -- '--refresh-nginx --skip-if-provision-locked' "$system_dropin_dir/zz-secpal-runtime.conf"
-grep -q "Environment=PATH=$system_node_dir:/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$system_dropin_dir/zz-secpal-runtime.conf"
-grep -q 'Environment=SSH_AUTH_SOCK=/run/user/1000/openssh_agent' "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q -- '--container-preview --skip-if-provision-locked' "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q "Environment=PATH=$system_node_dir:/home/polyscope/.local/lib/polyscope/bin:/home/polyscope/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$system_dropin_dir/zz-secpal-runtime.conf"
+grep -q 'Environment=SSH_AUTH_SOCK=/run/user/1002/openssh_agent' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$system_dropin_dir/zz-secpal-runtime.conf"
 grep -q 'After=network-online.target' "$system_user_unit_dir/polyscope-rollout-sync.service"
-grep -q -- "--clone-root $system_home_dir/.polyscope/clones --provision-lock-path $system_home_dir/.local/state/polyscope/worktree-provision.lock --refresh-nginx" "$system_user_unit_dir/polyscope-rollout-sync.service"
+grep -q -- "--clone-root $system_home_dir/.polyscope/clones --provision-lock-path $system_home_dir/.local/state/polyscope/worktree-provision.lock --container-preview" "$system_user_unit_dir/polyscope-rollout-sync.service"
 grep -q 'After=polyscope-rollout-sync.service' "$system_user_unit_dir/polyscope-worktree-provision.service"
 if grep -Eq '^(daemon-reload|enable --now polyscope-server\.service|restart polyscope-server\.service)$' "$system_systemctl_log"; then
   echo "unprivileged installer must not mutate the system service" >&2
@@ -6034,16 +6033,16 @@ grep -q 'ExecStartPost=/usr/bin/env bash -lc ' "$fake_unit_dir/polyscope-server.
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-server.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-server.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-server.service"
-grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-server.service"
+! grep -q "Environment=POLYSCOPE_SUDO_BIN=" "$fake_unit_dir/polyscope-server.service"
 grep -q "Environment=SECPAL_WORKSPACE_ROOT=$workspace_root" "$fake_unit_dir/polyscope-server.service"
 grep -q 'polyscope-secpal-rollout.py --workspace-root ' "$fake_unit_dir/polyscope-server.service"
 grep -q -- "--clone-root $home_dir/.polyscope/clones --provision-lock-path $home_dir/.local/state/polyscope/worktree-provision.lock" "$fake_unit_dir/polyscope-server.service"
-grep -q -- '--refresh-nginx --skip-if-provision-locked' "$fake_unit_dir/polyscope-server.service"
+grep -q -- '--container-preview --skip-if-provision-locked' "$fake_unit_dir/polyscope-server.service"
 grep -q 'Restart=on-failure' "$fake_unit_dir/polyscope-server.service"
 grep -q 'After=polyscope-server.service' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api' "$fake_unit_dir/polyscope-rollout-sync.service"
-grep -q 'ExecStart=.* --refresh-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
-grep -q -- "--clone-root $home_dir/.polyscope/clones --provision-lock-path $home_dir/.local/state/polyscope/worktree-provision.lock --refresh-nginx" "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q 'ExecStart=.* --container-preview$' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q -- "--clone-root $home_dir/.polyscope/clones --provision-lock-path $home_dir/.local/state/polyscope/worktree-provision.lock --container-preview" "$fake_unit_dir/polyscope-rollout-sync.service"
 if grep -q -- '--install-nginx' "$fake_unit_dir/polyscope-rollout-sync.service"; then
   echo "routine rollout sync must not run full worktree provisioning" >&2
   exit 1
@@ -6052,9 +6051,9 @@ grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root ' "$fake_unit
 grep -q "Environment=PATH=$fake_polyscope_git_dir:$fake_bin_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=SSH_AUTH_SOCK=%t/openssh_agent' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q 'Environment=POLYSCOPE_REAL_GIT_BIN=' "$fake_unit_dir/polyscope-rollout-sync.service"
-grep -q "Environment=POLYSCOPE_SUDO_BIN=$fake_sudo_dir/sudo" "$fake_unit_dir/polyscope-rollout-sync.service"
-grep -q 'Environment=POLYSCOPE_NGINX_HELPER=/usr/local/libexec/secpal-polyscope-nginx-apply' "$fake_unit_dir/polyscope-rollout-sync.service"
-grep -q -- '--nginx-manifest-output .*nginx-manifest.json --clone-root .* --provision-lock-path .* --refresh-nginx$' "$fake_unit_dir/polyscope-rollout-sync.service"
+! grep -q "Environment=POLYSCOPE_SUDO_BIN=" "$fake_unit_dir/polyscope-rollout-sync.service"
+! grep -q 'Environment=POLYSCOPE_NGINX_HELPER=' "$fake_unit_dir/polyscope-rollout-sync.service"
+grep -q -- '--clone-root .* --provision-lock-path .* --container-preview$' "$fake_unit_dir/polyscope-rollout-sync.service"
 grep -q '/api/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 grep -q '/frontend/AGENTS.md' "$fake_unit_dir/polyscope-rollout-sync.path"
 if grep -q '/retired-docs/' "$fake_unit_dir/polyscope-rollout-sync.path"; then
@@ -6089,7 +6088,7 @@ if grep -qE '^(Restart=|SuccessExitStatus=|ExecStart=-)' "$fake_unit_dir/polysco
   echo "provision service must expose failures without suppressing them" >&2
   exit 1
 fi
-grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --provision-lock-path .*worktree-provision.lock --skip-local-configs --skip-db-sync --provision-worktrees --refresh-nginx' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --db-path .*polyscope.db --clone-root .* --provision-lock-path .*worktree-provision.lock --skip-local-configs --skip-db-sync --provision-worktrees --container-preview' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^Unit=polyscope-worktree-provision.service$' "$fake_unit_dir/polyscope-worktree-provision.path"
 if grep -q 'polyscope\.db-wal' "$fake_unit_dir/polyscope-worktree-provision.path"; then
     echo "worktree provision watcher must not react to unrelated SQLite WAL writes" >&2
@@ -6833,13 +6832,13 @@ if grep -q 'start polyscope-worktree-provision.service' "$fake_systemctl_log"; t
   echo "installer must not start polyscope-worktree-provision.service directly once the timer is enabled" >&2
   exit 1
 fi
-if grep -qF -- '-n -k true' "$workspace/user-sudo.log"; then
-  echo "installer must not test generic passwordless sudo" >&2
+if [[ -s "$workspace/user-sudo.log" || -s "$system_sudo_log" ]]; then
+  echo "service installation must never request sudo, including the old Nginx helper" >&2
   exit 1
 fi
-grep -qF -- "-k -n $fake_nginx_helper --check" "$workspace/user-sudo.log"
 
-# installer must refuse when system scope is detected but sudo is unavailable
+# System scope still requires the reviewed root-owned drop-in, independently
+# of whether the caller has sudo permissions.
 no_sudo_home_dir="$workspace/no-sudo-home"
 no_sudo_bin_dir="$workspace/no-sudo-bin"
 no_sudo_unit_dir="$workspace/no-sudo-units"
@@ -6885,8 +6884,7 @@ if [[ "$no_sudo_exit" -eq 0 ]]; then
 fi
 test ! -e "$no_sudo_unit_dir/polyscope-server.service"
 
-# The user-scoped rollout sync also installs nginx and must therefore reject
-# configurations that cannot obtain unattended privileges before writing units.
+# User-scoped metadata/container reconciliation must work without sudo.
 no_sudo_user_home_dir="$workspace/no-sudo-user-home"
 no_sudo_user_bin_dir="$workspace/no-sudo-user-bin"
 no_sudo_user_unit_dir="$workspace/no-sudo-user-units"
@@ -6910,11 +6908,11 @@ env HOME="$no_sudo_user_home_dir" \
         --polyscope-server-bin "$fake_server_bin" \
         --polyscope-server-scope user \
         2>/dev/null || no_sudo_user_exit=$?
-if [[ "$no_sudo_user_exit" -eq 0 ]]; then
-    echo "installer must refuse user scope when unattended nginx privileges are unavailable" >&2
+if [[ "$no_sudo_user_exit" -ne 0 ]]; then
+    echo "unprivileged user scope must not require unattended nginx privileges" >&2
     exit 1
 fi
-test ! -e "$no_sudo_user_unit_dir/polyscope-rollout-sync.service"
+test -e "$no_sudo_user_unit_dir/polyscope-rollout-sync.service"
 
 # installer must also refuse when --polyscope-server-scope system is forced but no unit exists
 no_unit_exit=0

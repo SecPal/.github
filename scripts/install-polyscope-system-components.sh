@@ -12,7 +12,7 @@ ROLLOUT_SOURCE="$SCRIPT_DIR/polyscope-rollout.py"
 WORKSPACE_SOURCE="$SCRIPT_DIR/secpal-polyscope-workspace.py"
 WORKSPACE_WS_SOURCE="$SCRIPT_DIR/secpal-polyscope-workspace-ws.js"
 ISOLATION_SOURCE="$SCRIPT_DIR/polyscope-isolation.py"
-RUNTIME_ROLLOUT_SOURCE="/home/secpal/code/SecPal/.github/scripts/polyscope-rollout.py"
+RUNTIME_ROLLOUT_SOURCE="/home/polyscope/code/SecPal/.github/scripts/polyscope-rollout.py"
 RUNTIME_SCRIPT_DIR="${RUNTIME_ROLLOUT_SOURCE%/*}"
 RUNTIME_TOOLCHAIN_ROOT="${RUNTIME_SCRIPT_DIR%/scripts}"
 RUNTIME_YAML_CHECK="$RUNTIME_SCRIPT_DIR/verify-js-yaml-package.cjs"
@@ -62,9 +62,27 @@ for source_file in "$HELPER_SOURCE" "$LIBRARY_SOURCE" "$ROLLOUT_SOURCE" \
 done
 
 if [[ "$STAGE_ONLY" -eq 1 ]]; then
-    SECPAL_UID=1000
-elif ! SECPAL_UID="$(id -u secpal 2>/dev/null)"; then
-    echo "Error: required service user 'secpal' does not exist." >&2
+    POLYSCOPE_UID=1002
+elif ! POLYSCOPE_UID="$(id -u polyscope 2>/dev/null)"; then
+    echo "Error: required service user 'polyscope' does not exist." >&2
+    exit 1
+fi
+
+if [[ "$POLYSCOPE_UID" -eq 0 ]]; then
+    echo "Error: the polyscope service account must not be root." >&2
+    exit 1
+fi
+
+if [[ "$STAGE_ONLY" -eq 0 ]]; then
+    if [[ ! -d /home/polyscope || -L /home/polyscope \
+        || "$(stat -c '%u' /home/polyscope)" != "$POLYSCOPE_UID" ]]; then
+        echo "Error: the dedicated /home/polyscope working directory must exist and belong to polyscope." >&2
+        exit 1
+    fi
+fi
+
+if [[ "$STAGE_ONLY" -eq 0 ]] && /usr/bin/systemctl is-active --quiet polyscope-server.service; then
+    echo "Error: quiesce Polyscope and qualify migrated paths before installation." >&2
     exit 1
 fi
 
@@ -102,13 +120,13 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
         exit 1
     fi
     if [[ ! -x /usr/bin/sudo ]] \
-        || ! /usr/bin/sudo -u secpal -- /usr/bin/test -x "$NODE_BIN"; then
-        echo "Error: Node.js is not executable by the secpal service user: $NODE_BIN" >&2
+        || ! /usr/bin/sudo -u polyscope -- /usr/bin/test -x "$NODE_BIN"; then
+        echo "Error: Node.js is not executable by the polyscope service user: $NODE_BIN" >&2
         exit 1
     fi
 fi
 NODE_BIN_DIR="$(dirname -- "$NODE_BIN")"
-BASE_SERVICE_PATH="/home/secpal/.local/lib/polyscope/bin:/home/secpal/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+BASE_SERVICE_PATH="/home/polyscope/.local/lib/polyscope/bin:/home/polyscope/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
 case ":$BASE_SERVICE_PATH:" in
     *":$NODE_BIN_DIR:"*) SYSTEM_SERVICE_PATH="$BASE_SERVICE_PATH" ;;
     *) SYSTEM_SERVICE_PATH="$NODE_BIN_DIR:$BASE_SERVICE_PATH" ;;
@@ -139,12 +157,12 @@ if [[ "$STAGE_ONLY" -eq 0 ]]; then
         echo "Error: canonical Polyscope runtime scripts and pinned validator must be executable below $RUNTIME_TOOLCHAIN_ROOT." >&2
         exit 1
     fi
-    if ! /usr/bin/sudo -u secpal -- \
+    if ! /usr/bin/sudo -u polyscope -- \
         "$NODE_BIN" "$RUNTIME_YAML_CHECK" "$RUNTIME_YAML_PACKAGE"; then
         echo "Error: canonical Polyscope runtime js-yaml package is unusable; reinstall the committed dependencies before activation." >&2
         exit 1
     fi
-    if ! /usr/bin/sudo -u secpal -- /usr/bin/env "PATH=$SYSTEM_SERVICE_PATH" \
+    if ! /usr/bin/sudo -u polyscope -- /usr/bin/env "PATH=$SYSTEM_SERVICE_PATH" \
         python3 -I "$RUNTIME_SCRIPT_DIR/secpal-evidence-architecture.py" --self-check >/dev/null 2>&1; then
         echo "Error: Evidence Architecture package or markdown-it parser is unusable by the service account; restore committed dependencies before activation." >&2
         exit 1
@@ -180,33 +198,25 @@ if source.count(marker) != 1:
 Path(sys.argv[2]).write_text(source.replace(marker, "NODE_BIN = " + json.dumps(sys.argv[3])))
 PY
 
-cat >"$TEMP_DIR/secpal-polyscope-nginx" <<'EOF'
-secpal ALL=(root) NOPASSWD: /usr/local/libexec/secpal-polyscope-nginx-apply ""
-secpal ALL=(root) NOPASSWD: /usr/local/libexec/secpal-polyscope-nginx-apply --check
-EOF
-chmod 0440 "$TEMP_DIR/secpal-polyscope-nginx"
-
 cat >"$TEMP_DIR/zz-secpal-runtime.conf" <<EOF
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 [Service]
-User=secpal
+User=polyscope
+Group=polyscope
+WorkingDirectory=/home/polyscope
+Environment=HOME=/home/polyscope
+Environment=XDG_RUNTIME_DIR=/run/user/$POLYSCOPE_UID
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$POLYSCOPE_UID/bus
 ExecStart=
-ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321
+ExecStart=/home/polyscope/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321
 ExecStartPost=
-ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec $RUNTIME_ROLLOUT_SOURCE --workspace-root /home/secpal/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --skip-local-configs --skip-db-sync --refresh-nginx --skip-if-provision-locked; sleep 1; done; echo "Polyscope API did not become ready in time." >&2; exit 1'
+ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec $RUNTIME_ROLLOUT_SOURCE --workspace-root /home/polyscope/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --db-path /home/polyscope/.polyscope/polyscope.db --clone-root /home/polyscope/.polyscope/clones --skip-local-configs --skip-db-sync --container-preview --skip-if-provision-locked; sleep 1; done; echo "Polyscope API did not become ready in time." >&2; exit 1'
 Environment=PATH=$SYSTEM_SERVICE_PATH
-Environment=SSH_AUTH_SOCK=/run/user/$SECPAL_UID/openssh_agent
+Environment=SSH_AUTH_SOCK=/run/user/$POLYSCOPE_UID/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git
 EOF
 chmod 0644 "$TEMP_DIR/zz-secpal-runtime.conf"
-
-if [[ -x /usr/sbin/visudo ]]; then
-    /usr/sbin/visudo -c -f "$TEMP_DIR/secpal-polyscope-nginx" >/dev/null
-elif [[ "$STAGE_ONLY" -eq 0 ]]; then
-    echo "Error: /usr/sbin/visudo is required before installing sudoers policy." >&2
-    exit 1
-fi
 
 install_atomic() {
     local source="$1"
@@ -231,7 +241,7 @@ if [[ "$STAGE_ONLY" -eq 1 ]]; then
     install -m 0755 "$ISOLATION_SOURCE" "$ISOLATION_TARGET"
     install -m 0644 "$WORKSPACE_WS_SOURCE" "$WORKSPACE_WS_TARGET"
     install -m 0755 "$TEMP_DIR/secpal-polyscope-workspace" "$WORKSPACE_TARGET"
-    install -m 0440 "$TEMP_DIR/secpal-polyscope-nginx" "$SUDOERS_TARGET"
+    rm -f -- "$SUDOERS_TARGET"
     install -m 0644 "$TEMP_DIR/zz-secpal-runtime.conf" "$DROPIN_TARGET"
     echo "Staged Polyscope system components below $DESTDIR"
     exit 0
@@ -265,22 +275,23 @@ backup_target "$ROLLOUT_TARGET" rollout
 backup_target "$WORKSPACE_TARGET" workspace
 backup_target "$WORKSPACE_WS_TARGET" workspace_ws
 backup_target "$ISOLATION_TARGET" isolation
-backup_target "$SUDOERS_TARGET" sudoers
-backup_target "$DROPIN_TARGET" dropin
 
 rollback() {
     local status=$?
     trap - ERR
+    # Revoke the retired delegation and drain before restoring any program.
+    rm -f -- "$SUDOERS_TARGET"
+    if ! /usr/bin/systemctl stop polyscope-server.service; then
+        echo "Error: Polyscope stop failed; retain installed files for administrative recovery." >&2
+        exit "$status"
+    fi
     restore_target "$HELPER_TARGET" helper
     restore_target "$LIBRARY_TARGET" library
     restore_target "$ROLLOUT_TARGET" rollout
     restore_target "$WORKSPACE_TARGET" workspace
     restore_target "$WORKSPACE_WS_TARGET" workspace_ws
     restore_target "$ISOLATION_TARGET" isolation
-    restore_target "$SUDOERS_TARGET" sudoers
-    restore_target "$DROPIN_TARGET" dropin
     /usr/bin/systemctl daemon-reload >/dev/null 2>&1 || true
-    /usr/bin/systemctl restart polyscope-server.service >/dev/null 2>&1 || true
     exit "$status"
 }
 trap rollback ERR
@@ -291,7 +302,7 @@ install_atomic "$ROLLOUT_SOURCE" "$ROLLOUT_TARGET" 0644
 install_atomic "$ISOLATION_SOURCE" "$ISOLATION_TARGET" 0755
 install_atomic "$WORKSPACE_WS_SOURCE" "$WORKSPACE_WS_TARGET" 0644
 install_atomic "$TEMP_DIR/secpal-polyscope-workspace" "$WORKSPACE_TARGET" 0755
-install_atomic "$TEMP_DIR/secpal-polyscope-nginx" "$SUDOERS_TARGET" 0440
+rm -f -- "$SUDOERS_TARGET"
 install_atomic "$TEMP_DIR/zz-secpal-runtime.conf" "$DROPIN_TARGET" 0644
 
 /usr/sbin/visudo -c >/dev/null
@@ -300,4 +311,4 @@ install_atomic "$TEMP_DIR/zz-secpal-runtime.conf" "$DROPIN_TARGET" 0644
 /usr/bin/systemctl restart polyscope-server.service
 
 trap - ERR
-echo "Installed Polyscope system components with a constrained nginx helper boundary."
+echo "Installed Polyscope system components for the unprivileged polyscope account."
