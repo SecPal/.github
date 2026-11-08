@@ -39,21 +39,11 @@ POLYSCOPE_SERVER_SCOPE="${POLYSCOPE_SERVER_SCOPE:-auto}"
 POLYSCOPE_SYSTEM_SERVER_UNIT="${POLYSCOPE_SYSTEM_SERVER_UNIT:-polyscope-server.service}"
 POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR="${POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR:-/etc/systemd/system/$POLYSCOPE_SYSTEM_SERVER_UNIT.d}"
 SERVICE_PATH="${POLYSCOPE_SERVICE_PATH:-}"
-SUDO_BIN="${SUDO_BIN:-sudo}"
-FIXED_POLYSCOPE_NGINX_HELPER="/usr/local/libexec/secpal-polyscope-nginx-apply"
-POLYSCOPE_NGINX_HELPER_CHECK="${POLYSCOPE_NGINX_HELPER:-$FIXED_POLYSCOPE_NGINX_HELPER}"
-FIXED_POLYSCOPE_NGINX_MANIFEST="/home/secpal/.local/state/polyscope/nginx-manifest.json"
-if [[ "${POLYSCOPE_NGINX_MANIFEST:-$FIXED_POLYSCOPE_NGINX_MANIFEST}" != "$FIXED_POLYSCOPE_NGINX_MANIFEST" ]]; then
-    echo "Error: the nginx manifest path is fixed at $FIXED_POLYSCOPE_NGINX_MANIFEST." >&2
+# Host Nginx activation belongs to the administrator, never this account.
+if [[ -n "${POLYSCOPE_NGINX_HELPER:-}${POLYSCOPE_NGINX_MANIFEST:-}" ]]; then
+    echo "Error: privileged nginx overrides are not supported by the service installer." >&2
     exit 1
 fi
-POLYSCOPE_NGINX_MANIFEST="$FIXED_POLYSCOPE_NGINX_MANIFEST"
-if [[ "$POLYSCOPE_NGINX_HELPER_CHECK" != "$FIXED_POLYSCOPE_NGINX_HELPER" \
-    && "${POLYSCOPE_TEST_ALLOW_NGINX_HELPER_OVERRIDE:-0}" != "1" ]]; then
-    echo "Error: the nginx helper path is fixed at $FIXED_POLYSCOPE_NGINX_HELPER." >&2
-    exit 1
-fi
-POLYSCOPE_NGINX_HELPER="$FIXED_POLYSCOPE_NGINX_HELPER"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -88,12 +78,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if ! secpal_uid="$(id -u secpal 2>/dev/null)"; then
-    echo "Error: required service user 'secpal' does not exist." >&2
+if ! polyscope_uid="$(id -u polyscope 2>/dev/null)"; then
+    echo "Error: required service user 'polyscope' does not exist." >&2
     exit 1
 fi
-if [[ "$(id -u)" != "$secpal_uid" ]]; then
-    echo "Error: this installer must be run as the secpal user." >&2
+if [[ "$polyscope_uid" -eq 0 || "$(id -u)" != "$polyscope_uid" ]]; then
+    echo "Error: this installer must be run as the polyscope user." >&2
     exit 1
 fi
 
@@ -115,7 +105,7 @@ PROVISION_PATH_UNIT="$UNIT_DIR/polyscope-worktree-provision.path"
 PROVISION_TIMER_UNIT="$UNIT_DIR/polyscope-worktree-provision.timer"
 REAPER_SERVICE_UNIT="$UNIT_DIR/polyscope-clone-reaper.service"
 REAPER_TIMER_UNIT="$UNIT_DIR/polyscope-clone-reaper.timer"
-ROLLOUT_READY_COMMAND="for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf $POLYSCOPE_API_BASE/repos >/dev/null 2>&1 && exec $INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --refresh-nginx --skip-if-provision-locked; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1"
+ROLLOUT_READY_COMMAND="for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf $POLYSCOPE_API_BASE/repos >/dev/null 2>&1 && exec $INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --container-preview --skip-if-provision-locked; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1"
 
 detect_system_server_fragment_path() {
     "$SYSTEMCTL_BIN" show -p FragmentPath --value "$POLYSCOPE_SYSTEM_SERVER_UNIT" 2>/dev/null || true
@@ -151,16 +141,6 @@ resolve_server_scope() {
     esac
 }
 
-can_apply_nginx_non_interactively() {
-    local helper_check_output
-
-    [[ -x "$POLYSCOPE_NGINX_HELPER_CHECK" ]] || return 1
-    helper_check_output="$(
-        "$SUDO_BIN" -k -n "$POLYSCOPE_NGINX_HELPER_CHECK" --check 2>/dev/null
-    )" || return 1
-    [[ " $helper_check_output " == *" manifest_schema=3 "* ]]
-}
-
 is_managed_codex_agents_link() {
     local link_target
 
@@ -189,7 +169,7 @@ if [[ ! -x "$POLYSCOPE_REAL_GIT_BIN" ]]; then
     exit 1
 fi
 
-for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE NGINX_LIBRARY_SOURCE NGINX_HELPER_SOURCE CODEX_AGENTS_SOURCE CODEX_HOME_DIR POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_PROVISION_LOCK POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH SUDO_BIN POLYSCOPE_NGINX_HELPER POLYSCOPE_NGINX_HELPER_CHECK POLYSCOPE_NGINX_MANIFEST; do
+for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE NGINX_LIBRARY_SOURCE NGINX_HELPER_SOURCE CODEX_AGENTS_SOURCE CODEX_HOME_DIR POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_PROVISION_LOCK POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH; do
     _val="${!_var_name}"
     if [[ "$_val" == *$'\n'* ]]; then
         echo "Error: $_var_name must not contain newlines" >&2
@@ -293,13 +273,6 @@ if [[ "$server_scope" == "system" ]] && [[ -z "$system_server_fragment_path" ]];
     exit 1
 fi
 
-if ! can_apply_nginx_non_interactively; then
-    echo "Error: the exact constrained nginx helper capability is unavailable." >&2
-    echo "Expected: sudo -k -n $POLYSCOPE_NGINX_HELPER_CHECK --check" >&2
-    echo "Run scripts/install-polyscope-system-components.sh interactively as root, then retry." >&2
-    exit 1
-fi
-
 if [[ ! -f "$CODEX_AGENTS_SOURCE" ]]; then
     echo "Error: Polyscope Codex instructions not found: $CODEX_AGENTS_SOURCE" >&2
     exit 1
@@ -326,12 +299,12 @@ if [[ "$server_scope" == "system" ]]; then
         echo "Run scripts/install-polyscope-system-components.sh interactively as root first." >&2
         exit 1
     fi
-    if [[ "$(detect_system_server_user)" != "secpal" ]]; then
-        echo "Error: the system Polyscope server must run as secpal before user units are installed." >&2
+    if [[ "$(detect_system_server_user)" != "polyscope" ]]; then
+        echo "Error: the system Polyscope server must run as polyscope before user units are installed." >&2
         exit 1
     fi
-    if ! system_server_uid="$(id -u secpal 2>/dev/null)"; then
-        echo "Error: required system Polyscope service user 'secpal' does not exist." >&2
+    if ! system_server_uid="$(id -u polyscope 2>/dev/null)"; then
+        echo "Error: required system Polyscope service user 'polyscope' does not exist." >&2
         exit 1
     fi
     mapfile -t _installed_path_lines < <(sed -n 's/^Environment=PATH=//p' "$installed_server_target")
@@ -354,8 +327,8 @@ if [[ "$server_scope" == "system" ]]; then
         fi
     done
     for _required_path_entry in \
-        /home/secpal/.local/lib/polyscope/bin \
-        /home/secpal/.local/bin \
+        /home/polyscope/.local/lib/polyscope/bin \
+        /home/polyscope/.local/bin \
         /usr/local/sbin \
         /usr/local/bin \
         /usr/sbin \
@@ -372,8 +345,11 @@ if [[ "$server_scope" == "system" ]]; then
         exit 1
     fi
     for _required_dropin_line in \
-        "User=secpal" \
-        "ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321" \
+        "User=polyscope" \
+        "Group=polyscope" \
+        "WorkingDirectory=/home/polyscope/work" \
+        "Environment=HOME=/home/polyscope" \
+        "ExecStart=/home/polyscope/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321" \
         "Environment=SSH_AUTH_SOCK=/run/user/$system_server_uid/openssh_agent" \
         "Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git"; do
         if ! grep -qxF "$_required_dropin_line" "$installed_server_target"; then
@@ -382,23 +358,23 @@ if [[ "$server_scope" == "system" ]]; then
             exit 1
         fi
     done
-    _expected_system_start_post="ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec /home/secpal/code/SecPal/.github/scripts/polyscope-rollout.py --workspace-root /home/secpal/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --skip-local-configs --skip-db-sync --refresh-nginx --skip-if-provision-locked; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1'"
+    _expected_system_start_post="ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec /home/polyscope/code/SecPal/.github/scripts/polyscope-rollout.py --workspace-root /home/polyscope/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --skip-local-configs --skip-db-sync --container-preview --skip-if-provision-locked; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1'"
     mapfile -t _installed_start_post_lines < <(sed -n '/^ExecStartPost=/p' "$installed_server_target")
     if [[ "${#_installed_start_post_lines[@]}" -ne 2 \
         || "${_installed_start_post_lines[0]}" != "ExecStartPost=" \
         || "${_installed_start_post_lines[1]}" != "$_expected_system_start_post" ]]; then
-        echo "Error: reviewed system server drop-in lacks constrained nginx activation: $installed_server_target" >&2
+        echo "Error: reviewed system server drop-in lacks bounded container-preview convergence: $installed_server_target" >&2
         exit 1
     fi
     if grep -qF -- '--install-nginx' "$installed_server_target"; then
         echo "Error: reviewed system server drop-in must not run full worktree provisioning: $installed_server_target" >&2
         exit 1
     fi
-    if ! grep -qF -- 'exec /home/secpal/code/SecPal/.github/scripts/polyscope-rollout.py --workspace-root /home/secpal/code/SecPal' "$installed_server_target"; then
+    if ! grep -qF -- 'exec /home/polyscope/code/SecPal/.github/scripts/polyscope-rollout.py --workspace-root /home/polyscope/code/SecPal' "$installed_server_target"; then
         echo "Error: reviewed system server drop-in lacks the canonical rollout runtime: $installed_server_target" >&2
         exit 1
     fi
-    if grep -qF -- 'exec /home/secpal/.local/bin/polyscope-secpal-rollout.py ' "$installed_server_target"; then
+    if grep -qF -- 'exec /home/polyscope/.local/bin/polyscope-secpal-rollout.py ' "$installed_server_target"; then
         echo "Error: reviewed system server drop-in depends on a user installer target: $installed_server_target" >&2
         exit 1
     fi
@@ -443,7 +419,6 @@ Type=simple
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
-Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN
 Environment=SECPAL_WORKSPACE_ROOT=$WORKSPACE_ROOT
 ExecStart=$POLYSCOPE_SERVER_BIN serve --host 127.0.0.1 --port 4321
 ExecStartPost=/usr/bin/env bash -lc '$ROLLOUT_READY_COMMAND'
@@ -471,9 +446,7 @@ WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
-Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN
-Environment=POLYSCOPE_NGINX_HELPER=$POLYSCOPE_NGINX_HELPER
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --refresh-nginx
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --container-preview
 EOF
 
 cat >"$PATH_UNIT" <<EOF
@@ -563,10 +536,8 @@ WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
-Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN
-Environment=POLYSCOPE_NGINX_HELPER=$POLYSCOPE_NGINX_HELPER
 ExecStartPre=/usr/bin/sleep 3
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --provision-worktrees --refresh-nginx
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --provision-worktrees --container-preview
 EOF
 
 cat >"$PROVISION_PATH_UNIT" <<EOF

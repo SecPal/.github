@@ -9,6 +9,73 @@ links, prompts and canonical configuration are service responsibilities. Executi
 mutable workspace code is not: dependency installation, builds and tests belong
 to the unprivileged development identity and its isolated toolchain.
 
+## Dedicated service account and existing-installation migration
+
+The service account is `polyscope` (UID 1002 on the existing host), with its own
+home, Codex session, Git configuration and rootless container storage. The
+independent `codex` account and the SecPal application accounts are separate
+security domains. None receives sudo permissions. Sharing a supplementary group
+must not grant access to another account's home, credentials, sockets or mutable
+repositories.
+
+The system-component installer now renders `User=polyscope`, `Group=polyscope`,
+its own HOME, working directory and XDG runtime paths. The user installer refuses
+other accounts, including a root alias. Installed reconciliation uses the existing
+`--container-preview` backend, never host Nginx activation. The old two-command
+Nginx sudoers file is removed, including on failed installation. Recovery leaves
+Polyscope stopped instead of restoring the former service identity and restarting
+it. The existing root-owned Nginx helper remains an administrator-only artifact;
+no service needs an unattended Nginx capability. Existing renderer/manifest checks
+still apply to an administrator's explicit host-Nginx operation.
+
+This source change does **not** migrate a live database or authorize using a new
+empty data directory as a replacement. Before applying the accepted immutable
+revision to an existing installation:
+
+1. Inventory native repository/workspace/session identities, Git heads/indexes and
+   uncommitted files, service cgroups, container identities, path references,
+   private credentials and the existing isolation policy. Keep a root-private,
+   consistent SQLite backup and separate file backups. Preserve the retired
+   executor state from the earlier cutover.
+2. Qualify the absolute-path transition on a disposable copy of the actual
+   database, Git metadata and session representation. Native `--data-dir` selects
+   a database; it is not proof that stored repository/worktree/session paths are
+   rebased. Do not rewrite the live database, introduce cross-home symlinks or
+   reopen traversal permissions to make stale paths work. If no compatible
+   transition is demonstrated, stop before moving data or changing the service.
+3. Drain only Polyscope management/agents and its provision/refresh/reaper triggers
+   and preview consumers. Leave application/API services and the independent
+   Codex untouched. The system installer refuses an active server.
+4. Transfer only authenticated Polyscope-owned data after that qualification;
+   preserve native identities, links and Git contents. Do not copy an entire
+   other user's SSH/GitHub/Codex credential directory. Establish the intended
+   service-specific authentication and signing identity, without exposing keys or
+   agent sockets to another account or development container.
+5. Initialize the dedicated user's normal runtime/user manager and use the
+   existing installers from the accepted revision. Remove obsolete service
+   drop-ins that override HOME, UID1003 runtime paths or the old account-only
+   model-cache hook. A source merge is not evidence that those host-specific
+   overrides were retired. Keep the existing API-group fence; its service lock
+   belongs to the dedicated Polyscope identity, not the application identity.
+6. Reconcile the existing management network deny boundary for the retired
+   application identity as well as independent Codex, including rootless mapped
+   UIDs. Do not expose the management listener through a container or relay
+   bypass. Retain SELinux Enforcing and distinct subuid/subgid ranges.
+7. Verify native registrations and resumable work, the own Codex agent, Git and
+   signing, own toolchains, safe metadata reconciliation and existing routes.
+   Recheck cross-account file/socket/process denial and zero sudo rights. Keep
+   application containers unchanged. Preview database/proxy ownership and
+   authentication must be resolved before restarting a migrated preview; no
+   application credentials are inherited automatically.
+
+On failure keep the affected Polyscope consumers stopped, credentials private and
+execution-free canonical configuration effective. Restore only the specifically
+changed data to its authenticated owner; never restart the former mixed service
+identity, restore the old sudo grant or resurrect service-owned workspace workers.
+A path or credential blocker is a migration blocker, not a reason to loosen DAC,
+SELinux or network boundaries. Historical API-2639 mount/receipt examples below
+are historical qualification, not instructions to recreate a retired Codex binding.
+
 ## Service execution is retired
 
 Previously, the periodic/path provisioner hashed candidate package manifests and
@@ -146,15 +213,16 @@ s = p.lstat()
 if not stat.S_ISDIR(s.st_mode) or s.st_uid != 0 or s.st_mode & 0o022:
     raise SystemExit("untrusted authority directory; abort")
 PY
-sudo -u secpal -- /usr/bin/python3 -I - <<'PY'
+sudo -u polyscope -- /usr/bin/python3 -I - <<'PY'
 import importlib.machinery
 import importlib.util
+import pwd
 loader = importlib.machinery.SourceFileLoader(
     "workspace_owner", "/usr/local/bin/secpal-polyscope-workspace")
 spec = importlib.util.spec_from_loader(loader.name, loader)
 owner = importlib.util.module_from_spec(spec)
 loader.exec_module(owner)
-owner.configure_paths(1003)
+owner.configure_paths(pwd.getpwnam("polyscope").pw_uid)
 with owner.creation_lock() as stream:
     if stream.read().strip():
         raise SystemExit("unresolved native creation; retain fence and abort")

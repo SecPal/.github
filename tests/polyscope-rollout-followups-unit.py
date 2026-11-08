@@ -39,6 +39,69 @@ rollout = load_rollout_module()
 
 
 class PolyscopeRolloutFollowupTests(TestCase):
+    def test_system_stage_separates_the_service_account_without_sudo(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stage = Path(directory)
+            policy = stage / "etc/sudoers.d/secpal-polyscope-nginx"
+            policy.parent.mkdir(parents=True)
+            policy.write_text("secpal ALL=(root) NOPASSWD: /old/helper\n")
+            result = subprocess.run(
+                ["bash", str(REPO_ROOT / "scripts/install-polyscope-system-components.sh"), "--stage-only"],
+                env={**os.environ, "DESTDIR": str(stage)},
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            unit = (stage / "etc/systemd/system/polyscope-server.service.d/zz-secpal-runtime.conf").read_text()
+            for line in ("User=polyscope", "Group=polyscope", "Environment=HOME=/home/polyscope",
+                         "WorkingDirectory=/home/polyscope/work"):
+                self.assertIn(line, unit)
+            self.assertNotIn("/home/secpal", unit)
+            self.assertIn("--container-preview --skip-if-provision-locked", unit)
+            self.assertFalse((stage / "etc/sudoers.d/secpal-polyscope-nginx").exists())
+
+    def test_failed_system_install_never_restores_a_sudo_grant_or_restarts(self):
+        source = (REPO_ROOT / "scripts/install-polyscope-system-components.sh").read_text()
+        rollback = re.search(r"^rollback\(\) \{.*?^\}", source, re.MULTILINE | re.DOTALL).group(0)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sudoers = root / "sudoers"
+            sudoers.write_text("old grant")
+            systemctl = root / "systemctl"
+            systemctl.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_LOG"\n')
+            systemctl.chmod(0o755)
+            # Exercise the real recovery function with disposable targets and a
+            # logged systemctl boundary, never the machine's live service manager.
+            rollback = rollback.replace("/usr/bin/systemctl", str(systemctl))
+            result = subprocess.run(["bash", "-c",
+                'restore_target() { printf "%s %s\\n" "$1" "$2" >> "$TEST_RESTORES"; };\n'
+                + rollback + "\nfalse; rollback"],
+                env={**os.environ, "TEST_LOG": str(root / "log"), "TEST_RESTORES": str(root / "restores"),
+                     "HELPER_TARGET": "helper", "LIBRARY_TARGET": "library", "ROLLOUT_TARGET": "rollout",
+                     "WORKSPACE_TARGET": "workspace", "WORKSPACE_WS_TARGET": "ws", "ISOLATION_TARGET": "isolation",
+                     "SUDOERS_TARGET": str(sudoers), "DROPIN_TARGET": "old-service-identity"},
+                capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(sudoers.exists())
+            self.assertIn("stop polyscope-server.service", (root / "log").read_text())
+            self.assertNotIn("restart", (root / "log").read_text())
+            self.assertNotIn("sudoers", (root / "restores").read_text())
+            self.assertNotIn("old-service-identity", (root / "restores").read_text())
+
+    def test_root_alias_cannot_install_the_unprivileged_service(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            identity = root / "id"
+            identity.write_text("#!/bin/sh\necho 0\n")
+            identity.chmod(0o755)
+            result = subprocess.run(
+                ["bash", str(REPO_ROOT / "scripts/install-polyscope-rollout.sh"),
+                 "--polyscope-server-bin", "/bin/true"],
+                env={**os.environ, "HOME": directory, "PATH": f"{root}:/usr/bin:/bin"},
+                capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must be run as the polyscope user", result.stderr)
+            self.assertFalse((root / ".local").exists())
+
     def test_container_api_checks_use_the_isolated_test_entrypoint(self) -> None:
         spec = {"path": Path("/source/api"), "preview_prefix": "api"}
         config = {"scripts": {"run": [
@@ -121,22 +184,12 @@ class PolyscopeRolloutFollowupTests(TestCase):
             helper_runner=previous_helper, service_user=SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid()))
         writer.assert_called_once()
 
-    def test_installer_requires_the_reduced_manifest_capability(self) -> None:
+    def test_service_installer_has_no_privileged_nginx_capability(self) -> None:
         source = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
-        function = re.search(r"^can_apply_nginx_non_interactively\(\) \{.*?^\}", source, re.MULTILINE | re.DOTALL).group(0)
-        with tempfile.TemporaryDirectory() as temporary:
-            helper = Path(temporary) / "helper"
-            sudo = Path(temporary) / "sudo"
-            sudo.write_text('#!/usr/bin/env bash\nshift 2\nexec "$@"\n')
-            sudo.chmod(0o755)
-            for capability, expected in (("bundle=2 manifest_schema=1 manifest_schema=2", 1),
-                                         ("bundle=3 manifest_schema=3", 0)):
-                helper.write_text(f"#!/usr/bin/env bash\necho '{capability}'\n")
-                helper.chmod(0o755)
-                result = subprocess.run(["bash", "-c", function + "\ncan_apply_nginx_non_interactively"],
-                                        env={**os.environ, "SUDO_BIN": str(sudo),
-                                             "POLYSCOPE_NGINX_HELPER_CHECK": str(helper)}, capture_output=True)
-                self.assertEqual(result.returncode, expected)
+        self.assertNotIn("can_apply_nginx_non_interactively", source)
+        self.assertNotIn("POLYSCOPE_SUDO_BIN", source)
+        self.assertNotIn("--refresh-nginx", source)
+        self.assertIn("--container-preview", source)
 
     def test_helper_rejects_a_renderer_without_the_new_contract(self) -> None:
         spec = importlib.util.spec_from_file_location("nginx_bundle_test", REPO_ROOT / "scripts/polyscope_nginx.py")
@@ -366,7 +419,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
                     root,
                 )
 
-    def test_user_server_startup_uses_lightweight_nginx_convergence(self) -> None:
+    def test_user_server_startup_uses_unprivileged_container_convergence(self) -> None:
         installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
         ready_command = next(
             line
@@ -375,12 +428,11 @@ class PolyscopeRolloutFollowupTests(TestCase):
         )
 
         for argument in (
-            "--nginx-manifest-output $POLYSCOPE_NGINX_MANIFEST",
             "--clone-root $POLYSCOPE_CLONE_ROOT",
             "--provision-lock-path $POLYSCOPE_PROVISION_LOCK",
             "--skip-local-configs",
             "--skip-db-sync",
-            "--refresh-nginx",
+            "--container-preview",
             "--skip-if-provision-locked",
         ):
             self.assertIn(argument, ready_command)
@@ -399,7 +451,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
         installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
 
         self.assertIn(
-            "--skip-local-configs --skip-db-sync --refresh-nginx --skip-if-provision-locked",
+            "--skip-local-configs --skip-db-sync --container-preview --skip-if-provision-locked",
             installer,
         )
         self.assertIn("_installed_start_post_lines[0]", installer)
@@ -414,11 +466,12 @@ class PolyscopeRolloutFollowupTests(TestCase):
 
         self.assertIn("POLYSCOPE_CLONE_ROOT", validation_block)
 
-    def test_user_server_startup_receives_the_validated_sudo_binary(self) -> None:
+    def test_user_server_startup_has_no_sudo_or_host_nginx_contract(self) -> None:
         installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
         server_unit = installer.split('cat >"$SERVER_UNIT" <<EOF', 1)[1].split("EOF", 1)[0]
 
-        self.assertIn("Environment=POLYSCOPE_SUDO_BIN=$SUDO_BIN", server_unit)
+        self.assertNotIn("SUDO", server_unit)
+        self.assertNotIn("NGINX", server_unit)
 
     def test_system_server_startup_skips_refresh_while_provisioning(self) -> None:
         installer = (REPO_ROOT / "scripts/install-polyscope-system-components.sh").read_text()
@@ -426,7 +479,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
             1
         ].split("EOF", 1)[0]
 
-        self.assertIn("--refresh-nginx --skip-if-provision-locked", system_dropin)
+        self.assertIn("--container-preview --skip-if-provision-locked", system_dropin)
 
     def test_provision_service_allows_the_scheduler_gate_to_finish(self) -> None:
         installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()

@@ -57,7 +57,7 @@ fake_id_dir="$WORKSPACE/fake-id"
 mkdir -p "$fake_id_dir"
 cat >"$fake_id_dir/id" <<'STUB'
 #!/usr/bin/env bash
-if [[ "${1:-}" == "-u" && "${2:-}" == "secpal" ]]; then
+if [[ "${1:-}" == "-u" && "${2:-}" == "polyscope" ]]; then
     echo "stage-only must not inspect the target service account" >&2
     exit 67
 fi
@@ -128,39 +128,34 @@ cmp "$REPO_ROOT/scripts/polyscope-isolation.py" "$WORKSPACE/stage/usr/local/libe
 test -x "$helper"
 test -f "$library"
 test -f "$rollout"
-test -f "$sudoers"
+test ! -e "$sudoers"
 test -f "$dropin"
 test "$(head -n 1 "$helper")" = '#!/usr/bin/python3'
 test "$(stat -c '%a' "$helper")" = 755
 test "$(stat -c '%a' "$library")" = 644
 test "$(stat -c '%a' "$rollout")" = 644
-test "$(stat -c '%a' "$sudoers")" = 440
 test "$(stat -c '%a' "$dropin")" = 644
 
-grep -qxF 'secpal ALL=(root) NOPASSWD: /usr/local/libexec/secpal-polyscope-nginx-apply ""' "$sudoers"
-grep -qxF 'secpal ALL=(root) NOPASSWD: /usr/local/libexec/secpal-polyscope-nginx-apply --check' "$sudoers"
-if cut -d: -f2- "$sudoers" | grep -Eq 'ALL[[:space:]]*$|\*|/(usr/)?bin/(ba)?sh([[:space:]]|$)|/(usr/)?bin/(python[^/[:space:]]*|systemctl|install|cp|mv|rm|tee)([[:space:]]|$)'; then
-    echo "sudoers fixture grants a broad command" >&2
-    exit 1
-fi
-
-grep -q '^User=secpal$' "$dropin"
-grep -q '^Environment=SSH_AUTH_SOCK=/run/user/1000/openssh_agent$' "$dropin"
-grep -q 'ExecStart=/home/secpal/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321' "$dropin"
-grep -q 'exec /home/secpal/code/SecPal/.github/scripts/polyscope-rollout.py ' "$dropin"
+grep -q '^User=polyscope$' "$dropin"
+grep -q '^Environment=SSH_AUTH_SOCK=/run/user/1002/openssh_agent$' "$dropin"
+grep -q 'ExecStart=/home/polyscope/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321' "$dropin"
+grep -q 'exec /home/polyscope/code/SecPal/.github/scripts/polyscope-rollout.py ' "$dropin"
 grep -q -- '--skip-local-configs --skip-db-sync' "$dropin"
-if grep -qF 'exec /home/secpal/.local/bin/polyscope-secpal-rollout.py ' "$dropin"; then
+if grep -qF 'exec /home/polyscope/.local/bin/polyscope-secpal-rollout.py ' "$dropin"; then
     echo "system installer must not depend on a target created by the later user installer" >&2
     exit 1
 fi
-grep -q -- '--nginx-manifest-output /home/secpal/.local/state/polyscope/nginx-manifest.json --skip-local-configs --skip-db-sync --refresh-nginx --skip-if-provision-locked' "$dropin"
+grep -q -- '--skip-local-configs --skip-db-sync --container-preview --skip-if-provision-locked' "$dropin"
 if grep -q -- '--install-nginx' "$dropin"; then
     echo "system startup must not run full worktree provisioning" >&2
     exit 1
 fi
 
-if command -v visudo >/dev/null 2>&1; then
-    visudo -c -f "$sudoers" >/dev/null
+grep -qxF 'Group=polyscope' "$dropin"
+grep -qxF 'Environment=HOME=/home/polyscope' "$dropin"
+if grep -q '/home/secpal\|--refresh-nginx' "$dropin"; then
+    echo "system startup must not enter the app home or request host Nginx" >&2
+    exit 1
 fi
 
 echo "Polyscope system-component installer tests passed."
