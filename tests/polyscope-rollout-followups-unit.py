@@ -53,10 +53,12 @@ class PolyscopeRolloutFollowupTests(TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             unit = (stage / "etc/systemd/system/polyscope-server.service.d/zz-secpal-runtime.conf").read_text()
             for line in ("User=polyscope", "Group=polyscope", "Environment=HOME=/home/polyscope",
-                         "WorkingDirectory=/home/polyscope/work"):
-                self.assertIn(line, unit)
+                         "WorkingDirectory=/home/polyscope"):
+                self.assertIn(line, unit.splitlines())
             self.assertNotIn("/home/secpal", unit)
             self.assertIn("--container-preview --skip-if-provision-locked", unit)
+            self.assertIn("--db-path /home/polyscope/.polyscope/polyscope.db", unit)
+            self.assertIn("--clone-root /home/polyscope/.polyscope/clones", unit)
             self.assertFalse((stage / "etc/sudoers.d/secpal-polyscope-nginx").exists())
 
     def test_failed_system_install_never_restores_a_sudo_grant_or_restarts(self):
@@ -122,6 +124,17 @@ class PolyscopeRolloutFollowupTests(TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("must be run as the polyscope user", result.stderr)
             self.assertFalse((root / ".local").exists())
+
+    def test_dedicated_canonical_paths_retain_cleanup_without_cross_account_access(self):
+        clones = Path("/home/polyscope/.polyscope/clones")
+        database = Path("/home/polyscope/.polyscope/polyscope.db")
+        self.assertTrue(rollout.should_manage_api_runtime_units(clones, database))
+        self.assertFalse(rollout.should_manage_api_runtime_units(
+            Path("/home/secpal/.polyscope/clones"), database))
+        self.assertFalse(rollout.should_manage_api_runtime_units(
+            clones, Path("/home/secpal/.polyscope/polyscope.db")))
+        self.assertEqual(rollout.API_RUNTIME_UNIT_DIRECTORY,
+                         Path("/home/polyscope/.config/systemd/user"))
 
     def test_container_api_checks_use_the_isolated_test_entrypoint(self) -> None:
         spec = {"path": Path("/source/api"), "preview_prefix": "api"}
@@ -450,6 +463,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
 
         for argument in (
             "--clone-root $POLYSCOPE_CLONE_ROOT",
+            "--db-path $POLYSCOPE_DB_PATH",
             "--provision-lock-path $POLYSCOPE_PROVISION_LOCK",
             "--skip-local-configs",
             "--skip-db-sync",
@@ -467,6 +481,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
             sync_unit,
         )
         self.assertIn("--clone-root $POLYSCOPE_CLONE_ROOT", sync_unit)
+        self.assertIn("--db-path $POLYSCOPE_DB_PATH", sync_unit)
 
     def test_system_dropin_validator_requires_nonblocking_startup_refresh(self) -> None:
         installer = (REPO_ROOT / "scripts/install-polyscope-rollout.sh").read_text()
@@ -509,6 +524,7 @@ class PolyscopeRolloutFollowupTests(TestCase):
         )[0]
 
         self.assertIn("TimeoutStartSec=15min", provision_unit)
+        self.assertIn("--db-path $POLYSCOPE_DB_PATH", provision_unit)
 
     def test_nonblocking_provision_lock_reports_contention(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

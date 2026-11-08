@@ -30,6 +30,7 @@ POLYSCOPE_REAL_GIT_BIN="${POLYSCOPE_REAL_GIT_BIN:-$(command -v git || true)}"
 POLYSCOPE_API_BASE="${POLYSCOPE_API_BASE:-http://127.0.0.1:4321/api}"
 POLYSCOPE_CLONE_ROOT="${POLYSCOPE_CLONE_ROOT:-$HOME/.polyscope/clones}"
 POLYSCOPE_HOME="${POLYSCOPE_HOME:-$HOME/.polyscope}"
+POLYSCOPE_DB_PATH="${POLYSCOPE_DB_PATH:-$POLYSCOPE_HOME/polyscope.db}"
 POLYSCOPE_PROVISION_LOCK="${POLYSCOPE_PROVISION_LOCK:-$HOME/.local/state/polyscope/worktree-provision.lock}"
 POLYSCOPE_EXPOSE_BIN="${POLYSCOPE_EXPOSE_BIN:-$POLYSCOPE_HOME/bin/expose-linux-x64}"
 POLYSCOPE_EXPOSE_REAL_BIN="${POLYSCOPE_EXPOSE_REAL_BIN:-$POLYSCOPE_HOME/bin/expose-linux-x64.real}"
@@ -105,7 +106,7 @@ PROVISION_PATH_UNIT="$UNIT_DIR/polyscope-worktree-provision.path"
 PROVISION_TIMER_UNIT="$UNIT_DIR/polyscope-worktree-provision.timer"
 REAPER_SERVICE_UNIT="$UNIT_DIR/polyscope-clone-reaper.service"
 REAPER_TIMER_UNIT="$UNIT_DIR/polyscope-clone-reaper.timer"
-ROLLOUT_READY_COMMAND="for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf $POLYSCOPE_API_BASE/repos >/dev/null 2>&1 && exec $INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --container-preview --skip-if-provision-locked; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1"
+ROLLOUT_READY_COMMAND="for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf $POLYSCOPE_API_BASE/repos >/dev/null 2>&1 && exec $INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --db-path $POLYSCOPE_DB_PATH --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --container-preview --skip-if-provision-locked; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1"
 
 detect_system_server_fragment_path() {
     "$SYSTEMCTL_BIN" show -p FragmentPath --value "$POLYSCOPE_SYSTEM_SERVER_UNIT" 2>/dev/null || true
@@ -169,7 +170,7 @@ if [[ ! -x "$POLYSCOPE_REAL_GIT_BIN" ]]; then
     exit 1
 fi
 
-for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE NGINX_LIBRARY_SOURCE NGINX_HELPER_SOURCE CODEX_AGENTS_SOURCE CODEX_HOME_DIR POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_PROVISION_LOCK POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH; do
+for _var_name in WORKSPACE_ROOT SOURCE_SCRIPT WRAPPER_SOURCE GIT_WRAPPER_SOURCE NGINX_LIBRARY_SOURCE NGINX_HELPER_SOURCE CODEX_AGENTS_SOURCE CODEX_HOME_DIR POLYSCOPE_SERVER_BIN POLYSCOPE_REAL_GIT_BIN POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_HOME POLYSCOPE_DB_PATH POLYSCOPE_PROVISION_LOCK POLYSCOPE_EXPOSE_BIN POLYSCOPE_EXPOSE_REAL_BIN POLYSCOPE_GIT_BIN_DIR POLYSCOPE_GIT_WRAPPER_BIN POLYSCOPE_SERVER_SCOPE POLYSCOPE_SYSTEM_SERVER_UNIT POLYSCOPE_SYSTEM_SERVER_DROPIN_DIR SERVICE_PATH; do
     _val="${!_var_name}"
     if [[ "$_val" == *$'\n'* ]]; then
         echo "Error: $_var_name must not contain newlines" >&2
@@ -257,7 +258,7 @@ if ! PATH="$SERVICE_PATH" python3 -I "$EVIDENCE_VALIDATOR" --self-check >/dev/nu
 fi
 
 # Reject shell metacharacters in variables embedded in ExecStart/ExecStartPost command strings.
-for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_PROVISION_LOCK INSTALL_TARGET; do
+for _var_name in WORKSPACE_ROOT POLYSCOPE_API_BASE POLYSCOPE_CLONE_ROOT POLYSCOPE_DB_PATH POLYSCOPE_PROVISION_LOCK INSTALL_TARGET; do
     _val="${!_var_name}"
     if [[ "$_val" =~ [^a-zA-Z0-9/_.:-] ]]; then
         echo "Error: $_var_name contains characters that are unsafe in shell command strings; only letters, digits, /, _, ., :, - are permitted" >&2
@@ -347,7 +348,7 @@ if [[ "$server_scope" == "system" ]]; then
     for _required_dropin_line in \
         "User=polyscope" \
         "Group=polyscope" \
-        "WorkingDirectory=/home/polyscope/work" \
+        "WorkingDirectory=/home/polyscope" \
         "Environment=HOME=/home/polyscope" \
         "ExecStart=/home/polyscope/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321" \
         "Environment=SSH_AUTH_SOCK=/run/user/$system_server_uid/openssh_agent" \
@@ -358,7 +359,7 @@ if [[ "$server_scope" == "system" ]]; then
             exit 1
         fi
     done
-    _expected_system_start_post="ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec /home/polyscope/code/SecPal/.github/scripts/polyscope-rollout.py --workspace-root /home/polyscope/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --skip-local-configs --skip-db-sync --container-preview --skip-if-provision-locked; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1'"
+    _expected_system_start_post="ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec /home/polyscope/code/SecPal/.github/scripts/polyscope-rollout.py --workspace-root /home/polyscope/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --db-path /home/polyscope/.polyscope/polyscope.db --clone-root /home/polyscope/.polyscope/clones --skip-local-configs --skip-db-sync --container-preview --skip-if-provision-locked; sleep 1; done; echo \"Polyscope API did not become ready in time.\" >&2; exit 1'"
     mapfile -t _installed_start_post_lines < <(sed -n '/^ExecStartPost=/p' "$installed_server_target")
     if [[ "${#_installed_start_post_lines[@]}" -ne 2 \
         || "${_installed_start_post_lines[0]}" != "ExecStartPost=" \
@@ -446,7 +447,7 @@ WorkingDirectory=$WORKSPACE_ROOT/.github
 Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --container-preview
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --db-path $POLYSCOPE_DB_PATH --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --container-preview
 EOF
 
 cat >"$PATH_UNIT" <<EOF
@@ -537,7 +538,7 @@ Environment=PATH=$SERVICE_PATH
 Environment=SSH_AUTH_SOCK=%t/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=$POLYSCOPE_REAL_GIT_BIN
 ExecStartPre=/usr/bin/sleep 3
-ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --provision-worktrees --container-preview
+ExecStart=$INSTALL_TARGET --workspace-root $WORKSPACE_ROOT --polyscope-api-base $POLYSCOPE_API_BASE --db-path $POLYSCOPE_DB_PATH --clone-root $POLYSCOPE_CLONE_ROOT --provision-lock-path $POLYSCOPE_PROVISION_LOCK --skip-local-configs --skip-db-sync --provision-worktrees --container-preview
 EOF
 
 cat >"$PROVISION_PATH_UNIT" <<EOF

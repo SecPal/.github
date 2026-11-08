@@ -6088,7 +6088,7 @@ if grep -qE '^(Restart=|SuccessExitStatus=|ExecStart=-)' "$fake_unit_dir/polysco
   echo "provision service must expose failures without suppressing them" >&2
   exit 1
 fi
-grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --clone-root .* --provision-lock-path .*worktree-provision.lock --skip-local-configs --skip-db-sync --provision-worktrees --container-preview' "$fake_unit_dir/polyscope-worktree-provision.service"
+grep -q 'ExecStart=.*/polyscope-secpal-rollout.py --workspace-root .* --polyscope-api-base http://127.0.0.1:4321/api --db-path .*polyscope.db --clone-root .* --provision-lock-path .*worktree-provision.lock --skip-local-configs --skip-db-sync --provision-worktrees --container-preview' "$fake_unit_dir/polyscope-worktree-provision.service"
 grep -q '^Unit=polyscope-worktree-provision.service$' "$fake_unit_dir/polyscope-worktree-provision.path"
 if grep -q 'polyscope\.db-wal' "$fake_unit_dir/polyscope-worktree-provision.path"; then
     echo "worktree provision watcher must not react to unrelated SQLite WAL writes" >&2

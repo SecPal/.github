@@ -509,40 +509,26 @@ to the expected repository set.
 POLYSCOPE_SERVER_SCOPE=system bash .github/scripts/install-polyscope-rollout.sh
 ```
 
-Run `install-polyscope-system-components.sh` first. This installer remains
-unprivileged, requires the invoking account to be `secpal`, and verifies the
-exact fixed-helper capability:
+After qualifying an existing-installation migration as described in
+[`docs/polyscope-isolated-development.md`](../docs/polyscope-isolated-development.md),
+run `install-polyscope-system-components.sh` as the administrator with Polyscope
+quiesced. This user installer runs only as the dedicated `polyscope` account,
+never root, `secpal` or independent `codex`. It does not call sudo or require a
+host-Nginx capability; legacy Nginx override variables are rejected.
 
-`sudo -k -n /usr/local/libexec/secpal-polyscope-nginx-apply --check`
+Both startup scopes publish execution-free canonical configuration and use
+`--container-preview` for the existing rootless route refresh. Startup and
+routine commands explicitly name the same configured database, clone root and
+provision lock. A held provision lock lets startup return without waiting; the
+in-flight metadata reconciliation performs that same final refresh. A
+system-scope installation requires the reviewed dedicated-account drop-in.
+Canonical cleanup remains bound to `/home/polyscope/.polyscope/{clones,polyscope.db}`
+and the dedicated user's own systemd units; it cannot manage another user's bus.
+Retire the old account's workers before moving data or installing the new source.
 
-The credential reset ensures the check proves the exact `NOPASSWD` rule rather
-than a cached interactive sudo timestamp. It never tests generic sudo access,
-rejects helper-path overrides, and exits before writing user units when the
-fixed helper, fixed manifest path, system server drop-in, or exact
-authorization is unavailable. The helper check validates the installed
-root-owned bundle independently of the current manifest and advertises
-`manifest_schema=3`; the unprivileged producer refuses to publish unless that
-capability is present on the same fixed helper used for activation. Schema 3
-binds the reduced three-repository preview inventory. Older schema-1/2 manifests
-and mismatched installed renderers fail closed; update the root-owned consumer
-bundle before publishing the new producer manifest.
-Environment-selected helper paths cannot authorize publication. This permits
-consumer-first schema upgrades and allows a malformed active manifest to be
-replaced without leaving Nginx on an unreadable manifest. Both system- and
-user-scope server startup hooks publish execution-free canonical native config,
-while skipping optional auxiliary files and database synchronization. They perform
-management convergence without executing workspace setup. If the full provisioner already holds the shared lock,
-the startup hook exits successfully because that in-flight provisioner performs
-the same final Nginx convergence. User-scope startup also receives the exact
-sudo binary validated by the installer. Startup and routine refreshes use the
-same configured clone root and provision lock as the full provisioner. A
-system-scope installation accepts only the exact reviewed nonblocking startup
-hook from the privileged component installer. Routine instruction/config
-synchronization refreshes Nginx without executing workspace code; the existing
-path/timer service is now a management reconciliation trigger. The path unit deliberately
-ignores the broad SQLite WAL stream so ordinary Polyscope activity cannot create
-a provisioning loop; the main database, generated configs, and periodic timer
-remain convergence inputs.
+The path unit deliberately ignores the broad SQLite WAL stream so ordinary
+Polyscope activity cannot create a provisioning loop; the main database,
+generated configs and periodic timer remain metadata convergence inputs.
 
 `--source-script` accepts a custom rollout implementation only as part of a
 complete source bundle: the script must be executable, have the constrained
@@ -597,49 +583,33 @@ unsafe executor while an unprivileged write grant exists.
 
 ### `install-polyscope-system-components.sh`
 
-Installs only the root-owned Polyscope system boundary: the constrained nginx
-helper and renderer bundle, two exact sudoers command forms, and the system
-Polyscope server drop-in. Review the script, then run it interactively:
+Installs the root-owned system components and dedicated-account server drop-in.
+The administrator must first qualify the existing data/path/credential transition
+and quiesce Polyscope. This is not a database mover. Do not install candidate
+sources before their regular protected acceptance.
 
-```bash
-sudo -k
-sudo .github/scripts/install-polyscope-system-components.sh
-```
+The installer verifies that `/home/polyscope` exists and belongs to the dedicated
+account; systemd uses that existing home, not an uncreated `work` subdirectory.
+It resolves Node.js, verifies that the service can execute it, and checks the
+canonical executable rollout, committed lockfile and pinned validator dependencies
+under `/home/polyscope/code/SecPal/.github/` before writing components. Use
+`--node-bin` with an absolute executable path when root cannot discover it.
+The service always names its dedicated database and clone root explicitly.
 
-The host must provide `/usr/bin/setfacl` from its `acl` package before
-activation. The installer checks this prerequisite before writing any system
-component and exits with an actionable error when it is unavailable.
-
-The installer resolves `node` before writing the system drop-in, verifies that
-the `secpal` service account can execute it, and adds its directory to the
-service `PATH`. If root's environment cannot discover a user-managed Node.js
-installation, pass its absolute path explicitly:
-
-```bash
-sudo .github/scripts/install-polyscope-system-components.sh \
-  --node-bin /home/secpal/.local/share/node/bin/node
-```
-
-The administrator enters the password only at the terminal prompt. The script
-validates sudoers syntax before activation, writes fixed root-owned targets
-atomically, and restores the previous components if activation fails. It does
-not authorize shells, Python, `systemctl`, file utilities, or user-selected
-paths through passwordless sudo.
+The retired `secpal-polyscope-nginx` sudoers file is removed, never restored by
+recovery. A failed installation stops the service before restoring programs and
+does not restore the former account's drop-in or restart it. If stopping fails,
+programs remain intact for administrative recovery. No service receives a
+privileged shell, interpreter, Nginx helper or general command delegation.
 
 `DESTDIR=/path scripts/install-polyscope-system-components.sh --stage-only`
-renders a deterministic packaging fixture without root or a local `secpal`
-account. Its UID 1000 systemd value is for validation only; a real installation
-always resolves the target host's `secpal` UID and an executable Node.js path
-before activation. Packaging tests may pass `--node-bin` to render the intended
-service `PATH` without inspecting the target account.
+renders a disposable packaging fixture without root or a local service account.
+Its UID1002 runtime is the documented packaging default; actual installation
+resolves the dedicated account. Staging does not start services or migrate data.
 
-Before activation, the installer verifies the executable canonical rollout and
-validator source bundle, committed lockfile, and installed pinned Markdown and
-YAML dependencies under `/home/secpal/code/SecPal/.github/`. The parser must
-resolve and expose the required loading API to the `secpal` service account.
-The system drop-in executes that source directly, so a fresh installation does
-not depend on the user-local rollout link created during the following
-unprivileged installation step.
+The retained helper below is a legacy administrator-only diagnostic contract,
+not an authorization to recreate the removed service sudo rules or use it as
+the dedicated account's preview backend.
 
 The installed `/usr/local/libexec/secpal-polyscope-nginx-apply` accepts only no
 arguments (apply) or `--check` (non-mutating boundary check). It reads the fixed
@@ -648,23 +618,17 @@ unknown fields, non-loopback upstreams, invalid ports, and unsafe repository
 identifiers, then renders one fixed nginx target internally. The exact
 root-owned manifest library is checked before it is imported. Activation is
 atomic; `nginx -t` precedes reload, and validation or reload failure restores
-the prior configuration. Root may invoke the helper directly; invocations
-carrying sudo identity are accepted only from `secpal` with its exact UID.
+the prior configuration. Root may invoke the retained helper directly for its legacy manifest contract;
+service invocations are no longer authorized by sudoers. The existing identity
+checks are not a grant and must not be turned back into one.
 
-When the managed repository set changes, rerun this privileged installer before
-the unprivileged rollout installer to replace the root-owned renderer contract.
-During a staged upgrade, an older installed renderer can retain a syntactic
-route for a retired repository. The live rollout supplies only the exact fixed
-tombstone required by that older contract and fails closed if the tombstone's
-clone-root path exists, so the compatibility route cannot serve content. The
-privileged reinstall removes the obsolete content mapping from generated nginx
-configuration. The retired hostname prefix remains reserved solely as an
-explicit `404` boundary so it cannot be reinterpreted as a generic workspace.
+Legacy host-Nginx renderer upgrades and retired-hostname tombstones remain
+administrator diagnostics only. They are not part of the dedicated account's
+metadata or rootless preview activation.
 
 After both installation steps, verify the steady state:
 
 ```bash
-sudo -k -n /usr/local/libexec/secpal-polyscope-nginx-apply --check
 systemctl --user is-active polyscope-rollout-sync.path
 systemctl --user is-active polyscope-worktree-provision.path
 systemctl --user is-active polyscope-worktree-provision.timer

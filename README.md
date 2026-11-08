@@ -194,50 +194,30 @@ markers, or arbitrary policy keywords. See
 
 #### Polyscope Operational Installation
 
-Polyscope uses a two-part installation. An administrator first installs the
-fixed root-owned nginx helper, its exact sudoers rules, and the system server
-drop-in through an interactive terminal prompt:
+Polyscope uses the dedicated `polyscope` account, its own home and rootless
+container storage. The independent `codex` and application accounts receive no
+Polyscope access. None of these accounts receives sudo. Existing mixed-account
+installations require the bounded data/path/credential migration in
+[`docs/polyscope-isolated-development.md`](docs/polyscope-isolated-development.md)
+before applying this installer contract; a new data directory does not relocate
+registered workspaces.
+
+After that qualification, the administrator quiesces the old service and uses
+`scripts/install-polyscope-system-components.sh`. The installer verifies the
+canonical `/home/polyscope/code/SecPal/.github/` toolchain, renders the dedicated
+account and existing home as its working directory, and removes the retired
+Nginx sudo grant. The `polyscope` account uses
+`scripts/install-polyscope-rollout.sh` for its own user units. Generated metadata
+commands name the dedicated database and clone root explicitly and use the
+existing `--container-preview` backend. Host Nginx changes remain administrator
+operations; neither installer asks the service account for Nginx privileges.
+Failed installation stays stopped and cannot restore the old sudo boundary.
+
+The existing rootless preview installer runs under `polyscope` with that user's
+XDG runtime and user bus:
 
 ```bash
-sudo -k
-sudo ./scripts/install-polyscope-system-components.sh
-```
-
-The `secpal` user then installs the user units without sudo:
-
-```bash
-POLYSCOPE_SERVER_SCOPE=system bash ./scripts/install-polyscope-rollout.sh
-```
-
-The system drop-in executes the rollout from the canonical
-`/home/secpal/code/SecPal/.github/scripts/` source bundle, which the
-administrator installer verifies with its pinned validator toolchain before
-activation. It also resolves Node.js before writing the drop-in and includes
-that executable's directory in the service `PATH`; pass `--node-bin` when Node
-is installed through a user-managed toolchain that root cannot discover. The
-first step therefore does not depend on the user-local links created by the
-second step.
-
-The user installer clears cached sudo credentials and verifies only the exact
-noninteractive fixed-helper capability; it rejects helper-path overrides and
-does not require or grant generic passwordless sudo. The rollout writes a
-strict manifest at the fixed
-`/home/secpal/.local/state/polyscope/nginx-manifest.json` path with `secpal`
-filesystem authority, including during direct-root troubleshooting, and the
-root-owned helper validates and renders the one fixed preview nginx target
-before testing and reloading nginx. Failed validation or reload restores the
-previous target.
-
-Rocky development hosts that run Polyscope under a separate `polyscope` user
-and serve previews through the rootless container runtime use the bounded
-container-preview installer instead of mounting PostgreSQL's package-managed
-Unix socket into every PHP container:
-
-```bash
-sudo -u polyscope -H env \
-  XDG_RUNTIME_DIR=/run/user/$(id -u polyscope) \
-  DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u polyscope)/bus \
-  bash ./scripts/install-polyscope-container-preview.sh
+bash ./scripts/install-polyscope-container-preview.sh
 ```
 
 The installer requires the local preview image, initialized Polyscope database,
@@ -260,8 +240,9 @@ backed up before atomic replacement and restored if activation fails.
 
 For automatic reconciliation on these container hosts, pass
 `--container-preview` to `polyscope-rollout.py --provision-worktrees`.
-This backend keeps native setup and persistent API scheduler readiness checks
-while omitting host nginx rendering and ACL changes. API routes and writable
+This backend reconciles metadata and preview routing while omitting host Nginx
+rendering and ACL changes. Automatic native setup, run and archive actions and
+service-owned API workers remain retired; do not restore them for readiness. API routes and writable
 storage mounts require the coordinator's local readiness token; registration
 alone does not grant access. Failed setup or readiness withdraws the token, and
 the running Caddy route immediately returns HTTP 503 before configuration

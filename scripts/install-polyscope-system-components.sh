@@ -73,6 +73,14 @@ if [[ "$POLYSCOPE_UID" -eq 0 ]]; then
     exit 1
 fi
 
+if [[ "$STAGE_ONLY" -eq 0 ]]; then
+    if [[ ! -d /home/polyscope || -L /home/polyscope \
+        || "$(stat -c '%u' /home/polyscope)" != "$POLYSCOPE_UID" ]]; then
+        echo "Error: the dedicated /home/polyscope working directory must exist and belong to polyscope." >&2
+        exit 1
+    fi
+fi
+
 if [[ "$STAGE_ONLY" -eq 0 ]] && /usr/bin/systemctl is-active --quiet polyscope-server.service; then
     echo "Error: quiesce Polyscope and qualify migrated paths before installation." >&2
     exit 1
@@ -196,14 +204,14 @@ cat >"$TEMP_DIR/zz-secpal-runtime.conf" <<EOF
 [Service]
 User=polyscope
 Group=polyscope
-WorkingDirectory=/home/polyscope/work
+WorkingDirectory=/home/polyscope
 Environment=HOME=/home/polyscope
 Environment=XDG_RUNTIME_DIR=/run/user/$POLYSCOPE_UID
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$POLYSCOPE_UID/bus
 ExecStart=
 ExecStart=/home/polyscope/.local/bin/polyscope-server serve --host 127.0.0.1 --port 4321
 ExecStartPost=
-ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec $RUNTIME_ROLLOUT_SOURCE --workspace-root /home/polyscope/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --skip-local-configs --skip-db-sync --container-preview --skip-if-provision-locked; sleep 1; done; echo "Polyscope API did not become ready in time." >&2; exit 1'
+ExecStartPost=/usr/bin/env bash -lc 'for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:4321/api/repos >/dev/null 2>&1 && exec $RUNTIME_ROLLOUT_SOURCE --workspace-root /home/polyscope/code/SecPal --polyscope-api-base http://127.0.0.1:4321/api --db-path /home/polyscope/.polyscope/polyscope.db --clone-root /home/polyscope/.polyscope/clones --skip-local-configs --skip-db-sync --container-preview --skip-if-provision-locked; sleep 1; done; echo "Polyscope API did not become ready in time." >&2; exit 1'
 Environment=PATH=$SYSTEM_SERVICE_PATH
 Environment=SSH_AUTH_SOCK=/run/user/$POLYSCOPE_UID/openssh_agent
 Environment=POLYSCOPE_REAL_GIT_BIN=/usr/bin/git
