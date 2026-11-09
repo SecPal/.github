@@ -9,6 +9,28 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-09 - Authorize Dependabot Paths From Accepted Configuration
+
+- Read allowed ecosystems, target branches and exact manifest directories from
+  Dependabot configuration at the immutable PR base, rather than a directory
+  inferred from the bot branch name. Root npm and Composer MINOR updates no
+  longer fail source verification because their branch contains `main`.
+- Classify a missing dependencies label separately from the PR author, use live
+  labels, and report manual decisions in the run without repeated PR comments.
+- Preserve signed single-commit metadata, exact-head checks, manual MAJOR and
+  unclassified updates, and the required Source Safety enrollment gate.
+
+## 2026-11-09 - Preserve Released Artifact Evidence And Unresolved Issues
+
+- Recognize Syft's native optional `v` version prefix in existing SPDX creators,
+  including the authenticated API consumer inventory. Preserve the original
+  inventory, exact digest/platform/byte binding and rejection of other tools.
+
+- Remove automatic CVE issue closure on scan disappearance or disposition changes.
+  Preserve unresolved findings until component-specific remediation, non-applicability
+  or complete artifact retirement is demonstrated. Healthy scans still resolve
+  stale-evidence alerts.
+
 ## 2026-11-09 - Restore Released Artifact Re-evaluation
 
 - Select the existing policy CI's supported Python 3.12 runtime in both scan
