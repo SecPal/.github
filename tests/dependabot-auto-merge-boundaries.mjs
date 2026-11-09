@@ -374,7 +374,7 @@ test("caller reconciles label, draft and target changes", () => {
   assert.equal(caller.jobs["auto-merge"].with.phase, "2");
   assert.equal(caller.jobs["auto-merge"].with["allowed-ecosystems"], "github_actions");
   assert.equal(caller.concurrency["cancel-in-progress"], true);
-  assert.equal(caller["cache-mode"], undefined);
+  assert.equal(caller["cache-mode"], "none");
   assert.deepEqual(caller.permissions, {
     contents: "write",
     "pull-requests": "write",
