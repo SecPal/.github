@@ -9,6 +9,12 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-09 - Recognize Attested Syft Version Prefixes
+
+- Recognize Syft's native optional `v` version prefix in existing SPDX creators,
+  including the authenticated API consumer inventory. Preserve the original
+  inventory, exact digest/platform/byte binding and rejection of other tools.
+
 ## 2026-11-09 - Restore Released Artifact Re-evaluation
 
 - Select the existing policy CI's supported Python 3.12 runtime in both scan
