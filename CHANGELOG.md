@@ -9,6 +9,12 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-09 - Restore Released Artifact Re-evaluation
+
+- Select the existing policy CI's supported Python 3.12 runtime in both scan
+  and independent triage validation jobs. Retain exact dependency pins and
+  security policy; Python 3.14 runner drift cannot prevent the scans from starting.
+
 ## 2026-11-07 - Observe Current Terraform Scan Coverage
 
 - Replace expired deployment source/control enrollment with current Git blob
