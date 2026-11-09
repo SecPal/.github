@@ -24,7 +24,7 @@ on:
       - edited
       - converted_to_draft
 
-cache-mode: none
+# Cache access is disabled by the accepted immutable callee.
 
 permissions:
   contents: write
