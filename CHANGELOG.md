@@ -9,6 +9,15 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-09 - Upgrade The Verified Grype Scanner
+
+- Pin Grype 0.121.3 and its verified Linux archive digest in the shared
+  re-evaluation executor, workflow and native frozen-database replay. The release
+  upgrades the vulnerable Brotli decoder and removes the retired Docker client.
+- Reject the retired scanner identity and retain exact SBOM provenance, native
+  observation admission, database freshness and vulnerability policy. Existing
+  artifact findings remain open until their own remediation is demonstrated.
+
 ## 2026-11-09 - Authorize Dependabot Paths From Accepted Configuration
 
 - Read allowed ecosystems, target branches and exact manifest directories from
