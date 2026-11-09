@@ -16,7 +16,7 @@ const workflow = yaml.load(
   )
 );
 const check = workflow.jobs["check-eligibility"].steps.find((step) => step.id === "check");
-function eligible(overrides = {}) {
+function decision(overrides = {}) {
   const dir = mkdtempSync(join(tmpdir(), "dependabot-boundary-"));
   const output = join(dir, "output");
   try {
@@ -47,11 +47,19 @@ function eligible(overrides = {}) {
         .trim()
         .split("\n")
         .map((line) => line.split("="))
-    )["should-auto-merge"];
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+function eligible(overrides = {}) {
+  return decision(overrides)["should-auto-merge"];
+}
+test("missing labels do not misidentify the Dependabot author and adding the label requalifies", () => {
+  assert.equal(decision({ PR_LABELS: "[]" })["update-type"], "missing-dependencies-label");
+  assert.equal(eligible({ PR_LABELS: "[]" }), "false");
+  assert.equal(eligible({ PR_LABELS: '["dependencies"]' }), "true");
+});
 for (const kind of ["patch", "minor"]) {
   test(`${kind} with verified metadata is eligible in phase 2`, () => {
     assert.equal(eligible({ UPDATE_TYPE_RAW: `version-update:semver-${kind}` }), "true");
@@ -106,6 +114,7 @@ async function verifySource(change = {}) {
     head: { sha: head, repo: { full_name: "SecPal/frontend" } },
     commits: 1,
     changed_files: 2,
+    labels: [{ name: "dependencies" }],
     ...change.pr,
   };
   const commits = change.commits || [botCommit()];
@@ -114,6 +123,22 @@ async function verifySource(change = {}) {
   let reads = 0;
   const github = {
     rest: {
+      repos: {
+        getContent: async ({ ref }) => {
+          assert.equal(ref, pr.base.sha, "configuration must come from the immutable base");
+          if (change.configError) throw new Error("configuration unavailable");
+          return {
+            data: {
+              type: "file",
+              encoding: "base64",
+              content: Buffer.from(
+                change.config ??
+                  "version: 2\nupdates:\n- package-ecosystem: npm\n  directory: /\n- package-ecosystem: github-actions\n  directory: /\n"
+              ).toString("base64"),
+            },
+          };
+        },
+      },
       pulls: {
         get: async () => ({ data: ++reads > 1 && change.after ? change.after : pr }),
         listFiles: "files",
@@ -136,7 +161,10 @@ async function verifySource(change = {}) {
       github,
       {
         repo: { owner: "SecPal", repo: "frontend" },
-        payload: { pull_request: { number: 1, head: { sha: head } } },
+        payload: {
+          repository: { default_branch: "main" },
+          pull_request: { number: 1, head: { sha: head } },
+        },
       },
       { setOutput: (key, value) => Object.assign(output, { [key]: value }) },
       createRequire(import.meta.url)
@@ -150,6 +178,15 @@ test("authentic signed bot manifest update passes the source boundary", async ()
   assert.equal(await verifySource(), "true");
 });
 for (const [name, change] of [
+  ["foreign PR author", { pr: { user: { login: "attacker", type: "User" } } }],
+  [
+    "unverified commit signature",
+    {
+      commits: [
+        { ...botCommit(), commit: { ...botCommit().commit, verification: { verified: false } } },
+      ],
+    },
+  ],
   ["maintainer commit", { commits: [botCommit(undefined, "aroviqen")] }],
   [
     "foreign head repository",
@@ -170,7 +207,18 @@ for (const [name, change] of [
   ],
   ["truncated changed file list", { pr: { changed_files: 3 } }],
   ["unknown ecosystem", { env: { PACKAGE_ECOSYSTEM: "terraform" } }],
-  ["directory traversal", { env: { DEPENDENCY_DIRECTORY: "/../" } }],
+  [
+    "configured directory traversal",
+    { config: "version: 2\nupdates:\n- package-ecosystem: npm\n  directory: /../\n" },
+  ],
+  ["configuration has no matching ecosystem", { config: "version: 2\nupdates: []\n" }],
+  [
+    "configuration targets another branch",
+    {
+      config:
+        "version: 2\nupdates:\n- package-ecosystem: npm\n  directory: /\n  target-branch: release\n",
+    },
+  ],
   [
     "head changed during verification",
     { after: { state: "open", head: { sha: "c".repeat(40) }, base: { sha: "b".repeat(40) } } },
@@ -302,7 +350,10 @@ test("queued automation is revoked when eligibility changes, while manual reques
     const run = () =>
       new AsyncFunction("github", "context", script)(github, {
         repo: { owner: "SecPal", repo: "frontend" },
-        payload: { pull_request: { number: 1, head: { sha: head } } },
+        payload: {
+          repository: { default_branch: "main" },
+          pull_request: { number: 1, head: { sha: head } },
+        },
       });
     if (expected) await run();
     else await assert.rejects(run());
@@ -436,7 +487,10 @@ test("a stale eligible run cannot enroll after the live dependencies label is re
       },
       {
         repo: { owner: "SecPal", repo: ".github" },
-        payload: { pull_request: { number: 1, head: { sha: head } } },
+        payload: {
+          repository: { default_branch: "main" },
+          pull_request: { number: 1, head: { sha: head } },
+        },
       },
       {
         setOutput: (k, v) => {
@@ -457,4 +511,54 @@ test("native required-check lookup has only the necessary read scopes", () => {
 
 test("callers remaining in phase one still refuse minor enrollment", () => {
   assert.equal(eligible({ PHASE: "1", UPDATE_TYPE_RAW: "version-update:semver-minor" }), "false");
+});
+
+// fetch-metadata v3.1.0 interprets the target branch as a directory for these
+// real Dependabot PRs: https://github.com/SecPal/frontend/pull/2051 and
+// https://github.com/SecPal/api/pull/2646. It is never path authorization.
+for (const [name, ecosystem, config, files] of [
+  ["frontend #2051", "npm_and_yarn", "npm", ["package.json", "package-lock.json"]],
+  ["api #2646", "composer", "composer", ["composer.json", "composer.lock"]],
+]) {
+  test(`${name}: root manifests are authorized by base config despite /main metadata`, async () => {
+    assert.equal(
+      await verifySource({
+        env: {
+          PACKAGE_ECOSYSTEM: ecosystem,
+          ALLOWED_ECOSYSTEMS: ecosystem,
+          DEPENDENCY_DIRECTORY: "/main",
+        },
+        config: `version: 2\nupdates:\n- package-ecosystem: ${config}\n  directory: /\n`,
+        files: files.map((filename) => ({ filename })),
+      }),
+      "true"
+    );
+  });
+}
+test("a branch-derived directory cannot authorize unconfigured manifest paths", async () => {
+  assert.equal(
+    await verifySource({
+      env: { DEPENDENCY_DIRECTORY: "/main" },
+      files: [{ filename: "main/package.json" }, { filename: "main/package-lock.json" }],
+    }),
+    "false"
+  );
+});
+test("only explicitly configured subdirectories authorize manifests", async () => {
+  const config = "version: 2\nupdates:\n- package-ecosystem: npm\n  directories: [/tools, /docs]\n";
+  assert.equal(await verifySource({ config }), "false");
+  assert.equal(
+    await verifySource({
+      config,
+      files: [{ filename: "tools/package.json" }, { filename: "tools/package-lock.json" }],
+    }),
+    "true"
+  );
+});
+test("status reporting does not post repeated PR comments", () => {
+  assert.doesNotMatch(JSON.stringify(workflow), /issues\.createComment/);
+});
+
+test("unavailable base config fails closed", async () => {
+  await assert.rejects(verifySource({ configError: true }), /configuration unavailable/);
 });

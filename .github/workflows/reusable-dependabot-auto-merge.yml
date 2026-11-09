@@ -96,7 +96,6 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PACKAGE_ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
-          DEPENDENCY_DIRECTORY: ${{ steps.metadata.outputs.directory }}
           ALLOWED_ECOSYSTEMS: ${{ inputs.allowed-ecosystems }}
           VERIFIED_DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
           WORKFLOW_PATHS: ${{ inputs.workflow-paths }}
@@ -108,6 +107,7 @@ jobs:
             const expected = context.payload.pull_request.head.sha;
             const read = async () => (await github.rest.pulls.get({ owner, repo, pull_number })).data;
             const pr = await read();
+            core.setOutput('labels', JSON.stringify(pr.labels?.map(label => label.name) || []));
             if (pr.state !== 'open' || pr.base.ref !== 'main' || pr.draft ||
                 pr.user.login !== 'dependabot[bot]' || pr.user.type !== 'Bot' ||
                 pr.head.repo?.full_name !== `${owner}/${repo}` || pr.head.sha !== expected) return;
@@ -116,9 +116,36 @@ jobs:
             const verifiedDependencies = JSON.parse(process.env.VERIFIED_DEPENDENCIES || 'null');
             if (!Array.isArray(verifiedDependencies) || (ecosystem === 'github_actions' &&
                 verifiedDependencies.some(item => /^SecPal\/\.github(?:\/|$)/i.test(item.dependencyName)))) return;
-            const directory = process.env.DEPENDENCY_DIRECTORY;
-            if (!directory || !directory.startsWith('/') || directory.includes('..') || directory.includes('\\')) return;
-            const prefix = directory === '/' ? '' : directory.slice(1).replace(/\/$/, '') + '/';
+            // Branch-derived metadata is not path authorization. Read only the
+            // accepted base configuration; never load code from the PR head.
+            const config = (await github.rest.repos.getContent({ owner, repo,
+              path: '.github/dependabot.yml', ref: pr.base.sha })).data;
+            if (config.type !== 'file' || config.encoding !== 'base64' || !config.content) return;
+            const configured = require('node:child_process').spawnSync('ruby', ['-rjson', '-ryaml', '-e', String.raw`
+              begin
+                input = JSON.parse(STDIN.read)
+                config = YAML.safe_load(input.fetch('config'), permitted_classes: [], permitted_symbols: [], aliases: false)
+                raise 'unsupported config' unless config.fetch('version') == 2
+                directories = config.fetch('updates').select do |entry|
+                  entry.fetch('package-ecosystem') == input.fetch('ecosystem') &&
+                    entry.fetch('target-branch', input.fetch('default_branch')) == input.fetch('target')
+                end.flat_map { |entry| entry.key?('directories') ? entry.fetch('directories') : [entry.fetch('directory')] }
+                print JSON.generate(directories)
+              rescue StandardError
+                exit 1
+              end
+            `], { input: JSON.stringify({ config: Buffer.from(config.content, 'base64').toString('utf8'),
+              ecosystem: ({ npm_and_yarn: 'npm', github_actions: 'github-actions' })[ecosystem] || ecosystem,
+              target: pr.base.ref, default_branch: context.payload.repository.default_branch }),
+              encoding: 'utf8', env: { PATH: process.env.PATH }, timeout: 10000, maxBuffer: 1024 * 1024 });
+            if (configured.status !== 0) return;
+            const directories = JSON.parse(configured.stdout);
+            // Exact paths only; unsupported globs and noncanonical paths fail closed.
+            if (!Array.isArray(directories) || !directories.length || !directories.every(directory =>
+                typeof directory === 'string' && (directory === '/' ||
+                  /^\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+$/.test(directory) &&
+                  directory.split('/').every(part => part !== '.' && part !== '..')))) return;
+            const prefixes = directories.map(directory => directory === '/' ? '' : directory.slice(1) + '/');
             const manifests = {
               npm_and_yarn: ['package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml'],
               composer: ['composer.json', 'composer.lock'],
@@ -131,8 +158,8 @@ jobs:
                 typeof path === 'string' && /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path))) return;
             const allowed = path => typeof path === 'string' && (ecosystem === 'github_actions'
               ? /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path) &&
-                (!workflowPaths.length || workflowPaths.includes(path))
-              : (manifests[ecosystem] || []).some(name => path === prefix + name));
+                directories.includes('/') && (!workflowPaths.length || workflowPaths.includes(path))
+              : prefixes.some(prefix => (manifests[ecosystem] || []).some(name => path === prefix + name)));
             const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number, per_page: 100 });
             if (!files.length || files.length !== pr.changed_files ||
                 !files.every(file => allowed(file.filename) && (!file.previous_filename || allowed(file.previous_filename)))) return;
@@ -175,7 +202,7 @@ jobs:
         id: check
         env:
           SOURCE_VERIFIED: ${{ steps.source.outputs.verified }}
-          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_LABELS: ${{ steps.source.outputs.labels }}
           PHASE: ${{ inputs.phase }}
           METADATA_STEP_OUTCOME: ${{ steps.metadata.outcome }}
           DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
@@ -237,7 +264,7 @@ jobs:
           # Check if PR has 'dependencies' label (required for Dependabot PRs)
           if ! jq -e 'type == "array" and index("dependencies") != null' <<<"${PR_LABELS}" >/dev/null; then
             echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
-            echo "update-type=not-dependabot" >> "${GITHUB_OUTPUT}"
+            echo "update-type=missing-dependencies-label" >> "${GITHUB_OUTPUT}"
             echo "❌ Not eligible: Missing dependencies label"
             exit 0
           fi
@@ -418,46 +445,7 @@ jobs:
 
           echo "✅ Auto-merge enabled! PR will merge when all checks pass."
 
-      - name: Add comment
-        if: steps.enrollment.outputs.required == 'true'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          script: |
-            const phase = '${{ inputs.phase }}';
-            const updateType = '${{ needs.check-eligibility.outputs.update-type }}';
-            const mergeMethod = '${{ inputs.merge-method }}';
-
-            let policyText = '';
-            if (phase === '1') {
-              policyText = '- ✅ PATCH updates: Auto-merge\n' +
-                           '- 🔍 MINOR updates: Manual review\n' +
-                           '- ⚠️ MAJOR updates: Manual review';
-            } else if (phase === '2') {
-              policyText = '- ✅ PATCH updates: Auto-merge\n' +
-                           '- ✅ MINOR updates: Auto-merge\n' +
-                           '- ⚠️ MAJOR updates: Manual review';
-            } else if (phase === '3') {
-              policyText = '- ✅ PATCH updates: Auto-merge\n' +
-                           '- ✅ MINOR updates: Auto-merge\n' +
-                           '- ⚠️ MAJOR updates: Manual review';
-            }
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `🤖 **Auto-merge enabled** for this ${updateType} update.\n\n` +
-                    `This PR will automatically merge when all required checks pass.\n\n` +
-                    `**Configuration:**\n` +
-                    `- Update type: \`${updateType}\`\n` +
-                    `- Merge strategy: \`${mergeMethod}\`\n` +
-                    `- Policy phase: \`${phase}\`\n\n` +
-                    `**Current auto-merge policy (Phase ${phase}):**\n${policyText}\n\n` +
-                    `**Rollback:** If issues occur, use \`git revert\` on the merge commit.\n\n` +
-                    `_Automated by Dependabot Auto-Merge Workflow_`
-            })
-
-  # Skip auto-merge for non-eligible PRs (informational)
+  # Report decisions in the run, avoiding stale or repeated PR comments.
   skip-auto-merge:
     name: Skip Auto-Merge
     runs-on: ubuntu-latest
@@ -465,111 +453,10 @@ jobs:
     if: >-
       needs.check-eligibility.outputs.should-auto-merge != 'true' &&
       github.event.pull_request.user.login == 'dependabot[bot]'
-    timeout-minutes: 10
+    timeout-minutes: 5
+    permissions: {}
     steps:
-      - name: Add comment for manual review
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          script: |
-            const updateType = '${{ needs.check-eligibility.outputs.update-type }}';
-            const phase = '${{ inputs.phase }}';
-            let emoji = '🔍';
-            let title = 'Manual review required';
-            let reason = 'This update requires manual review.';
-
-            if (updateType === 'major') {
-              emoji = '⚠️';
-              title = 'MAJOR version update detected';
-              reason = 'This is a **MAJOR** version update which may contain breaking changes.\n\n' +
-                       '**Action required:**\n' +
-                       '1. Review the changelog for breaking changes\n' +
-                       '2. Update code if necessary\n' +
-                       '3. Verify all tests pass\n' +
-                       '4. Merge manually after verification';
-              if (phase === '3') {
-                reason += '\n\n**Note:** Major updates require manual review in every phase.';
-              }
-            } else if (updateType === 'minor') {
-              emoji = '🔍';
-              title = 'MINOR version update detected';
-              reason = 'This is a **MINOR** version update which may contain new features.\n\n' +
-                       '**Action required:**\n' +
-                       '1. Review the changelog for new features\n' +
-                       '2. Consider if new features should be utilized\n' +
-                       '3. Verify all tests pass\n' +
-                       '4. Merge manually after verification';
-              if (phase === '1') {
-                reason += '\n\n**Note:** In Phase 2, MINOR updates will be auto-merged.';
-              } else if (phase === '2' || phase === '3') {
-                reason += '\n\n⚠️ **Note:** Your policy is set to Phase ' + phase +
-                          ' but this PR was not auto-merged. Check the logs for details.';
-              }
-            } else if (updateType === 'github-actions-non-semver') {
-              emoji = '🔒';
-              title = 'GitHub Actions reference update requires manual review';
-              reason = 'This Dependabot PR updates a GitHub Actions workflow reference pinned to a commit SHA.\n\n' +
-                       'Dependabot does not expose a semver `update-type` for this update shape, ' +
-                       'so the auto-merge policy treats it as manual review only.\n\n' +
-                       '**Action required:**\n' +
-                       '1. Review the upstream workflow or action diff\n' +
-                       '2. Verify the pinned commit is expected\n' +
-                       '3. Merge manually after verification';
-            } else if (updateType === 'metadata-unavailable') {
-              emoji = '❓';
-              title = 'Dependabot metadata did not include an update type';
-              reason = 'The Dependabot metadata action did not return a semver update classification for this PR.\n\n' +
-                       'Please review manually.';
-            } else if (updateType === 'maintainer-changes') {
-              emoji = '🛠️';
-              title = 'Dependabot PR includes maintainer changes';
-              reason = 'This Dependabot PR includes maintainer-authored changes.\n\n' +
-                       'The auto-merge workflow therefore fails closed.\n\n' +
-                       '**Action required:**\n' +
-                       '1. Review the maintainer-authored diff\n' +
-                       '2. Verify the dependency update is still safe\n' +
-                       '3. Merge manually after verification';
-            } else if (updateType === 'grouped-update') {
-              emoji = '🧩';
-              title = 'Grouped Dependabot PR requires manual review';
-              reason = 'This Dependabot PR uses an unversioned, unknown, or mismatched dependency group.\n\n' +
-                       'Only the configured homogeneous PATCH, MINOR, and MAJOR groups are trusted ' +
-                       'for semver policy decisions.\n\n' +
-                       '**Action required:**\n' +
-                       '1. Review each dependency in the group\n' +
-                       '2. Confirm there are no SHA-pinned or non-semver updates\n' +
-                       '3. Merge manually after verification';
-            } else if (updateType === 'non-semver') {
-              emoji = '❓';
-              title = 'Non-semver dependency update requires manual review';
-              reason = 'Dependabot reported a non-semver update classification for this PR.\n\n' +
-                       'Please review manually.';
-            } else {
-              emoji = '🔍';
-              reason = `Update type: \`${updateType}\`\n\nPlease review and merge manually.`;
-            }
-
-            let policyText = '';
-            if (phase === '1') {
-              policyText = '- ✅ PATCH updates: Auto-merge\n' +
-                           '- 🔍 MINOR updates: Manual review\n' +
-                           '- ⚠️ MAJOR updates: Manual review';
-            } else if (phase === '2') {
-              policyText = '- ✅ PATCH updates: Auto-merge\n' +
-                           '- ✅ MINOR updates: Auto-merge\n' +
-                           '- ⚠️ MAJOR updates: Manual review';
-            } else if (phase === '3') {
-              policyText = '- ✅ PATCH updates: Auto-merge\n' +
-                           '- ✅ MINOR updates: Auto-merge\n' +
-                           '- ⚠️ MAJOR updates: Manual review';
-            }
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `${emoji} **${title}**\n\n` +
-                    `${reason}\n\n` +
-                    `---\n` +
-                    `**Current auto-merge policy (Phase ${phase}):**\n${policyText}\n\n` +
-                    `_See policy: \`SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml\`_`
-            })
+      - name: Record manual decision
+        env:
+          UPDATE_TYPE: ${{ needs.check-eligibility.outputs.update-type }}
+        run: printf 'Manual review required (%s).\n' "$UPDATE_TYPE" >> "$GITHUB_STEP_SUMMARY"
