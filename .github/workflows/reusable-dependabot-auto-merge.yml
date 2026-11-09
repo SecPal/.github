@@ -118,8 +118,15 @@ jobs:
                 verifiedDependencies.some(item => /^SecPal\/\.github(?:\/|$)/i.test(item.dependencyName)))) return;
             // Branch-derived metadata is not path authorization. Read only the
             // accepted base configuration; never load code from the PR head.
-            const config = (await github.rest.repos.getContent({ owner, repo,
-              path: '.github/dependabot.yml', ref: pr.base.sha })).data;
+            let config;
+            try {
+              config = (await github.rest.repos.getContent({ owner, repo,
+                path: '.github/dependabot.yml', ref: pr.base.sha })).data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              config = (await github.rest.repos.getContent({ owner, repo,
+                path: '.github/dependabot.yaml', ref: pr.base.sha })).data;
+            }
             if (config.type !== 'file' || config.encoding !== 'base64' || !config.content) return;
             const configured = require('node:child_process').spawnSync('ruby', ['-rjson', '-ryaml', '-e', String.raw`
               begin

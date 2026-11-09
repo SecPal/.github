@@ -124,7 +124,10 @@ async function verifySource(change = {}) {
   const github = {
     rest: {
       repos: {
-        getContent: async ({ ref }) => {
+        getContent: async ({ ref, path }) => {
+          if (change.alternateConfig && path.endsWith(".yml")) {
+            throw Object.assign(new Error("not found"), { status: 404 });
+          }
           assert.equal(ref, pr.base.sha, "configuration must come from the immutable base");
           if (change.configError) throw new Error("configuration unavailable");
           return {
@@ -561,4 +564,8 @@ test("status reporting does not post repeated PR comments", () => {
 
 test("unavailable base config fails closed", async () => {
   await assert.rejects(verifySource({ configError: true }), /configuration unavailable/);
+});
+
+test("the supported dependabot.yaml filename uses the same immutable base", async () => {
+  assert.equal(await verifySource({ alternateConfig: true }), "true");
 });
