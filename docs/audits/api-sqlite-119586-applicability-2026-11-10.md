@@ -62,34 +62,65 @@ the disputed CLI observation. These controls are not covered by this VEX.
 
 Grype 0.121.3 uses `apk-matcher` / `cpe-match`: truthful upstream origin `sqlite`
 is expanded to generic `nvd:cpe` SQLite through 3.54.1, losing the CLI component
-boundary. Trivy 0.74.0 reports no HIGH/CRITICAL on the FPM subjects. Trivy's absence
+boundary. Fresh current-head Trivy 0.74.0 reports no HIGH/CRITICAL on any target image. Trivy's absence
 alone is not the nonapplicability proof. Grype's original observation, exact
 PURL and severity remain visible; only the unchanged central policy may apply
 a reviewed disposition. The upstream data issue can remain open independently.
 
 ## Exact artifact and runtime evidence
 
-[Current native run 42722113210](https://github.com/SecPal/api/actions/runs/42722113210)
-is producing the final artifacts for API head
-`cc1fee5d64c393f453bd3706d197569751193a46`. Their exact checkout, subjects,
-SPDX associations and binary identities must be authenticated before adding the
-corresponding OpenVEX documents. No current-subject document or discovery
-manifest is present in this initial draft. No earlier OCI digest or later
-rebuild inherits a disposition.
+[Native run 42722113210](https://github.com/SecPal/api/actions/runs/42722113210),
+producing attempt 1, completed both native runtime integrations. The actual
+checkout is `80a186e2540bd8ff16579b7de45b796f98bb9d0a`; its tree
+`0e4fb360b6fe5d7fc3e36d5a2e5a7e92393d16fc` equals the GitHub-verified signed API
+head `cc1fee5d64c393f453bd3706d197569751193a46`.
 
-The existing binary investigation linked above records library SHA-256
-`b9ed2596aa9aacb17048b7e93e46061e33fd578d4d239badbe23dd3a1fd5e113`
-for AMD64 and
-`a5f56962738b632566388c8ba4ce131e8e1be84be1d6dd673ce077071362aee6`
-for ARM64, native ELF machines 62/183 and no recovery entrypoints. These are
-baseline technical controls, not a claim that new OCI subjects were already
-verified. Current artifact bytes must establish their actual runtime identity.
+GitHub artifact [13721422889](https://github.com/SecPal/api/actions/runs/42722113210/artifacts/13721422889)
+(AMD64) ZIP SHA-256 is
+`9cfe6034ca93b3919871c62e5e4fc420b6b401ebd8bf76eee6ed58daaf3a968e`;
+[13720223792](https://github.com/SecPal/api/actions/runs/42722113210/artifacts/13720223792)
+(ARM64) is
+`036c89a514a47849997b7f4a72aeafac5860f416b6f4bdc9d9569438014a531a`.
+All four manifests/configurations and all 70 layer descriptors were rehashed
+from these exact ZIP bytes. SPDX digests, associations, native architectures,
+source labels and both exact smoke companions agree.
+
+| Component | Platform    | Manifest digest                                                           | Authoritative SPDX digest                                                 |
+| --------- | ----------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| php-fpm   | linux/amd64 | `sha256:54e7afe9859d93b38e884161fe7685fc866b63505ad1cd7a95ebd5df12884a7c` | `sha256:bb9ddc0ab4fe632d2c94568ac336d9914b7d40933c473894fc65c7df4d85ed6c` |
+| nginx     | linux/amd64 | `sha256:1d81a6f01dcbe1c9a95ac5f2e2250b5ebeb7658a0adacdabffb1ee7746f08348` | `sha256:5e7e4f9096041b26dab711ce1fcc3e1bfdc7022bd1e6db8a70075d0093f47953` |
+| php-fpm   | linux/arm64 | `sha256:504d6810911ab263a835243ea643f0bc5e65d08f1ad9e1d82cf86a6b86f61d95` | `sha256:c4075ab7ddcb2ecb9367af774c19022bb1a53ee0d422ed3cbc4771f1e1ac1d8b` |
+| nginx     | linux/arm64 | `sha256:db073d1112a3cb5cf1988a40ddb688914ae0e1b369a02a2f727d5408a48df1f1` | `sha256:f6d2b9740526bbeb9560fc332ebb55f555ad6e9f8436c2529c3bc56799d952d4` |
+
+Both FPM libraries are byte-identical to the previously inspected architecture
+controls: AMD64 SHA-256
+`b9ed2596aa9aacb17048b7e93e46061e33fd578d4d239badbe23dd3a1fd5e113`,
+ARM64 SHA-256
+`a5f56962738b632566388c8ba4ce131e8e1be84be1d6dd673ce077071362aee6`.
+Actual ELF machines are 62/183. Both expose `sqlite3_open` and exclude
+`sqlite3_recover_*` exports. This agrees with the authenticated link rule and
+amalgamation boundary, which also excludes static recovery/shell code; exported
+symbol absence alone is not the proof. Both final file inventories lack the
+CLI. Installed APK records, versioned library bytes and runtime provenance
+agree on `sqlite-libs 3.54.0-r0`, truthful origin `sqlite` and recipe SHA-256
+`ff107b16a389a8b978f1bd123ce4c7cb5f665f9a5b151940510a6db4b38fa5ed`.
+Both FPM inventories contain 55 APKs and zero Go packages; Nginx contains 19
+APKs and zero Go packages. These are unpublished CI subjects, not registry
+release artifacts. No earlier digest or later rebuild inherits their statement.
 
 The source ID is
 `2026-10-09 15:46:58 be8d059e9a49089ab2dce5ed26dd87aaf598fdc5fbe0b107c0dd758464bcd5e3`.
-The final filesystem, package ownership, architecture-specific ELF and runtime
-provenance must agree. Recovery/shell entrypoints must be absent from the actual
-library while ordinary SQLite entrypoints and PHP SQLite/PDO remain functional.
+The existing native PHP/PDO, Python FTS5/session and library ABI checks passed
+against these exact subjects on both native runners.
+
+The original four-image scan [artifact 13720763672](https://github.com/SecPal/api/actions/runs/42722113210/artifacts/13720763672)
+has ZIP SHA-256
+`225c5adbb2b2930ff82dce7275772b6eaf3dbbaefa09fe50bd40769e5a978b43`.
+All four evidence results are HEALTHY. Nginx is CLEAN on both platforms; FPM
+is REVIEW_REQUIRED solely for CVE-2026-119586 on the exact PURLs in the proposed
+documents. Trivy has no HIGH/CRITICAL in any target. The original raw results
+and policy decisions are unchanged. The pre-VEX qualification correctly fails;
+no CLEAN result or release admission is asserted by these documents alone.
 
 ## Review and scope
 
@@ -98,11 +129,14 @@ the existing Reviewed-VEX procedure; no new review authority or upstream waiting
 condition is introduced. Independent technical confirmation is recorded through
 the existing GitHub review process. The author cannot self-approve this finding.
 
-The technical conclusion and its artifact bindings are submitted through the
-existing GitHub code/security review. A generic receipt without assessment of
-these applicability facts is not a separately claimed technical opinion.
-Activation requires a genuine independent review record, retained by the
-existing reviewed manifest; this draft has no such operative manifest.
+The technical conclusion, exact binaries and two proposed OpenVEX documents
+are submitted through the existing independent GitHub review in
+[PR #1323](https://github.com/SecPal/.github/pull/1323). The later discovery
+manifests must retain the actual final-document review record and reviewer
+identity. No separate external technical opinion, author self-approval or
+invented reviewer is asserted. This document stage has no operative discovery
+manifest; protected acceptance and exact reviewed-checkout verification remain
+required.
 
 Validity is bounded to 2026-11-23T00:00:00Z and the two exact FPM subjects only.
 The trust manifests must name the actual protected commit containing their
