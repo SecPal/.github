@@ -220,3 +220,45 @@ the existing trusted manifest format. Expiration remains
 Fresh registry scans, OCI/SBOM attestations, native registry-pull integrations
 and complete pair admission remain mandatory in the same publisher. These
 measurements alone assert neither accepted publication nor deployment authority.
+
+## Publisher-subject decision and trusted adoption
+
+The [actual new-subject technical decision](https://github.com/SecPal/.github/pull/1328#issuecomment-6759952695)
+by `chatgpt-codex-connector[bot]`, created 2026-11-10T05:37:11Z,
+confirms `not_affected` / `vulnerable_code_not_present` for exactly the two
+publisher-attempt-2 FPM subjects above, through 2026-11-23T00:00:00Z.
+It independently assesses the vulnerable recovery producer, shell callback,
+dot-command dispatcher, core amalgamation/link/package boundary and the
+byte-identical library identity bridge for the new OCI/SPDX subjects. It finds
+no component-level counterexample or missing technical proof. Its environment
+could not independently acquire the private Actions archives, so it explicitly
+relies on the signed primary byte measurements and does not claim another
+download or rehash. This limitation is retained, not converted into a claim
+of independent binary acquisition.
+
+The proposal documents were protected-merged in [PR #1328](https://github.com/SecPal/.github/pull/1328),
+actual GitHub-verified commit `161bccd892493a2ffb71891d12e0cc75291148a0`.
+The existing trusted manifests reference that ancestor document commit,
+canonical document hashes, actual decision URL and author, exact platforms
+and OCI subjects, and the unchanged expiration. The creation-time pending
+language in the immutable documents remains a historical fact; the actual
+subsequent decision is the trust-manifest provenance.
+
+The publisher's original fresh scan
+[artifact 13737844795](https://github.com/SecPal/api/actions/runs/42757690047/artifacts/13737844795)
+has ZIP SHA-256 `86c89c7b1dbe03f1e8d5ece2b14643413bf524a756d3c258fc31a1a90c63f3f9`.
+All four subjects are HEALTHY; Nginx is CLEAN on both architectures. Each FPM
+subject is REVIEW_REQUIRED solely for CVE-2026-119586, with six unchanged
+MEDIUM/LOW observations. Both registry-pull native pair integrations and all ten
+index/platform/SBOM OCI attestations succeeded. The unchanged acceptance gate
+correctly rejected `publisher-runtime-security-not-clean` before final pair
+attestation or discovery publication. Protected trusted-data adoption and a
+fresh scan/acceptance execution on the same prepared subjects are still needed;
+these documents do not themselves assert accepted publication or deployment.
+
+A current local replay of those retained raw evaluations with the proposed new
+manifests returns HEALTHY/CLEAN on all four subjects. Exactly the two FPM CLI
+findings change to VEX_ACCEPTED; all raw bytes, observations and unrelated
+findings remain unchanged. Supplying only the opposite architecture's new
+manifest leaves FPM REVIEW_REQUIRED. This is policy replay evidence, not a fresh
+scanner run, trusted protected adoption or final publisher admission.
