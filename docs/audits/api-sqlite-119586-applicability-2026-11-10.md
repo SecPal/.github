@@ -262,3 +262,65 @@ findings change to VEX_ACCEPTED; all raw bytes, observations and unrelated
 findings remain unchanged. Supplying only the opposite architecture's new
 manifest leaves FPM REVIEW_REQUIRED. This is policy replay evidence, not a fresh
 scanner run, trusted protected adoption or final publisher admission.
+
+## API #1615: exact unpublished CI subjects
+
+The application security fix in [API #1615](https://github.com/SecPal/api/pull/1615)
+requires native OCI qualification. Its new images cannot inherit the accepted
+published-image disposition. The following proposes only a new subject binding
+of the already assessed, byte-identical SQLite component; no source/advisory
+investigation or positive-control rebuild is repeated.
+
+[Run 42852878456](https://github.com/SecPal/api/actions/runs/42852878456),
+producing attempt 1, completed both native integrations and all PHP tests.
+Signed PR head `3462517f3c87abfb8d03b8f523e0d4f5794be3af` and actual CI checkout
+`2a7be6d3a5a2ddaa460b20caa33e82ac548a4e6c` have the same tree
+`3be558386cd68b81afd9e355b1b55cd79c4d4869`. The accepted base is
+`1723917a150e1b15495327dc6437327641413d5c`.
+
+Authenticated native archive IDs and ZIP SHA-256:
+
+- AMD64 [13782012401](https://github.com/SecPal/api/actions/runs/42852878456/artifacts/13782012401):
+  `0ea754b91f0d8466fb51b4ae70e7c2d217931d1f04bacf56db7f17e30acd9c82`.
+- ARM64 [13781394498](https://github.com/SecPal/api/actions/runs/42852878456/artifacts/13781394498):
+  `adf835fbcf8b5b17cee59ce42fa4be7ac7093c066b880ae977aba195f25cfcbe`.
+
+Both archive hashes match GitHub's authenticated artifact metadata. Actual FPM
+manifest, config and layer bytes were rehashed against their OCI descriptors.
+The native smoke records bind the corresponding exact FPM and Nginx companions.
+
+| FPM platform | Manifest digest                                                           | Authoritative SPDX digest                                                 |
+| ------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| linux/amd64  | `sha256:d010691af61b47fda1ca4673e59da46302dc4ff0e0538e43e949a364a60d7234` | `sha256:af720577c192113adfe173cc1e0a12529ef53b2f35e2cd8f01941c1a6b3526a0` |
+| linux/arm64  | `sha256:33ac8ca8fd85c9aca6e100021525f0d5985201a302bda8fe88b3fbfff954dc5d` | `sha256:90b700f823f91dcdee03fc0b0507d441d25d166548cabce012ac04476032b7d0` |
+
+Actual library bytes extracted from these OCI layers have the same accepted
+AMD64 SHA-256 `b9ed2596aa9aacb17048b7e93e46061e33fd578d4d239badbe23dd3a1fd5e113`
+and ARM64 SHA-256 `a5f56962738b632566388c8ba4ce131e8e1be84be1d6dd673ce077071362aee6`.
+ELF machines are 62 and 183. Both actual APK databases identify truthful
+`sqlite-libs 3.54.0-r0`, origin `sqlite`, with SONAME `libsqlite3.so.0`.
+The installed build proofs and native runtime checks agree on these hashes and
+source ID `2026-10-09 15:46:58 be8d059e9a49089ab2dce5ed26dd87aaf598fdc5fbe0b107c0dd758464bcd5e3`.
+Layer-order inspection respects whiteouts: the replaced 3.53.4 library is absent
+from the final filesystem. Neither final image contains a SQLite CLI in its
+binary paths. The actual 3.54.0 ELF contains none of `recoverSqlCb`,
+`recoverDatabaseCmd` or `sqlite3_recover_init_sql`. These observations corroborate
+the accepted source/link boundary; absence of names alone is not the proof.
+
+The corresponding Nginx smoke companions are AMD64
+`sha256:0c93e3e1d8130bc4bcfd8b87eda8d8cc40841f511c790b566ecb33be304edaf1`
+and ARM64 `sha256:f1f17e21a9175131ea1eceba93d4bfb91b7ea1756ad6d00fa0ba55e111b2b032`.
+Original scan artifact
+[13782387859](https://github.com/SecPal/api/actions/runs/42852878456/artifacts/13782387859)
+reports all four subjects HEALTHY, both Nginx subjects CLEAN and both FPM subjects
+REVIEW_REQUIRED solely for CVE-2026-119586 (Grype HIGH, `apk-matcher:cpe-match`).
+Other LOW/MEDIUM observations remain visible and non-actionable under the
+unchanged policy. The original scanner files are not edited.
+
+Independent confirmation of these two new bindings is pending in the existing
+GitHub procedure. These proposal documents are not self-approval and do not
+activate a disposition. Protected adoption must record the actual independent
+decision and protected document commit. Expiry remains **2026-11-23T00:00:00Z**;
+no other or future digest, CLI-positive control, other CVE, publication or
+deployment is covered. After trusted adoption, the same existing CI run must
+rescan and qualify these exact native subjects without rebuilding them.
