@@ -125,23 +125,47 @@ no CLEAN result or release admission is asserted by these documents alone.
 ## Review and scope
 
 The operator authorized truthful, independently confirmed nonapplicability via
-the existing Reviewed-VEX procedure; no new review authority or upstream waiting
-condition is introduced. Independent technical confirmation is pending in this
-document stage. Its actual decision link and author must be recorded before
-trusted activation. The author cannot self-approve this finding.
+the existing Reviewed-VEX procedure. The author does not self-approve the
+technical finding. Document preparation originally recorded that independent
+confirmation was pending; the immutable document impact statements retain that
+historical creation-time fact.
 
-The technical conclusion, exact binaries and two proposed OpenVEX documents
-are submitted for assessment through the existing GitHub process in
-[PR #1323](https://github.com/SecPal/.github/pull/1323). The later discovery
-manifests must retain the actual final-document review record and reviewer
-identity. No separate external technical opinion, author self-approval or
-invented reviewer is asserted. This document stage has no operative discovery
-manifest; protected acceptance and exact reviewed-checkout verification remain
-required.
+The subsequent [actual independent technical decision](https://github.com/SecPal/.github/pull/1323#issuecomment-6754950018)
+by `chatgpt-codex-connector[bot]`, recorded 2026-11-10T00:07:58Z, supports
+`not_affected` / `vulnerable_code_not_present` for exactly the two FPM subjects.
+It explicitly assesses the recovery producer, shell callback/command and
+OS-command dispatcher, authenticated library link/package boundary, actual
+ELF/source-ID identities, OCI/SPDX/runtime association and genuine controls.
+It identifies no technical counterexample or missing technical proof in that
+chain. This is the substantive decision, not the earlier generic review receipt
+or the author's request for an assessment.
+
+The reviewer transparently records that its environment had no authenticated
+GitHub session for a second download of the Actions ZIPs. Its exact-subject
+assessment uses the signed audit's original authenticated artifact rehashes and
+identity associations, plus the original public source/control evidence. It
+does not claim to have repeated those byte measurements. The primary exact ZIP,
+OCI, SPDX and loaded-library measurements above remain unchanged and retained;
+no extra external reviewer or new authority is introduced.
+
+The two documents were independently assessed and protected-merged in
+[PR #1323](https://github.com/SecPal/.github/pull/1323), actual verified commit
+`3884f032ec511fd5c5a5d72dab8d94aa77f451cb`. The existing `reviewed-vex`
+manifests name that real ancestor document commit, canonical document digests,
+actual decision URL/author, exact OCI/platform pair and bounded validity.
+Normal independent PR review and protected acceptance govern manifest adoption;
+the existing trusted adapter must verify the accepted checkout before use.
+
+A local policy replay of the original exact-subject raw evaluations with the
+proposed manifests returns HEALTHY/CLEAN for all four subjects. Only the two
+FPM CVE-2026-119586 dispositions change to VEX_ACCEPTED; their raw observations
+and every unrelated finding remain identical. Supplying only the opposite
+platform's manifest leaves FPM REVIEW_REQUIRED. This is a current policy replay
+of retained evidence, not a fresh scanner run or protected publication admission.
+The actual hosted qualification must run again after protected manifest adoption.
 
 Validity is bounded to 2026-11-23T00:00:00Z and the two exact FPM subjects only.
-The trust manifests must name the actual protected commit containing their
-OpenVEX documents, the independent review record and exact OCI/platform pairs.
 No statement covers CLI-positive controls, other vulnerabilities, other images,
 future rebuilds, released FrankenPHP artifacts or an exception for real risk.
-Raw observations and the unchanged Policy 1.0.0 remain authoritative.
+Raw observations and the unchanged Policy 1.0.0 remain authoritative. No registry
+publication, deployment, host mutation or release admission is granted here.
