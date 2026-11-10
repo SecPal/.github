@@ -169,3 +169,54 @@ No statement covers CLI-positive controls, other vulnerabilities, other images,
 future rebuilds, released FrankenPHP artifacts or an exception for real risk.
 Raw observations and the unchanged Policy 1.0.0 remain authoritative. No registry
 publication, deployment, host mutation or release admission is granted here.
+
+## First manual publisher candidate: exact new subjects
+
+The accepted API main commit is `da806926a754d7446cdfa9f6f19ed331e5dbee31`
+(GitHub signature verified). Its tree is the same previously accepted
+`0e4fb360b6fe5d7fc3e36d5a2e5a7e92393d16fc`. Post-merge
+[PHP CI](https://github.com/SecPal/api/actions/runs/42729226562) and
+[Quality](https://github.com/SecPal/api/actions/runs/42729226370) succeeded.
+The authorized existing manual [publisher run 42757690047](https://github.com/SecPal/api/actions/runs/42757690047),
+producing attempt **2**, rebuilt and successfully integrated both architectures.
+Attempt 1 was cancelled during a runner package-index download, before any
+registry preparation or prepared artifact; its native digests are not adopted.
+
+The authenticated native GitHub archives are
+[AMD64 artifact 13737349570](https://github.com/SecPal/api/actions/runs/42757690047/artifacts/13737349570),
+ZIP SHA-256 `2650f3df5e8549a65ac447dcb0f75ac5baeb5be8b9a534877bb023cc454fc9d8`,
+and [ARM64 artifact 13738555175](https://github.com/SecPal/api/actions/runs/42757690047/artifacts/13738555175),
+ZIP SHA-256 `a58d25ec7357048333b336b3b5316eafd27c1a39dd638d9e76fc1ddea8597250`.
+Actual downloaded ZIP bytes agree with the GitHub artifact digests and sizes.
+All four manifests, configs and 70 layer descriptors were rehashed; accepted
+source, Containerfile/context hashes, source epoch, component/platform/non-root
+configuration, SPDX associations and exact native smoke companions agree.
+
+| Component | Platform    | Manifest digest                                                           | Authoritative SPDX digest                                                 |
+| --------- | ----------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| php-fpm   | linux/amd64 | `sha256:c175e73eeb9b45af5a5c7aac5ce13d90979d79bf264bffbdf05518679e081f2d` | `sha256:cbff5b6ed3519a4449b3be0746f27cdc0290cb49cd793637de8e48a367ba7bd7` |
+| nginx     | linux/amd64 | `sha256:86ffda2552cbbe51cbc391fba1a44e73b8ad74f08fdced156cd9fc23346c81d1` | `sha256:69e9ddefdfb42ff07ceaad8f4ecf2446c933afce547c47d7bb3edc67f95870ba` |
+| php-fpm   | linux/arm64 | `sha256:70790c63d4ff0fe32fd9b617ef20587d26bb2281ab8c5b17cb51151e44a2cf43` | `sha256:f2053e7278821d7468f0ae47714efd85b0a04d982f34bf663bd7ca114effe62d` |
+| nginx     | linux/arm64 | `sha256:5a3fc7bd00c1bdcda861423a7fd370087c5c3c2e5ab33608f98e64d3e7c59531` | `sha256:f820f04fcda5f69ecaad53c8f45df03c8e938f0436a8b122f5faf1146565cb19` |
+
+Both current final layered filesystems contain the genuine `sqlite-libs
+3.54.0-r0` package with unchanged origin `sqlite`. Their actual library hashes,
+ELF machines and source ID exactly equal the accepted architecture-specific
+measurements above. The package identity and upstream PURLs remain truthful.
+No SQLite executable is present; the Python `sqlite3` package directory is not a
+CLI. The current dynamic symbols expose `sqlite3_open` and lack recovery exports.
+These observations bind the new subjects to the accepted amalgamation/link rule
+and genuine controls; absence of an executable or export alone is not the proof.
+The same APKBUILD is part of the accepted source tree. FPM contains 55 APKs and
+zero Go packages; Nginx contains 19 APKs and zero Go packages.
+
+The new OpenVEX documents propose **only** these two current FPM subjects,
+using the existing independent technical component decision. At document
+creation the new exact-subject binding has not yet received its independent
+confirmation. The old decision does not approve different digests. Normal
+protected adoption must record the actual new decision and document commit in
+the existing trusted manifest format. Expiration remains
+`2026-11-23T00:00:00Z`; no extension or blanket applicability is proposed.
+Fresh registry scans, OCI/SBOM attestations, native registry-pull integrations
+and complete pair admission remain mandatory in the same publisher. These
+measurements alone assert neither accepted publication nor deployment authority.
