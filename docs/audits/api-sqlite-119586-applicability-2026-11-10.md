@@ -126,11 +126,12 @@ no CLEAN result or release admission is asserted by these documents alone.
 
 The operator authorized truthful, independently confirmed nonapplicability via
 the existing Reviewed-VEX procedure; no new review authority or upstream waiting
-condition is introduced. Independent technical confirmation is recorded through
-the existing GitHub review process. The author cannot self-approve this finding.
+condition is introduced. Independent technical confirmation is pending in this
+document stage. Its actual decision link and author must be recorded before
+trusted activation. The author cannot self-approve this finding.
 
 The technical conclusion, exact binaries and two proposed OpenVEX documents
-are submitted through the existing independent GitHub review in
+are submitted for assessment through the existing GitHub process in
 [PR #1323](https://github.com/SecPal/.github/pull/1323). The later discovery
 manifests must retain the actual final-document review record and reviewer
 identity. No separate external technical opinion, author self-approval or
