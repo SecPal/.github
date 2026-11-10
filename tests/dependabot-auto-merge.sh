@@ -286,8 +286,8 @@ awk '
   exit 1
 }
 
-grep -q '^        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0$' "$REUSABLE_WORKFLOW" || {
-  echo "Reusable Dependabot workflow must pin dependabot/fetch-metadata to the v3.1.0 commit with the null update-type fix." >&2
+grep -Eq '^        uses: dependabot/fetch-metadata@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$' "$REUSABLE_WORKFLOW" || {
+  echo "Reusable Dependabot workflow must retain a full immutable fetch-metadata pin with its release annotation." >&2
   exit 1
 }
 
