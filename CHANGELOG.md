@@ -9,6 +9,12 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-19 - Complete Governance Dependabot Coverage
+
+- Schedule daily Dependabot updates at 04:00 Europe/Berlin for the governance
+  npm and Python tooling, remote pre-commit hooks, Polyscope PHP image references,
+  and the standalone repository scanner action.
+
 ## 2026-11-09 - Upgrade The Verified Grype Scanner
 
 - Pin Grype 0.121.3 and its verified Linux archive digest in the shared

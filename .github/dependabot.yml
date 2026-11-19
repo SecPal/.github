@@ -57,3 +57,102 @@ updates:
     target-branch: "main"
     pull-request-branch-name:
       separator: "-"
+
+  # GitHub Actions - Composite action dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/.github/actions/trivy-repository-scan"
+    schedule:
+      interval: "daily"
+      time: "04:00"
+      timezone: "Europe/Berlin"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "dependabot"
+    open-pull-requests-limit: 10
+    rebase-strategy: "auto"
+    target-branch: "main"
+    pull-request-branch-name:
+      separator: "-"
+
+  # npm - Governance tooling and lockfile
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "04:00"
+      timezone: "Europe/Berlin"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "dependabot"
+    open-pull-requests-limit: 10
+    rebase-strategy: "auto"
+    target-branch: "main"
+    pull-request-branch-name:
+      separator: "-"
+
+  # pre-commit - Remote hook revisions
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "04:00"
+      timezone: "Europe/Berlin"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "dependabot"
+    open-pull-requests-limit: 10
+    rebase-strategy: "auto"
+    target-branch: "main"
+    pull-request-branch-name:
+      separator: "-"
+
+  # Docker - Polyscope PHP image references
+  - package-ecosystem: "docker"
+    directory: "/containers/polyscope-php"
+    schedule:
+      interval: "daily"
+      time: "04:00"
+      timezone: "Europe/Berlin"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "dependabot"
+    open-pull-requests-limit: 10
+    rebase-strategy: "auto"
+    target-branch: "main"
+    pull-request-branch-name:
+      separator: "-"
+
+  # pip - Vulnerability policy tooling
+  - package-ecosystem: "pip"
+    directory: "/requirements"
+    schedule:
+      interval: "daily"
+      time: "04:00"
+      timezone: "Europe/Berlin"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "python"
+      - "dependabot"
+    open-pull-requests-limit: 10
+    rebase-strategy: "auto"
+    target-branch: "main"
+    pull-request-branch-name:
+      separator: "-"
