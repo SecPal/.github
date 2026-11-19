@@ -782,6 +782,8 @@ updates:
     ${DAILY}
 `,
     "mobile/settings.gradle": `include(':app'); rootProject.name = 'mobile'; include(':extra')
+if (true) include(':conditional')
+if (true) { include(':inline') }
 include(
     ':plugins:conventions',
 )
@@ -792,7 +794,9 @@ apply from: 'generated.settings.gradle'
     "mobile/build.gradle": "",
     "mobile/app/build.gradle": "apply from: 'generated.build.gradle'\n",
     "mobile/app/generated.build.gradle": "dependencies {}\n",
+    "mobile/conditional/build.gradle": "",
     "mobile/extra/build.gradle": "",
+    "mobile/inline/build.gradle": "",
     "mobile/plugins/conventions/build.gradle": "",
     "mobile/modules/bridge/build.gradle": "",
   });
@@ -806,7 +810,9 @@ apply from: 'generated.settings.gradle'
     [
       ["mobile/app/build.gradle", "/mobile"],
       ["mobile/build.gradle", "/mobile"],
+      ["mobile/conditional/build.gradle", "/mobile"],
       ["mobile/extra/build.gradle", "/mobile"],
+      ["mobile/inline/build.gradle", "/mobile"],
       ["mobile/modules/bridge/build.gradle", "/mobile"],
       ["mobile/plugins/conventions/build.gradle", "/mobile"],
     ]
