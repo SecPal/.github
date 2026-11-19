@@ -936,16 +936,158 @@ function cargoOwnership(root, manifestPath, tracked) {
   return selected ? parentDirectory(selected.manifest) : parentDirectory(manifestPath);
 }
 
+function gradleSubprojects(source) {
+  if (source.includes("\0")) return [];
+  const literals = [];
+  let nestedComment = false;
+  const contents = source.replace(
+    /"""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$)|\$\/[\s\S]*?(?:\/\$|$)|"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|\/\/[^\r\n]*|\/\*[\s\S]*?(?:\*\/|$)|\/(?![*/])(?:\\.|[^/\\])*\//g,
+    (token) => {
+      if (token.startsWith("/*") && token.slice(2).includes("/*")) nestedComment = true;
+      if (/^(?:"""|'''|\$\/|\/)/.test(token)) return token.replace(/[^\r\n]/g, " ");
+      literals.push(token.slice(1, -1));
+      return `\0${literals.length - 1}\0`;
+    }
+  );
+  if (nestedComment) return [];
+  const literal = String.raw`\0\d+\0`;
+  const value = (token) => literals[Number(token.slice(1, -1))];
+  const names = String.raw`${literal}(?:\s*,\s*${literal})*`;
+  // The pinned fetcher's bare argument token includes an attached semicolon.
+  const includes = new RegExp(
+    String.raw`(?:^|(?<=\s))include(?:\s*\(\s*(${names})\s*,?\s*\)|[\t ]+(${names})(?=[\t ]*\r?$|[\t ]+;))`,
+    "gm"
+  );
+  const remaps = new Map();
+  // The pinned settings parser's custom directory fixture uses both property names.
+  const assignments = new RegExp(
+    String.raw`(?:^|(?<=;))[\t ]*project\s*\(\s*(${literal})\s*\)\s*\.\s*(?:projectDir|dir)\s*=[\t ]*([^;\r\n]*)`,
+    "gm"
+  );
+  const remaining = contents.replace(assignments, (_, token, expression) => {
+    const name = value(token);
+    const project = name.replace(/^:/, "");
+    const pathMatch =
+      /^(?:(?:new\s+)?File\(\s*(?:(?:rootDir|settingsDir)\s*,\s*)?|file\(\s*)(\0\d+\0)\s*\)\s*$/.exec(
+        expression
+      );
+    const directory = pathMatch && value(pathMatch[1]);
+    remaps.set(
+      project,
+      name.startsWith(":") && !remaps.has(project) && /^[\w./-]+$/.test(directory ?? "")
+        ? directory
+        : null
+    );
+    return "";
+  });
+  if (
+    /\b(?:projectDir\s*=|setProjectDir\s*\(|project\s*\([^;\r\n]*?\)\s*\.\s*dir\s*=)/.test(
+      remaining
+    )
+  )
+    return [];
+  return [
+    ...new Set(
+      [...contents.matchAll(includes)].flatMap((match) =>
+        [...(match[1] ?? match[2]).matchAll(new RegExp(literal, "g"))]
+          .map(([token]) => value(token))
+          .filter((name) => /^:?[\w.-]+(?::[\w.-]+)*$/.test(name))
+          .map((name) => name.replace(/^:/, ""))
+      )
+    ),
+  ].map((project) => (remaps.has(project) ? remaps.get(project) : project.replaceAll(":", "/")));
+}
+
+function gradleOwnership(root, tracked, rule) {
+  const builds = new Map();
+  const settings = new Map();
+  for (const file of tracked) {
+    const collection = rule.compiled.test(file)
+      ? builds
+      : /(^|\/)settings\.gradle(\.kts)?$/.test(file)
+        ? settings
+        : null;
+    if (!collection) continue;
+    const directory = path.posix.dirname(file);
+    if (!collection.has(directory)) collection.set(directory, []);
+    collection.get(directory).push(file);
+  }
+  const owners = new Map();
+  for (const [directory, files] of settings) {
+    const rootBuilds = builds.get(directory) ?? [];
+    if (files.length !== 1 || rootBuilds.length > 1) continue;
+    const source = readTrackedText(root, files[0]);
+    if (source === null) continue;
+    const members = new Set();
+    for (const declared of gradleSubprojects(source)) {
+      if (!declared || declared.startsWith("/") || declared.split("/").includes("..")) continue;
+      const member = path.posix.join(directory, declared).replace(/\/$/, "");
+      if (member !== directory) members.add(member);
+    }
+    // With settings alone, excludes can change which subproject establishes the filename.
+    const buildNames = new Set(
+      (rootBuilds.length ? rootBuilds : [...members].flatMap((dir) => builds.get(dir) ?? [])).map(
+        (name) => path.posix.basename(name)
+      )
+    );
+    if (buildNames.size !== 1) continue;
+    for (const member of members) {
+      const memberBuilds = builds.get(member) ?? [];
+      if (memberBuilds.length !== 1) continue;
+      const [manifest] = memberBuilds;
+      if (!buildNames.has(path.posix.basename(manifest))) continue;
+      let boundary = member;
+      while (boundary !== directory && !settings.has(boundary)) {
+        boundary = path.posix.dirname(boundary);
+      }
+      if (boundary === directory) owners.set(manifest, [files[0], ...rootBuilds]);
+    }
+  }
+  return { builds, owners };
+}
+
+function gradleAppliedScripts(root, gradle, scriptRule) {
+  const scripts = new Set();
+  if (!gradle || !scriptRule) return scripts;
+  for (const files of gradle.builds.values()) {
+    const [build] = files;
+    if (files.length !== 1 || gradle.owners.has(build)) continue;
+    // Discovery reports missing and non-regular manifest candidates.
+    if (!lstatSync(path.join(root, build), { throwIfNoEntry: false })?.isFile()) continue;
+    const source = readTrackedText(root, build);
+    if (source === null) continue;
+    // Match the pinned fetcher's literal applied paths and leave their ownership unresolved.
+    for (const [, target] of source.matchAll(
+      /apply(?:\(| )\s*from(?:\s+=|:)\s+['"]([^'"]+)['"]/g
+    )) {
+      if (
+        scriptRule.compiled.test(target) &&
+        !target.includes("://") &&
+        (target.includes("/") || target.split(".").length <= 2)
+      ) {
+        scripts.add(path.posix.join(path.posix.dirname(build), target.replaceAll("$rootDir", ".")));
+      }
+    }
+  }
+  return scripts;
+}
+
 function discover(root, policy, reviewed) {
   const manifests = [];
   const diagnostics = [...(reviewed.diagnostics || [])];
   const tracked = trackedFiles(root);
   const trackedSet = new Set(tracked);
   const terraformModules = new Map();
+  const gradleBuildRule = policy.manifest_rules.find((rule) => rule.ownership === "gradle-build");
+  const gradle = gradleBuildRule && gradleOwnership(root, tracked, gradleBuildRule);
+  const gradleScriptRule = policy.candidate_rules.find(
+    (rule) => rule.id === "gradle-dependency-script"
+  );
+  const gradleScripts = gradleAppliedScripts(root, gradle, gradleScriptRule);
   for (const manifestPath of tracked) {
     const pathRules = policy.manifest_rules.filter((rule) => rule.compiled.test(manifestPath));
     const candidateRules = policy.candidate_rules.filter((rule) =>
-      rule.compiled.test(manifestPath)
+      rule === gradleScriptRule ? gradleScripts.has(manifestPath) : rule.compiled.test(manifestPath)
     );
     const nonManifestRules = policy.non_manifest_rules.filter(
       (rule) =>
@@ -1016,6 +1158,18 @@ function discover(root, policy, reviewed) {
       ecosystem = trackedSet.has(uvLock) ? "uv" : "pip";
     } else if (ownershipRule?.ownership === "cargo-package") {
       coverageDirectory = cargoOwnership(root, manifestPath, tracked);
+    } else if (ownershipRule?.ownership === "gradle-build") {
+      if (gradle.builds.get(path.posix.dirname(manifestPath)).length > 1) {
+        diagnostics.push({
+          code: "AMBIGUOUS_MANIFEST_CLASSIFICATION",
+          expected_ecosystem: "gradle",
+          manifest_path: manifestPath,
+          reason: "multiple standard Gradle build files share the same directory",
+        });
+        continue;
+      }
+      const inputs = gradle.owners.get(manifestPath);
+      if (inputs) coverageDirectory = parentDirectory(inputs[0]);
     }
     const rule = matchingRules.find((item) => item.ecosystem === ecosystem);
     manifests.push({
@@ -1072,7 +1226,7 @@ function discover(root, policy, reviewed) {
     (left, right) =>
       compareText(left.manifest_path, right.manifest_path) || compareText(left.code, right.code)
   );
-  return { diagnostics, manifests };
+  return { diagnostics, manifests, gradleOwners: gradle?.owners };
 }
 
 function globRegex(pattern) {
@@ -1331,7 +1485,10 @@ function coverageReport(options, policy, config, reviewed, discovery) {
           candidates.push(label);
           if (
             (!entry.targetBranch || entry.targetBranch === options.defaultBranch) &&
-            !excluded(entry, manifest.manifest_path, manifest.coverage_directory)
+            !excluded(entry, manifest.manifest_path, manifest.coverage_directory) &&
+            !discovery.gradleOwners
+              ?.get(manifest.manifest_path)
+              ?.some((input) => excluded(entry, input, manifest.coverage_directory))
           )
             matches.push(label);
         }

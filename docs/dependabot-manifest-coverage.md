@@ -130,6 +130,24 @@ their direct parent directory. Therefore npm coverage for `/tools` cannot cover
 an unrelated `frontend/package.json`, while npm or Cargo coverage for `/` covers
 a declared root workspace member.
 
+Gradle coverage tracks the exact standard build filenames `build.gradle` and
+`build.gradle.kts`. A tracked settings file can establish ownership of
+subprojects through literal `include` declarations and literal `projectDir` or
+`dir` mappings. Subproject build filenames must match the fetcher's selected
+build filename. An intervening settings file preserves an independent build
+boundary.
+Dynamic declarations and remaps cannot establish inherited coverage. This
+bounded rule covers multi-project builds. Composite builds and other build
+relationships require independent coverage when ownership cannot be established
+by this rule.
+
+Nonstandard applied scripts are not standard Gradle manifests. The pinned
+fetcher can retrieve certain scripts applied from a build root with
+`dependencies` anywhere in their paths. The guard keeps the corresponding
+tracked literal references as candidates when updater ownership is unresolved.
+Applying a script from a subproject does not make the script an independent
+updater input.
+
 Dependabot Core recognizes names containing `Dockerfile` or `Containerfile`
 under its `docker` package ecosystem. The SecPal catalog preserves that exact
 terminology:
