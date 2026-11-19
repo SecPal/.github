@@ -142,10 +142,11 @@ relationships require independent coverage when ownership cannot be established
 by this rule.
 
 Nonstandard applied scripts are not standard Gradle manifests. The pinned
-fetcher can retrieve certain applied scripts with `dependencies` anywhere in
-their paths. The guard keeps the corresponding tracked literal references as
-candidates when updater ownership is unresolved. Applying an ordinary script
-from a subproject does not make the script an independent updater input.
+fetcher can retrieve certain scripts applied from a build root with
+`dependencies` anywhere in their paths. The guard keeps the corresponding
+tracked literal references as candidates when updater ownership is unresolved.
+Applying a script from a subproject does not make the script an independent
+updater input.
 
 Dependabot Core recognizes names containing `Dockerfile` or `Containerfile`
 under its `docker` package ecosystem. The SecPal catalog preserves that exact

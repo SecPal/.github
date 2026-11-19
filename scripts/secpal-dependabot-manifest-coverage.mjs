@@ -1046,11 +1046,12 @@ function gradleOwnership(root, tracked, rule) {
   return { builds, owners };
 }
 
-function gradleAppliedScripts(root, tracked, buildRule, scriptRule) {
+function gradleAppliedScripts(root, gradle, scriptRule) {
   const scripts = new Set();
-  if (!buildRule || !scriptRule) return scripts;
-  for (const build of tracked) {
-    if (!buildRule.compiled.test(build)) continue;
+  if (!gradle || !scriptRule) return scripts;
+  for (const files of gradle.builds.values()) {
+    const [build] = files;
+    if (files.length !== 1 || gradle.owners.has(build)) continue;
     // Discovery reports missing and non-regular manifest candidates.
     if (!lstatSync(path.join(root, build), { throwIfNoEntry: false })?.isFile()) continue;
     const source = readTrackedText(root, build);
@@ -1077,16 +1078,12 @@ function discover(root, policy, reviewed) {
   const tracked = trackedFiles(root);
   const trackedSet = new Set(tracked);
   const terraformModules = new Map();
+  const gradleBuildRule = policy.manifest_rules.find((rule) => rule.ownership === "gradle-build");
+  const gradle = gradleBuildRule && gradleOwnership(root, tracked, gradleBuildRule);
   const gradleScriptRule = policy.candidate_rules.find(
     (rule) => rule.id === "gradle-dependency-script"
   );
-  const gradleScripts = gradleAppliedScripts(
-    root,
-    tracked,
-    policy.manifest_rules.find((rule) => rule.ownership === "gradle-build"),
-    gradleScriptRule
-  );
-  let gradle;
+  const gradleScripts = gradleAppliedScripts(root, gradle, gradleScriptRule);
   for (const manifestPath of tracked) {
     const pathRules = policy.manifest_rules.filter((rule) => rule.compiled.test(manifestPath));
     const candidateRules = policy.candidate_rules.filter((rule) =>
@@ -1162,7 +1159,6 @@ function discover(root, policy, reviewed) {
     } else if (ownershipRule?.ownership === "cargo-package") {
       coverageDirectory = cargoOwnership(root, manifestPath, tracked);
     } else if (ownershipRule?.ownership === "gradle-build") {
-      gradle ??= gradleOwnership(root, tracked, ownershipRule);
       if (gradle.builds.get(path.posix.dirname(manifestPath)).length > 1) {
         diagnostics.push({
           code: "AMBIGUOUS_MANIFEST_CLASSIFICATION",

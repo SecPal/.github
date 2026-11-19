@@ -796,8 +796,11 @@ project(":beam-examples-java").dir = file("examples/java")
 apply from: 'generated.settings.gradle'
 `,
     "mobile/build.gradle": "",
-    "mobile/app/build.gradle": "apply from: 'generated.build.gradle'\n",
+    "mobile/app/build.gradle": `apply from: 'generated.build.gradle'
+apply from: 'gradle/app-dependencies.gradle'
+`,
     "mobile/app/generated.build.gradle": "dependencies {}\n",
+    "mobile/app/gradle/app-dependencies.gradle": "dependencies {}\n",
     "mobile/conditional/build.gradle": "",
     "mobile/examples/java/build.gradle": "",
     "mobile/extra/build.gradle": "",
