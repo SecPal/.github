@@ -1,6 +1,6 @@
 {
   "schema": "secpal-dependabot-manifest-catalog/v1",
-  "policy_version": "2026-09-02.3",
+  "policy_version": "2026-09-02.4",
   "reviewed_on": "2026-09-02",
   "expires_on": "2026-12-01",
   "upstream": {
@@ -25,6 +25,7 @@
       "github_actions/lib/dependabot/github_actions/file_fetcher.rb",
       "go_modules/lib/dependabot/go_modules/file_fetcher.rb",
       "gradle/lib/dependabot/gradle/file_fetcher.rb",
+      "gradle/lib/dependabot/gradle/file_fetcher/settings_file_parser.rb",
       "helm/lib/dependabot/helm/file_fetcher.rb",
       "hex/lib/dependabot/hex/file_fetcher.rb",
       "julia/lib/dependabot/julia/file_fetcher.rb",
@@ -364,9 +365,13 @@
     {
       "id": "gradle",
       "ecosystem": "gradle",
-      "path_regex": "(^|/)[^/]*build\\.gradle(\\.kts)?$",
+      "path_regex": "(^|/)build\\.gradle(\\.kts)?$",
       "coverage_directory": "parent",
-      "source_paths": ["gradle/lib/dependabot/gradle/file_fetcher.rb"]
+      "ownership": "gradle-build",
+      "source_paths": [
+        "gradle/lib/dependabot/gradle/file_fetcher.rb",
+        "gradle/lib/dependabot/gradle/file_fetcher/settings_file_parser.rb"
+      ]
     },
     {
       "id": "helm",
@@ -503,6 +508,11 @@
       "path_regex": "(^|/)[^/]+\\.(deps|dependencies)\\.(json|toml|ya?ml)$",
       "case_insensitive": true,
       "authority": "secpal-review-backstop"
+    },
+    {
+      "id": "gradle-dependency-script",
+      "path_regex": "(^|/)[^/]*dependencies[^/]*\\.gradle(\\.kts)?$",
+      "source_paths": ["gradle/lib/dependabot/gradle/file_fetcher.rb"]
     },
     {
       "id": "native-nuget-manifest",

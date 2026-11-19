@@ -773,6 +773,190 @@ updates:
   }
 });
 
+test("Gradle covers declared standard build files from the updater root", () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /mobile
+    ${DAILY}
+`,
+    "mobile/settings.gradle": `include ':app'
+include(
+    ':plugins:conventions',
+    ':bridge'
+)
+project(':bridge').projectDir = new File('./modules/bridge/')
+apply from: 'generated.settings.gradle'
+`,
+    "mobile/build.gradle": "",
+    "mobile/app/build.gradle": "apply from: 'generated.build.gradle'\n",
+    "mobile/app/generated.build.gradle": "dependencies {}\n",
+    "mobile/plugins/conventions/build.gradle": "",
+    "mobile/modules/bridge/build.gradle": "",
+  });
+  const { code, report } = run(root);
+  assert.equal(code, 0, JSON.stringify(report.diagnostics));
+  assert.deepEqual(
+    report.manifests.map(({ manifest_path, coverage_directory }) => [
+      manifest_path,
+      coverage_directory,
+    ]),
+    [
+      ["mobile/app/build.gradle", "/mobile"],
+      ["mobile/build.gradle", "/mobile"],
+      ["mobile/modules/bridge/build.gradle", "/mobile"],
+      ["mobile/plugins/conventions/build.gradle", "/mobile"],
+    ]
+  );
+});
+
+test("Gradle does not absorb independent builds, comments, or unsupported remaps", () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /mobile
+    exclude-paths: ["app/build.gradle.kts"]
+    ${DAILY}
+`,
+    "mobile/settings.gradle.kts": `// include(":commented")
+/*
+include(":block")
+*/
+val example = """
+include(":quoted")
+"""
+def slashy = /
+include(":slashy")
+/
+include(":app", ":mixed", ":nested:leaf", ":dynamic")
+rootProject.name = "mobile"; project(":dynamic").projectDir = file(projectLocation)
+`,
+    "mobile/build.gradle.kts": "",
+    "mobile/app/build.gradle.kts": "",
+    "mobile/mixed/build.gradle": "",
+    "mobile/commented/build.gradle.kts": "",
+    "mobile/block/build.gradle.kts": "",
+    "mobile/quoted/build.gradle.kts": "",
+    "mobile/slashy/build.gradle.kts": "",
+    "mobile/dynamic/build.gradle.kts": "",
+    "mobile/nested/settings.gradle.kts": 'include(":leaf")\n',
+    "mobile/nested/build.gradle.kts": "",
+    "mobile/nested/leaf/build.gradle.kts": "",
+    "sibling/build.gradle.kts": "",
+  });
+  const { code, report } = run(root);
+  assert.equal(code, 1);
+  const manifests = Object.fromEntries(report.manifests.map((row) => [row.manifest_path, row]));
+  for (const dir of ["mixed", "commented", "block", "quoted", "slashy", "dynamic"]) {
+    const file = dir === "mixed" ? "build.gradle" : "build.gradle.kts";
+    assert.equal(manifests[`mobile/${dir}/${file}`].coverage_directory, `/mobile/${dir}`);
+  }
+  for (const [file, directory] of [
+    ["mobile/app/build.gradle.kts", "/mobile"],
+    ["mobile/nested/build.gradle.kts", "/mobile/nested"],
+    ["mobile/nested/leaf/build.gradle.kts", "/mobile/nested"],
+    ["sibling/build.gradle.kts", "/sibling"],
+  ]) {
+    assert.equal(manifests[file].coverage_directory, directory);
+    assert.equal(manifests[file].status, "UNCOVERED");
+  }
+});
+
+test("Gradle dependency scripts with unresolved ownership remain candidates", () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /mobile
+    ${DAILY}
+`,
+    "mobile/build.gradle": "apply from: 'versions/android-dependencies.gradle'\n",
+    "mobile/versions/android-dependencies.gradle": "dependencies {}\n",
+  });
+  const { code, report } = run(root);
+  assert.equal(code, 1);
+  assert.ok(
+    report.diagnostics.some(
+      ({ code, manifest_path }) =>
+        code === "UNCLASSIFIED_MANIFEST_CANDIDATE" &&
+        manifest_path === "mobile/versions/android-dependencies.gradle"
+    )
+  );
+});
+
+test("Gradle does not infer a build dialect from an excluded settings-only member", () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /mobile
+    exclude-paths: ["first/**"]
+    ${DAILY}
+`,
+    "mobile/settings.gradle": "include ':first', ':second', ':third'\n",
+    "mobile/first/build.gradle": "",
+    "mobile/second/build.gradle.kts": "",
+    "mobile/third/build.gradle": "",
+  });
+  const { code, report } = run(root);
+  assert.equal(code, 1);
+  assert.ok(report.manifests.every(({ status }) => status === "UNCOVERED"));
+});
+
+test("Gradle does not inherit coverage through excluded settings", () => {
+  const root = repository({
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /mobile
+    exclude-paths: ["settings.gradle"]
+    ${DAILY}
+`,
+    "mobile/settings.gradle": "include ':app'\n",
+    "mobile/build.gradle": "",
+    "mobile/app/build.gradle": "",
+  });
+  const { code, report } = run(root);
+  assert.equal(code, 1);
+  assert.deepEqual(
+    report.manifests.map(({ manifest_path, status }) => [manifest_path, status]),
+    [
+      ["mobile/app/build.gradle", "UNCOVERED"],
+      ["mobile/build.gradle", "COVERED"],
+    ]
+  );
+});
+
+test("Gradle settings-only coverage requires an unambiguous standard build filename", () => {
+  const files = {
+    ".github/dependabot.yml": `version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /mobile
+    ${DAILY}
+`,
+    "mobile/settings.gradle.kts": 'include(":app", ":library")\n',
+    "mobile/app/build.gradle.kts": "",
+    "mobile/library/build.gradle.kts": "",
+  };
+  const { code, report } = run(repository(files));
+  assert.equal(code, 0, JSON.stringify(report.diagnostics));
+  assert.equal(report.manifests.length, 2);
+  assert.ok(report.manifests.every(({ coverage_directory }) => coverage_directory === "/mobile"));
+
+  const ambiguous = run(repository({ ...files, "mobile/app/build.gradle": "" }));
+  assert.equal(ambiguous.code, 1);
+  assert.ok(
+    ambiguous.report.diagnostics.some(
+      ({ code, manifest_path }) =>
+        code === "AMBIGUOUS_MANIFEST_CLASSIFICATION" &&
+        manifest_path === "mobile/app/build.gradle.kts"
+    )
+  );
+});
+
 test("Cargo workspace members inherit only their declared workspace root", () => {
   const root = repository({
     ".github/dependabot.yml": `version: 2
