@@ -781,17 +781,18 @@ updates:
     directory: /mobile
     ${DAILY}
 `,
-    "mobile/settings.gradle": `include ':app'
+    "mobile/settings.gradle": `include(':app'); rootProject.name = 'mobile'; include(':extra')
 include(
     ':plugins:conventions',
-    ':bridge'
 )
+include ':bridge' ; println('literal member')
 project(':bridge').projectDir = new File('./modules/bridge/')
 apply from: 'generated.settings.gradle'
 `,
     "mobile/build.gradle": "",
     "mobile/app/build.gradle": "apply from: 'generated.build.gradle'\n",
     "mobile/app/generated.build.gradle": "dependencies {}\n",
+    "mobile/extra/build.gradle": "",
     "mobile/plugins/conventions/build.gradle": "",
     "mobile/modules/bridge/build.gradle": "",
   });
@@ -805,6 +806,7 @@ apply from: 'generated.settings.gradle'
     [
       ["mobile/app/build.gradle", "/mobile"],
       ["mobile/build.gradle", "/mobile"],
+      ["mobile/extra/build.gradle", "/mobile"],
       ["mobile/modules/bridge/build.gradle", "/mobile"],
       ["mobile/plugins/conventions/build.gradle", "/mobile"],
     ]
@@ -831,6 +833,7 @@ def slashy = /
 include(":slashy")
 /
 include(":app", ":mixed", ":nested:leaf", ":dynamic")
+include ":attached"; println("the pinned fetcher keeps the semicolon in the name")
 rootProject.name = "mobile"; project(":dynamic").projectDir = file(projectLocation)
 `,
     "mobile/build.gradle.kts": "",
@@ -841,6 +844,7 @@ rootProject.name = "mobile"; project(":dynamic").projectDir = file(projectLocati
     "mobile/quoted/build.gradle.kts": "",
     "mobile/slashy/build.gradle.kts": "",
     "mobile/dynamic/build.gradle.kts": "",
+    "mobile/attached/build.gradle.kts": "",
     "mobile/nested/settings.gradle.kts": 'include(":leaf")\n',
     "mobile/nested/build.gradle.kts": "",
     "mobile/nested/leaf/build.gradle.kts": "",
@@ -849,7 +853,7 @@ rootProject.name = "mobile"; project(":dynamic").projectDir = file(projectLocati
   const { code, report } = run(root);
   assert.equal(code, 1);
   const manifests = Object.fromEntries(report.manifests.map((row) => [row.manifest_path, row]));
-  for (const dir of ["mixed", "commented", "block", "quoted", "slashy", "dynamic"]) {
+  for (const dir of ["mixed", "commented", "block", "quoted", "slashy", "dynamic", "attached"]) {
     const file = dir === "mixed" ? "build.gradle" : "build.gradle.kts";
     assert.equal(manifests[`mobile/${dir}/${file}`].coverage_directory, `/mobile/${dir}`);
   }

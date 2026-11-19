@@ -953,8 +953,9 @@ function gradleSubprojects(source) {
   const literal = String.raw`\0\d+\0`;
   const value = (token) => literals[Number(token.slice(1, -1))];
   const names = String.raw`${literal}(?:\s*,\s*${literal})*`;
+  // The pinned fetcher's bare argument token includes an attached semicolon.
   const includes = new RegExp(
-    String.raw`^[\t ]*include(?:[\t ]*\(\s*(${names})\s*,?\s*\)|[\t ]+(${names}))[\t ]*;?[\t ]*\r?$`,
+    String.raw`(?:^[\t ]*|(?<=;)[\t ]+)include(?:[\t ]*\(\s*(${names})\s*,?\s*\)(?=[\t ]*(?:;|\r?$))|[\t ]+(${names})(?=[\t ]*\r?$|[\t ]+;))`,
     "gm"
   );
   const remaps = new Map();
