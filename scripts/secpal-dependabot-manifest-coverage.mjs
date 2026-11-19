@@ -959,8 +959,9 @@ function gradleSubprojects(source) {
     "gm"
   );
   const remaps = new Map();
+  // The pinned settings parser's custom directory fixture uses both property names.
   const assignments = new RegExp(
-    String.raw`(?:^|(?<=;))[\t ]*project\s*\(\s*(${literal})\s*\)\s*\.\s*projectDir\s*=[\t ]*([^;\r\n]*)`,
+    String.raw`(?:^|(?<=;))[\t ]*project\s*\(\s*(${literal})\s*\)\s*\.\s*(?:projectDir|dir)\s*=[\t ]*([^;\r\n]*)`,
     "gm"
   );
   const remaining = contents.replace(assignments, (_, token, expression) => {
@@ -979,7 +980,12 @@ function gradleSubprojects(source) {
     );
     return "";
   });
-  if (/\b(?:projectDir\s*=|setProjectDir\s*\()/.test(remaining)) return [];
+  if (
+    /\b(?:projectDir\s*=|setProjectDir\s*\(|project\s*\([^;\r\n]*?\)\s*\.\s*dir\s*=)/.test(
+      remaining
+    )
+  )
+    return [];
   return [
     ...new Set(
       [...contents.matchAll(includes)].flatMap((match) =>

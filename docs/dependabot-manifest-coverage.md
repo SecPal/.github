@@ -132,9 +132,10 @@ a declared root workspace member.
 
 Gradle coverage tracks the exact standard build filenames `build.gradle` and
 `build.gradle.kts`. A tracked settings file can establish ownership of
-subprojects through literal `include` declarations and literal `projectDir`
-mappings. Subproject build filenames must match the fetcher's selected build
-filename. An intervening settings file preserves an independent build boundary.
+subprojects through literal `include` declarations and literal `projectDir` or
+`dir` mappings. Subproject build filenames must match the fetcher's selected
+build filename. An intervening settings file preserves an independent build
+boundary.
 Dynamic declarations and remaps cannot establish inherited coverage. This
 bounded rule covers multi-project builds. Composite builds and other build
 relationships require independent coverage when ownership cannot be established

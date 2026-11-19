@@ -789,16 +789,22 @@ include(
 )
 include ':bridge' ; println('literal member')
 project(':bridge').projectDir = new File('./modules/bridge/')
+include 'chrome-trace'
+project(':chrome-trace').projectDir = new File(rootDir, 'subprojects/chrome-trace')
+include "beam-examples-java"
+project(":beam-examples-java").dir = file("examples/java")
 apply from: 'generated.settings.gradle'
 `,
     "mobile/build.gradle": "",
     "mobile/app/build.gradle": "apply from: 'generated.build.gradle'\n",
     "mobile/app/generated.build.gradle": "dependencies {}\n",
     "mobile/conditional/build.gradle": "",
+    "mobile/examples/java/build.gradle": "",
     "mobile/extra/build.gradle": "",
     "mobile/inline/build.gradle": "",
     "mobile/plugins/conventions/build.gradle": "",
     "mobile/modules/bridge/build.gradle": "",
+    "mobile/subprojects/chrome-trace/build.gradle": "",
   });
   const { code, report } = run(root);
   assert.equal(code, 0, JSON.stringify(report.diagnostics));
@@ -811,10 +817,12 @@ apply from: 'generated.settings.gradle'
       ["mobile/app/build.gradle", "/mobile"],
       ["mobile/build.gradle", "/mobile"],
       ["mobile/conditional/build.gradle", "/mobile"],
+      ["mobile/examples/java/build.gradle", "/mobile"],
       ["mobile/extra/build.gradle", "/mobile"],
       ["mobile/inline/build.gradle", "/mobile"],
       ["mobile/modules/bridge/build.gradle", "/mobile"],
       ["mobile/plugins/conventions/build.gradle", "/mobile"],
+      ["mobile/subprojects/chrome-trace/build.gradle", "/mobile"],
     ]
   );
 });
@@ -838,9 +846,10 @@ include(":quoted")
 def slashy = /
 include(":slashy")
 /
-include(":app", ":mixed", ":nested:leaf", ":dynamic")
+include(":app", ":mixed", ":nested:leaf", ":dynamic", ":legacy")
 include ":attached"; println("the pinned fetcher keeps the semicolon in the name")
 rootProject.name = "mobile"; project(":dynamic").projectDir = file(projectLocation)
+project(":legacy").dir = file(projectLocation)
 `,
     "mobile/build.gradle.kts": "",
     "mobile/app/build.gradle.kts": "",
@@ -850,6 +859,7 @@ rootProject.name = "mobile"; project(":dynamic").projectDir = file(projectLocati
     "mobile/quoted/build.gradle.kts": "",
     "mobile/slashy/build.gradle.kts": "",
     "mobile/dynamic/build.gradle.kts": "",
+    "mobile/legacy/build.gradle.kts": "",
     "mobile/attached/build.gradle.kts": "",
     "mobile/nested/settings.gradle.kts": 'include(":leaf")\n',
     "mobile/nested/build.gradle.kts": "",
@@ -859,7 +869,16 @@ rootProject.name = "mobile"; project(":dynamic").projectDir = file(projectLocati
   const { code, report } = run(root);
   assert.equal(code, 1);
   const manifests = Object.fromEntries(report.manifests.map((row) => [row.manifest_path, row]));
-  for (const dir of ["mixed", "commented", "block", "quoted", "slashy", "dynamic", "attached"]) {
+  for (const dir of [
+    "mixed",
+    "commented",
+    "block",
+    "quoted",
+    "slashy",
+    "dynamic",
+    "legacy",
+    "attached",
+  ]) {
     const file = dir === "mixed" ? "build.gradle" : "build.gradle.kts";
     assert.equal(manifests[`mobile/${dir}/${file}`].coverage_directory, `/mobile/${dir}`);
   }
