@@ -1642,7 +1642,7 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-08-21 - Centralize The Single-Maintainer Review Baseline
+## 2026-08-21 - Centralize The Required Approval-Count Baseline
 
 **Changed:**
 
@@ -2634,11 +2634,11 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
-## 2026-06-27 - Make AGENTS The Authoritative AI Runtime Baseline
+## 2026-06-27 - Make AGENTS The Authoritative Repository Instruction Baseline
 
 **Fixed:**
 
-- flipped the SecPal AI-governance model so each managed repository now treats its root `AGENTS.md` as the authoritative, provider-neutral runtime baseline for AI-assisted development and review tooling
+- made each managed repository's root `AGENTS.md` the authoritative, provider-neutral instruction baseline for tools that load repository development and review guidance
 - updated `scripts/polyscope-rollout.py` so generated Polyscope task prompts and rollout summaries now point at repo-local `AGENTS.md`, while `.github/copilot-instructions.md` is regenerated as a compatibility mirror for tooling that auto-loads the Copilot path
 - normalized blank-line runs when `scripts/validate-ai-instructions.sh` compares `.github/copilot-instructions.md` against authoritative `AGENTS.md`, so regenerated mirrors no longer fail on formatting-only newline collapse
 - introduced `scripts/validate-ai-instructions.sh` as the canonical validator, kept `scripts/validate-copilot-instructions.sh` as a compatibility wrapper, and extended regression coverage so repositories now fail governance validation when `AGENTS.md` is missing or weak, or when `.github/copilot-instructions.md` stops clearly mirroring the authoritative `AGENTS.md`

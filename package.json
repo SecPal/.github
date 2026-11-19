@@ -26,7 +26,7 @@
   "license": "CC0-1.0",
   "devDependencies": {
     "js-yaml": "^5.5.0",
-    "markdown-it": "14.3.3",
+    "markdown-it": "15.0.3",
     "markdownlint-cli": "0.50.0",
     "prettier": "3.10.1",
     "smol-toml": "1.9.1"
