@@ -127,6 +127,13 @@ existing repository-specific validation. Draft means work in progress; keep a
 Ready PR Ready and request re-review directly when needed. Fix genuine findings
 and merge through GitHub protection when authorized.
 
+When GitHub permits the merge, an authorized maintainer may decide to merge
+their own PR through the normal protected path. The merge records the
+maintainer's source decision. Established automated code and security review,
+technical evidence and required checks continue to apply. The
+[OCI vulnerability policy](vulnerability-triage-policy.md) defines the separate
+authority for artifact applicability and publication.
+
 Preserve existing SSH signing and GitHub verification of every PR commit. Reuse
 successful validation until relevant changes invalidate it. Production,
 cryptographic, release and external qualification requirements remain owned by
