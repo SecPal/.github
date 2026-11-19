@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-FROM docker.io/library/composer:2.10.2@sha256:5946476338742b200bb9ff88f8be56275ddae4b3949c72305cb0dbf10cfcb760 AS composer
+FROM docker.io/library/composer:2.11.2@sha256:0c8e663f14c94d07b3c45b175c51f5a14718508f21fe4dd7e54f09488dd0ed71 AS composer
 FROM docker.io/dunglas/frankenphp:1.13.3-php8.4.27-alpine@sha256:0a7f02a9694dec87d705dbe1967567cc97cf20c80cbf0d32b911ab621cdd7ce5
 
 # The API owns these hash-locked Python runtime requirements. Build with its
