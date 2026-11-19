@@ -38,6 +38,24 @@ path. PROTECTED does not replace it.
 
 ## Binding decision
 
+### Managed infrastructure placement
+
+The 2026-11-19 Managed FCOS refinement under
+[#1347](https://github.com/SecPal/.github/issues/1347) follows ADR-018:
+HAProxy and CrowdSec/AppSec use independently qualified Podman/Quadlet
+infrastructure services wherever technically appropriate. Rootless remains
+the default; any required privilege exception is component-specific and
+separately qualified. Host-native nftables remains an independent host authority,
+not application-container authority.
+
+Container placement must preserve actual TCP peer identity, the exact
+DIRECT/PROTECTED trust boundaries, fixed backend interfaces, atomic certificate
+publication, graceful reload and last-known-good behavior. Port publishing or
+namespace translation must not silently redefine trusted proxy sources or
+canonical Viewer identity. Each mode needs real end-to-end qualification;
+earlier host-native evidence does not qualify containerized Edge behavior.
+The security-outage, privacy and authority contracts below remain binding.
+
 ### DIRECT mode
 
 DIRECT retains the original architecture:
@@ -51,7 +69,7 @@ Internet
 → SecPal
 ```
 
-Host-native HAProxy is the public HTTP(S) Edge, with fixed loopback application
+HAProxy is the public HTTP(S) Edge, with fixed loopback application
 backends and no container-IP discovery or runtime socket. HAProxy terminates
 Viewer TLS. External Certbot owns ACME: HTTP-01 handling is exact; all other
 HTTP redirects to HTTPS. Certificate publication is atomic, candidate material

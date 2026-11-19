@@ -94,8 +94,8 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [ADR-021: OCI Supply-Chain and Vulnerability Evidence Architecture](20260824-oci-supply-chain-vulnerability-evidence-adr021.md) - 2026-08-24
 - [ADR-020: Production State, Recovery, and Cryptographic Authority Separation](20260824-production-state-recovery-authority-separation-adr020.md) - 2026-08-24; Managed storage and failure-class-specific RecoverySet authority refined under [#843](https://github.com/SecPal/.github/issues/843)
 - [ADR-019: Production Edge and Layered Security](20260824-production-edge-layered-security-adr019.md) - 2026-08-24; DIRECT and PROTECTED modes rebaselined under [#768](https://github.com/SecPal/.github/issues/768)
-- [ADR-018: Production Host and Container Runtime](20260824-production-host-container-runtime-adr018.md) - 2026-08-24
-- [ADR-017: PostgreSQL 18 Canonical Database Baseline](20260824-postgresql-18-canonical-baseline-adr017.md) - 2026-08-24
+- [ADR-018: Production Host and Container Runtime](20260824-production-host-container-runtime-adr018.md) - 2026-08-24; Managed FCOS/container refinement under [#1347](https://github.com/SecPal/.github/issues/1347)
+- [ADR-017: PostgreSQL 18 Canonical Database Baseline](20260824-postgresql-18-canonical-baseline-adr017.md) - 2026-08-24; Managed infrastructure-container refinement under [#1347](https://github.com/SecPal/.github/issues/1347)
 - [ADR-015: Global Identity Key Security](20260720-global-identity-key-security-adr015.md) - 2026-07-20
 - [BRAND-0002: Typography](BRAND-0002-typography.md) - 2026-06-13
 - [BRAND-0003: Navigation Pattern](BRAND-0003-navigation-pattern.md) - 2026-06-13

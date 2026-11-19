@@ -82,11 +82,30 @@ class PostgreSQL18BaselineGovernanceTest(unittest.TestCase):
             "UUIDs",
             "relational constraints",
             "transactional integrity",
-            "host-native",
-            "disposable PostgreSQL 18 containers",
-            "bounded CI/integration",
-            "qualified Rocky/RHEL 10.2+ PostgreSQL 18 Application Stream",
+            "independently qualified infrastructure containers",
+            "persistent state outside container writable layers",
+            "sslmode=verify-full",
+            "SCRAM-SHA-256",
+            "Runtime application, migration/DDL, backup, and replication authorities are distinct",
+            "Historical host-native qualification does not qualify the container path",
             "Future major upgrades start from PostgreSQL 18",
+        ):
+            self.assertIn(requirement, normalized_adr)
+
+    def test_managed_host_guidance_preserves_qualification_boundaries(self) -> None:
+        adr = (
+            REPOSITORY_ROOT
+            / "docs/adr/20260824-production-host-container-runtime-adr018.md"
+        ).read_text(encoding="utf-8")
+        normalized_adr = re.sub(r"\s+", " ", adr)
+        for requirement in (
+            "Fedora CoreOS Stable",
+            "rootless Podman with systemd/Quadlet",
+            "SELinux Enforcing",
+            "Host Enrollment",
+            "Workload Activation",
+            "Self-hosting does not require Fedora CoreOS",
+            "Host qualification is not Managed Production Acceptance",
         ):
             self.assertIn(requirement, normalized_adr)
 
