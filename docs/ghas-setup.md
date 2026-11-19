@@ -164,7 +164,7 @@ bash scripts/sync-required-checks.sh --repo api --apply
 bash scripts/sync-required-checks.sh --apply
 ```
 
-Synchronize the separate single-maintainer review baseline explicitly:
+Synchronize the required approval-count baseline explicitly:
 
 ```bash
 # Inspect the approval-count-only payload before applying it
@@ -183,7 +183,7 @@ does not change required checks or other pull-request review settings.
 **Note:**
 
 - `enforce_admins=true`: Non-negotiable - even admins must follow rules
-- `required_approving_review_count=0`: Single maintainer project, automated checks provide quality gates
+- `required_approving_review_count=0`: Required checks and configured automated review provide technical verification. The protected merge records the authorized source decision.
 - Required status checks: Keep them aligned with the real lint, test, build, analysis, and governance gates each repository actually runs
 
 ### Copilot Review Ruleset
