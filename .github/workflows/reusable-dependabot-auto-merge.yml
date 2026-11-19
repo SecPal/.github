@@ -353,7 +353,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: read
+      # GitHub requires repository write access to disable auto-merge.
+      contents: write
       pull-requests: write
     steps:
       - name: Reconcile automated enrollment against this exact head

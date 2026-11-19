@@ -186,6 +186,21 @@ grep -q '^  pull-requests: write$' "$CALLER_WORKFLOW" || {
   exit 1
 }
 
+# Disabling auto-merge is a repository write. Job permissions replace the
+# workflow defaults, so the Source Safety job must request that write explicitly.
+awk '
+  /^  source-safety:$/ { in_job = 1; next }
+  in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
+  in_job && /^    permissions:$/ { in_permissions = 1; next }
+  in_job && /^    [[:alnum:]_-]+:/ { in_permissions = 0 }
+  in_job && in_permissions && /^      contents: write$/ { contents_write = 1 }
+  in_job && in_permissions && /^      pull-requests: write$/ { pull_requests_write = 1 }
+  END { exit !(contents_write && pull_requests_write) }
+' "$REUSABLE_WORKFLOW" || {
+  echo "Dependabot Source Safety must have both write scopes to revoke auto-merge." >&2
+  exit 1
+}
+
 # Source safety must appear on human PRs too; eligibility stays bot-only in
 # the immutable callee. An author/actor job guard would skip required safety.
 if grep -qE "^[[:space:]]+if:.*github\.(event\.pull_request\.user\.login|actor)" "$CALLER_WORKFLOW"; then
