@@ -26,6 +26,7 @@
       "go_modules/lib/dependabot/go_modules/file_fetcher.rb",
       "gradle/lib/dependabot/gradle/file_fetcher.rb",
       "gradle/lib/dependabot/gradle/file_fetcher/settings_file_parser.rb",
+      "gradle/lib/dependabot/gradle/file_parser.rb",
       "helm/lib/dependabot/helm/file_fetcher.rb",
       "hex/lib/dependabot/hex/file_fetcher.rb",
       "julia/lib/dependabot/julia/file_fetcher.rb",
@@ -511,8 +512,11 @@
     },
     {
       "id": "gradle-dependency-script",
-      "path_regex": "(^|/)[^/]*dependencies[^/]*\\.gradle(\\.kts)?$",
-      "source_paths": ["gradle/lib/dependabot/gradle/file_fetcher.rb"]
+      "path_regex": "dependencies",
+      "source_paths": [
+        "gradle/lib/dependabot/gradle/file_fetcher.rb",
+        "gradle/lib/dependabot/gradle/file_parser.rb"
+      ]
     },
     {
       "id": "native-nuget-manifest",

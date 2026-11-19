@@ -901,17 +901,28 @@ updates:
     directory: /mobile
     ${DAILY}
 `,
-    "mobile/build.gradle": "apply from: 'versions/android-dependencies.gradle'\n",
+    "mobile/build.gradle": `apply from: 'versions/android-dependencies.gradle'
+apply from: 'dependencies/versions'
+apply from: 'versions/extra-dependencies'
+apply from: 'android-dependencies.extra.gradle'
+`,
     "mobile/versions/android-dependencies.gradle": "dependencies {}\n",
+    "mobile/dependencies/versions": "dependencies {}\n",
+    "mobile/dependencies/README.md": "# Dependency management\n",
+    "mobile/android-dependencies.extra.gradle": "dependencies {}\n",
+    "mobile/versions/extra-dependencies": "dependencies {}\n",
   });
   const { code, report } = run(root);
   assert.equal(code, 1);
-  assert.ok(
-    report.diagnostics.some(
-      ({ code, manifest_path }) =>
-        code === "UNCLASSIFIED_MANIFEST_CANDIDATE" &&
-        manifest_path === "mobile/versions/android-dependencies.gradle"
-    )
+  assert.deepEqual(
+    report.diagnostics
+      .filter(({ code }) => code === "UNCLASSIFIED_MANIFEST_CANDIDATE")
+      .map(({ manifest_path }) => manifest_path),
+    [
+      "mobile/dependencies/versions",
+      "mobile/versions/android-dependencies.gradle",
+      "mobile/versions/extra-dependencies",
+    ]
   );
 });
 

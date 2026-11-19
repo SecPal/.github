@@ -1046,17 +1046,51 @@ function gradleOwnership(root, tracked, rule) {
   return { builds, owners };
 }
 
+function gradleAppliedScripts(root, tracked, buildRule, scriptRule) {
+  const scripts = new Set();
+  if (!buildRule || !scriptRule) return scripts;
+  for (const build of tracked) {
+    if (!buildRule.compiled.test(build)) continue;
+    // Discovery reports missing and non-regular manifest candidates.
+    if (!lstatSync(path.join(root, build), { throwIfNoEntry: false })?.isFile()) continue;
+    const source = readTrackedText(root, build);
+    if (source === null) continue;
+    // Match the pinned fetcher's literal applied paths and leave their ownership unresolved.
+    for (const [, target] of source.matchAll(
+      /apply(?:\(| )\s*from(?:\s+=|:)\s+['"]([^'"]+)['"]/g
+    )) {
+      if (
+        scriptRule.compiled.test(target) &&
+        !target.includes("://") &&
+        (target.includes("/") || target.split(".").length <= 2)
+      ) {
+        scripts.add(path.posix.join(path.posix.dirname(build), target.replaceAll("$rootDir", ".")));
+      }
+    }
+  }
+  return scripts;
+}
+
 function discover(root, policy, reviewed) {
   const manifests = [];
   const diagnostics = [...(reviewed.diagnostics || [])];
   const tracked = trackedFiles(root);
   const trackedSet = new Set(tracked);
   const terraformModules = new Map();
+  const gradleScriptRule = policy.candidate_rules.find(
+    (rule) => rule.id === "gradle-dependency-script"
+  );
+  const gradleScripts = gradleAppliedScripts(
+    root,
+    tracked,
+    policy.manifest_rules.find((rule) => rule.ownership === "gradle-build"),
+    gradleScriptRule
+  );
   let gradle;
   for (const manifestPath of tracked) {
     const pathRules = policy.manifest_rules.filter((rule) => rule.compiled.test(manifestPath));
     const candidateRules = policy.candidate_rules.filter((rule) =>
-      rule.compiled.test(manifestPath)
+      rule === gradleScriptRule ? gradleScripts.has(manifestPath) : rule.compiled.test(manifestPath)
     );
     const nonManifestRules = policy.non_manifest_rules.filter(
       (rule) =>
