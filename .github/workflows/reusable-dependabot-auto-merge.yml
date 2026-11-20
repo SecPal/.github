@@ -56,6 +56,14 @@ on:
         required: false
         type: string
         default: ""
+      pre-commit-path:
+        description: "Optional exact .pre-commit-config.yaml path for authenticated hook updates"
+        type: string
+        default: ""
+      docker-rules:
+        description: "Explicit image, Containerfile paths, numeric release line, tag suffix and digest refresh permission"
+        type: string
+        default: "[]"
       merge-method:
         description: "Automatic merge method: squash"
         required: false
@@ -105,6 +113,8 @@ jobs:
           VERIFIED_DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
           WORKFLOW_PATHS: ${{ inputs.workflow-paths }}
           PIP_MANIFEST_PATH: ${{ inputs.pip-manifest-path }}
+          PRE_COMMIT_PATH: ${{ inputs.pre-commit-path }}
+          DOCKER_RULES: ${{ inputs.docker-rules }}
         with:
           script: |
             core.setOutput('verified', 'false');
@@ -148,7 +158,7 @@ jobs:
                 exit 1
               end
             `], { input: JSON.stringify({ config: Buffer.from(config.content, 'base64').toString('utf8'),
-              ecosystem: ({ npm_and_yarn: 'npm', github_actions: 'github-actions' })[ecosystem] || ecosystem,
+              ecosystem: ({ npm_and_yarn: 'npm', github_actions: 'github-actions', pre_commit: 'pre-commit' })[ecosystem] || ecosystem,
               target: pr.base.ref, default_branch: context.payload.repository.default_branch }),
               encoding: 'utf8', env: { PATH: process.env.PATH }, timeout: 10000, maxBuffer: 1024 * 1024 });
             if (configured.status !== 0) return;
@@ -170,11 +180,18 @@ jobs:
             if (!Array.isArray(workflowPaths) || !workflowPaths.every(path =>
                 typeof path === 'string' && /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path))) return;
             const pipPath = process.env.PIP_MANIFEST_PATH;
+            const rules = ecosystem === 'docker' ? JSON.parse(process.env.DOCKER_RULES || '[]') : [];
+            if (!Array.isArray(rules) || !rules.every(rule => rule && Array.isArray(rule.paths))) return;
+            const matchingRules = rules.filter(rule => rule.image === verifiedDependencies[0]?.dependencyName);
+            if (ecosystem === 'docker' && matchingRules.length !== 1) return;
+            const [dockerRule] = matchingRules;
             const allowed = path => typeof path === 'string' && (ecosystem === 'github_actions'
               ? /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path) &&
                 directories.includes('/') && (!workflowPaths.length || workflowPaths.includes(path))
               : prefixes.some(prefix => ecosystem === 'pip'
                 ? path === pipPath && path.startsWith(prefix) && /^[A-Za-z0-9_.-]*requirements[A-Za-z0-9_.-]*\.txt$/.test(path.slice(prefix.length))
+                : ecosystem === 'pre_commit' ? path === process.env.PRE_COMMIT_PATH && path === prefix + '.pre-commit-config.yaml'
+                : ecosystem === 'docker' ? path === prefix + 'Containerfile' && dockerRule?.paths?.includes(path)
                 : (manifests[ecosystem] || []).some(name => path === prefix + name)));
             const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number, per_page: 100 });
             if (!files.length || files.length !== pr.changed_files ||
@@ -186,7 +203,7 @@ jobs:
                   ['web-flow', 'dependabot[bot]'].includes(commit.committer?.login) &&
                   commit.commit.verification?.verified === true && commit.parents.length === 1)) return;
             // fetch-metadata can calculate a missing class using a mutable PR
-            // title. Require each class in the signed YAML metadata itself.
+            // title. Use the signed class or derive it from verified hook refs.
             const proof = require('node:child_process').spawnSync('ruby', ['-rjson', '-ryaml', '-e', String.raw`
               begin
                 input = JSON.parse(STDIN.read)
@@ -200,17 +217,134 @@ jobs:
                     expected = verified[index]
                     dependency.is_a?(Hash) && expected.is_a?(Hash) &&
                       dependency['dependency-name'] == expected['dependencyName'] &&
-                      types.include?(dependency['update-type']) && dependency['update-type'] == expected['updateType'] &&
-                      (input.fetch('ecosystem') != 'pip' || dependency['dependency-version'] == expected['newVersion'])
+                      (input.fetch('ecosystem') == 'pre_commit' ||
+                        (types.include?(dependency['update-type']) && dependency['update-type'] == expected['updateType'])) &&
+                      (!%w[pip pre_commit docker].include?(input.fetch('ecosystem')) ||
+                        (dependency['dependency-version'].is_a?(String) && dependency['dependency-version'] == expected['newVersion']))
                   end
-                print(valid ? 'true' : 'false')
+                print(valid ? JSON.generate(dependencies) : 'false')
               rescue StandardError
                 print 'false'
               end
             `], { input: JSON.stringify({ message: commits[0].commit.message,
               verified: verifiedDependencies, ecosystem }),
               encoding: 'utf8', env: { PATH: process.env.PATH }, timeout: 10000, maxBuffer: 1024 * 1024 });
-            if (proof.status !== 0 || proof.stdout !== 'true') return;
+            if (proof.status !== 0 || proof.stdout === 'false') return;
+            const signedDependencies = JSON.parse(proof.stdout);
+            const numeric = /^(?:v)?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+            const classify = (before, after) => {
+              const old = numeric.exec(before), next = numeric.exec(after);
+              if (!old || !next || old[1] !== next[1]) return '';
+              if (BigInt(next[2]) > BigInt(old[2])) return 'version-update:semver-minor';
+              return old[2] === next[2] && BigInt(next[3]) > BigInt(old[3]) ? 'version-update:semver-patch' : '';
+            };
+            const readExact = async (path, ref, blob) => {
+              const { data } = await github.rest.repos.getContent({ owner, repo, path, ref });
+              if (data.type !== 'file' || data.encoding !== 'base64' || !data.content || (blob && data.sha !== blob)) return null;
+              return Buffer.from(data.content, 'base64').toString('utf8');
+            };
+            const treeAt = async ref => {
+              const { data: commit } = await github.rest.git.getCommit({ owner, repo, commit_sha: ref });
+              const { data } = await github.rest.git.getTree({ owner, repo, tree_sha: commit.tree.sha, recursive: '1' });
+              return data.truncated === false ? new Map(data.tree.map(entry => [entry.path, entry])) : null;
+            };
+            let updateType;
+            if (['pre_commit', 'docker'].includes(ecosystem)) {
+              if (commits[0].parents[0].sha !== pr.base.sha || files.length !== signedDependencies.length ||
+                  files.some(file => file.status !== 'modified' || file.previous_filename || !/^[a-f0-9]{40}$/.test(file.sha)) ||
+                  verifiedDependencies.some(dep => dep.packageEcosystem !== ecosystem)) return;
+              const beforeTree = await treeAt(pr.base.sha), afterTree = await treeAt(expected);
+              if (!beforeTree || !afterTree) return;
+              const edits = [];
+              for (const file of files) {
+                const oldEntry = beforeTree.get(file.filename), newEntry = afterTree.get(file.filename);
+                if (oldEntry?.mode !== '100644' || newEntry?.mode !== '100644' || newEntry.sha !== file.sha) return;
+                const old = await readExact(file.filename, pr.base.sha, oldEntry.sha);
+                const next = await readExact(file.filename, expected, file.sha);
+                if (!old || !next) return;
+                const before = old.split('\n'), after = next.split('\n');
+                if (before.length !== after.length) return;
+                const changed = before.flatMap((line, index) => line === after[index] ? [] : [index]);
+                if (changed.length !== 1) return;
+                const [index] = changed;
+                edits.push({ before: before[index], after: after[index], file: old, index });
+              }
+              if (ecosystem === 'pre_commit') {
+                const [dependency] = verifiedDependencies;
+                const upstream = /^https:\/\/github\.com\/([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+)$/.exec(dependency.dependencyName);
+                if (files.length !== 1 || dependency.dependencyGroup !== '' || !upstream) return;
+                const { before, after, file, index } = edits[0];
+                const rev = /^( +)rev: ([A-Za-z0-9.-]+)(?: +# (v?[0-9.]+))?$/;
+                const old = rev.exec(before), next = rev.exec(after);
+                if (!old || !next || old[1] !== next[1]) return;
+                // Bind the only modified physical line to the actual repo/rev YAML node.
+                const hook = require('node:child_process').spawnSync('ruby', ['-rjson', '-ryaml', '-e', String.raw`
+                  begin
+                    input = JSON.parse(STDIN.read)
+                    yaml = input.fetch('file')
+                    YAML.safe_load(yaml, permitted_classes: [], permitted_symbols: [], aliases: false)
+                    pairs = ->(node) { node.children.each_slice(2).map { |k, v| [k.value, v] } }
+                    repos = pairs.call(YAML.parse(yaml).root).select { |key, _| key == 'repos' }
+                    raise unless repos.length == 1 && repos.first.last.is_a?(Psych::Nodes::Sequence)
+                    matches = repos.first.last.children.map { |node| pairs.call(node) }.select do |entry|
+                      entry.any? { |key, value| key == 'repo' && value.value == input.fetch('repo') }
+                    end
+                    raise unless matches.length == 1
+                    members = matches.first
+                    raise unless members.map(&:first).uniq.length == members.length
+                    ref = members.to_h.fetch('rev')
+                    raise unless ref.start_line == input.fetch('index') && ref.value == input.fetch('ref')
+                  rescue StandardError
+                    exit 1
+                  end
+                `], { input: JSON.stringify({ file, index, repo: dependency.dependencyName, ref: old[2] }),
+                  env: { PATH: process.env.PATH }, timeout: 10000 });
+                if (hook.status !== 0) return;
+                const digest = /^[a-f0-9]{40}$/;
+                const oldTag = digest.test(old[2]) ? old[3] : old[2];
+                const newTag = digest.test(next[2]) ? next[3] : next[2];
+                if (!oldTag || !newTag || newTag.replace(/^v/, '') !== dependency.newVersion.replace(/^v/, '') ||
+                    digest.test(old[2]) !== digest.test(next[2])) return;
+                updateType = classify(oldTag, newTag);
+                if (!updateType || (signedDependencies[0]['update-type'] && signedDependencies[0]['update-type'] !== updateType)) return;
+                const [, upstreamOwner, upstreamRepo] = upstream;
+                const resolveTag = async (tag) => {
+                  const params = { owner: upstreamOwner, repo: upstreamRepo };
+                  let object = (await github.rest.git.getRef({ ...params, ref: 'tags/'+tag })).data.object;
+                  if (object?.type === 'tag' && digest.test(object.sha)) {
+                    const annotation = (await github.rest.git.getTag({ ...params, tag_sha: object.sha })).data;
+                    if (annotation?.tag !== tag) return;
+                    object = annotation.object;
+                  }
+                  if (object?.type === 'commit' && digest.test(object.sha)) return object.sha;
+                };
+                const oldCommit = await resolveTag(oldTag), newCommit = await resolveTag(newTag);
+                if (!oldCommit || !newCommit || oldCommit === newCommit ||
+                    (digest.test(old[2]) && (old[2] !== oldCommit || next[2] !== newCommit))) return;
+              } else {
+                if (!dockerRule || !Array.isArray(dockerRule.paths) ||
+                    JSON.stringify(files.map(f => f.filename).sort()) !== JSON.stringify([...dockerRule.paths].sort()) ||
+                    !/^\d+(?:\.\d+){0,2}$/.test(dockerRule.line) || !/^(?:-[a-z0-9.-]+)?$/.test(dockerRule.suffix)) return;
+                const [first] = edits;
+                if (edits.some(edit => edit.before !== first.before || edit.after !== first.after)) return;
+                const from = /^FROM docker\.io\/([a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+):([A-Za-z0-9_.-]+)@(sha256:[a-f0-9]{64}) AS ([A-Za-z0-9_-]+)$/;
+                const old = from.exec(first.before), next = from.exec(first.after);
+                if (!old || !next || old[1] !== dockerRule.image || next[1] !== old[1] ||
+                    old[3] === next[3] || old[4] !== next[4]) return;
+                const suffix = dockerRule.suffix;
+                const version = tag => tag.endsWith(suffix) ? tag.slice(0, tag.length-suffix.length) : '';
+                const oldVersion = version(old[2]), newVersion = version(next[2]);
+                const inLine = v => numeric.test(v) && !v.startsWith('v') &&
+                  (v === dockerRule.line || v.startsWith(dockerRule.line+'.'));
+                if (!inLine(oldVersion) || !inLine(newVersion)) return;
+                updateType = old[2] === next[2] && dockerRule.digestRefresh === true ? 'digest-refresh' : classify(oldVersion, newVersion);
+                const signedType = updateType === 'digest-refresh' ? 'version-update:semver-patch' : updateType;
+                const group = verifiedDependencies[0].dependencyGroup;
+                if (!updateType || typeof group !== 'string' || Boolean(group) !== (files.length > 1) ||
+                    verifiedDependencies.some(dep => dep.dependencyName !== old[1] || dep.newVersion !== next[2] ||
+                      dep.updateType !== signedType || dep.dependencyGroup !== group)) return;
+              }
+            }
             if (ecosystem === 'pip') {
               const [file] = files;
               const [dependency] = verifiedDependencies;
@@ -222,12 +356,9 @@ jobs:
               // Read the approved file from the exact base and signed head.
               // Accept only exact numeric pins and SHA-256 hashes, with no pip directives.
               const readLock = async (ref, expectedBlob) => {
-                const { data } = await github.rest.repos.getContent({ owner, repo, path: pipPath, ref });
-                if (data.type !== 'file' || data.encoding !== 'base64' || !data.content ||
-                    (expectedBlob && data.sha !== expectedBlob)) return null;
-                const content = Buffer.from(data.content, 'base64').toString('utf8').replace(/\r\n/g, '\n');
+                const content = (await readExact(pipPath, ref, expectedBlob))?.replace(/\r\n/g, '\n');
                 // Limit the lock format to unambiguous pip line and encoding rules.
-                if (/[^\x09\x0a\x20-\x7e]/.test(content) || /^[ \t]*#.*(?:coding[:=]|\\[ \t]*$)/m.test(content)) return null;
+                if (!content || /[^\x09\x0a\x20-\x7e]/.test(content) || /^[ \t]*#.*(?:coding[:=]|\\[ \t]*$)/m.test(content)) return null;
                 const lock = new Map();
                 for (const line of content.replace(/\\\n/g, '').split('\n')) {
                   if (!line.trim() || line.trimStart().startsWith('#')) continue;
@@ -250,14 +381,16 @@ jobs:
                     (previous.version !== next.version || previous.hashes !== next.hashes))) return;
               }
               if (!before.has(updatedName) || after.get(updatedName).version !== dependency.newVersion) return;
-              const [major, minor, patch] = before.get(updatedName).version.split('.').map(BigInt);
-              const [newMajor, newMinor, newPatch] = after.get(updatedName).version.split('.').map(BigInt);
-              const kind = newMajor !== major ? null : newMinor > minor ? 'minor' :
-                newMinor === minor && newPatch > patch ? 'patch' : null;
-              if (!kind || dependency.updateType !== `version-update:semver-${kind}`) return;
+              const type = classify(before.get(updatedName).version, after.get(updatedName).version);
+              if (!type || dependency.updateType !== type) return;
             }
             const after = await read();
             if (after.head.sha !== expected || after.base.sha !== pr.base.sha || after.state !== 'open') return;
+            if (updateType) {
+              const { data: ref } = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
+              if (ref.object?.type !== 'commit' || ref.object.sha !== pr.base.sha) return;
+              core.setOutput('update-type', updateType);
+            }
             core.setOutput('verified', 'true');
 
       - name: Check PR metadata
@@ -270,7 +403,7 @@ jobs:
           DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
           DEPENDENCY_GROUP: ${{ steps.metadata.outputs.dependency-group }}
           MAINTAINER_CHANGES: ${{ steps.metadata.outputs.maintainer-changes }}
-          UPDATE_TYPE_RAW: ${{ steps.metadata.outputs.update-type }}
+          UPDATE_TYPE_RAW: ${{ steps.source.outputs.update-type || steps.metadata.outputs.update-type }}
           UPDATED_DEPENDENCIES_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
           PACKAGE_ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
           PREVIOUS_VERSION: ${{ steps.metadata.outputs.previous-version }}
@@ -355,7 +488,7 @@ jobs:
           # fetch-metadata reports only the highest aggregate update type.
           # Verify every JSON member against the reviewed group/type contract;
           # unknown, unversioned, mixed, or mismatched groups fail closed.
-          if is_grouped_update && ! is_reviewed_semver_group; then
+          if [[ "${PACKAGE_ECOSYSTEM}" != docker ]] && is_grouped_update && ! is_reviewed_semver_group; then
             echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
             echo "update-type=grouped-update" >> "${GITHUB_OUTPUT}"
             echo "❌ Not eligible: Dependabot group is not a reviewed homogeneous semver group"
@@ -363,6 +496,14 @@ jobs:
           fi
 
           case "${UPDATE_TYPE_RAW}" in
+            digest-refresh)
+              echo "update-type=digest-refresh" >> "${GITHUB_OUTPUT}"
+              if [[ "${PACKAGE_ECOSYSTEM}" == docker && ( "${PHASE}" == 2 || "${PHASE}" == 3 ) ]]; then
+                echo "should-auto-merge=true" >> "${GITHUB_OUTPUT}"
+              else
+                echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
+              fi
+              ;;
             version-update:semver-major)
               echo "update-type=major" >> "${GITHUB_OUTPUT}"
               echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
