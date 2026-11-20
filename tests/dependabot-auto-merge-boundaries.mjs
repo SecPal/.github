@@ -248,6 +248,22 @@ test("an opted-in signed pip minor changes one hash-locked dependency", async ()
   assert.equal(await verifySource(pipChange()), "true");
 });
 
+test("pip uses canonical names for locked dependencies", async () => {
+  const before =
+    pipBefore.replace("opentimestamps", "OpenTimestamps") +
+    requirement("test-package", "1.2.3", "d");
+  const after =
+    pipAfter.replace("opentimestamps", "OpenTimestamps") +
+    requirement("TEST_package", "1.2.3", "d");
+  assert.equal(await verifySource(pipChange({ before, after })), "true");
+  assert.equal(
+    await verifySource(
+      pipChange({ before, after: after + requirement("test.package", "1.2.3", "d") })
+    ),
+    "false"
+  );
+});
+
 test("an opted-in signed pip patch changes one hash-locked dependency", async () => {
   const after =
     requirement("opentimestamps", "0.4.6", "c") + requirement("pycryptodomex", "3.23.0", "b");
@@ -271,6 +287,9 @@ for (const [reason, change] of [
   ["unhashed pin", { after: pipAfter.replace(/ --hash=sha256:[a-f]+/, "") }],
   ["unrelated hash change", { after: pipAfter.replace("b".repeat(64), "d".repeat(64)) }],
   ["added dependency", { after: pipAfter + requirement("fixture", "1.2.3", "a") }],
+  ["ambiguous continued comment", { after: pipAfter + "# comment\\\nnot-a-requirement\n" }],
+  ["encoding override", { after: "# coding: latin1\n" + pipAfter }],
+  ["nonstandard line boundary", { after: pipAfter + "# comment\rnot-a-requirement\n" }],
   ["custom package source", { after: pipAfter + "--index-url https://example.com\n" }],
 ]) {
   test(`pip ${reason} fails source verification`, async () => {
