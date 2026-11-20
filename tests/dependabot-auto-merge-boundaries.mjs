@@ -123,6 +123,30 @@ async function verifySource(change = {}) {
   let reads = 0;
   const github = {
     rest: {
+      git: {
+        getCommit: async ({ commit_sha }) => ({ data: { tree: { sha: commit_sha } } }),
+        getTree: async ({ tree_sha }) => ({
+          data: {
+            truncated: false,
+            tree: Object.entries(change.manifests || {}).map(([path, entries]) => ({
+              path,
+              sha: entries[tree_sha].sha,
+              mode: change.mode ?? "100644",
+            })),
+          },
+        }),
+        getRef: async ({ owner, repo, ref }) => ({
+          data: {
+            object:
+              ref === "heads/main"
+                ? { type: "commit", sha: change.protectedHead ?? pr.base.sha }
+                : change.refs?.[`${owner}/${repo}/${ref}`],
+          },
+        }),
+        getTag: async ({ owner, repo, tag_sha }) => ({
+          data: change.tags?.[`${owner}/${repo}/${tag_sha}`],
+        }),
+      },
       repos: {
         getContent: async ({ ref, path }) => {
           if (change.manifests?.[path]) {
@@ -177,13 +201,267 @@ async function verifySource(change = {}) {
       { setOutput: (key, value) => Object.assign(output, { [key]: value }) },
       createRequire(import.meta.url)
     );
-    return output.verified;
+    return change.classification ? output["update-type"] : output.verified;
   } finally {
     process.env = saved;
   }
 }
 test("authentic signed bot manifest update passes the source boundary", async () => {
   assert.equal(await verifySource(), "true");
+});
+
+const admissionBase = "b".repeat(40);
+const admissionHead = "a".repeat(40);
+const admissionBlob = "f".repeat(40);
+
+function updateFixture(ecosystem, config, changes, dependencies, env, extra = {}) {
+  const signed = dependencies.map(({ dependencyName, newVersion, updateType }) => ({
+    "dependency-name": dependencyName,
+    "dependency-version": newVersion,
+    ...(updateType ? { "update-type": updateType } : {}),
+  }));
+  const commit = botCommit(`Update.\n\n---\n${yaml.dump({ "updated-dependencies": signed })}...\n`);
+  commit.parents = [{ sha: admissionBase }];
+  const encoded = (content) => ({
+    sha: admissionBlob,
+    content: Buffer.from(content).toString("base64"),
+  });
+  return {
+    classification: true,
+    pr: { changed_files: changes.length },
+    commits: [commit],
+    files: changes.map(([filename]) => ({ filename, status: "modified", sha: admissionBlob })),
+    manifests: Object.fromEntries(
+      changes.map(([name, old, next]) => [
+        name,
+        {
+          [admissionBase]: encoded(old),
+          [admissionHead]: encoded(next),
+        },
+      ])
+    ),
+    config: `version: 2\nupdates:\n${config}`,
+    env: {
+      PACKAGE_ECOSYSTEM: ecosystem,
+      ALLOWED_ECOSYSTEMS: ecosystem,
+      VERIFIED_DEPENDENCIES: JSON.stringify(dependencies),
+      ...env,
+    },
+    ...extra,
+  };
+}
+
+function preCommitFixture(repo, before, after, oldTag, newTag, extraEdit = "") {
+  const name = `https://github.com/${repo}`;
+  const config = (rev, edit) =>
+    `repos:\n  - repo: ${name}\n    rev: ${rev}\n    hooks:\n      - id: lint\n${edit}  - repo: local\n    hooks:\n      - id: local\n`;
+  const refs = {};
+  for (const [ref, tag, fallback] of [
+    [before, oldTag, admissionBase],
+    [after, newTag, admissionHead],
+  ]) {
+    refs[`${repo}/tags/${tag}`] = {
+      type: "commit",
+      sha: /^[a-f0-9]{40}/.test(ref) ? ref.slice(0, 40) : fallback,
+    };
+  }
+  return updateFixture(
+    "pre_commit",
+    "- package-ecosystem: pre-commit\n  directory: /\n",
+    [[".pre-commit-config.yaml", config(before, ""), config(after, extraEdit)]],
+    [
+      {
+        dependencyName: name,
+        newVersion: newTag.slice(1),
+        packageEcosystem: "pre_commit",
+        dependencyGroup: "",
+      },
+    ],
+    { PRE_COMMIT_PATH: ".pre-commit-config.yaml" },
+    { refs }
+  );
+}
+
+for (const [repo, initial, replacement, kind] of [
+  ["fsfe/reuse-tool", "v6.2.0", "v6.3.0", "minor"],
+  ["adrienverge/yamllint", "v1.37.1", "v1.38.0", "minor"],
+  ["kjanat/actionlint", "v1.17.0", "v1.17.1", "patch"],
+]) {
+  test(`authenticates the ${repo} pre-commit ${kind} without a title-derived class`, async () => {
+    const [before, after] =
+      kind === "patch"
+        ? [`${admissionBase} # ${initial}`, `${admissionHead} # ${replacement}`]
+        : [initial, replacement];
+    const fixture = preCommitFixture(repo, before, after, initial, replacement);
+    assert.equal(await verifySource(fixture), `version-update:semver-${kind}`);
+    fixture.refs[`${repo}/tags/${replacement}`].sha = admissionBase;
+    assert.equal(await verifySource(fixture), undefined);
+  });
+}
+
+test("pre-commit admission rejects prereleases and hook argument changes", async () => {
+  assert.equal(
+    await verifySource(
+      preCommitFixture("example/hooks", "v1.2.0", "v1.3.0-rc.1", "v1.2.0", "v1.3.0-rc.1")
+    ),
+    undefined
+  );
+  assert.equal(
+    await verifySource(
+      preCommitFixture(
+        "example/hooks",
+        "v1.2.0",
+        "v1.2.1",
+        "v1.2.0",
+        "v1.2.1",
+        "        args: [new]\n"
+      )
+    ),
+    undefined
+  );
+  assert.equal(
+    await verifySource({
+      ...preCommitFixture("example/hooks", "v1.2.0", "v1.2.1", "v1.2.0", "v1.2.1"),
+      protectedHead: "c".repeat(40),
+    }),
+    undefined
+  );
+  assert.equal(
+    await verifySource({
+      ...preCommitFixture("example/hooks", "v1.2.0", "v1.2.1", "v1.2.0", "v1.2.1"),
+      mode: "100755",
+    }),
+    undefined
+  );
+});
+
+function dockerFixture(
+  tags,
+  paths,
+  line,
+  suffix = "",
+  digestRefresh = false,
+  image = "library/composer"
+) {
+  const ref = (tag, digest) =>
+    `FROM docker.io/${image}:${tag}@sha256:${digest.repeat(64)} AS base\nRUN true\n`;
+  const changes = paths.map((path) => [path, ref(tags[0], "a"), ref(tags[1], "b")]);
+  const patch =
+    tags[0] === tags[1] ||
+    tags[0].split(".").slice(0, 2).join(".") === tags[1].split(".").slice(0, 2).join(".");
+  const dependencies = paths.map(() => ({
+    dependencyName: image,
+    newVersion: tags[1],
+    packageEcosystem: "docker",
+    dependencyGroup: paths.length > 1 ? "composer-image" : "",
+    updateType: `version-update:semver-${patch ? "patch" : "minor"}`,
+  }));
+  return updateFixture(
+    "docker",
+    "- package-ecosystem: docker\n  directories: [/, /docker/php-fpm, /docker/nginx]\n",
+    changes,
+    dependencies,
+    { DOCKER_RULES: JSON.stringify([{ image, paths, line, suffix, digestRefresh }]) }
+  );
+}
+
+test("authenticates a stable PHP patch within the supported image line", async () => {
+  const paths = ["docker/php-fpm/Containerfile"];
+  assert.equal(
+    await verifySource(
+      dockerFixture(
+        ["8.4.27-fpm-alpine3.24", "8.4.28-fpm-alpine3.24"],
+        paths,
+        "8.4",
+        "-fpm-alpine3.24",
+        false,
+        "library/php"
+      )
+    ),
+    "version-update:semver-patch"
+  );
+});
+
+test("authenticates both members of the Composer image group", async () => {
+  const paths = ["Containerfile", "docker/php-fpm/Containerfile"];
+  const fixture = dockerFixture(["2.10.2", "2.11.1"], paths, "2");
+  assert.equal(await verifySource(fixture), "version-update:semver-minor");
+  const changed = fixture.manifests[paths[1]][admissionHead];
+  changed.content = Buffer.from(
+    Buffer.from(changed.content, "base64").toString().replace(/b{64}/, "c".repeat(64))
+  ).toString("base64");
+  assert.equal(await verifySource(fixture), undefined);
+});
+
+test("classifies unchanged FrankenPHP tags as explicit digest refreshes", async () => {
+  const tags = ["1.13.5-php8.4.27-alpine", "1.13.5-php8.4.27-alpine"];
+  assert.equal(
+    await verifySource(
+      dockerFixture(
+        tags,
+        ["Containerfile"],
+        "1.13.5",
+        "-php8.4.27-alpine",
+        true,
+        "dunglas/frankenphp"
+      )
+    ),
+    "digest-refresh"
+  );
+  assert.equal(
+    await verifySource(
+      dockerFixture(
+        tags,
+        ["Containerfile"],
+        "1.13.5",
+        "-php8.4.27-alpine",
+        false,
+        "dunglas/frankenphp"
+      )
+    ),
+    undefined
+  );
+  assert.equal(
+    eligible({ UPDATE_TYPE_RAW: "digest-refresh", PACKAGE_ECOSYSTEM: "docker", PHASE: "2" }),
+    "true"
+  );
+  assert.equal(
+    eligible({ UPDATE_TYPE_RAW: "digest-refresh", PACKAGE_ECOSYSTEM: "docker", PHASE: "1" }),
+    "false"
+  );
+  assert.equal(
+    eligible({ UPDATE_TYPE_RAW: "digest-refresh", PACKAGE_ECOSYSTEM: "github_actions" }),
+    "false"
+  );
+});
+
+test("rejects RC image versions and unsupported Nginx lines", async () => {
+  assert.equal(
+    await verifySource(
+      dockerFixture(
+        ["8.4.27-fpm-alpine3.24", "8.6.0RC5-fpm-alpine3.24"],
+        ["docker/php-fpm/Containerfile"],
+        "8.4",
+        "-fpm-alpine3.24",
+        false,
+        "library/php"
+      )
+    ),
+    undefined
+  );
+  assert.equal(
+    await verifySource(
+      dockerFixture(
+        ["1.30.7-alpine3.24-slim", "1.31.8-alpine3.24-slim"],
+        ["docker/nginx/Containerfile"],
+        "1.30",
+        "-alpine3.24-slim",
+        false,
+        "library/nginx"
+      )
+    ),
+    undefined
+  );
 });
 
 const pipPath = "docker/python/opentimestamps-requirements.txt";
