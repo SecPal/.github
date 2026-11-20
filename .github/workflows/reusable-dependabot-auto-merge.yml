@@ -61,7 +61,7 @@ on:
         type: string
         default: ""
       docker-rules:
-        description: "Explicit image, Containerfile paths, numeric release line, tag suffix and digest refresh permission"
+        description: "Explicit image, Containerfile paths, numeric release line, tag suffix, digestRefresh opt-in and enforceLine opt-in"
         type: string
         default: "[]"
       merge-method:
@@ -96,6 +96,7 @@ jobs:
     outputs:
       should-auto-merge: ${{ steps.check.outputs.should-auto-merge }}
       update-type: ${{ steps.check.outputs.update-type }}
+      policy-rejection: ${{ steps.source.outputs.policy-rejection }}
     steps:
       - name: Dependabot metadata
         id: metadata
@@ -249,6 +250,7 @@ jobs:
               return data.truncated === false ? new Map(data.tree.map(entry => [entry.path, entry])) : null;
             };
             let updateType;
+            let policyRejection;
             if (['pre_commit', 'docker'].includes(ecosystem)) {
               if (commits[0].parents[0].sha !== pr.base.sha || files.length !== signedDependencies.length ||
                   files.some(file => file.status !== 'modified' || file.previous_filename || !/^[a-f0-9]{40}$/.test(file.sha)) ||
@@ -336,13 +338,22 @@ jobs:
                 const oldVersion = version(old[2]), newVersion = version(next[2]);
                 const inLine = v => numeric.test(v) && !v.startsWith('v') &&
                   (v === dockerRule.line || v.startsWith(dockerRule.line+'.'));
-                if (!inLine(oldVersion) || !inLine(newVersion)) return;
-                updateType = old[2] === next[2] && dockerRule.digestRefresh === true ? 'digest-refresh' : classify(oldVersion, newVersion);
-                const signedType = updateType === 'digest-refresh' ? 'version-update:semver-patch' : updateType;
                 const group = verifiedDependencies[0].dependencyGroup;
-                if (!updateType || typeof group !== 'string' || Boolean(group) !== (files.length > 1) ||
+                if (!inLine(oldVersion) || typeof group !== 'string' || Boolean(group) !== (files.length > 1) ||
                     verifiedDependencies.some(dep => dep.dependencyName !== old[1] || dep.newVersion !== next[2] ||
-                      dep.updateType !== signedType || dep.dependencyGroup !== group)) return;
+                      dep.dependencyGroup !== group)) return;
+                if (!inLine(newVersion)) {
+                  if (dockerRule.enforceLine !== true) return;
+                  const release = /^(\d+\.\d+\.\d+)([._-]?[a-z][a-z0-9._-]*)?$/i.exec(newVersion);
+                  const reason = !release || !numeric.test(release[1]) ? 'an invalid runtime tag'
+                    : release[2] ? (inLine(release[1]) ? 'a prerelease' : 'a prerelease outside the supported release line')
+                    : 'a version outside the supported release line';
+                  policyRejection = `Docker image ${next[1]}:${next[2]} uses ${reason}. Expected stable ${dockerRule.line} with suffix ${suffix || '(none)'}.`;
+                } else {
+                  updateType = old[2] === next[2] && dockerRule.digestRefresh === true ? 'digest-refresh' : classify(oldVersion, newVersion);
+                  const signedType = updateType === 'digest-refresh' ? 'version-update:semver-patch' : updateType;
+                  if (!updateType || verifiedDependencies.some(dep => dep.updateType !== signedType)) return;
+                }
               }
             }
             if (ecosystem === 'pip') {
@@ -386,11 +397,15 @@ jobs:
             }
             const after = await read();
             if (after.head.sha !== expected || after.base.sha !== pr.base.sha || after.state !== 'open') return;
-            if (updateType) {
+            if (updateType || policyRejection) {
               const { data: ref } = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
               if (ref.object?.type !== 'commit' || ref.object.sha !== pr.base.sha) return;
-              core.setOutput('update-type', updateType);
             }
+            if (policyRejection) {
+              core.setOutput('policy-rejection', policyRejection);
+              return;
+            }
+            if (updateType) core.setOutput('update-type', updateType);
             core.setOutput('verified', 'true');
 
       - name: Check PR metadata
@@ -559,6 +574,7 @@ jobs:
           ELIGIBLE: >-
             ${{ needs.check-eligibility.result == 'success' &&
                 needs.check-eligibility.outputs.should-auto-merge == 'true' && inputs.merge-method == 'squash' }}
+          POLICY_REJECTION: ${{ needs.check-eligibility.outputs.policy-rejection }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -583,6 +599,9 @@ jobs:
               if ((await read()).auto_merge?.enabled_by.login === 'github-actions[bot]') {
                 throw new Error('Unsafe automated enrollment is still active');
               }
+            }
+            if (pr.user.login === 'dependabot[bot]' && process.env.POLICY_REJECTION) {
+              throw new Error(process.env.POLICY_REJECTION);
             }
 
   # Enrollment is informational; branch protection owns quality admission.
@@ -660,7 +679,13 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     steps:
-      - name: Record manual decision
+      - name: Record the decision
         env:
           UPDATE_TYPE: ${{ needs.check-eligibility.outputs.update-type }}
-        run: printf 'Manual review required (%s).\n' "$UPDATE_TYPE" >> "$GITHUB_STEP_SUMMARY"
+          POLICY_REJECTION: ${{ needs.check-eligibility.outputs.policy-rejection }}
+        run: |
+          if [[ -n "$POLICY_REJECTION" ]]; then
+            printf '%s\n' "$POLICY_REJECTION" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'Manual review required (%s).\n' "$UPDATE_TYPE" >> "$GITHUB_STEP_SUMMARY"
+          fi

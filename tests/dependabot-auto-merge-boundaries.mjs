@@ -201,7 +201,7 @@ async function verifySource(change = {}) {
       { setOutput: (key, value) => Object.assign(output, { [key]: value }) },
       createRequire(import.meta.url)
     );
-    return change.classification ? output["update-type"] : output.verified;
+    return output[change.output ?? (change.classification ? "update-type" : "verified")];
   } finally {
     process.env = saved;
   }
@@ -341,7 +341,8 @@ function dockerFixture(
   line,
   suffix = "",
   digestRefresh = false,
-  image = "library/composer"
+  image = "library/composer",
+  enforceLine = false
 ) {
   const ref = (tag, digest) =>
     `FROM docker.io/${image}:${tag}@sha256:${digest.repeat(64)} AS base\nRUN true\n`;
@@ -361,7 +362,7 @@ function dockerFixture(
     "- package-ecosystem: docker\n  directories: [/, /docker/php-fpm, /docker/nginx]\n",
     changes,
     dependencies,
-    { DOCKER_RULES: JSON.stringify([{ image, paths, line, suffix, digestRefresh }]) }
+    { DOCKER_RULES: JSON.stringify([{ image, paths, line, suffix, digestRefresh, enforceLine }]) }
   );
 }
 
@@ -380,6 +381,83 @@ test("authenticates a stable PHP patch within the supported image line", async (
     ),
     "version-update:semver-patch"
   );
+});
+
+const phpSuffix = "-fpm-alpine3.24";
+const phpPolicyFixture = (candidate, { enforceLine = true, digestRefresh = false } = {}) =>
+  dockerFixture(
+    ["8.4.27" + phpSuffix, candidate],
+    ["docker/php-fpm/Containerfile"],
+    "8.4",
+    phpSuffix,
+    digestRefresh,
+    "library/php",
+    enforceLine
+  );
+
+test("enforced PHP rule accepts future stable patches and preserves explicit digest opt-in", async () => {
+  for (const version of ["8.4.28", "8.4.29"]) {
+    assert.equal(
+      await verifySource(phpPolicyFixture(version + phpSuffix)),
+      "version-update:semver-patch"
+    );
+  }
+  const currentTag = "8.4.27" + phpSuffix;
+  assert.equal(
+    await verifySource(phpPolicyFixture(currentTag, { digestRefresh: true })),
+    "digest-refresh"
+  );
+  assert.equal(await verifySource(phpPolicyFixture(currentTag)), undefined);
+});
+
+test("enforced PHP rule rejects prereleases, variant changes, malformed tags, and unsupported lines", async () => {
+  for (const [tag, reason] of [
+    ...[
+      "RC1",
+      "rc1",
+      ".RC1",
+      "-rc.1",
+      "alpha1",
+      "-BETA.2",
+      "a1",
+      "-preview",
+      "-nightly",
+      "-dev",
+    ].map((qualifier) => ["8.4.28" + qualifier + phpSuffix, "prerelease"]),
+    ["8.6.0RC5" + phpSuffix, "prerelease outside the supported release line"],
+    ["8.5.0" + phpSuffix, "outside the supported release line"],
+    ["8.4.28-cli-alpine3.24", "invalid runtime tag"],
+    ["8.4" + phpSuffix, "invalid runtime tag"],
+  ]) {
+    const fixture = phpPolicyFixture(tag);
+    assert.equal(await verifySource(fixture), undefined, tag);
+    assert.match(
+      (await verifySource({ ...fixture, output: "policy-rejection" })) ?? "",
+      new RegExp(reason),
+      tag
+    );
+  }
+});
+
+test("a hard rejection requires an opted-in rule, signed proposal, and current protected base", async () => {
+  const tag = "8.4.28RC1" + phpSuffix;
+  const unsigned = phpPolicyFixture(tag);
+  unsigned.commits[0].commit.verification.verified = false;
+  const mismatchedTag = phpPolicyFixture(tag);
+  const [file] = mismatchedTag.files;
+  const content = mismatchedTag.manifests[file.filename][admissionHead];
+  content.content = Buffer.from(
+    Buffer.from(content.content, "base64").toString().replace("RC1", "RC2")
+  ).toString("base64");
+  for (const fixture of [
+    phpPolicyFixture(tag, { enforceLine: false }),
+    unsigned,
+    mismatchedTag,
+    { ...phpPolicyFixture(tag), protectedHead: "c".repeat(40) },
+    { ...phpPolicyFixture(tag), pr: { user: { login: "developer", type: "User" } } },
+  ]) {
+    assert.equal(await verifySource({ ...fixture, output: "policy-rejection" }), undefined);
+  }
 });
 
 test("authenticates both members of the Composer image group", async () => {
@@ -948,4 +1026,37 @@ test("unavailable base config fails closed", async () => {
 
 test("the supported dependabot.yaml filename uses the same immutable base", async () => {
   assert.equal(await verifySource({ alternateConfig: true }), "true");
+});
+
+test("the required source-safety check blocks the verified policy rejection", async () => {
+  const safety = workflow.jobs["source-safety"];
+  assert.match(safety.steps[0].env.POLICY_REJECTION ?? "", /policy-rejection/);
+  const script = safety.steps[0].with.script;
+  const head = "a".repeat(40);
+  const pr = {
+    head: { sha: head },
+    base: { ref: "main" },
+    state: "open",
+    user: { login: "dependabot[bot]" },
+    labels: [{ name: "dependencies" }],
+    auto_merge: null,
+  };
+  const policyRejection = "Docker image library/php uses a prerelease";
+  const github = {
+    rest: { pulls: { get: async () => ({ data: pr }) } },
+    graphql: async () => assert.fail("a policy rejection does not close or edit the PR"),
+  };
+  const run = () =>
+    new AsyncFunction("github", "context", script)(github, {
+      repo: { owner: "SecPal", repo: "frontend" },
+      payload: { pull_request: { number: 1, head: { sha: head } } },
+    });
+  process.env.POLICY_REJECTION = policyRejection;
+  try {
+    await assert.rejects(run(), new RegExp(policyRejection));
+    pr.head.sha = "b".repeat(40);
+    await assert.rejects(run(), /enrollment identity is unavailable or changed/);
+  } finally {
+    delete process.env.POLICY_REJECTION;
+  }
 });
