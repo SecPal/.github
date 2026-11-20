@@ -4062,16 +4062,6 @@ def run_setup_commands(worktree_path: pathlib.Path, commands: list[str], *, db_p
         )
 
 
-def container_preview_admission():
-    renderer_path = ROLLOUT_SCRIPT_PATH.with_name("render-polyscope-container-caddy.py")
-    spec = importlib.util.spec_from_file_location("polyscope_preview_admission", renderer_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("container-preview-admission-unavailable")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def sync_worktree_local_config(
     worktree_path: pathlib.Path, config_text: str, *, container_preview: bool = False
 ) -> None:

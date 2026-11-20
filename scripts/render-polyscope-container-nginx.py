@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 SecPal Contributors
 # SPDX-License-Identifier: MIT
 
-"""Render fail-closed Caddy routes for active registered SecPal previews."""
+"""Render fail-closed Nginx routes for active registered SecPal previews."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import re
 import sqlite3
 import stat
 import tempfile
+from typing import NamedTuple
 
 
 @functools.lru_cache(maxsize=1)
@@ -48,18 +49,8 @@ WORKSPACE_ALIAS_REGISTRY = ".polyscope-secpal-workspace-aliases.json"
 
 
 def api_preview_is_admitted(worktree: pathlib.Path) -> bool:
-    token = worktree / API_PREVIEW_ADMISSION_FILENAME
+    token = worktree / "public" / API_PREVIEW_ADMISSION_FILENAME
     return not token.is_symlink() and token.is_file()
-
-
-def admit_api_preview(worktree: pathlib.Path) -> None:
-    """Publish only after the coordinator has proved persistent runtime readiness."""
-    write_atomic(worktree / API_PREVIEW_ADMISSION_FILENAME, "")
-
-
-def withdraw_api_preview(worktree: pathlib.Path) -> None:
-    """The running Caddy file matcher observes withdrawal without a reload."""
-    (worktree / API_PREVIEW_ADMISSION_FILENAME).unlink(missing_ok=True)
 
 
 def has_provisioned_physical_name(worktree: pathlib.Path) -> bool:
@@ -197,7 +188,7 @@ def active_workspaces(
         if require_runtime_admission and not api_preview_is_admitted(physical_worktree):
             continue
         host_document_root = physical_worktree / document_root
-        if not host_document_root.is_dir():
+        if host_document_root.is_symlink() or not host_document_root.is_dir():
             raise RuntimeError(f"active preview document root is unavailable: {host_document_root}")
         for candidate in host_document_root.rglob("*"):
             if candidate.is_symlink():
@@ -229,94 +220,108 @@ def active_workspaces(
     return workspaces
 
 
-def render(
-    db_path: pathlib.Path,
-    container_root: pathlib.Path,
-    clone_root: pathlib.Path,
-    repository_root: pathlib.Path,
-) -> str:
+class PreviewRoute(NamedTuple):
+    host: str
+    redirect_host: str | None
+    worktree: pathlib.Path
+    document_root: str
+    php: bool
+
+
+def preview_routes(db_path, clone_root, repository_root) -> list[PreviewRoute]:
     identifiers = repository_ids(db_path, repository_root)
-    blocks: list[str] = [
-        "{",
-        "    admin off",
-        "    auto_https off",
-        "    frankenphp",
-        "}",
-        "",
-        ":18080 {",
-    ]
-    route_index = 0
-    for repository_name, _repository_directory, host_prefix, document_root, route_type in ROUTES:
-        repository_id = identifiers.get(repository_name)
+    routes = []
+    for repository, _directory, prefix, document_root, route_type in ROUTES:
+        repository_id = identifiers.get(repository)
         if repository_id is None:
             continue
+        php = route_type == "php"
         workspaces = active_workspaces(
-            db_path, repository_id, clone_root, document_root,
-            require_runtime_admission=route_type == "php",
+            db_path, repository_id, clone_root, document_root, require_runtime_admission=php,
         )
-        canonical_names = {workspace for workspace, _physical in workspaces}
-        for workspace, physical_workspace in workspaces:
-            if physical_workspace != workspace and physical_workspace in canonical_names:
+        canonical_names = {workspace for workspace, _ in workspaces}
+        for workspace, physical in workspaces:
+            if physical != workspace and physical in canonical_names:
                 raise RuntimeError(
                     "physical preview hostname conflicts with a canonical workspace: "
-                    f"{repository_id}/{physical_workspace}"
+                    f"{repository_id}/{physical}"
                 )
-            route_index += 1
-            matcher = f"preview_{route_index}"
-            root = container_root / repository_id / physical_workspace / document_root
-            if physical_workspace != workspace:
-                redirect_matcher = f"preview_redirect_{route_index}"
-                blocks.extend(
-                    [
-                        f"    @{redirect_matcher} host {host_prefix}-{physical_workspace}.preview.secpal.dev",
-                        f"    handle @{redirect_matcher} {{",
-                        f"        redir https://{host_prefix}-{workspace}.preview.secpal.dev{{uri}} 308",
-                        "    }",
-                        "",
-                    ]
-                )
-            blocks.extend(
-                [
-                    f"    @{matcher} host {host_prefix}-{workspace}.preview.secpal.dev",
-                    f"    handle @{matcher} {{",
-                    f"        root * {root}",
-                ]
-            )
-            if route_type == "php":
-                non_front_controller = f"non_front_controller_php_{route_index}"
-                static_file = f"static_file_{route_index}"
-                blocks.extend(
-                    [
-                        "        route {",
-                        f"            @api_not_ready_{route_index} {{",
-                        "                not {",
-                        "                    file {",
-                        f"                        root {root.parent}",
-                        f"                        try_files {API_PREVIEW_ADMISSION_FILENAME}",
-                        "                    }",
-                        "                }",
-                        "            }",
-                        f'            respond @api_not_ready_{route_index} "Preview not ready" 503',
-                        f"            @{non_front_controller} {{",
-                        "                path *.php",
-                        "                not path /index.php",
-                        "            }",
-                        f'            respond @{non_front_controller} "Not found" 404',
-                        f"            @{static_file} {{",
-                        "                file {path}",
-                        "                not path *.php",
-                        "            }",
-                        f"            file_server @{static_file}",
-                        "            rewrite * /index.php",
-                        "            php",
-                        "        }",
-                    ]
-                )
-            else:
-                blocks.extend(["        try_files {path} /index.html", "        file_server"])
-            blocks.extend(["    }", ""])
-    blocks.extend(['    respond "Unknown Polyscope preview workspace" 404', "}", ""])
+            host = f"{prefix}-{workspace}.preview.secpal.dev"
+            redirect = f"{prefix}-{physical}.preview.secpal.dev" if physical != workspace else None
+            routes.append(PreviewRoute(
+                host, redirect, clone_root / repository_id / physical, document_root, php,
+            ))
+    return routes
+
+
+def render_routes(routes: list[PreviewRoute], container_root: pathlib.Path) -> str:
+    blocks = [
+        "pid /tmp/nginx.pid;",
+        "error_log /dev/null;",
+        "events {}",
+        "http {",
+        "    include /etc/nginx/mime.types;",
+        "    server_names_hash_bucket_size 128;",
+        "    access_log off;",
+        "    client_body_temp_path /tmp/client-body;",
+        "    proxy_temp_path /tmp/proxy;",
+        "    fastcgi_temp_path /tmp/fastcgi;",
+        "    uwsgi_temp_path /tmp/uwsgi;",
+        "    scgi_temp_path /tmp/scgi;",
+        "    client_max_body_size 12m;",
+        "    server {",
+        "        listen 18080 default_server;",
+        "        server_name _;",
+        "        return 404;",
+        "    }",
+    ]
+    for index, route in enumerate(routes, start=1):
+        # Podman bind mounts hold directories by identity. Trigger refresh when
+        # a build or workspace recreation replaces a directory at the same path.
+        mount_paths = [route.worktree / route.document_root]
+        if route.php:
+            mount_paths.extend([route.worktree, route.worktree / "storage"])
+        identities = [path.stat(follow_symlinks=False) for path in mount_paths]
+        mounts = " ".join(f"{item.st_dev}:{item.st_ino}" for item in identities)
+        blocks.append(f"    # Preview mounts: {mounts}")
+        if route.redirect_host:
+            blocks.extend([
+                "    server {",
+                "        listen 18080;",
+                f"        server_name {route.redirect_host};",
+                f"        return 308 https://{route.host}$request_uri;",
+                "    }",
+            ])
+        blocks.extend([
+            "    server {",
+            "        listen 18080;",
+            f"        server_name {route.host};",
+            f"        root {container_root / str(index)};",
+            "        disable_symlinks on from=$document_root;",
+            r"        location ~ /\. { return 404; }",
+            r"        location ~* \.php(?:/|$) { return 404; }",
+        ])
+        if route.php:
+            blocks.extend([
+                f"        if (!-f $document_root/{API_PREVIEW_ADMISSION_FILENAME}) {{ return 503; }}",
+                "        location / { try_files $uri /index.php?$query_string; }",
+                "        location = /index.php {",
+                "            include /etc/nginx/fastcgi_params;",
+                "            fastcgi_param SCRIPT_FILENAME /app/public/index.php;",
+                '            fastcgi_param HTTP_PROXY "";',
+                "            fastcgi_buffering off;",
+                f"            fastcgi_pass unix:/run/preview-sockets/{index}/api.sock;",
+                "        }",
+            ])
+        else:
+            blocks.append("        location / { try_files $uri $uri/ /index.html =404; }")
+        blocks.append("    }")
+    blocks.extend(["}", ""])
     return "\n".join(blocks)
+
+
+def render(db_path, container_root, clone_root, repository_root) -> str:
+    return render_routes(preview_routes(db_path, clone_root, repository_root), container_root)
 
 
 def write_atomic(path: pathlib.Path, content: str) -> None:
@@ -350,7 +355,7 @@ def main() -> int:
         ("--clone-root", args.clone_root),
         ("--repository-root", args.repository_root),
     ):
-        if not path.is_absolute() or re.fullmatch(r"/[A-Za-z0-9._/ +#-]+", str(path)) is None:
+        if not path.is_absolute() or re.fullmatch(r"/[A-Za-z0-9._/+-]+", str(path)) is None:
             parser.error(f"{option} must be a safe absolute path")
     write_atomic(
         args.output,

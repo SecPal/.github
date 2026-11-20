@@ -393,31 +393,17 @@ test("authenticates both members of the Composer image group", async () => {
   assert.equal(await verifySource(fixture), undefined);
 });
 
-test("classifies unchanged FrankenPHP tags as explicit digest refreshes", async () => {
-  const tags = ["1.13.5-php8.4.27-alpine", "1.13.5-php8.4.27-alpine"];
+test("classifies unchanged official PHP tags as explicit digest refreshes", async () => {
+  const tags = ["8.4.28-fpm-alpine3.24", "8.4.28-fpm-alpine3.24"];
   assert.equal(
     await verifySource(
-      dockerFixture(
-        tags,
-        ["Containerfile"],
-        "1.13.5",
-        "-php8.4.27-alpine",
-        true,
-        "dunglas/frankenphp"
-      )
+      dockerFixture(tags, ["Containerfile"], "8.4", "-fpm-alpine3.24", true, "library/php")
     ),
     "digest-refresh"
   );
   assert.equal(
     await verifySource(
-      dockerFixture(
-        tags,
-        ["Containerfile"],
-        "1.13.5",
-        "-php8.4.27-alpine",
-        false,
-        "dunglas/frankenphp"
-      )
+      dockerFixture(tags, ["Containerfile"], "8.4", "-fpm-alpine3.24", false, "library/php")
     ),
     undefined
   );

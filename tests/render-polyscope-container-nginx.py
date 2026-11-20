@@ -13,11 +13,11 @@ from unittest import mock
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "scripts" / "render-polyscope-container-caddy.py"
+SCRIPT = REPO_ROOT / "scripts" / "render-polyscope-container-nginx.py"
 
 
 def load_module():
-    spec = importlib.util.spec_from_file_location("render_caddy", SCRIPT)
+    spec = importlib.util.spec_from_file_location("render_nginx", SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -35,7 +35,7 @@ def expect_runtime_error(callback, message: str) -> None:
 
 def main() -> None:
     module = load_module()
-    with tempfile.TemporaryDirectory(prefix="polyscope-caddy.") as temporary:
+    with tempfile.TemporaryDirectory(prefix="polyscope-nginx.") as temporary:
         root = pathlib.Path(temporary)
         repository_root = root / "repos/SecPal"
         clone_root = root / "clones"
@@ -105,14 +105,15 @@ def main() -> None:
             )
 
         api_worktree = clone_root / "api-repo_1/calm-otter-a1b2c3d4"
+        (api_worktree / "storage").mkdir()
         unready = module.render(db_path, pathlib.Path("/workspaces"), clone_root, repository_root)
         assert "api-calm-otter.preview.secpal.dev" not in unready
         assert "frontend-calm-otter.preview.secpal.dev" in unready
-        module.admit_api_preview(api_worktree)
+        (api_worktree / "public" / module.API_PREVIEW_ADMISSION_FILENAME).touch()
         assert module.api_preview_is_admitted(api_worktree)
-        module.withdraw_api_preview(api_worktree)
+        (api_worktree / "public" / module.API_PREVIEW_ADMISSION_FILENAME).unlink()
         assert not module.api_preview_is_admitted(api_worktree)
-        module.admit_api_preview(api_worktree)
+        (api_worktree / "public" / module.API_PREVIEW_ADMISSION_FILENAME).touch()
 
         rendered = module.render(
             db_path,
@@ -129,36 +130,35 @@ def main() -> None:
         assert "{re." not in rendered
         # Native Polyscope links use physical clone names. Redirect those
         # exact active aliases to the canonical host, preserving path/query.
-        for index, prefix, physical in (
-            (1, "api", "calm-otter-a1b2c3d4"),
-            (2, "frontend", "calm-otter-e5f6a7b8"),
-            (3, "secpal-app", "calm-otter-12345678"),
+        for prefix, physical in (
+            ("api", "calm-otter-a1b2c3d4"),
+            ("frontend", "calm-otter-e5f6a7b8"),
+            ("secpal-app", "calm-otter-12345678"),
         ):
-            redirect = (
-                f"    @preview_redirect_{index} host {prefix}-{physical}.preview.secpal.dev\n"
-                f"    handle @preview_redirect_{index} {{\n"
-                f"        redir https://{prefix}-calm-otter.preview.secpal.dev{{uri}} 308\n"
-                "    }"
-            )
-            assert redirect in rendered, redirect
-            assert rendered.index(redirect) < rendered.index(f"    @preview_{index} host")
-            assert f"    @preview_{index} host {prefix}-{physical}.preview.secpal.dev" not in rendered
-        assert "root * /workspaces/api-repo_1/calm-otter-a1b2c3d4/public" in rendered
-        assert "root * /workspaces/Frontend_2/calm-otter-e5f6a7b8/dist" in rendered
-        assert "@non_front_controller_php_1 {" in rendered
-        assert "not path /index.php" in rendered
-        assert 'respond @non_front_controller_php_1 "Not found" 404' in rendered
-        assert "try_files .polyscope-secpal-container-ready" in rendered
-        assert 'respond @api_not_ready_1 "Preview not ready" 503' in rendered
-        assert rendered.index("respond @api_not_ready_1") < rendered.index("file_server @static_file_1")
-        assert "rewrite * /index.php" in rendered
-        assert "            php\n" in rendered
+            assert f"server_name {prefix}-{physical}.preview.secpal.dev;" in rendered
+            assert f"return 308 https://{prefix}-calm-otter.preview.secpal.dev$request_uri;" in rendered
+        assert "root /workspaces/1;" in rendered
+        assert "root /workspaces/2;" in rendered
+        assert r"location ~* \.php(?:/|$) { return 404; }" in rendered
+        assert "if (!-f $document_root/.polyscope-secpal-container-ready) { return 503; }" in rendered
+        assert "location = /index.php {" in rendered
+        assert "fastcgi_param SCRIPT_FILENAME /app/public/index.php;" in rendered
+        assert "fastcgi_pass unix:/run/preview-sockets/1/api.sock;" in rendered
+        assert "access_log off;" in rendered
+
+        # Rebuilding a document root atomically requires new container mounts.
+        frontend_root = clone_root / worktrees["frontend"][0] / worktrees["frontend"][2] / "dist"
+        frontend_root.rename(frontend_root.with_name("dist-old"))
+        frontend_root.mkdir()
+        replaced = module.render(db_path, pathlib.Path("/workspaces"), clone_root, repository_root)
+        assert replaced != rendered
+        assert "frontend-calm-otter.preview.secpal.dev" in replaced
 
         # A physical-name redirect must never shadow another active
         # workspace's canonical hostname.
         conflicting = clone_root / "api-repo_1/other-otter-11223344"
         (conflicting / "public").mkdir(parents=True)
-        module.admit_api_preview(conflicting)
+        (conflicting / "public" / module.API_PREVIEW_ADMISSION_FILENAME).touch()
         registry_path = clone_root / "api-repo_1/.polyscope-secpal-workspace-aliases.json"
         registry_before = registry_path.read_text()
         registry_path.write_text(json.dumps({
@@ -183,7 +183,7 @@ def main() -> None:
             connection.execute("delete from worktrees where id = 'conflicting-api'")
         registry_path.write_text(registry_before)
 
-        output = root / "config" / "Caddyfile"
+        output = root / "config" / "nginx.conf"
         module.write_atomic(output, rendered)
         assert output.read_text() == rendered
         assert (output.stat().st_mode & 0o777) == 0o600
@@ -235,7 +235,8 @@ def main() -> None:
 
         legacy_path = clone_root / "api-repo_1/legacy-otter"
         (legacy_path / "public").mkdir(parents=True)
-        module.admit_api_preview(legacy_path)
+        (legacy_path / "public" / module.API_PREVIEW_ADMISSION_FILENAME).touch()
+        (legacy_path / "storage").mkdir()
         with sqlite3.connect(db_path) as connection:
             connection.execute(
                 "insert into worktrees (id, repo_id, path, status) values (?, ?, ?, 'active')",
@@ -245,8 +246,7 @@ def main() -> None:
             db_path, pathlib.Path("/workspaces"), clone_root, repository_root
         )
         assert "api-legacy-otter.preview.secpal.dev" in legacy_rendered
-        assert "root * /workspaces/api-repo_1/legacy-otter/public" in legacy_rendered
-        assert "redir https://api-legacy-otter.preview.secpal.dev" not in legacy_rendered
+        assert "return 308 https://api-legacy-otter.preview.secpal.dev" not in legacy_rendered
 
         alias_registry.unlink()
         expect_runtime_error(
@@ -270,7 +270,8 @@ def main() -> None:
         collision = clone_root / "api-repo_1/calm-otter-deadbeef"
         (collision / "public").mkdir(parents=True)
         (collision.parent / "calm-otter").symlink_to(api_worktree.name)
-        module.admit_api_preview(collision)
+        (collision / "public" / module.API_PREVIEW_ADMISSION_FILENAME).touch()
+        (collision / "storage").mkdir()
         with sqlite3.connect(db_path) as connection:
             connection.execute(
                 "insert into worktrees (id, repo_id, path, status) values (?, ?, ?, 'active')",
@@ -332,9 +333,9 @@ def main() -> None:
         collision_rendered = render_collision()
         assert f"api-{collision.name}.preview.secpal.dev" in collision_rendered
         assert "api-calm-otter.preview.secpal.dev" in collision_rendered
-        assert f"redir https://api-{collision.name}.preview.secpal.dev" not in collision_rendered
+        assert f"return 308 https://api-{collision.name}.preview.secpal.dev" not in collision_rendered
         assert alias_registry.read_bytes() == registry_before_collision
-        module.withdraw_api_preview(collision)
+        (collision / "public" / module.API_PREVIEW_ADMISSION_FILENAME).unlink()
         assert f"api-{collision.name}.preview.secpal.dev" not in render_collision()
         with sqlite3.connect(db_path) as connection:
             connection.execute("delete from worktrees where id = 'collision-api'")

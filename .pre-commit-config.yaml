@@ -22,7 +22,7 @@ repos:
     hooks:
       - id: prettier
         name: Prettier
-        entry: bash -c 'npx --yes prettier@3.5.3 --write "$@"' --
+        entry: bash -c 'npx --yes prettier@3.10.1 --write "$@"' --
         language: system
         types_or: [markdown, yaml, json, javascript]
         exclude: 'package-lock\.json|composer\.lock|yarn\.lock|pnpm-lock\.yaml'

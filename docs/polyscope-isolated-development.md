@@ -110,6 +110,15 @@ units and the separate UID1001 development environment are not touched. This
 upgrade step deliberately retires old service-owned workers at later activation;
 it is not performed by merging this source change.
 
+The container backend keeps static frontend and website previews. Nginx serves
+their registered public roots through the existing authenticated loopback route.
+Admitted API previews use one PHP-FPM container per workspace. Its writable
+mounts are limited to that workspace's runtime storage and its private FastCGI
+socket directory. Nginx receives public roots and read-only sockets. The route
+renderer excludes fenced workspaces, and runtime reconciliation never creates
+admission markers or starts setup, workers, or schedulers. The development
+image guide describes the separately authorized preview cutover.
+
 Every managed canonical `polyscope.local.json`, including a registration-only
 repository, now contains `scripts.setup: ""`, `scripts.run: []` and
 `copyGitignored: false`. The entire scripts object is replaced after enrichment,

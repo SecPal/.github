@@ -31,7 +31,8 @@ def main() -> None:
         for repository in ("api", "frontend"):
             (repository_root / repository).mkdir(parents=True)
         (clone_root / "api-repo/calm-otter-a1b2c3d4/public").mkdir(parents=True)
-        (clone_root / "api-repo/calm-otter-a1b2c3d4/.polyscope-secpal-container-ready").touch()
+        (clone_root / "api-repo/calm-otter-a1b2c3d4/public/.polyscope-secpal-container-ready").touch()
+        (clone_root / "api-repo/calm-otter-a1b2c3d4/storage").mkdir()
         (clone_root / "frontend_repo/calm-otter-e5f6a7b8/dist").mkdir(parents=True)
         (clone_root / "api-repo/.polyscope-secpal-workspace-aliases.json").write_text(
             json.dumps({"version": 1, "aliases": {"calm-otter": "calm-otter-a1b2c3d4"}})
@@ -235,7 +236,7 @@ def main() -> None:
         assert "run-polyscope-api-tests.py" in test_wrapper
         assert "polyscope-postgresql-proxy" not in test_wrapper
         assert home.joinpath("custom-libexec/run-polyscope-api-tests.py").is_file()
-        caddyfile = home.joinpath(".config/polyscope-preview/Caddyfile").read_text()
+        nginx_config = home.joinpath(".config/polyscope-preview/nginx.conf").read_text()
         assert "--security-opt label=disable" in proxy_unit
         assert "--cap-drop=all" in proxy_unit
         assert "--userns=keep-id:uid=1000,gid=1000" in proxy_unit
@@ -253,13 +254,16 @@ def main() -> None:
         assert 'git rev-parse --path-format=absolute --git-common-dir' in php_wrapper
         assert '-v "$git_common":"$git_common":ro,z' in php_wrapper
         assert f"-v '{clone_root}':'{clone_root}':ro" not in php_wrapper
-        assert "api-calm-otter.preview.secpal.dev" in caddyfile
-        assert "frontend-calm-otter.preview.secpal.dev" in caddyfile
-        assert "@preview_redirect_1 host api-calm-otter-a1b2c3d4.preview.secpal.dev" in caddyfile
-        assert "redir https://api-calm-otter.preview.secpal.dev{uri} 308" in caddyfile
-        assert "@preview_redirect_2 host frontend-calm-otter-e5f6a7b8.preview.secpal.dev" in caddyfile
-        assert "root * /workspaces/api-repo/calm-otter-a1b2c3d4/public" in caddyfile
-        assert "root * /workspaces/frontend_repo/calm-otter-e5f6a7b8/dist" in caddyfile
+        assert "api-calm-otter.preview.secpal.dev" in nginx_config
+        assert "frontend-calm-otter.preview.secpal.dev" in nginx_config
+        assert "server_name api-calm-otter-a1b2c3d4.preview.secpal.dev;" in nginx_config
+        assert "return 308 https://api-calm-otter.preview.secpal.dev$request_uri;" in nginx_config
+        assert "server_name frontend-calm-otter-e5f6a7b8.preview.secpal.dev;" in nginx_config
+        assert "fastcgi_pass unix:/run/preview-sockets/1/api.sock;" in nginx_config
+        assert "RuntimeDirectoryMode=0700" in preview_unit
+        assert "Type=notify" in preview_unit and "NotifyAccess=all" in preview_unit
+        assert "--nginx-image localhost/secpal-polyscope-nginx:1.30.7" in preview_unit
+        assert "cleanup --runtime-directory %t/polyscope-preview" in preview_unit
         assert f"PathChanged={db_path}" in refresh_path
         assert f"PathChanged={db_path}-wal" in refresh_path
         assert "polyscope-preview-refresh.service" in refresh_path
@@ -299,7 +303,7 @@ def main() -> None:
 
 
         commands = command_log.read_text()
-        assert "podman:image exists localhost/secpal-polyscope-api-toolchain:php84" in commands
+        assert "podman:image exists localhost/secpal-polyscope-php:8.4" in commands
         assert "podman:network create --label preview.secpal.dev/managed=true polyscope-preview-db" in commands
         assert "systemctl:--user enable --now polyscope-postgresql-proxy.service" in commands
         assert "systemctl:--user enable --now polyscope-preview.service" in commands
