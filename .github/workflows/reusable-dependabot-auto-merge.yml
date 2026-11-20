@@ -51,6 +51,11 @@ on:
         required: false
         type: string
         default: "[]"
+      pip-manifest-path:
+        description: "Optional exact hash-locked requirements file for callers with required native qualification"
+        required: false
+        type: string
+        default: ""
       merge-method:
         description: "Automatic merge method: squash"
         required: false
@@ -99,6 +104,7 @@ jobs:
           ALLOWED_ECOSYSTEMS: ${{ inputs.allowed-ecosystems }}
           VERIFIED_DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
           WORKFLOW_PATHS: ${{ inputs.workflow-paths }}
+          PIP_MANIFEST_PATH: ${{ inputs.pip-manifest-path }}
         with:
           script: |
             core.setOutput('verified', 'false');
@@ -163,10 +169,13 @@ jobs:
             const workflowPaths = JSON.parse(process.env.WORKFLOW_PATHS || '[]');
             if (!Array.isArray(workflowPaths) || !workflowPaths.every(path =>
                 typeof path === 'string' && /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path))) return;
+            const pipPath = process.env.PIP_MANIFEST_PATH;
             const allowed = path => typeof path === 'string' && (ecosystem === 'github_actions'
               ? /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path) &&
                 directories.includes('/') && (!workflowPaths.length || workflowPaths.includes(path))
-              : prefixes.some(prefix => (manifests[ecosystem] || []).some(name => path === prefix + name)));
+              : prefixes.some(prefix => ecosystem === 'pip'
+                ? path === pipPath && path.startsWith(prefix) && /^[A-Za-z0-9_.-]*requirements[A-Za-z0-9_.-]*\.txt$/.test(path.slice(prefix.length))
+                : (manifests[ecosystem] || []).some(name => path === prefix + name)));
             const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number, per_page: 100 });
             if (!files.length || files.length !== pr.changed_files ||
                 !files.every(file => allowed(file.filename) && (!file.previous_filename || allowed(file.previous_filename)))) return;
@@ -191,16 +200,56 @@ jobs:
                     expected = verified[index]
                     dependency.is_a?(Hash) && expected.is_a?(Hash) &&
                       dependency['dependency-name'] == expected['dependencyName'] &&
-                      types.include?(dependency['update-type']) && dependency['update-type'] == expected['updateType']
+                      types.include?(dependency['update-type']) && dependency['update-type'] == expected['updateType'] &&
+                      (input.fetch('ecosystem') != 'pip' || dependency['dependency-version'] == expected['newVersion'])
                   end
                 print(valid ? 'true' : 'false')
               rescue StandardError
                 print 'false'
               end
             `], { input: JSON.stringify({ message: commits[0].commit.message,
-              verified: verifiedDependencies }),
+              verified: verifiedDependencies, ecosystem }),
               encoding: 'utf8', env: { PATH: process.env.PATH }, timeout: 10000, maxBuffer: 1024 * 1024 });
             if (proof.status !== 0 || proof.stdout !== 'true') return;
+            if (ecosystem === 'pip') {
+              const [file] = files;
+              const [dependency] = verifiedDependencies;
+              if (files.length !== 1 || file.status !== 'modified' || file.previous_filename ||
+                  !/^[a-f0-9]{40}$/.test(file.sha) || commits[0].parents[0].sha !== pr.base.sha ||
+                  verifiedDependencies.length !== 1 || dependency.packageEcosystem !== 'pip' ||
+                  dependency.dependencyGroup !== '') return;
+              // Read the approved file from the exact base and signed head.
+              // Accept only exact numeric pins and SHA-256 hashes, with no pip directives.
+              const readLock = async (ref, expectedBlob) => {
+                const { data } = await github.rest.repos.getContent({ owner, repo, path: pipPath, ref });
+                if (data.type !== 'file' || data.encoding !== 'base64' || !data.content ||
+                    (expectedBlob && data.sha !== expectedBlob)) return null;
+                const lock = new Map();
+                for (const line of Buffer.from(data.content, 'base64').toString('utf8').replace(/\\\r?\n/g, ' ').split(/\r?\n/)) {
+                  if (!line.trim() || line.trimStart().startsWith('#')) continue;
+                  const entry = /^([a-z0-9]+(?:-[a-z0-9]+)*)==((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))((?:[ \t]+--hash=sha256:[a-f0-9]{64})+)$/.exec(line.trim());
+                  if (!entry || lock.has(entry[1])) return null;
+                  const [, name, version, hashes] = entry;
+                  lock.set(name, { version, hashes: hashes.trim().split(/[ \t]+/).sort().join(' ') });
+                }
+                return lock;
+              };
+              const before = await readLock(pr.base.sha);
+              const after = await readLock(expected, file.sha);
+              if (!before || !after || before.size !== after.size) return;
+              for (const [name, previous] of before) {
+                const next = after.get(name);
+                if (!next || (name !== dependency.dependencyName &&
+                    (previous.version !== next.version || previous.hashes !== next.hashes))) return;
+              }
+              const name = dependency.dependencyName;
+              if (!before.has(name) || after.get(name).version !== dependency.newVersion) return;
+              const [major, minor, patch] = before.get(name).version.split('.').map(BigInt);
+              const [newMajor, newMinor, newPatch] = after.get(name).version.split('.').map(BigInt);
+              const kind = newMajor !== major ? null : newMinor > minor ? 'minor' :
+                newMinor === minor && newPatch > patch ? 'patch' : null;
+              if (!kind || dependency.updateType !== `version-update:semver-${kind}`) return;
+            }
             const after = await read();
             if (after.head.sha !== expected || after.base.sha !== pr.base.sha || after.state !== 'open') return;
             core.setOutput('verified', 'true');
