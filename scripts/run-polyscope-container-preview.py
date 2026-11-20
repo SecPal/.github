@@ -33,6 +33,7 @@ pm.max_children = 4
 clear_env = yes
 env[DB_HOST] = polyscope-postgresql-proxy
 env[DB_PORT] = 5432
+env[KEK_PATH] = /app/storage/app/keys/kek.key
 env[APP_ENV] = local
 env[APP_DEBUG] = "false"
 security.limit_extensions = .php
@@ -185,9 +186,6 @@ def preview_commands(routes, runtime_directory, *, pod, image, nginx_image, netw
     gateway = common + [
         "--rm", "--name", "polyscope-preview", "--network=bridge", "--sdnotify=healthy",
         "--publish", f"127.0.0.1:{preview_port}:18080",
-        "--health-cmd",
-        "wget -S -T 3 -O /dev/null http://127.0.0.1:18080/ 2>&1 | grep -Eq 'HTTP/[0-9.]+ 404 '",
-        "--health-interval=2s", "--health-timeout=5s", "--health-start-period=5s",
         "--volume", f"{runtime_directory / 'nginx.conf'}:/run/preview/nginx.conf:ro,z",
         "--volume", f"{socket_root}:{SOCKET_ROOT}:ro,z",
     ]
@@ -204,7 +202,7 @@ def preview_commands(routes, runtime_directory, *, pod, image, nginx_image, netw
             raise RuntimeError("writable API runtime directory is unavailable")
         backends.append(common + [
             "--detach", "--name", f"polyscope-preview-fpm-{index}",
-            "--network", network, "--no-healthcheck", "--sdnotify=ignore",
+            "--network", network, "--sdnotify=ignore",
             "--stop-signal=SIGQUIT", "--restart=on-failure",
             "--workdir", "/app",
             "--volume", f"{worktree}:/app:ro,z",
@@ -228,6 +226,7 @@ def remove_pod(runtime_directory: pathlib.Path) -> None:
     try:
         shutil.rmtree(runtime_directory / "sockets")
     except FileNotFoundError:
+        # An interrupted start or a previous cleanup may have removed the sockets.
         pass
 
 

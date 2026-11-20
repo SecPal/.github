@@ -15,7 +15,7 @@ context is that revision's `docker/` directory.
 
 ```bash
 export SECPAL_API_SOURCE=/absolute/path/to/authenticated/api-source
-podman build --format oci \
+podman build --no-cache --format docker \
   --file "$PWD/containers/polyscope-php/Containerfile" \
   --tag localhost/secpal-polyscope-php:8.4 \
   "$SECPAL_API_SOURCE/docker"
@@ -34,7 +34,7 @@ Its image uses the official Nginx 1.30.7 OCI index with patched Alpine OpenSSL
 and zlib packages. Build the gateway target from the same recipe:
 
 ```bash
-podman build --format oci --target preview-nginx \
+podman build --no-cache --format docker --target preview-nginx \
   --file "$PWD/containers/polyscope-php/Containerfile" \
   --tag localhost/secpal-polyscope-nginx:1.30.7 \
   "$SECPAL_API_SOURCE/docker"
@@ -42,7 +42,7 @@ podman build --format oci --target preview-nginx \
 
 Nginx mounts only registered public document roots and private FastCGI sockets
 read-only. Static SPA previews and canonical redirects continue through the same
-hostnames.
+hostnames. The build format retains the gateway and PHP-FPM health probes for Podman.
 
 Each admitted API preview runs PHP-FPM in a dedicated container. It can read
 only its own application worktree and write its runtime storage and socket

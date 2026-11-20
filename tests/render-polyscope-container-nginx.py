@@ -140,9 +140,15 @@ def main() -> None:
         assert "root /workspaces/1;" in rendered
         assert "root /workspaces/2;" in rendered
         assert r"location ~* \.php(?:/|$) { return 404; }" in rendered
-        assert "if (!-f $document_root/.polyscope-secpal-container-ready) { return 503; }" in rendered
+        assert "if (!-f /workspaces/1/.polyscope-secpal-container-ready) { return 503; }" in rendered
         assert "location = /index.php {" in rendered
+        assert "try_files $uri /index.php?$query_string;" in rendered
+        assert "root /app/public;" in rendered
         assert "fastcgi_param SCRIPT_FILENAME /app/public/index.php;" in rendered
+        assert "fastcgi_param HTTP_HOST $host;" in rendered
+        assert "fastcgi_param HTTP_AUTHORIZATION $http_authorization;" in rendered
+        assert "fastcgi_param HTTP_COOKIE $http_cookie;" in rendered
+        assert 'fastcgi_param HTTP_PROXY "";' in rendered
         assert "fastcgi_pass unix:/run/preview-sockets/1/api.sock;" in rendered
         assert "access_log off;" in rendered
 

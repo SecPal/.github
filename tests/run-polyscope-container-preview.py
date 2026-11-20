@@ -77,6 +77,7 @@ def main() -> None:
     image_recipe = (REPO_ROOT / "containers/polyscope-php/Containerfile").read_text()
     assert "FROM docker.io/library/php:8.4." in image_recipe
     assert "frankenphp" not in image_recipe.lower()
+    assert "env[KEK_PATH] = /app/storage/app/keys/kek.key" in module.FPM_CONFIG
     with tempfile.TemporaryDirectory(prefix="polyscope-preview-runner.") as temporary:
         root = pathlib.Path(temporary)
         repository_root = root / "repos/SecPal"

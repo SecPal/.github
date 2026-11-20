@@ -276,6 +276,7 @@ def render_routes(routes: list[PreviewRoute], container_root: pathlib.Path) -> s
         "    }",
     ]
     for index, route in enumerate(routes, start=1):
+        public_root = container_root / str(index)
         # Podman bind mounts hold directories by identity. Trigger refresh when
         # a build or workspace recreation replaces a directory at the same path.
         mount_paths = [route.worktree / route.document_root]
@@ -296,18 +297,22 @@ def render_routes(routes: list[PreviewRoute], container_root: pathlib.Path) -> s
             "    server {",
             "        listen 18080;",
             f"        server_name {route.host};",
-            f"        root {container_root / str(index)};",
+            f"        root {public_root};",
             "        disable_symlinks on from=$document_root;",
             r"        location ~ /\. { return 404; }",
             r"        location ~* \.php(?:/|$) { return 404; }",
         ])
         if route.php:
             blocks.extend([
-                f"        if (!-f $document_root/{API_PREVIEW_ADMISSION_FILENAME}) {{ return 503; }}",
+                f"        if (!-f {public_root / API_PREVIEW_ADMISSION_FILENAME}) {{ return 503; }}",
                 "        location / { try_files $uri /index.php?$query_string; }",
                 "        location = /index.php {",
+                "            root /app/public;",
                 "            include /etc/nginx/fastcgi_params;",
                 "            fastcgi_param SCRIPT_FILENAME /app/public/index.php;",
+                "            fastcgi_param HTTP_HOST $host;",
+                "            fastcgi_param HTTP_AUTHORIZATION $http_authorization;",
+                "            fastcgi_param HTTP_COOKIE $http_cookie;",
                 '            fastcgi_param HTTP_PROXY "";',
                 "            fastcgi_buffering off;",
                 f"            fastcgi_pass unix:/run/preview-sockets/{index}/api.sock;",
