@@ -15,27 +15,28 @@ umask 077
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROXY_SOURCE="$SCRIPT_DIR/polyscope-postgresql-socket-proxy.py"
-RENDERER_SOURCE="$SCRIPT_DIR/render-polyscope-container-caddy.py"
+RENDERER_SOURCE="$SCRIPT_DIR/render-polyscope-container-nginx.py"
 REFRESH_SOURCE="$SCRIPT_DIR/refresh-polyscope-container-preview.sh"
 RUNNER_SOURCE="$SCRIPT_DIR/run-polyscope-container-preview.py"
 CLEANUP_SOURCE="$SCRIPT_DIR/cleanup-polyscope-container-preview.py"
 TEST_SOURCE="$SCRIPT_DIR/run-polyscope-api-tests.py"
 ISOLATION_SOURCE="$SCRIPT_DIR/polyscope-isolation.py"
 ROLLOUT_SOURCE="$SCRIPT_DIR/polyscope-rollout.py"
-IMAGE="${POLYSCOPE_PREVIEW_IMAGE:-localhost/secpal-polyscope-api-toolchain:php84}"
+IMAGE="${POLYSCOPE_PHP_IMAGE:-localhost/secpal-polyscope-php:8.4}"
+NGINX_IMAGE="localhost/secpal-polyscope-nginx:1.30.7"
 NETWORK="${POLYSCOPE_PREVIEW_NETWORK:-polyscope-preview-db}"
 PREVIEW_PORT="${POLYSCOPE_PREVIEW_PORT:-18080}"
 POSTGRES_SOCKET="${POLYSCOPE_POSTGRES_SOCKET:-/var/run/postgresql/.s.PGSQL.5432}"
 CLONE_ROOT="${POLYSCOPE_CLONE_ROOT:-$HOME/.polyscope/clones}"
 REPOSITORY_ROOT="${POLYSCOPE_REPOSITORY_ROOT:-$HOME/.polyscope/repos/SecPal}"
-CADDYFILE="${POLYSCOPE_PREVIEW_CADDYFILE:-$HOME/.config/polyscope-preview/Caddyfile}"
+NGINX_CONFIG="${POLYSCOPE_PREVIEW_NGINX_CONFIG:-$HOME/.config/polyscope-preview/nginx.conf}"
 POLYSCOPE_DB_PATH="${POLYSCOPE_DB_PATH:-$HOME/.polyscope/polyscope.db}"
 BIN_DIR="${POLYSCOPE_BIN_DIR:-$HOME/.local/bin}"
 LIBEXEC_DIR="${POLYSCOPE_LIBEXEC_DIR:-$HOME/.local/libexec}"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
 usage() {
-    echo "Usage: $0 [--image IMAGE] [--network NAME] [--preview-port PORT] [--postgres-socket PATH] [--caddyfile PATH]" >&2
+    echo "Usage: $0 [--image IMAGE] [--network NAME] [--preview-port PORT] [--postgres-socket PATH] [--nginx-config PATH]" >&2
     exit 2
 }
 
@@ -45,7 +46,7 @@ while [[ $# -gt 0 ]]; do
         --network) NETWORK="$2"; shift 2 ;;
         --preview-port) PREVIEW_PORT="$2"; shift 2 ;;
         --postgres-socket) POSTGRES_SOCKET="$2"; shift 2 ;;
-        --caddyfile) CADDYFILE="$2"; shift 2 ;;
+        --nginx-config) NGINX_CONFIG="$2"; shift 2 ;;
         *) usage ;;
     esac
 done
@@ -63,7 +64,7 @@ if [[ ! "$NETWORK" =~ ^[A-Za-z0-9_.-]+$ ]]; then
     echo "Error: network name contains unsupported characters." >&2
     exit 1
 fi
-for path_name in POSTGRES_SOCKET CLONE_ROOT REPOSITORY_ROOT CADDYFILE POLYSCOPE_DB_PATH BIN_DIR LIBEXEC_DIR UNIT_DIR; do
+for path_name in POSTGRES_SOCKET CLONE_ROOT REPOSITORY_ROOT NGINX_CONFIG POLYSCOPE_DB_PATH BIN_DIR LIBEXEC_DIR UNIT_DIR; do
     path_value="${!path_name}"
     if [[ ! "$path_value" =~ ^/[A-Za-z0-9._/+-]+$ ]]; then
         echo "Error: $path_name must be an absolute path containing only supported characters." >&2
@@ -120,6 +121,7 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 
 podman image exists "$IMAGE"
+podman image exists "$NGINX_IMAGE"
 network_created=0
 
 temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/polyscope-container-preview.XXXXXX")"
@@ -130,7 +132,7 @@ python3 "$RENDERER_SOURCE" \
     --container-root /workspaces \
     --clone-root "$CLONE_ROOT" \
     --repository-root "$REPOSITORY_ROOT" \
-    --output "$temporary_dir/Caddyfile"
+    --output "$temporary_dir/nginx.conf"
 
 network_preexisting=0
 if podman network exists "$NETWORK"; then
@@ -150,11 +152,11 @@ if podman network exists "$NETWORK"; then
             polyscope-postgresql-proxy|polyscope-preview) ;;
             *)
                 if [[ ! -f "$temporary_dir/owned-runtime-members" ]]; then
-                    python3 "$RUNNER_SOURCE" --observe-runtime-members \
+                    python3 "$RUNNER_SOURCE" observe \
                         --renderer "$RENDERER_SOURCE" --db-path "$POLYSCOPE_DB_PATH" \
                         --clone-root "$CLONE_ROOT" --repository-root "$REPOSITORY_ROOT" \
-                        --caddyfile "$temporary_dir/Caddyfile" --image "$IMAGE" \
-                        --network "$NETWORK" --preview-port "$PREVIEW_PORT" \
+                        --runtime-directory "$XDG_RUNTIME_DIR/polyscope-preview" --image "$IMAGE" \
+                        --network "$NETWORK" \
                         >"$temporary_dir/owned-runtime-members"
                 fi
                 if ! grep -Fxq -- "$attached_container" "$temporary_dir/owned-runtime-members"; then
@@ -172,7 +174,7 @@ set -eu
 export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="\${DBUS_SESSION_BUS_ADDRESS:-unix:path=\$XDG_RUNTIME_DIR/bus}"
 git_common="\$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || pwd)"
-exec podman run --rm --interactive --userns=keep-id:uid=1000,gid=1000 --no-healthcheck \\
+exec podman run --rm --pull=never --interactive --userns=keep-id:uid=1000,gid=1000 --no-healthcheck \\
   --network '$NETWORK' \\
   -e DB_HOST=polyscope-postgresql-proxy \\
   -e DB_PORT=5432 \\
@@ -189,7 +191,7 @@ set -eu
 export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="\${DBUS_SESSION_BUS_ADDRESS:-unix:path=\$XDG_RUNTIME_DIR/bus}"
 git_common="\$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || pwd)"
-exec podman run --rm --interactive --userns=keep-id:uid=1000,gid=1000 --no-healthcheck \\
+exec podman run --rm --pull=never --interactive --userns=keep-id:uid=1000,gid=1000 --no-healthcheck \\
   -v "\$PWD":/app:rw,z \\
   -v "\$git_common":"\$git_common":ro,z \\
   --workdir /app \\
@@ -213,7 +215,7 @@ ${SECPAL_WORKSPACE_ISOLATION_POLICY:+Environment=SECPAL_WORKSPACE_ISOLATION_POLI
 Type=simple
 Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
-ExecStart=/usr/bin/podman run --replace --rm --name polyscope-postgresql-proxy --userns=keep-id:uid=1000,gid=1000 --health-cmd "python3 /usr/local/bin/polyscope-postgresql-socket-proxy.py --check --listen-host 127.0.0.1 --listen-port 5432 --upstream $POSTGRES_SOCKET" --network $NETWORK --read-only --cap-drop=all --security-opt no-new-privileges --security-opt label=disable -v $LIBEXEC_DIR/polyscope-postgresql-socket-proxy.py:/usr/local/bin/polyscope-postgresql-socket-proxy.py:ro -v ${POSTGRES_SOCKET%/*}:${POSTGRES_SOCKET%/*}:ro --entrypoint python3 $IMAGE /usr/local/bin/polyscope-postgresql-socket-proxy.py --listen-host 0.0.0.0 --listen-port 5432 --upstream $POSTGRES_SOCKET
+ExecStart=/usr/bin/podman run --replace --rm --name polyscope-postgresql-proxy --pull=never --userns=keep-id:uid=1000,gid=1000 --health-cmd "python3 /usr/local/bin/polyscope-postgresql-socket-proxy.py --check --listen-host 127.0.0.1 --listen-port 5432 --upstream $POSTGRES_SOCKET" --network $NETWORK --read-only --cap-drop=all --security-opt no-new-privileges --security-opt label=disable -v $LIBEXEC_DIR/polyscope-postgresql-socket-proxy.py:/usr/local/bin/polyscope-postgresql-socket-proxy.py:ro -v ${POSTGRES_SOCKET%/*}:${POSTGRES_SOCKET%/*}:ro --entrypoint python3 $IMAGE /usr/local/bin/polyscope-postgresql-socket-proxy.py --listen-host 0.0.0.0 --listen-port 5432 --upstream $POSTGRES_SOCKET
 ExecStop=/usr/bin/podman stop -t 10 polyscope-postgresql-proxy
 Restart=on-failure
 RestartSec=3
@@ -232,11 +234,17 @@ Requires=polyscope-postgresql-proxy.service
 
 [Service]
 ${SECPAL_WORKSPACE_ISOLATION_POLICY:+Environment=SECPAL_WORKSPACE_ISOLATION_POLICY=$SECPAL_WORKSPACE_ISOLATION_POLICY}
-Type=simple
+Type=notify
+NotifyAccess=all
+TimeoutStartSec=60
 Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
-ExecStart=$LIBEXEC_DIR/run-polyscope-container-preview.py --renderer $LIBEXEC_DIR/render-polyscope-container-caddy.py --db-path $POLYSCOPE_DB_PATH --clone-root $CLONE_ROOT --repository-root $REPOSITORY_ROOT --caddyfile $CADDYFILE --image $IMAGE --network $NETWORK --preview-port $PREVIEW_PORT
-ExecStop=/usr/bin/podman stop -t 10 polyscope-preview
+RuntimeDirectory=polyscope-preview
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=restart
+UMask=0077
+ExecStart=$LIBEXEC_DIR/run-polyscope-container-preview.py start --renderer $LIBEXEC_DIR/render-polyscope-container-nginx.py --db-path $POLYSCOPE_DB_PATH --clone-root $CLONE_ROOT --repository-root $REPOSITORY_ROOT --runtime-directory %t/polyscope-preview --image $IMAGE --nginx-image $NGINX_IMAGE --network $NETWORK --preview-port $PREVIEW_PORT
+ExecStopPost=$LIBEXEC_DIR/run-polyscope-container-preview.py cleanup --runtime-directory %t/polyscope-preview
 Restart=always
 RestartSec=3
 
@@ -257,7 +265,7 @@ Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 Environment=PATH=$PSQL_DIR:/usr/bin
 ExecStartPre=/usr/bin/sleep 2
-ExecStart=$LIBEXEC_DIR/refresh-polyscope-container-preview.sh $LIBEXEC_DIR/render-polyscope-container-caddy.py $LIBEXEC_DIR/cleanup-polyscope-container-preview.py $POLYSCOPE_DB_PATH $CLONE_ROOT $REPOSITORY_ROOT $CADDYFILE polyscope-preview.service
+ExecStart=$LIBEXEC_DIR/refresh-polyscope-container-preview.sh $LIBEXEC_DIR/render-polyscope-container-nginx.py $LIBEXEC_DIR/cleanup-polyscope-container-preview.py $POLYSCOPE_DB_PATH $CLONE_ROOT $REPOSITORY_ROOT $NGINX_CONFIG polyscope-preview.service
 TimeoutStartSec=21min
 UMask=0077
 EOF
@@ -276,7 +284,7 @@ WantedBy=default.target
 EOF
 
 install -d -m 0755 "$BIN_DIR" "$LIBEXEC_DIR" "$UNIT_DIR"
-install -d -m 0700 "$(dirname -- "$CADDYFILE")"
+install -d -m 0700 "$(dirname -- "$NGINX_CONFIG")"
 backup_parent="$HOME/.local/state/polyscope/backups"
 install -d -m 0700 "$backup_parent"
 backup_dir="$(mktemp -d "$backup_parent/$(date -u +%Y%m%dT%H%M%SZ)-container-preview.XXXXXX")"
@@ -317,7 +325,7 @@ restore_target() {
 }
 
 proxy_target="$LIBEXEC_DIR/polyscope-postgresql-socket-proxy.py"
-renderer_target="$LIBEXEC_DIR/render-polyscope-container-caddy.py"
+renderer_target="$LIBEXEC_DIR/render-polyscope-container-nginx.py"
 refresh_target="$LIBEXEC_DIR/refresh-polyscope-container-preview.sh"
 runner_target="$LIBEXEC_DIR/run-polyscope-container-preview.py"
 cleanup_target="$LIBEXEC_DIR/cleanup-polyscope-container-preview.py"
@@ -330,7 +338,7 @@ proxy_unit_target="$UNIT_DIR/polyscope-postgresql-proxy.service"
 preview_unit_target="$UNIT_DIR/polyscope-preview.service"
 refresh_unit_target="$UNIT_DIR/polyscope-preview-refresh.service"
 refresh_path_target="$UNIT_DIR/polyscope-preview-refresh.path"
-caddyfile_target="$CADDYFILE"
+nginx_config_target="$NGINX_CONFIG"
 
 proxy_was_enabled=0
 proxy_was_active=0
@@ -371,7 +379,7 @@ backup_target "$proxy_unit_target" postgresql-proxy.service
 backup_target "$preview_unit_target" preview.service
 backup_target "$refresh_unit_target" preview-refresh.service
 backup_target "$refresh_path_target" preview-refresh.path
-backup_target "$caddyfile_target" Caddyfile
+backup_target "$nginx_config_target" nginx.conf
 
 rollback() {
     local status=$?
@@ -390,7 +398,7 @@ rollback() {
     restore_target "$preview_unit_target" preview.service
     restore_target "$refresh_unit_target" preview-refresh.service
     restore_target "$refresh_path_target" preview-refresh.path
-    restore_target "$caddyfile_target" Caddyfile
+    restore_target "$nginx_config_target" nginx.conf
     systemctl --user daemon-reload >/dev/null 2>&1 || true
     if [[ "$proxy_was_enabled" -eq 1 ]]; then
         systemctl --user enable polyscope-postgresql-proxy.service >/dev/null 2>&1 || true
@@ -441,7 +449,7 @@ install_managed "$REFRESH_SOURCE" "$refresh_target" 0755
 install_managed "$RUNNER_SOURCE" "$runner_target" 0755
 install_managed "$CLEANUP_SOURCE" "$cleanup_target" 0755
 install_managed "$ISOLATION_SOURCE" "$isolation_target" 0755
-install_managed "$temporary_dir/Caddyfile" "$caddyfile_target" 0600
+install_managed "$temporary_dir/nginx.conf" "$nginx_config_target" 0600
 install_managed "$temporary_dir/php" "$php_target" 0755
 install_managed "$temporary_dir/composer" "$composer_target" 0755
 install_managed "$temporary_dir/polyscope-api-test" "$test_target" 0755

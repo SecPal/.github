@@ -74,6 +74,10 @@ def test_owned_runtime_members(module):
 def main() -> None:
     module = load_module()
     test_owned_runtime_members(module)
+    image_recipe = (REPO_ROOT / "containers/polyscope-php/Containerfile").read_text()
+    assert "FROM docker.io/library/php:8.4." in image_recipe
+    assert "frankenphp" not in image_recipe.lower()
+    assert "env[KEK_PATH] = /app/storage/app/keys/kek.key" in module.FPM_CONFIG
     with tempfile.TemporaryDirectory(prefix="polyscope-preview-runner.") as temporary:
         root = pathlib.Path(temporary)
         repository_root = root / "repos/SecPal"
@@ -102,66 +106,75 @@ def main() -> None:
                 ("worktree", "api-repo", str(physical_worktree)),
             )
 
-        caddyfile = root / "Caddyfile"
-        caddyfile.write_text(":18080 {}\n")
-        renderer = module.load_renderer(REPO_ROOT / "scripts/render-polyscope-container-caddy.py")
-        # An active registration alone must not receive writable runtime storage.
-        unready_command = module.build_command(
-            renderer_path=REPO_ROOT / "scripts/render-polyscope-container-caddy.py",
-            db_path=db_path, clone_root=clone_root, repository_root=repository_root,
-            caddyfile=caddyfile, image="localhost/preview:latest",
+        renderer = module.load_renderer(REPO_ROOT / "scripts/render-polyscope-container-nginx.py")
+        arguments = dict(
+            pod="owned-pod", image="localhost/php:8.4", nginx_image="localhost/nginx:test",
             network="preview-network", preview_port=18080,
         )
-        assert not any(argument.endswith("/storage:rw") for argument in unready_command)
-        renderer.admit_api_preview(physical_worktree)
-        command = module.build_command(
-            renderer_path=REPO_ROOT / "scripts/render-polyscope-container-caddy.py",
-            db_path=db_path,
-            clone_root=clone_root,
-            repository_root=repository_root,
-            caddyfile=caddyfile,
-            image="localhost/preview:latest",
-            network="preview-network",
-            preview_port=18080,
-        )
-        assert "--userns=keep-id:uid=1000,gid=1000" in command
-        assert f"{clone_root}:/workspaces:ro" in command
-        assert f"{clone_root}:{clone_root}:ro" in command
-        storage_mount = f"{physical_worktree / 'storage'}:/workspaces/api-repo/{physical_worktree.name}/storage:rw"
-        assert storage_mount in command
-        assert f"{physical_worktree}:/workspaces/api-repo/{physical_worktree.name}:rw" not in command
-        assert not any(".env" in argument for argument in command)
-        assert command[command.index("localhost/preview:latest") - 1] == "--"
+
+        def commands():
+            routes = renderer.preview_routes(db_path, clone_root, repository_root)
+            return module.preview_commands(routes, root, **arguments)
+
+        backends, _ = commands()
+        assert backends == [], "active registrations alone must not start PHP"
+        admission = physical_worktree / "public" / renderer.API_PREVIEW_ADMISSION_FILENAME
+        # An old root marker does not trigger execution under the new runtime.
+        (physical_worktree / admission.name).touch()
+        assert commands()[0] == []
+        admission.touch()
+
+        other_worktree = clone_root / "api-repo/quiet-owl"
+        for directory in ("public", "storage"):
+            (other_worktree / directory).mkdir(parents=True)
+        (other_worktree / "public" / admission.name).touch()
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "insert into worktrees values (?, ?, ?, 'active')",
+                ("other", "api-repo", str(other_worktree)),
+            )
+
+        backends, gateway = commands()
+        assert len(backends) == 2
+        for index, (backend, worktree) in enumerate(zip(backends, (physical_worktree, other_worktree)), 1):
+            assert "/usr/local/sbin/php-fpm" in backend
+            assert f"{worktree}:/app:ro,z" in backend
+            assert f"{worktree / 'storage'}:/app/storage:rw,z" in backend
+            assert f"{root / 'sockets' / str(index)}:/run/preview-php:rw,z" in backend
+            assert backend[backend.index("--network") + 1] == "preview-network"
+            assert "--restart=on-failure" in backend
+            assert "--sdnotify=ignore" in backend
+            assert "--publish" not in backend
+            assert f"{worktree / 'public'}:/workspaces/{index}:ro,z" in gateway
+            assert not any(str(worktree) in argument for argument in backends[2-index])
+        assert "/usr/sbin/nginx" in gateway
+        assert "--sdnotify=healthy" in gateway
+        assert "127.0.0.1:18080:18080" in gateway and "preview-network" not in gateway
+        assert all(":ro,z" in mount for mount in gateway if str(root) in mount)
+        for command in [*backends, gateway]:
+            assert "--userns=keep-id:uid=1000,gid=1000" in command
+            assert "--cap-drop=all" in command and "--read-only" in command
+            assert not any(argument.startswith(f"{clone_root}:") for argument in command)
+            assert "--security-opt=label=disable" not in command
+            assert command[command.index("--") + 1] in {arguments["image"], arguments["nginx_image"]}
         assert module.SAFE_NAME.fullmatch("--privileged") is None
 
         (physical_worktree / "storage").rmdir()
         try:
-            module.build_command(
-                renderer_path=REPO_ROOT / "scripts/render-polyscope-container-caddy.py",
-                db_path=db_path,
-                clone_root=clone_root,
-                repository_root=repository_root,
-                caddyfile=caddyfile,
-                image="localhost/preview:latest",
-                network="preview-network",
-                preview_port=18080,
-            )
+            commands()
         except RuntimeError as error:
             assert "writable API runtime directory is unavailable" in str(error)
         else:
             raise AssertionError("missing API storage directory must fail closed")
 
+        admission.unlink()
+        assert len(commands()[0]) == 1
+
         # A newly registered API repository may have no active clone directory yet.
         with sqlite3.connect(db_path) as connection:
             connection.execute("delete from worktrees")
         shutil.rmtree(clone_root / "api-repo")
-        empty_command = module.build_command(
-            renderer_path=REPO_ROOT / "scripts/render-polyscope-container-caddy.py",
-            db_path=db_path, clone_root=clone_root, repository_root=repository_root,
-            caddyfile=caddyfile, image="localhost/preview:latest",
-            network="preview-network", preview_port=18080,
-        )
-        assert not any(argument.endswith("/storage:rw") for argument in empty_command)
+        assert commands()[0] == []
 
 
 if __name__ == "__main__":

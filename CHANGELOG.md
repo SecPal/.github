@@ -9,6 +9,13 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-20 - Retire FrankenPHP From Polyscope
+
+- Use official PHP 8.4 and Composer for the rootless development toolchain.
+- Serve authenticated previews through Nginx with one isolated PHP-FPM backend
+  per admitted API workspace. Keep static previews and immediate withdrawal.
+  The operator guide records the separately authorized cutover.
+
 ## 2026-11-19 - Complete Governance Dependabot Coverage
 
 - Schedule daily Dependabot updates at 04:00 Europe/Berlin for the governance

@@ -96,7 +96,7 @@ fi
 FORMAT_EXIT=0
 if command -v npx >/dev/null 2>&1; then
   git ls-files -z -- '*.md' '*.yml' '*.yaml' '*.json' '*.ts' '*.tsx' '*.js' '*.jsx' \
-    | xargs -0 npx --yes prettier@3.5.3 --check -- || FORMAT_EXIT=1
+    | xargs -0 npx --yes prettier@3.10.1 --check -- || FORMAT_EXIT=1
 fi
 if [ -x ./node_modules/.bin/markdownlint ]; then
   git ls-files -z -- '*.md' \
@@ -332,7 +332,7 @@ for preview_test in \
   tests/run-polyscope-api-tests.py \
   tests/polyscope-postgresql-socket-proxy.py \
   tests/cleanup-polyscope-container-preview.py \
-  tests/render-polyscope-container-caddy.py \
+  tests/render-polyscope-container-nginx.py \
   tests/refresh-polyscope-container-preview.py \
   tests/run-polyscope-container-preview.py \
   tests/install-polyscope-container-preview.py; do

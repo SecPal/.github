@@ -44,7 +44,7 @@ def run_refresh(
             str(root / "polyscope.db"),
             str(root / "clones"),
             str(root / "repos"),
-            str(root / "Caddyfile"),
+            str(root / "nginx.conf"),
             "polyscope-preview.service",
         ],
         env=env,
@@ -80,17 +80,17 @@ def main() -> None:
             "exit 0\n",
         )
 
-        caddyfile = root / "Caddyfile"
-        caddyfile.write_text("same\n", encoding="utf-8")
+        nginx_config = root / "nginx.conf"
+        nginx_config.write_text("same\n", encoding="utf-8")
         unchanged = run_refresh(root, "same\n")
         assert unchanged.returncode == 0, (unchanged.stdout, unchanged.stderr)
         assert not (root / "commands.log").exists()
-        assert caddyfile.read_text(encoding="utf-8") == "same\n"
+        assert nginx_config.read_text(encoding="utf-8") == "same\n"
 
         changed = run_refresh(root, "changed\n")
         assert changed.returncode == 0, (changed.stdout, changed.stderr)
-        assert caddyfile.read_text(encoding="utf-8") == "changed\n"
-        assert (caddyfile.stat().st_mode & 0o777) == 0o600
+        assert nginx_config.read_text(encoding="utf-8") == "changed\n"
+        assert (nginx_config.stat().st_mode & 0o777) == 0o600
         assert (root / "commands.log").read_text(encoding="utf-8") == (
             "--user restart polyscope-preview.service\n"
         )
@@ -98,8 +98,8 @@ def main() -> None:
         (root / "commands.log").unlink()
         failed = run_refresh(root, "must-not-stick\n", fail_restart=True)
         assert failed.returncode != 0
-        assert caddyfile.read_text(encoding="utf-8") == "changed\n"
-        assert not list(root.glob(".Caddyfile.*"))
+        assert nginx_config.read_text(encoding="utf-8") == "changed\n"
+        assert not list(root.glob(".nginx.conf.*"))
 
 
 if __name__ == "__main__":

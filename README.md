@@ -213,42 +213,32 @@ existing `--container-preview` backend. Host Nginx changes remain administrator
 operations; neither installer asks the service account for Nginx privileges.
 Failed installation stays stopped and cannot restore the old sudo boundary.
 
-The existing rootless preview installer runs under `polyscope` with that user's
-XDG runtime and user bus:
+For the separately authorized
+[preview cutover](containers/polyscope-php/README.md#live-cutover), the existing
+rootless installer runs under `polyscope` with that user's XDG runtime and user bus:
 
 ```bash
 bash ./scripts/install-polyscope-container-preview.sh
 ```
 
-The installer requires the local preview image, initialized Polyscope database,
-PostgreSQL socket, and a clone root already labelled `container_file_t`. It
-creates a labelled dedicated rootless Podman network, rejects foreign network
-members except proven existing native API runtime containers. Those must match
-an active registered workspace, fixed role command, current or target image,
-container PID/cgroup and owning systemd conmon process; installation preserves
-these workers without stopping them. It installs the PHP and Composer wrappers, and renders exact Caddy routes
-only for active worktrees belonging to canonical repository paths. Preview
-document roots reject symbolic links, PHP requests execute only the front
-controller, and the shared clone mounts are read-only in the long-running
-preview service. The installer then activates the preview and database-proxy
-user services. The proxy is
-the only container allowed to use `label=disable`; it is read-only, drops all
-capabilities, has no host port, and exposes the host PostgreSQL socket only to
-the dedicated container network. Workspace containers retain normal SELinux
-labels. Existing managed files and each service's enabled/active state are
-backed up before atomic replacement and restored if activation fails.
+The installer requires the verified PHP and Nginx images, initialized Polyscope
+database, PostgreSQL socket and a clone root already labelled
+`container_file_t`. It creates a dedicated rootless Podman network for the
+database proxy and API preview backends, and rejects foreign network members.
+It installs the PHP, Composer and isolated API test wrappers. The proxy retains
+the narrow SELinux exception for its Unix socket. Nginx and PHP-FPM retain
+container labels and read-only roots. Existing managed files and service state
+are backed up before installation and restored if activation fails.
 
-For automatic reconciliation on these container hosts, pass
-`--container-preview` to `polyscope-rollout.py --provision-worktrees`.
-This backend reconciles metadata and preview routing while omitting host Nginx
-rendering and ACL changes. Automatic native setup, run and archive actions and
-service-owned API workers remain retired; do not restore them for readiness. API routes and writable
-storage mounts require the coordinator's local readiness token; registration
-alone does not grant access. Failed setup or readiness withdraws the token, and
-the running Caddy route immediately returns HTTP 503 before configuration
-refresh. Inactive API worktrees lose their token during reconciliation.
-The refresh request is queued without blocking; the dedicated refresh service
-owns its existing retry window and reports convergence failures independently.
+Pass `--container-preview` to the existing rollout command to reconcile preview
+routing with canonical native registrations. Nginx serves the registered public
+roots through the authenticated edge. API routes require the admission marker
+in the worktree's `public/` directory. Each admitted API workspace gets a
+dedicated PHP-FPM container and private socket. Withdrawing admission returns
+HTTP 503 immediately. Route reconciliation runs without setup or background
+workers. The dedicated refresh service retries route updates and reports
+convergence failures. See the [development image guide](containers/polyscope-php/README.md)
+for qualification and the separately authorized preview cutover.
 
 Every generated workspace setup is one fail-closed shell unit: canonical
 instruction validation must succeed before the complete native setup sequence,

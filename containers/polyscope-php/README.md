@@ -5,51 +5,81 @@ SPDX-License-Identifier: CC0-1.0
 
 # Polyscope PHP development image
 
-`Containerfile` is the development toolchain definition. Its pinned official
-FrankenPHP/PHP 8.4 base also preserves the binary used by container previews.
-Composer comes from a separately pinned official image. Git, Bash, Gettext,
-ripgrep and Python support existing API checks. The extension installer removes
-its build dependencies.
+The development image uses the official PHP 8.4 FPM/CLI image and a separately
+pinned official Composer image. Git, Bash, Gettext, ripgrep, Python and the
+application extensions support the existing workspace checks. The recipe uses
+the API's signed SQLite package and hash-locked OpenTimestamps requirements.
 
-Build as the existing unprivileged development account, from `SecPal/.github`.
-Supply a protected-main API checkout for its existing hash-locked Python
-requirements; no application source or second Python lockfile is copied.
+Build in rootless Podman using the authenticated API source inputs. The
+context is that revision's `docker/` directory.
 
 ```bash
-export SECPAL_API_SOURCE=/absolute/path/to/your/api-workspace
+export SECPAL_API_SOURCE=/absolute/path/to/authenticated/api-source
 podman build --no-cache --format docker \
   --file "$PWD/containers/polyscope-php/Containerfile" \
-  --tag localhost/secpal-polyscope-api-toolchain:php84 \
-  "$SECPAL_API_SOURCE/docker/python"
+  --tag localhost/secpal-polyscope-php:8.4 \
+  "$SECPAL_API_SOURCE/docker"
 ```
 
-Base images and direct added packages are pinned. Retain the build log, image
-digest and `apk info -v` inventory when qualifying a build. Missing packages
-must fail the build, not select unpinned replacements. Missing host rootless
-prerequisites are a boundary to report; do not install host packages or elevate.
+Retain the source revision, build log, image digest and `apk info -v` inventory.
+Verify the exact built image against the current vulnerability policy before
+authorizing runtime use. The image uses UID/GID 1000 and the existing
+`--userns=keep-id:uid=1000,gid=1000` mapping.
 
-The existing `scripts/install-polyscope-container-preview.sh` consumes this image
-and installs PHP, Composer and `polyscope-api-test`. Updating an already running
-preview remains separately authorized. An image build alone does not restart it.
+## Preview routing and runtime
 
-## Runtime identity and health
+The existing preview service groups independent rootless containers with Podman.
+Nginx binds the existing preview port on loopback behind the authenticated edge.
+Its image uses the official Nginx 1.30.7 OCI index with patched Alpine OpenSSL
+and zlib packages. Build the gateway target from the same recipe:
 
-The final image runs as developer (1000:1000), without Composer's root bypass.
-Native Podman invocations use `--userns=keep-id:uid=1000,gid=1000` to map this
-identity to the existing unprivileged development account. Bind-mounted source
-retains host ownership; no host UID mappings or broad Git trust are changed.
-The image owns its home and Caddy data/config directories.
+```bash
+podman build --no-cache --format docker --target preview-nginx \
+  --file "$PWD/containers/polyscope-php/Containerfile" \
+  --tag localhost/secpal-polyscope-nginx:1.30.7 \
+  "$SECPAL_API_SOURCE/docker"
+```
 
-Build with Docker schema 2 metadata as shown above: Podman's default OCI format
-discards HEALTHCHECK. Inspect the built image's user and healthcheck metadata.
-The preview check requests its existing loopback HTTP catch-all and requires
-the expected 404 response. It fails if the HTTP server is unavailable; workspace
-readiness and public routes retain their existing behavior. The proxy overrides
-that check with a PostgreSQL SSLRequest through its TCP listener to the Unix
-upstream. This checks forwarding without authenticating or changing data.
-Short-lived PHP/Composer/test invocations disable service healthchecks; native
-queue and scheduler commands use the same PHP wrapper. The proxy alone retains
-its existing narrow SELinux socket exception.
+Nginx mounts only registered public document roots and private FastCGI sockets
+read-only. Static SPA previews and canonical redirects continue through the same
+hostnames. The build format retains the gateway and PHP-FPM health probes for Podman.
+
+Each admitted API preview runs PHP-FPM in a dedicated container. It can read
+only its own application worktree and write its runtime storage and socket
+directory. Only PHP-FPM attaches to the existing preview database proxy
+network. Both HTTP containers keep SELinux labeling, dropped capabilities
+and read-only roots. The database proxy keeps its existing narrow Unix-socket
+exception. API requests reach the fixed Laravel front controller. The preview
+health probe checks loopback and the default 404. `/health/live` and
+`/health/ready` remain application checks.
+
+Nginx checks the admission marker at
+`public/.polyscope-secpal-container-ready` on every API request and denies HTTP
+access to dotfiles. Removing that marker withdraws the route immediately.
+Registration and route refresh never issue admissions. The isolation guard
+continues to exclude fenced workspaces.
+
+## Live cutover
+
+Use a separately authorized change window with the Polyscope runtime owner.
+Record the existing unit, wrapper, image and route identities and the set of
+authenticated, admitted API previews. Qualify the exact PHP and Nginx images
+and load them under the local tags required by
+`scripts/install-polyscope-container-preview.sh`.
+
+Quiesce the existing preview service, database proxy and refresh path using
+their user units. For each currently authorized, unfenced API workspace,
+revalidate the native registration and its old root-level admission marker.
+Place the marker in its real `public/` directory with the same ownership and
+mode. Keep admissions withdrawn for all other workspaces.
+
+Install the accepted source through the existing container-preview installer.
+It rewrites the three command wrappers and the preview/proxy/refresh user units.
+Verify authenticated routing, loopback and TLS boundaries, static content and
+aliases, FastCGI socket ownership, API health, marker withdrawal, and the
+current database isolation. Test an ordinary workspace and a fenced workspace.
+Retain the previous files as rollback evidence and stop the affected units
+if any of these checks fail.
 
 ## Workspace commands
 
@@ -92,6 +122,8 @@ preview routes remain unchanged.
 ```bash
 python3 tests/run-polyscope-api-tests.py
 python3 tests/install-polyscope-container-preview.py
+python3 tests/run-polyscope-container-preview.py
+python3 tests/render-polyscope-container-nginx.py
 python3 -m unittest tests/polyscope-rollout-followups-unit.py
 bash tests/polyscope-rollout.sh
 ```
