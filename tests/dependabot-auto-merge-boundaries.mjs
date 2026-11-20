@@ -125,6 +125,11 @@ async function verifySource(change = {}) {
     rest: {
       repos: {
         getContent: async ({ ref, path }) => {
+          if (change.manifests?.[path]) {
+            const manifest = change.manifests[path][ref];
+            assert.ok(manifest, "requirements must come from an exact commit");
+            return { data: { type: "file", encoding: "base64", ...manifest } };
+          }
           if (change.alternateConfig && path.endsWith(".yml")) {
             throw Object.assign(new Error("not found"), { status: 404 });
           }
@@ -180,6 +185,117 @@ async function verifySource(change = {}) {
 test("authentic signed bot manifest update passes the source boundary", async () => {
   assert.equal(await verifySource(), "true");
 });
+
+const pipPath = "docker/python/opentimestamps-requirements.txt";
+const pipBase = "b".repeat(40);
+const pipHead = "a".repeat(40);
+const pipBlob = "e".repeat(40);
+const requirement = (name, version, fill) =>
+  `${name}==${version} --hash=sha256:${fill.repeat(64)}\n`;
+const pipBefore =
+  requirement("opentimestamps", "0.4.5", "a") + requirement("pycryptodomex", "3.23.0", "b");
+const pipAfter =
+  requirement("opentimestamps", "0.5.0", "c") + requirement("pycryptodomex", "3.23.0", "b");
+
+function pipChange({
+  before = pipBefore,
+  after = pipAfter,
+  version = "0.5.0",
+  updateType = "version-update:semver-minor",
+  path = pipPath,
+  status = "modified",
+  blob = pipBlob,
+  group = "",
+  parent = pipBase,
+  secondFile = false,
+} = {}) {
+  const commit = botCommit(
+    `Fixture.\n\n---\nupdated-dependencies:\n- dependency-name: opentimestamps\n  dependency-version: ${version}\n  update-type: ${updateType}\n...\n`
+  );
+  commit.parents = [{ sha: parent }];
+  const files = [{ filename: path, status, sha: blob }];
+  if (secondFile)
+    files.push({ filename: "docker/python/other-requirements.txt", status, sha: blob });
+  return {
+    pr: { changed_files: files.length },
+    commits: [commit],
+    files,
+    config: "version: 2\nupdates:\n- package-ecosystem: pip\n  directory: /docker/python\n",
+    env: {
+      PACKAGE_ECOSYSTEM: "pip",
+      ALLOWED_ECOSYSTEMS: "pip",
+      PIP_MANIFEST_PATH: pipPath,
+      VERIFIED_DEPENDENCIES: JSON.stringify([
+        {
+          dependencyName: "opentimestamps",
+          packageEcosystem: "pip",
+          dependencyGroup: group,
+          newVersion: version,
+          updateType,
+        },
+      ]),
+    },
+    manifests: {
+      [pipPath]: {
+        [pipBase]: { content: Buffer.from(before).toString("base64") },
+        [pipHead]: { sha: pipBlob, content: Buffer.from(after).toString("base64") },
+      },
+    },
+  };
+}
+
+test("an opted-in signed pip minor changes one hash-locked dependency", async () => {
+  assert.equal(await verifySource(pipChange()), "true");
+});
+
+test("pip uses canonical names for locked dependencies", async () => {
+  const before =
+    pipBefore.replace("opentimestamps", "OpenTimestamps") +
+    requirement("test-package", "1.2.3", "d");
+  const after =
+    pipAfter.replace("opentimestamps", "OpenTimestamps") +
+    requirement("TEST_package", "1.2.3", "d");
+  assert.equal(await verifySource(pipChange({ before, after })), "true");
+  assert.equal(
+    await verifySource(
+      pipChange({ before, after: after + requirement("test.package", "1.2.3", "d") })
+    ),
+    "false"
+  );
+});
+
+test("an opted-in signed pip patch changes one hash-locked dependency", async () => {
+  const after =
+    requirement("opentimestamps", "0.4.6", "c") + requirement("pycryptodomex", "3.23.0", "b");
+  assert.equal(
+    await verifySource(
+      pipChange({ after, version: "0.4.6", updateType: "version-update:semver-patch" })
+    ),
+    "true"
+  );
+});
+
+for (const [reason, change] of [
+  ["other file", { path: "docker/python/other-requirements.txt" }],
+  ["second file", { secondFile: true }],
+  ["added file", { status: "added" }],
+  ["unbound blob", { blob: "f".repeat(40) }],
+  ["stale parent", { parent: "f".repeat(40) }],
+  ["grouped change", { group: "python" }],
+  ["misclassified update", { updateType: "version-update:semver-patch" }],
+  ["signed version mismatch", { version: "0.5.1" }],
+  ["unhashed pin", { after: pipAfter.replace(/ --hash=sha256:[a-f]+/, "") }],
+  ["unrelated hash change", { after: pipAfter.replace("b".repeat(64), "d".repeat(64)) }],
+  ["added dependency", { after: pipAfter + requirement("fixture", "1.2.3", "a") }],
+  ["ambiguous continued comment", { after: pipAfter + "# comment\\\nnot-a-requirement\n" }],
+  ["encoding override", { after: "# coding: latin1\n" + pipAfter }],
+  ["nonstandard line boundary", { after: pipAfter + "# comment\rnot-a-requirement\n" }],
+  ["custom package source", { after: pipAfter + "--index-url https://example.com\n" }],
+]) {
+  test(`pip ${reason} fails source verification`, async () => {
+    assert.equal(await verifySource(pipChange(change)), "false");
+  });
+}
 for (const [name, change] of [
   ["foreign PR author", { pr: { user: { login: "attacker", type: "User" } } }],
   [
