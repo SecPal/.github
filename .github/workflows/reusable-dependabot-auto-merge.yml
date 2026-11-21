@@ -329,7 +329,7 @@ jobs:
                     !/^\d+(?:\.\d+){0,2}$/.test(dockerRule.line) || !/^(?:-[a-z0-9.-]+)?$/.test(dockerRule.suffix)) return;
                 const [first] = edits;
                 if (edits.some(edit => edit.before !== first.before || edit.after !== first.after)) return;
-                const from = /^FROM docker\.io\/([a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+):([A-Za-z0-9_.-]+)@(sha256:[a-f0-9]{64}) AS ([A-Za-z0-9_-]+)$/;
+                const from = /^FROM docker\.io\/([a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+):([A-Za-z0-9_.-]+)@(sha256:[a-f0-9]{64})(?: AS ([A-Za-z0-9_-]+))?$/;
                 const old = from.exec(first.before), next = from.exec(first.after);
                 if (!old || !next || old[1] !== dockerRule.image || next[1] !== old[1] ||
                     old[3] === next[3] || old[4] !== next[4]) return;
