@@ -1,0 +1,54 @@
+---
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Daily Governance Repository Security
+
+on:
+  schedule:
+    - cron: "13 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-repository-security-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-security:
+    name: Assess exact Governance source
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Require exact protected main source
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REPOSITORY" != SecPal/.github ||
+                "$GITHUB_REF" != refs/heads/main || "$GITHUB_REF_PROTECTED" != true ||
+                ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'Source assessment requires the protected Governance main event SHA.' >&2
+            exit 1
+          fi
+          printf 'Source subject: %s@%s\n\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout exact Governance source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Scan repository security
+        id: repository-security
+        # yamllint disable-line rule:line-length
+        uses: SecPal/.github/.github/actions/trivy-repository-scan@df09a6a5b9e5ea557c92c283be4868001929b59f # main
+
+      - name: Require clean repository security
+        shell: bash
+        env:
+          SCAN_OUTCOME: ${{ steps.repository-security.outcome }}
+          GATE_STATE: ${{ steps.repository-security.outputs.gate-state }}
+        run: |
+          test "$SCAN_OUTCOME" = success
+          test "$GATE_STATE" = CLEAN
