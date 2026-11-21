@@ -44,11 +44,12 @@ jobs:
     # Keep auto-merge decisions on the reviewed immutable workflow revision so
     # Dependabot PRs cannot execute unreviewed policy changes from the same PR.
     # yamllint disable rule:line-length
-    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@0a1c3484c14cd591e2317b8e1d2d9af128b48c46 # main
+    uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@cbf343cf4521690f15157d6602a53ef9d0662ec7 # main
     # yamllint enable rule:line-length
     with:
       # Phase 2: Verified PATCH and MINOR updates; Source Safety must be required
       phase: "2"
-      allowed-ecosystems: "github_actions"
+      allowed-ecosystems: "github_actions,pre_commit"
+      pre-commit-path: ".pre-commit-config.yaml"
       # Use squash merge for cleaner history
       merge-method: "squash"
