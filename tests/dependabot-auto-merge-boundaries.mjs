@@ -460,6 +460,35 @@ test("a hard rejection requires an opted-in rule, signed proposal, and current p
   }
 });
 
+test("authenticates an alias-free Caddy digest refresh without accepting an alias change", async () => {
+  const path = "containers/phase-b-gateway/Containerfile";
+  const image = "library/caddy";
+  const tag = "2.11.9-alpine";
+  const base = (digest) => `FROM docker.io/${image}:${tag}@sha256:${digest.repeat(64)}`;
+  const scenario = (alias = "") =>
+    updateFixture(
+      "docker",
+      "- package-ecosystem: docker\n  directory: /containers/phase-b-gateway\n",
+      [[path, `${base("a")}\nUSER 1000\n`, `${base("b")}${alias}\nUSER 1000\n`]],
+      [
+        {
+          dependencyName: image,
+          newVersion: tag,
+          packageEcosystem: "docker",
+          dependencyGroup: "",
+          updateType: "version-update:semver-patch",
+        },
+      ],
+      {
+        DOCKER_RULES: JSON.stringify([
+          { image, paths: [path], line: "2.11", suffix: "-alpine", digestRefresh: true },
+        ]),
+      }
+    );
+  assert.equal(await verifySource(scenario()), "digest-refresh");
+  assert.equal(await verifySource(scenario(" AS alternate")), undefined);
+});
+
 test("authenticates both members of the Composer image group", async () => {
   const paths = ["Containerfile", "docker/php-fpm/Containerfile"];
   const fixture = dockerFixture(["2.10.2", "2.11.1"], paths, "2");
