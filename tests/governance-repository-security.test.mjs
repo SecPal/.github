@@ -17,8 +17,15 @@ const scan = job.steps.find((step) => step.id === "repository-security");
 const gate = job.steps.find((step) => step.name === "Require clean repository security");
 // The workflow owns the revision; provenance is checked against protected history below.
 const trusted = scan?.uses?.split("@")[1];
+const dailyPath = ".github/workflows/daily-repository-security.yml";
+const daily = existsSync(dailyPath) ? yaml.load(readFileSync(dailyPath, "utf8")) : undefined;
+const dailyJob = daily?.jobs?.["repository-security"];
 
 test("the existing required gate scans the exact source before candidate tooling", () => {
+  assert.deepEqual(workflow.on, {
+    pull_request: { branches: ["main"] },
+    push: { branches: ["main"] },
+  });
   assert.equal(job.name, "Evidence Architecture PR Gate");
   assert.equal(job.if, undefined);
   assert.equal(job.needs, undefined);
@@ -37,30 +44,102 @@ test("the existing required gate scans the exact source before candidate tooling
   });
 });
 
-test("only successful CLEAN execution admits the required gate", () => {
-  for (const outcome of ["success", "failure", "cancelled", "skipped", ""]) {
-    for (const state of [
-      "CLEAN",
-      "ACTIONABLE",
-      "REVIEW_REQUIRED",
-      "UNKNOWN_STALE",
-      "",
-      "CLEAN;true",
-    ]) {
+test("daily diagnostics use the exact event and the same accepted scanner authority", () => {
+  assert.deepEqual(daily?.on, { schedule: [{ cron: "13 3 * * *" }], workflow_dispatch: null });
+  assert.deepEqual(daily.permissions, { contents: "read" });
+  assert.deepEqual(Object.keys(daily.jobs), ["repository-security"]);
+  assert.equal(dailyJob.if, undefined);
+  assert.equal(dailyJob.permissions, undefined);
+  assert.equal(dailyJob["continue-on-error"], undefined);
+  assert.equal(dailyJob.steps.length, 4);
+
+  const [admission, checkout, dailyScan, dailyGate] = dailyJob.steps;
+  assert.equal(admission.shell, "bash");
+  assert.equal(admission.if, undefined);
+  assert.equal(admission["continue-on-error"], undefined);
+  assert.equal(checkout.uses, job.steps[0].uses);
+  assert.deepEqual(checkout.with, { ref: "${{ github.sha }}", "persist-credentials": false });
+  assert.deepEqual(dailyScan, scan);
+  assert.equal(dailyGate.shell, "bash");
+  assert.equal(dailyGate.if, undefined);
+  assert.equal(dailyGate["continue-on-error"], undefined);
+  assert.deepEqual(dailyGate.env, gate.env);
+});
+
+test("daily admission rejects wrong repository, ref, protection or source identity", () => {
+  const root = mkdtempSync(join(tmpdir(), "secpal-daily-source-"));
+  const sha = "a".repeat(40);
+  const cases = [
+    [{}, true],
+    [{ GITHUB_REPOSITORY: "Other/.github" }, false],
+    [{ GITHUB_REF: "refs/heads/topic" }, false],
+    [{ GITHUB_REF: "refs/tags/main" }, false],
+    [{ GITHUB_REF_PROTECTED: "false" }, false],
+    [{ GITHUB_REF_PROTECTED: "" }, false],
+    [{ GITHUB_SHA: "main" }, false],
+    [{ GITHUB_SHA: "a".repeat(39) }, false],
+    [{ GITHUB_SHA: "" }, false],
+  ];
+  try {
+    for (const [index, [changed, accepted]] of cases.entries()) {
+      const summary = join(root, "summary-" + index);
       const result = spawnSync(
         "bash",
-        ["--noprofile", "--norc", "-eo", "pipefail", "-c", gate?.run ?? ""],
+        ["--noprofile", "--norc", "-eo", "pipefail", "-c", dailyJob.steps[0].run],
         {
-          env: { ...process.env, SCAN_OUTCOME: outcome, GATE_STATE: state },
           encoding: "utf8",
+          env: {
+            ...process.env,
+            GITHUB_REPOSITORY: "SecPal/.github",
+            GITHUB_REF: "refs/heads/main",
+            GITHUB_REF_PROTECTED: "true",
+            GITHUB_SHA: sha,
+            ...changed,
+            GITHUB_STEP_SUMMARY: summary,
+          },
         }
       );
-      assert.equal(
-        result.status === 0,
-        outcome === "success" && state === "CLEAN",
-        outcome + "/" + state
-      );
-      assert.equal(result.stdout + result.stderr, "");
+      assert.equal(result.status, accepted ? 0 : 1);
+      assert.equal(result.stdout, "");
+      assert.equal(existsSync(summary), accepted);
+      if (accepted)
+        assert.equal(
+          readFileSync(summary, "utf8"),
+          "Source subject: SecPal/.github@" + sha + "\n\n"
+        );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("only successful CLEAN execution admits either governance security gate", () => {
+  for (const acceptance of [gate, dailyJob?.steps[3]]) {
+    assert.equal(typeof acceptance?.run, "string");
+    for (const outcome of ["success", "failure", "cancelled", "skipped", ""]) {
+      for (const state of [
+        "CLEAN",
+        "ACTIONABLE",
+        "REVIEW_REQUIRED",
+        "UNKNOWN_STALE",
+        "",
+        "CLEAN;true",
+      ]) {
+        const result = spawnSync(
+          "bash",
+          ["--noprofile", "--norc", "-eo", "pipefail", "-c", acceptance.run],
+          {
+            env: { ...process.env, SCAN_OUTCOME: outcome, GATE_STATE: state },
+            encoding: "utf8",
+          }
+        );
+        assert.equal(
+          result.status === 0,
+          outcome === "success" && state === "CLEAN",
+          outcome + "/" + state
+        );
+        assert.equal(result.stdout + result.stderr, "");
+      }
     }
   }
 });
