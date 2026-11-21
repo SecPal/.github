@@ -630,24 +630,48 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           MERGE_METHOD: ${{ inputs.merge-method }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # A failed revocation must block merging. Never enroll before GitHub
-          # actually requires this run's successful safety check.
-          if checks=$(gh pr checks "$PR_URL" --required --json name,state,link); then
-            :
-          else
-            status=$?
-            case "$status" in
-              1|8) ;; # Other protected checks may still be failing or pending.
-              *) exit "$status" ;;
-            esac
-          fi
-          jq -e --arg run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/job/" '
-            [.[] | select(.name == "auto-merge / Dependabot Source Safety" and (.link | startswith($run)))] |
-            length == 1 and .[0].state == "SUCCESS"
+          # Query only check fields available to the checks-read token, including on private repositories.
+          checks=$(gh api graphql --paginate --slurp \
+            -f owner="${GITHUB_REPOSITORY%%/*}" -f repository="${GITHUB_REPOSITORY#*/}" -F number="$PR_NUMBER" \
+            -f query='
+              query($owner: String!, $repository: String!, $number: Int!, $endCursor: String) {
+                repository(owner: $owner, name: $repository) {
+                  pullRequest(number: $number) {
+                    headRefOid
+                    commits(last: 1) {
+                      nodes {
+                        commit {
+                          oid
+                          statusCheckRollup {
+                            contexts(first: 100, after: $endCursor) {
+                              pageInfo { hasNextPage endCursor }
+                              nodes {
+                                ... on CheckRun {
+                                  name status conclusion detailsUrl isRequired(pullRequestNumber: $number)
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }')
+          # Require this run's unique successful safety check on the exact current head.
+          jq -e --arg head "$EXPECTED_HEAD" --arg run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/job/" '
+            map(.data.repository.pullRequest) |
+            if length > 0 and all(.[]; .headRefOid == $head and .commits.nodes[0].commit.oid == $head) then
+              [.[] | .commits.nodes[0].commit.statusCheckRollup.contexts.nodes[] |
+                select(.isRequired == true and .name == "auto-merge / Dependabot Source Safety" and
+                  ((.detailsUrl // "") | startswith($run)))] |
+              length == 1 and .[0].status == "COMPLETED" and .[0].conclusion == "SUCCESS"
+            else false end
           ' <<< "$checks"
           echo "🤖 Enabling auto-merge..."
           echo "PR: ${PR_URL}"

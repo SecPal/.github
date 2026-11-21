@@ -873,76 +873,74 @@ test("caller reconciles label, draft and target changes", () => {
     assert.ok(caller.on.pull_request_target.types.includes(event), `missing ${event}`);
   }
 });
-test("enrollment requires a successful protected safety check from this same run", () => {
+test("enrollment requires a successful protected safety check from this run and head", () => {
   const step = workflow.jobs["auto-merge"].steps.find((step) => step.name === "Enable auto-merge");
-  for (const [checks, expected] of [
-    [
-      [
-        {
-          name: "auto-merge / Dependabot Source Safety",
-          state: "SUCCESS",
-          link: "https://github.com/SecPal/test/actions/runs/41/job/1",
+  const head = "a".repeat(40);
+  const completed = {
+    name: "auto-merge / Dependabot Source Safety",
+    status: "COMPLETED",
+    conclusion: "SUCCESS",
+    detailsUrl: "https://github.com/SecPal/test/actions/runs/42/job/1",
+    isRequired: true,
+  };
+  const otherRun = {
+    ...completed,
+    detailsUrl: "https://github.com/SecPal/test/actions/runs/41/job/1",
+  };
+  const page = (nodes, { headRefOid = head, oid = head } = {}) => ({
+    data: {
+      repository: {
+        pullRequest: {
+          headRefOid,
+          commits: { nodes: [{ commit: { oid, statusCheckRollup: { contexts: { nodes } } } }] },
         },
-        {
-          name: "auto-merge / Dependabot Source Safety",
-          state: "SUCCESS",
-          link: "https://github.com/SecPal/test/actions/runs/42/job/1",
-        },
-      ],
-      true,
-    ],
-    [[], false],
-    [
-      [
-        {
-          name: "auto-merge / Dependabot Source Safety",
-          state: "FAILURE",
-          link: "https://github.com/SecPal/test/actions/runs/42/job/1",
-        },
-      ],
-      false,
-    ],
-    [
-      [
-        {
-          name: "auto-merge / Dependabot Source Safety",
-          state: "SUCCESS",
-          link: "https://github.com/SecPal/test/actions/runs/41/job/1",
-        },
-      ],
-      false,
-    ],
-    [
-      [
-        {
-          name: "auto-merge / Dependabot Source Safety",
-          state: "SUCCESS",
-          link: "https://github.com/SecPal/test/actions/runs/42/job/1",
-        },
-      ],
-      true,
-    ],
+      },
+    },
+  });
+
+  for (const [pages, expected, lookupExit = 0] of [
+    [[page([completed])], true],
+    [[page([otherRun]), page([completed])], true],
+    [[page([])], false],
+    [[page([otherRun])], false],
+    [[page([completed, completed])], false],
+    [[page([{ ...completed, isRequired: false }])], false],
+    [[page([{ ...completed, conclusion: "FAILURE" }])], false],
+    [[page([{ ...completed, status: "IN_PROGRESS", conclusion: null }])], false],
+    [[page([completed], { headRefOid: "b".repeat(40) })], false],
+    [[page([completed], { oid: "b".repeat(40) })], false],
+    [[page([completed])], false, 4],
   ]) {
     const dir = mkdtempSync(join(tmpdir(), "dependabot-enrollment-"));
     try {
       const record = join(dir, "merged");
       writeFileSync(
         join(dir, "gh"),
-        '#!/bin/sh\nif [ "$2" = checks ]; then printf "%s" "$CHECKS"; exit 8; fi\nprintf "merge" > "$RECORD"\n',
+        [
+          "#!/bin/sh",
+          'case "$1:$2" in',
+          '  api:graphql) printf "%s" "$CHECKS"; exit "$LOOKUP_EXIT" ;;',
+          "  pr:checks) exit 4 ;;",
+          '  pr:merge) printf "merge" > "$RECORD" ;;',
+          "  *) exit 1 ;;",
+          "esac",
+        ].join("\n"),
         { mode: 0o700 }
       );
       const result = spawnSync("bash", ["-c", step.run.replace(/\$\{\{.*?\}\}/g, "fixture")], {
         env: {
           ...process.env,
           PATH: `${dir}:${process.env.PATH}`,
-          CHECKS: JSON.stringify(checks),
+          CHECKS: JSON.stringify(pages),
+          LOOKUP_EXIT: String(lookupExit),
           RECORD: record,
           GITHUB_SERVER_URL: "https://github.com",
           GITHUB_REPOSITORY: "SecPal/test",
           GITHUB_RUN_ID: "42",
           PR_URL: "https://github.com/SecPal/test/pull/1",
+          PR_NUMBER: "1",
           MERGE_METHOD: "squash",
-          EXPECTED_HEAD: "a".repeat(40),
+          EXPECTED_HEAD: head,
         },
         encoding: "utf8",
       });
