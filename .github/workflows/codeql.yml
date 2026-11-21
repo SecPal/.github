@@ -16,29 +16,55 @@ on:
 permissions: {}
 
 jobs:
-  codeql:
-    name: CodeQL
+  analysis:
+    name: CodeQL analysis (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python, actions]
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Verify CodeQL applicability
+        if: ${{ matrix.language == 'javascript-typescript' }}
         run: bash tests/codeql-applicability.sh
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
-          languages: javascript-typescript
-          queries: +security-extended,security-and-quality
+          languages: ${{ matrix.language }}
+          queries: >-
+            ${{ matrix.language == 'javascript-typescript'
+            && '+security-extended,security-and-quality' || '' }}
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
-          category: /language:javascript-typescript
+          category: /language:${{ matrix.language }}
+
+  codeql:
+    name: CodeQL
+    needs: analysis
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Reject a cancelled workflow
+        if: ${{ cancelled() }}
+        run: exit 1
+
+      - name: Require successful CodeQL analyses
+        if: ${{ always() }}
+        env:
+          ANALYSIS_RESULT: ${{ needs.analysis.result }}
+        run: test "$ANALYSIS_RESULT" = success

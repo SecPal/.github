@@ -65,6 +65,48 @@ test("only successful CLEAN execution admits the required gate", () => {
   }
 });
 
+test("the existing CodeQL check requires all supported governance analyses", () => {
+  const codeql = yaml.load(readFileSync(".github/workflows/codeql.yml", "utf8"));
+  const analysis = codeql.jobs.analysis;
+  assert.deepEqual(analysis.strategy, {
+    "fail-fast": false,
+    matrix: { language: ["javascript-typescript", "python", "actions"] },
+  });
+  const [checkout, applicability, initialize, analyze] = analysis.steps;
+  assert.deepEqual(checkout.with, { ref: "${{ github.sha }}", "persist-credentials": false });
+  assert.equal(applicability.if, "${{ matrix.language == 'javascript-typescript' }}");
+  assert.equal(applicability.run, "bash tests/codeql-applicability.sh");
+  assert.match(initialize.uses, /^github\/codeql-action\/init@[0-9a-f]{40}$/);
+  assert.equal(initialize.with.languages, "${{ matrix.language }}");
+  assert.match(
+    initialize.with.queries,
+    /javascript-typescript.*\+security-extended,security-and-quality/
+  );
+  assert.equal(analyze.uses, initialize.uses.replace("/init@", "/analyze@"));
+  assert.equal(analyze.with.category, "/language:${{ matrix.language }}");
+  for (const step of [initialize, analyze]) {
+    assert.equal(step.if, undefined);
+    assert.equal(step["continue-on-error"], undefined);
+  }
+
+  const required = codeql.jobs.codeql;
+  assert.equal(required.name, "CodeQL");
+  assert.equal(required.needs, "analysis");
+  assert.equal(required.if, "${{ always() }}");
+  assert.deepEqual(required.permissions, {});
+  const [cancellation, completion] = required.steps;
+  assert.equal(cancellation.if, "${{ cancelled() }}");
+  assert.equal(cancellation.run, "exit 1");
+  assert.equal(completion.if, "${{ always() }}");
+  assert.deepEqual(completion.env, { ANALYSIS_RESULT: "${{ needs.analysis.result }}" });
+  for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
+    const process = spawnSync("bash", ["-e", "-c", completion.run], {
+      env: { ANALYSIS_RESULT: result },
+    });
+    assert.equal(process.status, result === "success" ? 0 : 1);
+  }
+});
+
 test("a candidate scanner and policy cannot replace the accepted action runtime", () => {
   assert.match(trusted ?? "", /^[0-9a-f]{40}$/);
   assert.equal(scan?.uses, actionReference + trusted);
