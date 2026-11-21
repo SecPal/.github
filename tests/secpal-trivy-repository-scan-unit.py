@@ -409,6 +409,8 @@ class RepositoryScanContractTests(unittest.TestCase):
                 (advisory + advisory, {}),
                 (advisory.replace("License detection", "Vulnerability detection"), {}),
                 (advisory, {"native": None}),
+                (advisory, {"native": {key: value for key, value in native.items() if key != "SchemaVersion"}}),
+                (advisory, {"native": {**native, "SchemaVersion": 3}}),
                 (advisory, {"native": {**native, "Results": []}}),
                 (advisory, {"workspace": "/substituted"}),
                 (advisory, {"scanner": {**scanner, "version": "0.74.1"}}),

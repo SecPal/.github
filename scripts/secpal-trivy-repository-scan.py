@@ -373,6 +373,8 @@ def _verify_pip_license_diagnostic(native: dict[str, Any] | None,
     # of optional installed-package license lookup in its isolated environment.
     if not isinstance(native, dict) or scanner is None or workspace is None:
         raise ContractError("pip diagnostic context is unavailable")
+    if native.get("SchemaVersion") != 2:
+        raise ContractError("pip native schema is unqualified")
     identity = _validate_scanner(scanner)
     if identity["version"] != TRIVY_VERSION or identity["immutable_id"] != TRIVY_ARCHIVE_ID:
         raise ContractError("pip scanner identity is unqualified")
