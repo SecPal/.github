@@ -384,6 +384,45 @@ class RepositoryScanContractTests(unittest.TestCase):
             self.assertEqual(result["gate_state"], "UNKNOWN_STALE")
             jsonschema.validate(result, json.loads(SCHEMA.read_text()))
 
+    def test_pip_license_advisory_requires_pinned_native_inventory(self) -> None:
+        scanner = {
+            "name": "trivy", "version": self.module.TRIVY_VERSION,
+            "immutable_id": self.module.TRIVY_ARCHIVE_ID,
+            "configuration_sha256": self.module.configuration_identity(),
+        }
+        native = native_result()
+        native["Results"] = [{
+            "Target": "requirements.txt", "Class": "lang-pkgs", "Type": "pip",
+            "Packages": [{"Name": "requests", "Version": "2.19.1"}],
+        }]
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            prefix = "2026-11-21T18:25:57Z\t"
+            fallback = prefix + "ERROR\t[misconfig] Falling back to embedded checks\terr=" + json.dumps(
+                "failed to check cache: cache does not exist at " + json.dumps(str(cache / "policy" / "content"))
+            ) + "\n"
+            advisory = (prefix + "WARN\t[pip] Unable to find python `site-packages` directory. "
+                        'License detection is skipped.\terr="unable to find path to Python executable"\n')
+            context = {"native": native, "scanner": scanner, "workspace": native["ArtifactName"]}
+            self.module.verify_diagnostics(fallback + advisory, cache, **context)
+            for diagnostic, override in (
+                (advisory + advisory, {}),
+                (advisory.replace("License detection", "Vulnerability detection"), {}),
+                (advisory, {"native": None}),
+                (advisory, {"native": {key: value for key, value in native.items() if key != "SchemaVersion"}}),
+                (advisory, {"native": {**native, "SchemaVersion": 3}}),
+                (advisory, {"native": {**native, "Results": []}}),
+                (advisory, {"workspace": "/substituted"}),
+                (advisory, {"scanner": {**scanner, "version": "0.74.1"}}),
+                (advisory, {"scanner": {**scanner, "immutable_id": "sha256:" + "0" * 64}}),
+                (advisory, {"native": {**native, "Results": [{**native["Results"][0], "Packages": []}]}}),
+                (advisory, {"native": {**native, "Results": [{**native["Results"][0], "Packages": [{}]}]}}),
+                (advisory, {"native": {**native, "Results": [{**native["Results"][0], "Type": "gobinary"}]}}),
+            ):
+                with self.subTest(diagnostic=diagnostic, override=override):
+                    with self.assertRaises(self.module.ContractError):
+                        self.module.verify_diagnostics(fallback + diagnostic, cache, **(context | override))
+
     def test_composer_advisory_requires_pinned_native_fallback_context(self) -> None:
         native = json.loads((FIXTURES / "composer-0.74.0-native.json").read_text())
         scanner = {

@@ -48,6 +48,10 @@ SEVERITY_FALLBACK_DIAGNOSTIC = (
     "Using severities from other vendors for some vulnerabilities. Read "
     "https://trivy.dev/docs/v0.74/guide/scanner/vulnerability#severity-selection for details."
 )
+PIP_LICENSE_DIAGNOSTIC = (
+    "[pip] Unable to find python `site-packages` directory. "
+    'License detection is skipped.\terr="unable to find path to Python executable"'
+)
 # Historical exception validation only; no current scan is enrolled in a
 # source/control allowlist and no historical qualification can be renewed here.
 DEPLOYMENT_TERRAFORM_ID = "deployment-ephemeral-1236"
@@ -362,6 +366,39 @@ def _terraform_warning_variables(message: str) -> list[str]:
     return sorted(names)
 
 
+def _verify_pip_license_diagnostic(native: dict[str, Any] | None,
+                                   scanner: dict[str, Any] | None,
+                                   workspace: str | None) -> None:
+    # Pinned Trivy parses requirements and checks vulnerabilities independently
+    # of optional installed-package license lookup in its isolated environment.
+    if not isinstance(native, dict) or scanner is None or workspace is None:
+        raise ContractError("pip diagnostic context is unavailable")
+    if native.get("SchemaVersion") != 2:
+        raise ContractError("pip native schema is unqualified")
+    identity = _validate_scanner(scanner)
+    if identity["version"] != TRIVY_VERSION or identity["immutable_id"] != TRIVY_ARCHIVE_ID:
+        raise ContractError("pip scanner identity is unqualified")
+    _validate_scan_surface(native, workspace)
+    results = native.get("Results")
+    if not isinstance(results, list) or any(not isinstance(result, dict) for result in results):
+        raise ContractError("pip native results are unavailable")
+    pip_results = [result for result in results if result.get("Type") == "pip"]
+    if not pip_results:
+        raise ContractError("pip package inventory is unavailable")
+    for result in pip_results:
+        if (result.get("Class") != "lang-pkgs"
+                or PurePosixPath(_path(result.get("Target"))).name != "requirements.txt"):
+            raise ContractError("pip package inventory target is unqualified")
+        packages = result.get("Packages")
+        if not isinstance(packages, list) or not packages:
+            raise ContractError("pip package inventory is unavailable")
+        for package in packages:
+            if not isinstance(package, dict):
+                raise ContractError("pip package inventory is malformed")
+            _string(package.get("Name"), "pip package name")
+            _string(package.get("Version"), "pip package version")
+
+
 def verify_diagnostics(content: str, cache_directory: Path, *,
                        native: dict[str, Any] | None = None,
                        scanner: dict[str, Any] | None = None,
@@ -381,6 +418,7 @@ def verify_diagnostics(content: str, cache_directory: Path, *,
     )
     fallbacks = 0
     advisories = 0
+    pip_license_seen = False
     modules = set()
     current_module = None
     unresolved = {}
@@ -407,6 +445,11 @@ def verify_diagnostics(content: str, cache_directory: Path, *,
             fallbacks += 1
         elif fields[1] == "WARN" and fields[2] == SEVERITY_FALLBACK_DIAGNOSTIC:
             advisories += 1
+        elif fields[1] == "WARN" and fields[2] == PIP_LICENSE_DIAGNOSTIC:
+            if pip_license_seen:
+                raise ContractError("pip diagnostic count is unqualified")
+            _verify_pip_license_diagnostic(native, scanner, workspace)
+            pip_license_seen = True
         elif fields[1] == "INFO" and fields[2].startswith("[terraform scanner] Scanning root module"):
             prefix = '[terraform scanner] Scanning root module\tfile_path='
             if coverage is None or not fields[2].startswith(prefix):

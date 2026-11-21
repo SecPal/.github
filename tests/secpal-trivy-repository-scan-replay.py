@@ -680,12 +680,13 @@ def main() -> int:
         generic_sources = module.observe_secret_sources(
             workspace, generic_commit, [r["Target"] for r in generic_native["Results"] if r.get("Secrets")],
         )
-        # Keep the generic replay and add the downstream Composer development seam.
+        # Keep the generic replay and add Composer and pip dependency seams.
         (workspace / "composer.lock").write_text(json.dumps({
             "packages": [], "packages-dev": [{
                 "name": "symfony/http-foundation", "version": "v5.4.0", "type": "library",
             }],
         }) + "\n")
+        (workspace / "requirements.txt").write_text("requests==2.19.1\n")
         subprocess.run(["git", "-C", str(workspace), "add", "."], check=True)
         subprocess.run(["git", "-C", str(workspace), "-c", "commit.gpgsign=false",
                         "commit", "--quiet", "-m", "Composer canary fixture"], check=True)
@@ -731,6 +732,8 @@ def main() -> int:
         ))
         if diagnostics.count("\tWARN\t" + module.SEVERITY_FALLBACK_DIAGNOSTIC) != 1:
             raise RuntimeError("Composer fixture did not exercise the exact advisory")
+        if diagnostics.count("\tWARN\t" + module.PIP_LICENSE_DIAGNOSTIC) != 1:
+            raise RuntimeError("pip fixture did not exercise the exact license advisory")
         module.verify_diagnostics(diagnostics, cache, native=native_value,
                                   scanner=observation["scanner"], workspace=str(workspace))
         for unexpected in ("WARN\tunknown warning", "ERROR\tparser failed"):
@@ -767,6 +770,7 @@ def main() -> int:
         } | {
             ("lodash-array-path/package-lock.json", "CVE-2026-2950"),
             ("Containerfile", "DS-0002"), ("Containerfile", "DS-0026"),
+            ("requirements.txt", "CVE-2018-18074"),
         }
         if not required_fixture_rules <= positive_fixture_rules:
             raise RuntimeError("materialized fixtures lost original positive detections")
@@ -845,14 +849,20 @@ def main() -> int:
         action_result = json.loads((evidence_root / "result.json").read_text())
         import jsonschema
         jsonschema.validate(action_result, json.loads((ROOT / "docs/schemas/secpal-trivy-repository-scan-v5.schema.json").read_text()))
-        if (action_result["gate_state"] != "ACTIONABLE"
-                or {f["class"] for f in action_result["findings"]} != classes
+        if action_result["gate_state"] != "ACTIONABLE":
+            raise RuntimeError("maintained action did not deliver ACTIONABLE evidence: "
+                               + action_result["gate_state"] + " / "
+                               + str(action_result["operation"].get("failure_code")))
+        if ({f["class"] for f in action_result["findings"]} != classes
                 or action_result["subject"] != {"repository": "SecPal/repository-scan-fixture", "commit": commit}
                 or action_result["scanner"] != observation["scanner"]
                 or action_result["database"]["status"] != "FRESH"
                 or action_result["policy"] != result["policy"]
                 or not any(f["class"] == "VULNERABILITY" and f.get("package") == "symfony/http-foundation" for f in action_result["findings"])):
             raise RuntimeError("maintained action did not preserve Canary identities and findings")
+        if not any(f["class"] == "VULNERABILITY" and f["path"] == "requirements.txt"
+                   and f["rule_id"] == "CVE-2018-18074" for f in action_result["findings"]):
+            raise RuntimeError("maintained action did not preserve the real pip finding")
         public = action.stdout + action.stderr + summary_path.read_bytes() + output_path.read_bytes()
         for retained in evidence_root.iterdir():
             public += retained.read_bytes()
