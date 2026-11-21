@@ -35,8 +35,9 @@ jobs:
           persist-credentials: false
 
       - name: Verify CodeQL applicability
-        if: ${{ matrix.language == 'javascript-typescript' }}
-        run: bash tests/codeql-applicability.sh
+        env:
+          CODEQL_LANGUAGE: ${{ matrix.language }}
+        run: bash tests/codeql-applicability.sh "$CODEQL_LANGUAGE"
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3

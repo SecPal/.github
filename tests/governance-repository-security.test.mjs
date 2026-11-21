@@ -74,8 +74,9 @@ test("the existing CodeQL check requires all supported governance analyses", () 
   });
   const [checkout, applicability, initialize, analyze] = analysis.steps;
   assert.deepEqual(checkout.with, { ref: "${{ github.sha }}", "persist-credentials": false });
-  assert.equal(applicability.if, "${{ matrix.language == 'javascript-typescript' }}");
-  assert.equal(applicability.run, "bash tests/codeql-applicability.sh");
+  assert.equal(applicability.if, undefined);
+  assert.deepEqual(applicability.env, { CODEQL_LANGUAGE: "${{ matrix.language }}" });
+  assert.equal(applicability.run, 'bash tests/codeql-applicability.sh "$CODEQL_LANGUAGE"');
   assert.match(initialize.uses, /^github\/codeql-action\/init@[0-9a-f]{40}$/);
   assert.equal(initialize.with.languages, "${{ matrix.language }}");
   assert.match(
