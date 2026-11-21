@@ -830,7 +830,8 @@ test("caller reconciles label, draft and target changes", () => {
   const caller = yaml.load(readFileSync(".github/workflows/dependabot-auto-merge.yml", "utf8"));
   assert.equal(caller.jobs["auto-merge"].if, undefined);
   assert.equal(caller.jobs["auto-merge"].with.phase, "2");
-  assert.equal(caller.jobs["auto-merge"].with["allowed-ecosystems"], "github_actions");
+  assert.equal(caller.jobs["auto-merge"].with["allowed-ecosystems"], "github_actions,pre_commit");
+  assert.equal(caller.jobs["auto-merge"].with["pre-commit-path"], ".pre-commit-config.yaml");
   assert.equal(caller.concurrency["cancel-in-progress"], true);
   assert.equal(caller["cache-mode"], "none");
   assert.deepEqual(caller.permissions, {
