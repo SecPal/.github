@@ -3926,6 +3926,8 @@ assert env_values[module.PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY] == "1", env_val
 
 calls.clear()
 module.run_api_worktree_bootstrap_command = fake_run_api_worktree_bootstrap_command
+env_path = api_worktree / ".env"
+env_path.chmod(0o644)
 ready, target = module.bootstrap_api_worktree(api_worktree, source_api)
 assert ready is True
 assert target == "database:secpal__preview__mighty_hyena", target
@@ -3933,6 +3935,7 @@ assert ("php", "artisan", "migrate:fresh", "--force") in calls, calls
 assert ("php", "artisan", "migrate", "--force") not in calls, calls
 env_values = module.load_env_assignments(api_worktree / ".env")
 assert env_values[module.PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY] == "", env_values
+assert env_path.stat().st_mode & 0o777 == 0o600, "reset marker replacement must stay private"
 
 calls.clear()
 ready, target = module.bootstrap_api_worktree(api_worktree, source_api)
@@ -4295,6 +4298,8 @@ def fake_execvpe(file, args, env):
 module.os.chdir = fake_chdir
 module.os.execvpe = fake_execvpe
 
+env_path = api_worktree / ".env"
+env_path.chmod(0o644)
 db_path = workspace / "runtime-polyscope.db"
 try:
     module.run_api_worktree_shell_command(
@@ -4306,6 +4311,7 @@ try:
 except SystemExit as error:
     assert error.code == 0, error
 
+assert env_path.stat().st_mode & 0o777 == 0o600, "direct preview startup must repair .env permissions"
 assert calls == [
     ("chdir", api_worktree),
     (

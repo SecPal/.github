@@ -819,8 +819,13 @@ def load_env_assignments(env_path: pathlib.Path) -> dict[str, str]:
     return parse_env_assignments(env_path.read_text())
 
 
-def _read_api_preview_env(env_path: pathlib.Path) -> str:
-    descriptor = os.open(env_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+def _read_api_preview_env(env_path: pathlib.Path, *, missing_ok: bool = False) -> str:
+    try:
+        descriptor = os.open(env_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        if missing_ok:
+            return ""
+        raise
     try:
         metadata = os.fstat(descriptor)
         if (not stat.S_ISREG(metadata.st_mode)
@@ -1721,10 +1726,10 @@ def run_api_worktree_shell_command(
 ) -> None:
     isolation_require_execution(worktree_path)
     env_path = worktree_path / ".env"
-    if not env_path.exists():
-        raise SystemExit(f"api worktree {worktree_path} is missing .env")
-
-    env_values = load_env_assignments(env_path)
+    try:
+        env_values = parse_env_assignments(_read_api_preview_env(env_path))
+    except FileNotFoundError:
+        raise SystemExit(f"api worktree {worktree_path} is missing .env") from None
     source_env_values = load_optional_env_assignments(source_repo_path / ".env")
     command_env = build_api_worktree_command_env(env_values, source_env_values)
     if db_path is not None:
@@ -1785,8 +1790,8 @@ def cleanup_removed_api_preview_databases(
 
         if protects_storage_target:
             env_path = worktree_path / ".env"
-            if env_path.exists():
-                active_targets.update(discover_existing_api_preview_targets(load_env_assignments(env_path), base_database))
+            preview_env = parse_env_assignments(_read_api_preview_env(env_path, missing_ok=True))
+            active_targets.update(discover_existing_api_preview_targets(preview_env, base_database))
 
     cleaned_databases: list[str] = []
     if postgres_role_can_create_databases(env_values, base_database):
@@ -5118,7 +5123,7 @@ def wait_for_api_scheduler_readiness(
     interval_seconds: float = 2.0,
 ) -> None:
     """Gate preview exposure on a heartbeat produced by the supervised scheduler."""
-    worktree_env = load_optional_env_assignments(worktree_path / ".env")
+    worktree_env = parse_env_assignments(_read_api_preview_env(worktree_path / ".env", missing_ok=True))
     source_env = load_optional_env_assignments(source_repo_path / ".env")
     command_env = build_api_worktree_command_env(worktree_env, source_env)
     tinker_script = " ".join(
