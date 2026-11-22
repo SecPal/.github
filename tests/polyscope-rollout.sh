@@ -3323,7 +3323,9 @@ PY
 # provisioning.
 python3 -B - <<'PY' "$PYTHON_SCRIPT" "$workspace"
 import importlib.util
+import os
 import pathlib
+import stat
 import sys
 
 script_path = pathlib.Path(sys.argv[1])
@@ -3368,7 +3370,12 @@ def fake_ensure_postgres_preview_database(env_values, base_database, preview_dat
 module.postgres_role_can_create_databases = fake_postgres_role_can_create_databases
 module.ensure_postgres_preview_database = fake_ensure_postgres_preview_database
 
-ready, target = module.ensure_api_worktree_ready(api_worktree, source_api)
+env_path = api_worktree / ".env"
+original_umask = os.umask(0o022)
+try:
+    ready, target = module.ensure_api_worktree_ready(api_worktree, source_api)
+finally:
+    os.umask(original_umask)
 assert ready is True
 assert target == "database:secpal__preview__quiet_bear", target
 assert calls == [
@@ -3377,6 +3384,12 @@ assert calls == [
 ], calls
 worktree_env = api_worktree.joinpath(".env").read_text()
 assert "DB_PASSWORD=source-only-password" in worktree_env, worktree_env
+assert stat.S_IMODE(env_path.stat().st_mode) == 0o600, "new preview .env must be private"
+
+env_path.chmod(0o644)
+module.ensure_api_worktree_ready(api_worktree, source_api)
+assert env_path.read_text() == worktree_env, "permission repair changed the .env contents"
+assert stat.S_IMODE(env_path.stat().st_mode) == 0o600, "existing preview .env must become private"
 
 source_api.joinpath(".env").write_text(
     "DB_CONNECTION=pgsql\n"
@@ -3397,6 +3410,7 @@ assert calls == [
 worktree_env = api_worktree.joinpath(".env").read_text()
 assert "DB_PASSWORD=rotated-source-password" in worktree_env, worktree_env
 assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
+assert stat.S_IMODE(env_path.stat().st_mode) == 0o600, "rotated preview .env must stay private"
 PY
 
 # ensure_api_worktree_ready must preserve source-managed PostgreSQL passwords

@@ -1281,17 +1281,27 @@ def ensure_api_worktree_ready(
     env_path = worktree_path / ".env"
     source_env_path = source_repo_path / ".env"
     source_env_values = load_optional_env_assignments(source_env_path)
-    if not env_path.exists():
-        env_path.write_text(
+    try:
+        env_metadata = env_path.lstat()
+    except FileNotFoundError:
+        _write_text_atomic(
+            env_path,
             build_api_worktree_env_template(
                 source_repo_path,
                 source_env_path=source_env_path if source_env_path.exists() else None,
-            )
+            ),
+            mode=0o600,
         )
         print(
             f"Healed api worktree {worktree_path.name} at {worktree_path}: "
             f"wrote missing .env from template {source_repo_path / '.env.example'}"
         )
+    else:
+        if (not stat.S_ISREG(env_metadata.st_mode)
+                or env_metadata.st_uid != os.geteuid() or env_metadata.st_nlink != 1):
+            raise RuntimeError("API preview .env must be a regular, caller-owned file with one link")
+        if stat.S_IMODE(env_metadata.st_mode) != 0o600:
+            _write_text_atomic(env_path, env_path.read_text(), mode=0o600)
 
     env_text = env_path.read_text()
     env_values = load_env_assignments(env_path)
@@ -1356,7 +1366,7 @@ def ensure_api_worktree_ready(
 
     updated_env_text = upsert_env_assignments(env_text, updated_values)
     if updated_env_text != env_text:
-        env_path.write_text(updated_env_text)
+        _write_text_atomic(env_path, updated_env_text, mode=0o600)
 
     final_env_values = env_values.copy()
     final_env_values.update(updated_values)
@@ -1619,11 +1629,13 @@ def _bootstrap_api_worktree_locked(
 
     if env_values.get(PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY, "").strip() == "1":
         current_env_text = env_path.read_text()
-        env_path.write_text(
+        _write_text_atomic(
+            env_path,
             upsert_env_assignments(
                 current_env_text,
                 {PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY: ""},
-            )
+            ),
+            mode=0o600,
         )
 
     return True, preview_storage_target
