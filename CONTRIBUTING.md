@@ -80,7 +80,7 @@ Create a dedicated directory for all SecPal repositories. This mirrors the GitHu
    ```bash
    python3 -m venv .venv
    . .venv/bin/activate
-   python3 -m pip install -r requirements/vulnerability-policy.txt
+   python3 -m pip install -r requirements/requirements.txt
    ```
 
 ### Local Development Workflow

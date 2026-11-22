@@ -21,6 +21,54 @@ const dailyPath = ".github/workflows/daily-repository-security.yml";
 const daily = existsSync(dailyPath) ? yaml.load(readFileSync(dailyPath, "utf8")) : undefined;
 const dailyJob = daily?.jobs?.["repository-security"];
 
+test("policy tooling has one scanner-recognized requirements manifest", () => {
+  const manifest = "requirements/requirements.txt";
+  assert.deepEqual(
+    execFileSync("git", ["ls-files", "-z", "--", "requirements/*.txt"], {
+      encoding: "utf8",
+    })
+      .split("\0")
+      .filter(Boolean),
+    [manifest]
+  );
+  const config = yaml.load(readFileSync(".github/dependabot.yml", "utf8"));
+  const pip = config.updates.filter((update) => update["package-ecosystem"] === "pip");
+  assert.equal(pip.length, 1);
+  assert.equal(pip[0].directory, "/requirements");
+  assert.equal(pip[0].schedule.interval, "daily");
+
+  const steps = workflow.jobs["vulnerability-policy"].steps;
+  assert.equal(
+    steps.find((step) => step.with?.cache === "pip")?.with["cache-dependency-path"],
+    manifest
+  );
+  assert.equal(
+    steps.find((step) => step.run?.includes("python3 -m pip install"))?.run,
+    "python3 -m pip install --requirement " + manifest
+  );
+
+  const reevaluation = yaml.load(
+    readFileSync(".github/workflows/reusable-vulnerability-reevaluation.yml", "utf8")
+  );
+  for (const name of ["scan", "triage_validation"]) {
+    const steps = reevaluation.jobs[name].steps;
+    const checkout = steps.findIndex((step) => step.with?.path === ".secpal-governance");
+    const install = steps.findIndex((step) => step.run?.includes("python3 -m pip install"));
+    assert.ok(checkout >= 0 && checkout < install, name);
+    assert.equal(
+      steps[checkout].with.repository,
+      "${{ fromJSON(toJSON(job)).workflow_repository }}"
+    );
+    assert.equal(steps[checkout].with.ref, "${{ fromJSON(toJSON(job)).workflow_sha }}");
+    const installs = steps[install].run
+      .split("\n")
+      .filter((line) => line.includes("python3 -m pip install"));
+    assert.deepEqual(installs, [
+      "python3 -m pip install --requirement .secpal-governance/" + manifest,
+    ]);
+  }
+});
+
 test("the existing required gate scans the exact source before candidate tooling", () => {
   assert.deepEqual(workflow.on, {
     pull_request: { branches: ["main"] },

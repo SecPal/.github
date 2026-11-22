@@ -106,7 +106,7 @@ jobs:
       - name: Scan repository security
         id: repository-security
         # yamllint disable-line rule:line-length
-        uses: SecPal/.github/.github/actions/trivy-repository-scan@df09a6a5b9e5ea557c92c283be4868001929b59f # main
+        uses: SecPal/.github/.github/actions/trivy-repository-scan@21456aaffba1519ced825347361b4237eddd955d # main
 
       - name: Require clean repository security
         shell: bash
@@ -177,10 +177,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements/vulnerability-policy.txt
+          cache-dependency-path: requirements/requirements.txt
 
       - name: Install vulnerability-policy dependencies
-        run: python3 -m pip install --requirement requirements/vulnerability-policy.txt
+        run: python3 -m pip install --requirement requirements/requirements.txt
 
       - name: Run vulnerability-policy contract tests
         run: python3 tests/secpal-vulnerability-policy-unit.py
