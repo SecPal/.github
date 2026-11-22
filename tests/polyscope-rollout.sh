@@ -3327,6 +3327,7 @@ import os
 import pathlib
 import stat
 import sys
+from unittest import mock
 
 script_path = pathlib.Path(sys.argv[1])
 workspace = pathlib.Path(sys.argv[2])
@@ -3411,6 +3412,33 @@ worktree_env = api_worktree.joinpath(".env").read_text()
 assert "DB_PASSWORD=rotated-source-password" in worktree_env, worktree_env
 assert "DB_PASSWORD=source-only-password" not in worktree_env, worktree_env
 assert stat.S_IMODE(env_path.stat().st_mode) == 0o600, "rotated preview .env must stay private"
+
+def assert_preview_env_rejected(error_type):
+    calls.clear()
+    try:
+        module.ensure_api_worktree_ready(api_worktree, source_api)
+    except error_type:
+        pass
+    else:
+        raise AssertionError("expected unsafe preview .env to be rejected")
+    assert not calls, "rejection must precede database operations"
+
+original = env_path.with_name("fixture.env")
+env_path.rename(original)
+for create, remove, error_type in (
+    (lambda: env_path.symlink_to(original.name), env_path.unlink, OSError),
+    (lambda: env_path.hardlink_to(original), env_path.unlink, RuntimeError),
+    (env_path.mkdir, env_path.rmdir, RuntimeError),
+):
+    create()
+    assert_preview_env_rejected(error_type)
+    assert original.read_text() == worktree_env, "rejection changed the fixture target"
+    remove()
+original.rename(env_path)
+
+with mock.patch.object(module.os, "geteuid", return_value=os.geteuid() + 1):
+    assert_preview_env_rejected(RuntimeError)
+assert env_path.read_text() == worktree_env, "foreign owner rejection changed the fixture file"
 PY
 
 # ensure_api_worktree_ready must preserve source-managed PostgreSQL passwords
