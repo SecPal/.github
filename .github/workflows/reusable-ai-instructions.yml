@@ -20,6 +20,8 @@ on:
         type: string
         default: "26"
 
+cache-mode: none
+
 permissions:
   contents: read
 
