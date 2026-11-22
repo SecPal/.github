@@ -805,14 +805,38 @@ def decode_env_value(raw_value: str) -> str:
     return value
 
 
-def load_env_assignments(env_path: pathlib.Path) -> dict[str, str]:
+def parse_env_assignments(text: str) -> dict[str, str]:
     values: dict[str, str] = {}
-    for line in env_path.read_text().splitlines():
+    for line in text.splitlines():
         match = ENV_ASSIGNMENT_PATTERN.match(line.strip())
         if match is None:
             continue
         values[match.group(1)] = decode_env_value(match.group(2))
     return values
+
+
+def load_env_assignments(env_path: pathlib.Path) -> dict[str, str]:
+    return parse_env_assignments(env_path.read_text())
+
+
+def _read_api_preview_env(env_path: pathlib.Path, *, missing_ok: bool = False) -> str:
+    try:
+        descriptor = os.open(env_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        if missing_ok:
+            return ""
+        raise
+    try:
+        metadata = os.fstat(descriptor)
+        if (not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid() or metadata.st_nlink != 1):
+            raise RuntimeError("API preview .env must be a regular, caller-owned file with one link")
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
+            os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "r", encoding="utf-8", closefd=False) as handle:
+            return handle.read()
+    finally:
+        os.close(descriptor)
 
 
 def upsert_env_assignments(text: str, updates: dict[str, str]) -> str:
@@ -1281,20 +1305,20 @@ def ensure_api_worktree_ready(
     env_path = worktree_path / ".env"
     source_env_path = source_repo_path / ".env"
     source_env_values = load_optional_env_assignments(source_env_path)
-    if not env_path.exists():
-        env_path.write_text(
-            build_api_worktree_env_template(
-                source_repo_path,
-                source_env_path=source_env_path if source_env_path.exists() else None,
-            )
+    try:
+        env_text = _read_api_preview_env(env_path)
+    except FileNotFoundError:
+        env_text = build_api_worktree_env_template(
+            source_repo_path,
+            source_env_path=source_env_path if source_env_path.exists() else None,
         )
+        _write_text_atomic(env_path, env_text, mode=0o600)
         print(
             f"Healed api worktree {worktree_path.name} at {worktree_path}: "
             f"wrote missing .env from template {source_repo_path / '.env.example'}"
         )
 
-    env_text = env_path.read_text()
-    env_values = load_env_assignments(env_path)
+    env_values = parse_env_assignments(env_text)
     previous_preview_storage_target = build_api_preview_storage_target(env_values)
     runtime_env_values = build_api_worktree_runtime_env(env_values, source_env_values)
     workspace = resolve_current_workspace_name(worktree_path, db_path=db_path)
@@ -1356,7 +1380,7 @@ def ensure_api_worktree_ready(
 
     updated_env_text = upsert_env_assignments(env_text, updated_values)
     if updated_env_text != env_text:
-        env_path.write_text(updated_env_text)
+        _write_text_atomic(env_path, updated_env_text, mode=0o600)
 
     final_env_values = env_values.copy()
     final_env_values.update(updated_values)
@@ -1482,7 +1506,7 @@ def _bootstrap_api_worktree_locked(
     """Run the API mutation pipeline while the caller holds its worktree lock."""
     isolation_require_execution(worktree_path)
     env_path = worktree_path / ".env"
-    env_values = load_env_assignments(env_path)
+    env_values = parse_env_assignments(_read_api_preview_env(env_path))
     if preview_storage_target is None:
         preview_storage_target = build_api_preview_storage_target(env_values)
     source_env_values = load_optional_env_assignments(source_repo_path / ".env")
@@ -1618,12 +1642,14 @@ def _bootstrap_api_worktree_locked(
     )
 
     if env_values.get(PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY, "").strip() == "1":
-        current_env_text = env_path.read_text()
-        env_path.write_text(
+        current_env_text = _read_api_preview_env(env_path)
+        _write_text_atomic(
+            env_path,
             upsert_env_assignments(
                 current_env_text,
                 {PREVIEW_STORAGE_RESET_REQUIRED_ENV_KEY: ""},
-            )
+            ),
+            mode=0o600,
         )
 
     return True, preview_storage_target
@@ -1700,10 +1726,10 @@ def run_api_worktree_shell_command(
 ) -> None:
     isolation_require_execution(worktree_path)
     env_path = worktree_path / ".env"
-    if not env_path.exists():
-        raise SystemExit(f"api worktree {worktree_path} is missing .env")
-
-    env_values = load_env_assignments(env_path)
+    try:
+        env_values = parse_env_assignments(_read_api_preview_env(env_path))
+    except FileNotFoundError:
+        raise SystemExit(f"api worktree {worktree_path} is missing .env") from None
     source_env_values = load_optional_env_assignments(source_repo_path / ".env")
     command_env = build_api_worktree_command_env(env_values, source_env_values)
     if db_path is not None:
@@ -1764,8 +1790,8 @@ def cleanup_removed_api_preview_databases(
 
         if protects_storage_target:
             env_path = worktree_path / ".env"
-            if env_path.exists():
-                active_targets.update(discover_existing_api_preview_targets(load_env_assignments(env_path), base_database))
+            preview_env = parse_env_assignments(_read_api_preview_env(env_path, missing_ok=True))
+            active_targets.update(discover_existing_api_preview_targets(preview_env, base_database))
 
     cleaned_databases: list[str] = []
     if postgres_role_can_create_databases(env_values, base_database):
@@ -5097,7 +5123,7 @@ def wait_for_api_scheduler_readiness(
     interval_seconds: float = 2.0,
 ) -> None:
     """Gate preview exposure on a heartbeat produced by the supervised scheduler."""
-    worktree_env = load_optional_env_assignments(worktree_path / ".env")
+    worktree_env = parse_env_assignments(_read_api_preview_env(worktree_path / ".env", missing_ok=True))
     source_env = load_optional_env_assignments(source_repo_path / ".env")
     command_env = build_api_worktree_command_env(worktree_env, source_env)
     tinker_script = " ".join(

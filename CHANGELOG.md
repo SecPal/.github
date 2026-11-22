@@ -9,6 +9,11 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-22 - Protect Polyscope Preview Environment Files
+
+- Create and replace API preview `.env` files atomically with owner-only access.
+  Repair existing file modes before preparing preview storage.
+
 ## 2026-11-20 - Retire FrankenPHP From Polyscope
 
 - Use official PHP 8.4 and Composer for the rootless development toolchain.
