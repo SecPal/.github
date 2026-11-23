@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { load } from "js-yaml";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -77,6 +78,17 @@ const DAILY = `schedule:
       interval: daily
       time: "04:00"
       timezone: Europe/Berlin`;
+
+test("Polyscope Dependabot retains only the accepted PHP and Nginx runtime lines", () => {
+  const config = load(readFileSync(path.join(ROOT, ".github/dependabot.yml"), "utf8"));
+  const docker = config.updates.filter((update) => update["package-ecosystem"] === "docker");
+  assert.equal(docker.length, 1);
+  assert.equal(docker[0].directory, "/containers/polyscope-php");
+  assert.deepEqual(docker[0].ignore, [
+    { "dependency-name": "library/php", versions: [">= 8.5"] },
+    { "dependency-name": "library/nginx", versions: [">= 1.31"] },
+  ]);
+});
 
 test("Containerfile is covered only by docker in its directory", () => {
   const root = repository({

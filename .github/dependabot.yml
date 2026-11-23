@@ -3,7 +3,7 @@
 
 ---
 # Dependabot configuration for SecPal .github repository
-# Automatically creates PRs for ALL dependency updates (including Major versions)
+# Tracks dependency updates, including major versions where allowed.
 # Security updates are prioritized and checked daily in early morning hours
 version: 2
 updates:
@@ -124,6 +124,12 @@ updates:
       interval: "daily"
       time: "04:00"
       timezone: "Europe/Berlin"
+    # Keep stable PHP 8.4 and Nginx 1.30 patch updates eligible.
+    ignore:
+      - dependency-name: "library/php"
+        versions: [">= 8.5"]
+      - dependency-name: "library/nginx"
+        versions: [">= 1.31"]
     commit-message:
       prefix: "chore"
       include: "scope"
