@@ -872,6 +872,36 @@ for (const dependency of [
   });
 }
 
+test("a refreshed signed shared pin can retain an equivalent ancestor in its metadata", async () => {
+  const fixture = sharedPin();
+  const oldRef = "1".repeat(40);
+  const newRef = "2".repeat(40);
+  const retainedRef = "9".repeat(40);
+  fixture.commits[0].commit.message = fixture.commits[0].commit.message.replace(
+    newRef,
+    retainedRef
+  );
+  const dependencies = JSON.parse(fixture.env.VERIFIED_DEPENDENCIES);
+  dependencies[0].newVersion = retainedRef;
+  fixture.env.VERIFIED_DEPENDENCIES = JSON.stringify(dependencies);
+  fixture.upstream.trees[retainedRef] = structuredClone(fixture.upstream.trees[newRef]);
+  fixture.upstream.comparisons[`${oldRef}...${retainedRef}`] = {
+    status: "ahead",
+    merge_base_commit: { sha: oldRef },
+  };
+  fixture.upstream.comparisons[`${retainedRef}...${newRef}`] = {
+    status: "ahead",
+    merge_base_commit: { sha: retainedRef },
+  };
+  assert.equal(await verifySource(fixture), "shared-sha-no-op");
+
+  const unrelated = structuredClone(fixture);
+  delete unrelated.upstream.comparisons[`${retainedRef}...${newRef}`];
+  assert.equal(await verifySource(unrelated), undefined);
+  fixture.upstream.trees[retainedRef].tree[1].sha = "6".repeat(40);
+  assert.equal(await verifySource(fixture), undefined);
+});
+
 test("shared SHA admission rejects transitive changes, missing ancestry, policy pins and extra caller edits", async () => {
   for (const fixture of [
     sharedPin({ dependency: ".github/workflows/reusable-dependabot-auto-merge.yml" }),

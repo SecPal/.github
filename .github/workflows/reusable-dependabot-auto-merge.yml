@@ -340,8 +340,9 @@ jobs:
               };
               const beforeTree = await treeAt(pr.base.sha), afterTree = await treeAt(expected);
               if (!beforeTree || !afterTree) return;
-              const seen = new Set();
+              const seen = new Map();
               const validated = new Set();
+              const useLine = /^[ \t]*(?:-[ \t]+)?uses:[ \t]+(\S+)(?:[ \t]+#.*)?[ \t]*$/;
               for (const file of files) {
                 const oldEntry = beforeTree.get(file.filename), nextEntry = afterTree.get(file.filename);
                 if (oldEntry?.mode !== '100644' || nextEntry?.mode !== '100644' || nextEntry.sha !== file.sha) return;
@@ -377,29 +378,42 @@ jobs:
                 `], { input: old, encoding: 'utf8', env: { PATH: process.env.PATH },
                   timeout: 10000, maxBuffer: 1024 * 1024 });
                 if (parsed.status !== 0) return;
-                const lines = old.split('\n');
+                const lines = old.split('\n'), nextLines = next.split('\n');
                 for (const [index, value] of JSON.parse(parsed.stdout)) {
                   const [name, oldRef] = value.split('@');
                   const item = dependencies.get(name);
-                  if (!item || !digest.test(oldRef) || oldRef === item.newVersion) continue;
-                  if (value !== name + '@' + oldRef || (item.prevVersion && item.prevVersion !== oldRef) ||
-                      /^[ \t]*(?:-[ \t]+)?uses:[ \t]+(\S+)(?:[ \t]+#.*)?[ \t]*$/.exec(lines[index])?.[1] !== value) return;
-                  const identity = value + '...' + item.newVersion;
+                  if (!item || lines[index] === nextLines[index]) continue;
+                  const proposedUse = useLine.exec(nextLines[index])?.[1];
+                  const newRef = proposedUse?.split('@')[1];
+                  if (!digest.test(oldRef) || !digest.test(newRef) || oldRef === item.newVersion ||
+                      oldRef === newRef || value !== name + '@' + oldRef ||
+                      proposedUse !== name + '@' + newRef ||
+                      (item.prevVersion && item.prevVersion !== oldRef) ||
+                      useLine.exec(lines[index])?.[1] !== value ||
+                      (seen.has(name) && seen.get(name) !== newRef)) return;
+                  const identity = value + '...' + newRef;
                   if (!validated.has(identity)) {
+                    // GitHub can retain the signed first proposal's metadata even
+                    // after Dependabot updates the exact signed Git tree. Verify
+                    // every mentioned revision and its ordered protected ancestry.
                     if (!await isAncestor(oldRef, item.newVersion) ||
-                        !await isAncestor(item.newVersion, main.commit.sha)) return;
-                    const previous = await getTree(oldRef), candidate = await getTree(item.newVersion);
-                    if (!previous || !candidate || !item.closure.every(([path, sha]) =>
-                        [previous.get(path), candidate.get(path)].every(entry =>
-                          entry?.mode === '100644' && entry.sha === sha))) return;
+                        !await isAncestor(item.newVersion, newRef) ||
+                        !await isAncestor(newRef, main.commit.sha)) return;
                     const actionDirectory = name.slice(prefix.length);
-                    if (actionDirectory.startsWith('.github/actions/') &&
-                        [previous, candidate].some(tree => [...tree.keys()].some(path =>
-                          path.startsWith(actionDirectory + '/') && path !== actionDirectory + '/action.yml'))) return;
+                    for (const ref of new Set([oldRef, item.newVersion, newRef])) {
+                      const tree = await getTree(ref);
+                      if (!tree || !item.closure.every(([path, sha]) => {
+                        const entry = tree.get(path);
+                        return entry?.mode === '100644' && entry.sha === sha;
+                      })) return;
+                      if (actionDirectory.startsWith('.github/actions/') &&
+                          [...tree.keys()].some(path =>
+                            path.startsWith(actionDirectory + '/') && path !== actionDirectory + '/action.yml')) return;
+                    }
                     validated.add(identity);
                   }
-                  seen.add(name);
-                  lines[index] = lines[index].replace(value, name + '@' + item.newVersion);
+                  seen.set(name, newRef);
+                  lines[index] = lines[index].replace(value, proposedUse);
                 }
                 if (lines.join('\n') !== next) return;
               }
