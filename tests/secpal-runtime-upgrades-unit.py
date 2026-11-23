@@ -48,8 +48,9 @@ class RuntimeUpgradeTests(unittest.TestCase):
             PHP_RELEASE + "9.0": php_release("9.0.0"),
             NGINX_DOWNLOADS: nginx_row("Mainline", "1.33.2") + nginx_row("Stable", "1.32.1"),
             monitor["NGINX_ADVISORIES"]: (
-                "<li><p>CVE-2040-12345<br>Not vulnerable: 1.33.2+, 1.30.8+<br></p></li>"
-                "<li><p>CVE-2040-12346<br>Not vulnerable: 1.33.2+<br></p></li>"
+                "<li><p>CVE-2040-12345<br>Not vulnerable: 1.33.2+, 1.30.8+<br>Vulnerable: 1.21.0-1.33.1</p></li>"
+                "<li><p>CVE-2040-12346<br>Not vulnerable: 1.33.2+<br>Vulnerable: 1.21.0-1.33.1</p></li>"
+                "<li><p>CVE-2040-12347<br>Not vulnerable: 1.33.2+<br>Vulnerable: 1.2.0-1.20.1</p></li>"
             ),
             IMAGES + "php": image("8.5.14-fpm-alpine3.24") + "\n" + image("8.6.1-fpm-trixie", "amd64"),
             IMAGES + "nginx": image("1.32.1-alpine3.24-slim"),

@@ -109,7 +109,12 @@ def nginx_fix_comparison(advisories, approved, candidate):
     for advisory in re.findall(r"<li><p>(.*?)</p></li>", advisories, re.S):
         ids = set(re.findall(r"CVE-\d{4}-\d{4,}", advisory))
         fixed = re.search(r"Not vulnerable: ([^<]+)", advisory)
-        if not ids or not fixed:
+        vulnerable = re.search(r"Vulnerable: ([^<]+)", advisory)
+        if not ids or not fixed or not vulnerable:
+            continue
+        published_ranges = re.findall(rf"({VERSION})-({VERSION})", vulnerable[1])
+        if not any(version_tuple(old) <= version_tuple(approved) <= version_tuple(new)
+                   for old, new in published_ranges):
             continue
         versions = [version_tuple(v) for v in re.findall(rf"({VERSION})\+", fixed[1])]
         if not any(v[:2] == line(candidate) and v <= version_tuple(candidate) for v in versions):
