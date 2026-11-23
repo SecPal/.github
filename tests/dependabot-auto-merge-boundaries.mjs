@@ -562,7 +562,8 @@ const deploymentPins = {
   "requirements/build/requirements.txt": "shellcheck-py==0.11.0.1\n",
   "requirements/integration/requirements.txt": "-r ../quality/requirements.txt\npsycopg==3.3.6\n",
   "requirements/qualification/requirements.txt": "-r ../schema/requirements.txt\nPyYAML==6.0.2\n",
-  "requirements/quality/requirements.txt": "-r ../qualification/requirements.txt\nreuse==6.1.2\n",
+  "requirements/quality/requirements.txt":
+    "-r ../qualification/requirements.txt\nreuse==6.1.2\nboolean.py==5.0\n",
   "requirements/schema/requirements.txt":
     'jsonschema==4.25.1\ntyping-extensions==4.16.0; python_version < "3.13"\n',
 };
@@ -617,6 +618,34 @@ test("authenticates an exact Deployment pip update to an included canonical pin"
   for (const group of ["", "deployment-python"]) {
     assert.equal(await verifySource(deploymentPipChange({ group })), "version-update:semver-patch");
   }
+});
+
+test("Deployment pip qualifies stable two-component pins without confusing version aliases", async () => {
+  const change = {
+    path: "requirements/quality/requirements.txt",
+    dependencyName: "boolean-py",
+    oldPin: "boolean.py==5.0",
+  };
+  assert.equal(
+    await verifySource(
+      deploymentPipChange({
+        ...change,
+        version: "5.0.1",
+        after: "boolean.py==5.0.1",
+      })
+    ),
+    "version-update:semver-patch"
+  );
+  assert.equal(
+    await verifySource(
+      deploymentPipChange({
+        ...change,
+        version: "5.0.0",
+        after: "boolean.py==5.0.0",
+      })
+    ),
+    undefined
+  );
 });
 
 test("Deployment pip classifies four-component stable patches without allowing downgrades", async () => {

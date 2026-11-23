@@ -259,15 +259,15 @@ jobs:
             if (proof.status !== 0 || proof.stdout === 'false') return;
             const signedDependencies = JSON.parse(proof.stdout);
             const numeric = /^(?:v)?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-            const pythonRelease = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?$/;
+            const pythonRelease = /^(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?)?$/;
             const classify = (before, after, format = numeric) => {
               const old = format.exec(before), next = format.exec(after);
               if (!old || !next || old[1] !== next[1]) return '';
               if (BigInt(next[2]) > BigInt(old[2])) return 'version-update:semver-minor';
               if (old[2] !== next[2]) return '';
-              const patchIncreased = BigInt(next[3]) > BigInt(old[3]);
-              const revisionIncreased = next[3] === old[3] && BigInt(next[4] ?? 0) > BigInt(old[4] ?? 0);
-              return patchIncreased || revisionIncreased ? 'version-update:semver-patch' : '';
+              const oldPatch = BigInt(old[3] ?? 0), nextPatch = BigInt(next[3] ?? 0);
+              const revisionIncreased = nextPatch === oldPatch && BigInt(next[4] ?? 0) > BigInt(old[4] ?? 0);
+              return nextPatch > oldPatch || revisionIncreased ? 'version-update:semver-patch' : '';
             };
             const readExact = async (path, ref, blob) => {
               const { data } = await github.rest.repos.getContent({ owner, repo, path, ref });
@@ -438,7 +438,7 @@ jobs:
               if (!beforeTree || !afterTree) return;
               const normalize = name => name.toLowerCase().replace(/[-_.]+/g, '-');
               const pins = new Map(), includes = new Map();
-              const pin = /^([A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?)==((?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){2,3})(; python_version < "[1-9]\d*\.(?:0|[1-9]\d*)")?$/;
+              const pin = /^([A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?)==([0-9.]+)(; python_version < "[1-9]\d*\.(?:0|[1-9]\d*)")?$/;
               for (const path of plainPaths) {
                 const previous = beforeTree.get(path), next = afterTree.get(path);
                 const changed = path === file.filename;
@@ -458,7 +458,7 @@ jobs:
                     continue;
                   }
                   const entry = pin.exec(line);
-                  if (!entry || pins.has(normalize(entry[1]))) return;
+                  if (!entry || !pythonRelease.test(entry[2]) || pins.has(normalize(entry[1]))) return;
                   pins.set(normalize(entry[1]), { path, lines, index, entry });
                 }
               }
