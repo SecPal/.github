@@ -61,13 +61,17 @@ def php_support(page, today):
     if not table:
         raise ValueError("PHP support table is missing")
     supported = {}
-    for row in re.findall(r'<tr class="(?:stable|security)">(.*?)</tr>', table[1], re.S):
-        name = re.findall(r'<a href="/downloads\.php\?version=(\d+\.\d+)">\1</a>', row)
-        dates = re.findall(r"<td>(\d{1,2} [A-Z][a-z]{2} \d{4})</td>", row)
-        if len(name) != 1 or len(dates) != 3 or name[0] in supported:
+    for row in re.findall(r"<tr\b[^>]*>(.*?)</tr>", table[1], re.S):
+        cells = re.findall(r"<td\b[^>]*>(.*?)</td>", row, re.S)
+        if not cells:
+            continue
+        cells = [re.sub(r"<[^>]+>", "", cell).strip() for cell in cells]
+        name = cells[0]
+        dates = [cell for cell in cells[1:] if re.fullmatch(r"\d{1,2} [A-Z][a-z]{2} \d{4}", cell)]
+        if not re.fullmatch(r"\d+\.\d+", name) or len(dates) != 3 or name in supported:
             raise ValueError("Invalid PHP support row")
         if today <= datetime.strptime(dates[2], "%d %b %Y").date():
-            supported[name[0]] = dates[1:]
+            supported[name] = dates[1:]
     if not supported:
         raise ValueError("PHP support list is missing")
     return supported

@@ -96,6 +96,16 @@ class RuntimeUpgradeTests(unittest.TestCase):
         self.assertIn("No advertised exact variant", report)
         self.assertNotIn("CLEAN", report)
 
+    def test_accepts_plain_support_table_rows_as_well_as_linked_rows(self):
+        table = (
+            "<h3>Currently Supported Versions</h3><table class='standard'>"
+            "<tr><th>Branch</th><th>Initial Release</th></tr>"
+            "<tr><td class='branch'>8.6</td><td>19 Nov 2026</td>"
+            "<td>31 Dec 2028</td><td>31 Dec 2030</td></tr></table>"
+        )
+        self.assertEqual(monitor["php_support"](table, date(2026, 11, 23)),
+                         {"8.6": ["31 Dec 2028", "31 Dec 2030"]})
+
     def test_notifies_when_security_relevance_changes(self):
         sources = self.sources()
         earlier = self.collect(sources)
