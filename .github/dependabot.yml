@@ -124,12 +124,13 @@ updates:
       interval: "daily"
       time: "04:00"
       timezone: "Europe/Berlin"
-    # Keep stable PHP 8.4 and Nginx 1.30 patch updates eligible.
+    # Routine runtime proposals use PATCH versions. New lines are reported by
+    # SecPal/.github's Runtime Upgrade Opportunities workflow for review.
     ignore:
       - dependency-name: "library/php"
-        versions: [">= 8.5"]
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "library/nginx"
-        versions: [">= 1.31"]
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
     commit-message:
       prefix: "chore"
       include: "scope"

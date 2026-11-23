@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: 2026 SecPal Contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+---
+name: Runtime Upgrade Opportunities
+
+on:
+  schedule:
+    - cron: "37 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      notify:
+        description: Notify subscribers of the existing supply-chain issue about new opportunities.
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: runtime-upgrade-opportunities
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    name: Report independently reviewable upstream runtime lines
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Require the exact protected governance source
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REPOSITORY" != SecPal/.github || "$GITHUB_REF" != refs/heads/main ||
+                "$GITHUB_REF_PROTECTED" != true || ! "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo '::error::Runtime discovery requires an exact protected SecPal/.github main commit.'
+            exit 1
+          fi
+
+      - name: Checkout the exact runtime discovery policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Read official release, support and image metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$RUNNER_TEMP/runtime-upgrades"
+          mkdir -p "$state"
+          python3 -I scripts/secpal-runtime-upgrades.py scan \
+            containers/polyscope-php/Containerfile > "$state/upstream.json"
+          python3 -I scripts/secpal-runtime-upgrades.py report "$state/upstream.json" \
+            > "$state/report.md"
+          if [[ -s "$state/report.md" ]]; then
+            cat "$state/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Official sources report no newer supported runtime lines.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Notify the existing supply-chain issue once per opportunity
+        if: ${{ github.event_name == 'schedule' || inputs.notify == true }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          state="$RUNNER_TEMP/runtime-upgrades"
+          issue="repos/SecPal/.github/issues/696"
+          gh api "$issue" --jq 'select(.number == 696 and .pull_request == null and .locked == false) | .number' \
+            > "$state/issue"
+          [[ "$(cat "$state/issue")" == 696 ]]
+          gh api --paginate "$issue/comments" \
+            --jq '.[] | select(.user.id == 41898282 and .user.login == "github-actions[bot]") | .body' \
+            > "$state/seen.md"
+          python3 -I scripts/secpal-runtime-upgrades.py report "$state/upstream.json" \
+            --seen "$state/seen.md" > "$state/new.md"
+          if [[ -s "$state/new.md" ]]; then
+            gh issue comment 696 --repo SecPal/.github --body-file "$state/new.md"
+          fi
