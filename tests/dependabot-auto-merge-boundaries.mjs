@@ -557,6 +557,127 @@ test("rejects RC image versions and unsupported Nginx lines", async () => {
   );
 });
 
+const deploymentPins = {
+  "requirements/build/requirements.txt": "shellcheck-py==0.11.0.1\n",
+  "requirements/integration/requirements.txt": "-r ../quality/requirements.txt\npsycopg==3.3.6\n",
+  "requirements/qualification/requirements.txt": "-r ../schema/requirements.txt\nPyYAML==6.0.2\n",
+  "requirements/quality/requirements.txt": "-r ../qualification/requirements.txt\nreuse==6.1.2\n",
+  "requirements/schema/requirements.txt":
+    'jsonschema==4.25.1\ntyping-extensions==4.16.0; python_version < "3.13"\n',
+};
+
+function deploymentPipChange({
+  group = "",
+  before = deploymentPins,
+  after = "PyYAML==6.0.3",
+  version = "6.0.3",
+  dependencyName = "pyyaml",
+  oldPin = "PyYAML==6.0.2",
+  path = "requirements/qualification/requirements.txt",
+} = {}) {
+  const paths = Object.keys(before);
+  const config = [
+    "- package-ecosystem: pip",
+    "  directories:",
+    ...paths.map((path) => `    - /${path.split("/").slice(0, -1).join("/")}`),
+    "  groups:",
+    "    deployment-python:",
+    "      group-by: dependency-name",
+    "",
+  ].join("\n");
+  const fixture = updateFixture(
+    "pip",
+    config,
+    [[path, before[path], before[path].replace(oldPin, after)]],
+    [
+      {
+        dependencyName,
+        newVersion: version,
+        packageEcosystem: "pip",
+        dependencyGroup: group,
+        updateType: "version-update:semver-patch",
+      },
+    ],
+    { PIP_PLAIN_MANIFEST_PATHS: JSON.stringify(paths) }
+  );
+  for (const manifest of paths) {
+    if (manifest === path) continue;
+    const unchanged = {
+      sha: "c".repeat(40),
+      content: Buffer.from(before[manifest]).toString("base64"),
+    };
+    fixture.manifests[manifest] = { [admissionBase]: unchanged, [admissionHead]: unchanged };
+  }
+  fixture.manifests[path][admissionBase].sha = "c".repeat(40);
+  return fixture;
+}
+
+test("authenticates an exact Deployment pip update to an included canonical pin", async () => {
+  for (const group of ["", "deployment-python"]) {
+    assert.equal(await verifySource(deploymentPipChange({ group })), "version-update:semver-patch");
+  }
+});
+
+test("Deployment pip classifies four-component stable patches without allowing downgrades", async () => {
+  const change = {
+    path: "requirements/build/requirements.txt",
+    dependencyName: "shellcheck-py",
+    oldPin: "shellcheck-py==0.11.0.1",
+  };
+  for (const version of ["0.11.0.2", "0.11.1", "0.11.1.0"]) {
+    const fixture = deploymentPipChange({ ...change, version, after: `shellcheck-py==${version}` });
+    assert.equal(await verifySource(fixture), "version-update:semver-patch");
+  }
+  for (const version of ["0.11.0", "0.11.0.0", "0.11.0.2.1", "0.11.0.2rc1"]) {
+    const fixture = deploymentPipChange({ ...change, version, after: `shellcheck-py==${version}` });
+    assert.equal(await verifySource(fixture), undefined);
+  }
+});
+
+test("Deployment pip admission rejects changes beyond the single canonical stable pin", async () => {
+  for (const change of [
+    { group: "unaccepted" },
+    { after: "PyYAML==6.0.4" },
+    { after: "PyYAML==6.0.3rc1", version: "6.0.3rc1" },
+    { after: "PyYAML==7.0.0", version: "7.0.0" },
+    { after: "pyyaml==6.0.3" },
+    { after: "PyYAML==6.0.3\n-r ../integration/requirements.txt" },
+    { after: 'PyYAML==6.0.3; python_version < "3.13"' },
+    {
+      before: {
+        ...deploymentPins,
+        "requirements/build/requirements.txt": "py_yaml==6.0.2\npyyaml==6.0.2\n",
+      },
+    },
+    {
+      before: {
+        ...deploymentPins,
+        "requirements/schema/requirements.txt": "-r ../integration/requirements.txt\n",
+      },
+    },
+    {
+      before: {
+        ...deploymentPins,
+        "requirements/schema/requirements.txt": "-r ../other/requirements.txt\n",
+      },
+    },
+  ]) {
+    assert.equal(await verifySource(deploymentPipChange(change)), undefined);
+  }
+});
+
+test("an independently verified one-package pip group is eligible", () => {
+  assert.equal(
+    eligible({
+      PACKAGE_ECOSYSTEM: "pip",
+      DEPENDENCY_GROUP: "deployment-python",
+      SOURCE_UPDATE_TYPE: "version-update:semver-minor",
+      UPDATE_TYPE_RAW: "version-update:semver-minor",
+    }),
+    "true"
+  );
+});
+
 const pipPath = "docker/python/opentimestamps-requirements.txt";
 const pipBase = "b".repeat(40);
 const pipHead = "a".repeat(40);
