@@ -571,8 +571,10 @@ function deploymentPipChange({
   before = deploymentPins,
   after = "PyYAML==6.0.3",
   version = "6.0.3",
+  dependencyName = "pyyaml",
+  oldPin = "PyYAML==6.0.2",
+  path = "requirements/qualification/requirements.txt",
 } = {}) {
-  const path = "requirements/qualification/requirements.txt";
   const paths = Object.keys(before);
   const config = [
     "- package-ecosystem: pip",
@@ -586,10 +588,10 @@ function deploymentPipChange({
   const fixture = updateFixture(
     "pip",
     config,
-    [[path, before[path], before[path].replace("PyYAML==6.0.2", after)]],
+    [[path, before[path], before[path].replace(oldPin, after)]],
     [
       {
-        dependencyName: "pyyaml",
+        dependencyName,
         newVersion: version,
         packageEcosystem: "pip",
         dependencyGroup: group,
@@ -613,6 +615,22 @@ function deploymentPipChange({
 test("authenticates an exact Deployment pip update to an included canonical pin", async () => {
   for (const group of ["", "deployment-python"]) {
     assert.equal(await verifySource(deploymentPipChange({ group })), "version-update:semver-patch");
+  }
+});
+
+test("Deployment pip classifies four-component stable patches without allowing downgrades", async () => {
+  const change = {
+    path: "requirements/build/requirements.txt",
+    dependencyName: "shellcheck-py",
+    oldPin: "shellcheck-py==0.11.0.1",
+  };
+  for (const version of ["0.11.0.2", "0.11.1", "0.11.1.0"]) {
+    const fixture = deploymentPipChange({ ...change, version, after: `shellcheck-py==${version}` });
+    assert.equal(await verifySource(fixture), "version-update:semver-patch");
+  }
+  for (const version of ["0.11.0", "0.11.0.0", "0.11.0.2.1", "0.11.0.2rc1"]) {
+    const fixture = deploymentPipChange({ ...change, version, after: `shellcheck-py==${version}` });
+    assert.equal(await verifySource(fixture), undefined);
   }
 });
 
