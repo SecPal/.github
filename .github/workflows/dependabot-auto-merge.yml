@@ -49,9 +49,14 @@ jobs:
     with:
       # Phase 2: Verified PATCH and MINOR updates; Source Safety must be required
       phase: "2"
-      allowed-ecosystems: "github_actions,pre_commit"
+      allowed-ecosystems: "github_actions,pre_commit,docker"
       pre-commit-path: ".pre-commit-config.yaml"
       shared-sha-workflow-paths: >-
         [".github/workflows/daily-repository-security.yml",".github/workflows/quality.yml"]
+      docker-rules: >-
+        [{"image":"library/php","paths":["containers/polyscope-php/Containerfile"],
+          "line":"8.4","suffix":"-fpm-alpine3.24","enforceLine":true},
+         {"image":"library/nginx","paths":["containers/polyscope-php/Containerfile"],
+          "line":"1.30","suffix":"-alpine3.24-slim","enforceLine":true}]
       # Use squash merge for cleaner history
       merge-method: "squash"

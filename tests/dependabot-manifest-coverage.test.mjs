@@ -84,10 +84,52 @@ test("Polyscope Dependabot retains only the accepted PHP and Nginx runtime lines
   const docker = config.updates.filter((update) => update["package-ecosystem"] === "docker");
   assert.equal(docker.length, 1);
   assert.equal(docker[0].directory, "/containers/polyscope-php");
+  const updateTypes = ["version-update:semver-minor", "version-update:semver-major"];
   assert.deepEqual(docker[0].ignore, [
-    { "dependency-name": "library/php", versions: [">= 8.5"] },
-    { "dependency-name": "library/nginx", versions: [">= 1.31"] },
+    { "dependency-name": "library/php", "update-types": updateTypes },
+    { "dependency-name": "library/nginx", "update-types": updateTypes },
   ]);
+  const caller = load(
+    readFileSync(path.join(ROOT, ".github/workflows/dependabot-auto-merge.yml"), "utf8")
+  );
+  const inputs = caller.jobs["auto-merge"].with;
+  assert.ok(inputs["allowed-ecosystems"].split(",").includes("docker"));
+  assert.deepEqual(JSON.parse(inputs["docker-rules"]), [
+    {
+      image: "library/php",
+      paths: ["containers/polyscope-php/Containerfile"],
+      line: "8.4",
+      suffix: "-fpm-alpine3.24",
+      enforceLine: true,
+    },
+    {
+      image: "library/nginx",
+      paths: ["containers/polyscope-php/Containerfile"],
+      line: "1.30",
+      suffix: "-alpine3.24-slim",
+      enforceLine: true,
+    },
+  ]);
+});
+
+test("runtime discovery notifies only from protected governance events", () => {
+  const workflow = load(
+    readFileSync(path.join(ROOT, ".github/workflows/runtime-upgrade-opportunities.yml"), "utf8")
+  );
+  assert.deepEqual(Object.keys(workflow.on).sort(), ["schedule", "workflow_dispatch"]);
+  assert.equal(workflow.on.workflow_dispatch.inputs.notify.default, false);
+  assert.deepEqual(workflow.permissions, {});
+  assert.deepEqual(Object.keys(workflow.jobs), ["observe"]);
+  const job = workflow.jobs.observe;
+  assert.deepEqual(job.permissions, { contents: "read", issues: "write" });
+  assert.match(job.steps[0].run, /GITHUB_REF_PROTECTED.*true/);
+  assert.match(job.steps[0].run, /GITHUB_REPOSITORY.*SecPal\/\.github/);
+  assert.equal(job.steps[1].with["persist-credentials"], false);
+  assert.equal(job.steps[2].env, undefined);
+  const notify = job.steps.at(-1);
+  assert.match(notify.if, /schedule.*inputs\.notify/);
+  assert.match(notify.run, /user\.id == 41898282/);
+  assert.match(notify.run, /gh issue comment 696 --repo SecPal\/\.github --body-file/);
 });
 
 test("Containerfile is covered only by docker in its directory", () => {

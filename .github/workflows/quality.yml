@@ -216,6 +216,9 @@ jobs:
       - name: Run manifest coverage contract tests
         run: node --test tests/dependabot-manifest-coverage.test.mjs
 
+      - name: Test runtime upgrade discovery and notification boundaries
+        run: python3 -m unittest tests/secpal-runtime-upgrades-unit.py
+
       - name: Verify reusable workflow trust boundary
         run: bash tests/dependabot-manifest-coverage-workflow.sh
 
