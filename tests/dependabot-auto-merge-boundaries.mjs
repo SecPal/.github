@@ -124,17 +124,24 @@ async function verifySource(change = {}) {
   const github = {
     rest: {
       git: {
-        getCommit: async ({ commit_sha }) => ({ data: { tree: { sha: commit_sha } } }),
-        getTree: async ({ tree_sha }) => ({
-          data: {
-            truncated: false,
-            tree: Object.entries(change.manifests || {}).map(([path, entries]) => ({
-              path,
-              sha: entries[tree_sha].sha,
-              mode: change.mode ?? "100644",
-            })),
-          },
+        getCommit: async ({ commit_sha }) => ({
+          data: { sha: commit_sha, tree: { sha: commit_sha } },
         }),
+        getTree: async ({ repo, tree_sha }) =>
+          repo === ".github"
+            ? {
+                data: change.upstream?.trees[tree_sha],
+              }
+            : {
+                data: {
+                  truncated: false,
+                  tree: Object.entries(change.manifests || {}).map(([path, entries]) => ({
+                    path,
+                    sha: entries[tree_sha].sha,
+                    mode: change.mode ?? "100644",
+                  })),
+                },
+              },
         getRef: async ({ owner, repo, ref }) => ({
           data: {
             object:
@@ -148,6 +155,17 @@ async function verifySource(change = {}) {
         }),
       },
       repos: {
+        getBranch: async ({ owner, repo, branch }) => {
+          assert.deepEqual(
+            { owner, repo, branch },
+            { owner: "SecPal", repo: ".github", branch: "main" }
+          );
+          return { data: change.upstream.branch };
+        },
+        compareCommitsWithBasehead: async ({ owner, repo, basehead }) => {
+          assert.deepEqual({ owner, repo }, { owner: "SecPal", repo: ".github" });
+          return { data: change.upstream.comparisons[basehead] };
+        },
         getContent: async ({ ref, path }) => {
           if (change.manifests?.[path]) {
             const manifest = change.manifests[path][ref];
@@ -715,6 +733,59 @@ function gradleWrapper({ next = wrapper("9.9.2", checksumAfter), path = wrapperP
   );
 }
 
+const sharedCaller = ".github/workflows/quality.yml";
+const scannerAction = ".github/actions/trivy-repository-scan";
+const scannerSources = [
+  ["scripts/secpal-trivy-repository-scan.py", "93849ae528f9a43e24e24d6db9bca52bff1263a5"],
+  ["policies/trivy-repository-scan-v1.json", "e735fd4c17d63d3ccdb4932c7eddae861cd4495d"],
+  ["policies/trivy-repository-scan-ignore-v1.yaml", "2b0cecf85eaab8dcb8a4f7d0da5b7f776023ef6b"],
+  ["policies/trivy-repository-secret-v1.yaml", "11600a6f598c88150e061b1e198b8cc4cbe97adf"],
+];
+
+function sharedPin({ dependency = scannerAction, alter = (data) => data } = {}) {
+  const full = `SecPal/.github/${dependency}`;
+  const oldRef = "1".repeat(40),
+    nextRef = "2".repeat(40);
+  const content = (ref) => `jobs:\n  quality:\n    steps:\n      - uses: ${full}@${ref} # main\n`;
+  const oldTree = {
+    truncated: false,
+    tree: [
+      {
+        path: `${scannerAction}/action.yml`,
+        sha: "f51119d1a316f9226df9f79dae76e0710118afbe",
+        mode: "100644",
+      },
+      ...scannerSources.map(([path, sha]) => ({ path, sha, mode: "100644" })),
+    ],
+  };
+  const nextTree = structuredClone(oldTree);
+  nextTree.tree.push({ path: "docs/changelog.md", sha: "4".repeat(40), mode: "100644" });
+  return updateFixture(
+    "github_actions",
+    "- package-ecosystem: github-actions\n  directory: /\n",
+    [[sharedCaller, content(oldRef), alter(content(nextRef))]],
+    [
+      {
+        dependencyName: full,
+        newVersion: nextRef,
+        prevVersion: oldRef,
+        packageEcosystem: "github_actions",
+        dependencyGroup: "",
+      },
+    ],
+    { SHARED_SHA_WORKFLOW_PATHS: JSON.stringify([sharedCaller]) },
+    {
+      upstream: {
+        branch: { name: "main", protected: true, commit: { sha: nextRef } },
+        comparisons: {
+          [`${oldRef}...${nextRef}`]: { status: "ahead", merge_base_commit: { sha: oldRef } },
+        },
+        trees: { [oldRef]: oldTree, [nextRef]: nextTree },
+      },
+    }
+  );
+}
+
 test("a signed Android Gradle wrapper patch matches both official checksums", async () => {
   assert.equal(await verifySource(gradleWrapper()), "version-update:semver-patch");
 });
@@ -734,6 +805,61 @@ test("Android wrapper admission rejects missing or incorrect checksums and out-o
     await verifySource({ ...gradleWrapper(), fetch: async () => ({ ok: false }) }),
     undefined
   );
+});
+
+test("a signed immutable shared pin can advance across unrelated upstream changes", async () => {
+  assert.equal(await verifySource(sharedPin()), "shared-sha-no-op");
+  assert.equal(
+    eligible({
+      PACKAGE_ECOSYSTEM: "github_actions",
+      SOURCE_UPDATE_TYPE: "shared-sha-no-op",
+      UPDATE_TYPE_RAW: "shared-sha-no-op",
+      DEPENDENCY_GROUP: "shared-workflow-pins",
+    }),
+    "true"
+  );
+});
+
+test("shared SHA admission rejects transitive changes, missing ancestry, policy pins and extra caller edits", async () => {
+  for (const fixture of [
+    sharedPin({ dependency: ".github/workflows/reusable-dependabot-auto-merge.yml" }),
+    sharedPin({ alter: (content) => content + "# Extra caller change\n" }),
+    sharedPin({ alter: (content) => content.replace("# main", "# different") }),
+    { ...sharedPin(), protectedHead: "5".repeat(40) },
+  ]) {
+    assert.equal(await verifySource(fixture), undefined);
+  }
+  for (const mutate of [
+    (fixture) => {
+      fixture.upstream.branch.protected = false;
+    },
+    (fixture) => {
+      fixture.upstream.comparisons = {};
+    },
+    (fixture) => {
+      fixture.upstream.trees["2".repeat(40)].tree[1].sha = "7".repeat(40);
+    },
+    (fixture) => {
+      fixture.upstream.trees["2".repeat(40)].tree[0].mode = "120000";
+    },
+    (fixture) => {
+      fixture.upstream.trees["2".repeat(40)].tree.push({
+        path: `${scannerAction}/action.yaml`,
+        sha: "8".repeat(40),
+        mode: "100644",
+      });
+    },
+    (fixture) => {
+      fixture.env.SHARED_SHA_WORKFLOW_PATHS = "[]";
+    },
+    (fixture) => {
+      fixture.env.WORKFLOW_PATHS = '[".github/workflows/local.yml"]';
+    },
+  ]) {
+    const fixture = sharedPin();
+    mutate(fixture);
+    assert.equal(await verifySource(fixture), undefined);
+  }
 });
 
 const pipPath = "docker/python/opentimestamps-requirements.txt";
