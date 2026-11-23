@@ -382,15 +382,16 @@ jobs:
                 for (const [index, value] of JSON.parse(parsed.stdout)) {
                   const [name, oldRef] = value.split('@');
                   const item = dependencies.get(name);
-                  if (!item || lines[index] === nextLines[index]) continue;
+                  if (!item) continue;
                   const proposedUse = useLine.exec(nextLines[index])?.[1];
                   const newRef = proposedUse?.split('@')[1];
-                  if (!digest.test(oldRef) || !digest.test(newRef) || oldRef === item.newVersion ||
-                      oldRef === newRef || value !== name + '@' + oldRef ||
-                      proposedUse !== name + '@' + newRef ||
-                      (item.prevVersion && item.prevVersion !== oldRef) ||
-                      useLine.exec(lines[index])?.[1] !== value ||
-                      (seen.has(name) && seen.get(name) !== newRef)) return;
+                  const prior = seen.get(name);
+                  if (!digest.test(oldRef) || !digest.test(newRef) ||
+                      value !== name + '@' + oldRef || proposedUse !== name + '@' + newRef ||
+                      useLine.exec(lines[index])?.[1] !== value || (prior && prior.ref !== newRef)) return;
+                  seen.set(name, { ref: newRef, changed: prior?.changed || oldRef !== newRef });
+                  if (oldRef === newRef) continue;
+                  if (oldRef === item.newVersion || (item.prevVersion && item.prevVersion !== oldRef)) return;
                   const identity = value + '...' + newRef;
                   if (!validated.has(identity)) {
                     // GitHub can retain the signed first proposal's metadata even
@@ -412,12 +413,11 @@ jobs:
                     }
                     validated.add(identity);
                   }
-                  seen.set(name, newRef);
                   lines[index] = lines[index].replace(value, proposedUse);
                 }
                 if (lines.join('\n') !== next) return;
               }
-              if (seen.size !== dependencies.size) return;
+              if (seen.size !== dependencies.size || [...seen.values()].some(use => !use.changed)) return;
               updateType = 'shared-sha-no-op';
             }
             if (wrapperPath || ['pre_commit', 'docker'].includes(ecosystem)) {
