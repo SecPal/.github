@@ -771,7 +771,7 @@ const scannerSources = [
   ["policies/trivy-repository-secret-v1.yaml", "11600a6f598c88150e061b1e198b8cc4cbe97adf"],
 ];
 
-function sharedPin({ dependency = scannerAction, alter = (data) => data } = {}) {
+function sharedPin({ dependency = scannerAction, alter = (data) => data, duplicateRef } = {}) {
   const full = `SecPal/.github/${dependency}`;
   const oldRef = "1".repeat(40),
     nextRef = "2".repeat(40);
@@ -798,12 +798,13 @@ function sharedPin({ dependency = scannerAction, alter = (data) => data } = {}) 
     assert.equal(blob.status, 0, blob.stderr);
     oldTree.tree = [{ path: dependency, sha: blob.stdout.trim(), mode: "100644" }];
   }
+  const duplicate = duplicateRef ? `      - uses: ${full}@${duplicateRef} # main\n` : "";
   const nextTree = structuredClone(oldTree);
   nextTree.tree.push({ path: "docs/changelog.md", sha: "4".repeat(40), mode: "100644" });
   return updateFixture(
     "github_actions",
     "- package-ecosystem: github-actions\n  directory: /\n",
-    [[sharedCaller, content(oldRef), alter(content(nextRef))]],
+    [[sharedCaller, content(oldRef) + duplicate, alter(content(nextRef) + duplicate)]],
     [
       {
         dependencyName: full,
@@ -871,6 +872,41 @@ for (const dependency of [
     assert.equal(await verifySource(fixture), undefined);
   });
 }
+
+test("a refreshed signed shared pin can retain an equivalent ancestor in its metadata", async () => {
+  const fixture = sharedPin();
+  const oldRef = "1".repeat(40);
+  const newRef = "2".repeat(40);
+  const retainedRef = "9".repeat(40);
+  fixture.commits[0].commit.message = fixture.commits[0].commit.message.replace(
+    newRef,
+    retainedRef
+  );
+  const dependencies = JSON.parse(fixture.env.VERIFIED_DEPENDENCIES);
+  dependencies[0].newVersion = retainedRef;
+  fixture.env.VERIFIED_DEPENDENCIES = JSON.stringify(dependencies);
+  fixture.upstream.trees[retainedRef] = structuredClone(fixture.upstream.trees[newRef]);
+  fixture.upstream.comparisons[`${oldRef}...${retainedRef}`] = {
+    status: "ahead",
+    merge_base_commit: { sha: oldRef },
+  };
+  fixture.upstream.comparisons[`${retainedRef}...${newRef}`] = {
+    status: "ahead",
+    merge_base_commit: { sha: retainedRef },
+  };
+  assert.equal(await verifySource(fixture), "shared-sha-no-op");
+
+  const unrelated = structuredClone(fixture);
+  delete unrelated.upstream.comparisons[`${retainedRef}...${newRef}`];
+  assert.equal(await verifySource(unrelated), undefined);
+  fixture.upstream.trees[retainedRef].tree[1].sha = "6".repeat(40);
+  assert.equal(await verifySource(fixture), undefined);
+});
+
+test("shared SHA admission rejects a stale duplicate use and permits an already-current one", async () => {
+  assert.equal(await verifySource(sharedPin({ duplicateRef: "1".repeat(40) })), undefined);
+  assert.equal(await verifySource(sharedPin({ duplicateRef: "2".repeat(40) })), "shared-sha-no-op");
+});
 
 test("shared SHA admission rejects transitive changes, missing ancestry, policy pins and extra caller edits", async () => {
   for (const fixture of [

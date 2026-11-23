@@ -340,8 +340,9 @@ jobs:
               };
               const beforeTree = await treeAt(pr.base.sha), afterTree = await treeAt(expected);
               if (!beforeTree || !afterTree) return;
-              const seen = new Set();
+              const seen = new Map();
               const validated = new Set();
+              const useLine = /^[ \t]*(?:-[ \t]+)?uses:[ \t]+(\S+)(?:[ \t]+#.*)?[ \t]*$/;
               for (const file of files) {
                 const oldEntry = beforeTree.get(file.filename), nextEntry = afterTree.get(file.filename);
                 if (oldEntry?.mode !== '100644' || nextEntry?.mode !== '100644' || nextEntry.sha !== file.sha) return;
@@ -377,33 +378,46 @@ jobs:
                 `], { input: old, encoding: 'utf8', env: { PATH: process.env.PATH },
                   timeout: 10000, maxBuffer: 1024 * 1024 });
                 if (parsed.status !== 0) return;
-                const lines = old.split('\n');
+                const lines = old.split('\n'), nextLines = next.split('\n');
                 for (const [index, value] of JSON.parse(parsed.stdout)) {
                   const [name, oldRef] = value.split('@');
                   const item = dependencies.get(name);
-                  if (!item || !digest.test(oldRef) || oldRef === item.newVersion) continue;
-                  if (value !== name + '@' + oldRef || (item.prevVersion && item.prevVersion !== oldRef) ||
-                      /^[ \t]*(?:-[ \t]+)?uses:[ \t]+(\S+)(?:[ \t]+#.*)?[ \t]*$/.exec(lines[index])?.[1] !== value) return;
-                  const identity = value + '...' + item.newVersion;
+                  if (!item) continue;
+                  const proposedUse = useLine.exec(nextLines[index])?.[1];
+                  const newRef = proposedUse?.split('@')[1];
+                  const prior = seen.get(name);
+                  if (!digest.test(oldRef) || !digest.test(newRef) ||
+                      value !== name + '@' + oldRef || proposedUse !== name + '@' + newRef ||
+                      useLine.exec(lines[index])?.[1] !== value || (prior && prior.ref !== newRef)) return;
+                  seen.set(name, { ref: newRef, changed: prior?.changed || oldRef !== newRef });
+                  if (oldRef === newRef) continue;
+                  if (oldRef === item.newVersion || (item.prevVersion && item.prevVersion !== oldRef)) return;
+                  const identity = value + '...' + newRef;
                   if (!validated.has(identity)) {
+                    // GitHub can retain the signed first proposal's metadata even
+                    // after Dependabot updates the exact signed Git tree. Verify
+                    // every mentioned revision and its ordered protected ancestry.
                     if (!await isAncestor(oldRef, item.newVersion) ||
-                        !await isAncestor(item.newVersion, main.commit.sha)) return;
-                    const previous = await getTree(oldRef), candidate = await getTree(item.newVersion);
-                    if (!previous || !candidate || !item.closure.every(([path, sha]) =>
-                        [previous.get(path), candidate.get(path)].every(entry =>
-                          entry?.mode === '100644' && entry.sha === sha))) return;
+                        !await isAncestor(item.newVersion, newRef) ||
+                        !await isAncestor(newRef, main.commit.sha)) return;
                     const actionDirectory = name.slice(prefix.length);
-                    if (actionDirectory.startsWith('.github/actions/') &&
-                        [previous, candidate].some(tree => [...tree.keys()].some(path =>
-                          path.startsWith(actionDirectory + '/') && path !== actionDirectory + '/action.yml'))) return;
+                    for (const ref of new Set([oldRef, item.newVersion, newRef])) {
+                      const tree = await getTree(ref);
+                      if (!tree || !item.closure.every(([path, sha]) => {
+                        const entry = tree.get(path);
+                        return entry?.mode === '100644' && entry.sha === sha;
+                      })) return;
+                      if (actionDirectory.startsWith('.github/actions/') &&
+                          [...tree.keys()].some(path =>
+                            path.startsWith(actionDirectory + '/') && path !== actionDirectory + '/action.yml')) return;
+                    }
                     validated.add(identity);
                   }
-                  seen.add(name);
-                  lines[index] = lines[index].replace(value, name + '@' + item.newVersion);
+                  lines[index] = lines[index].replace(value, proposedUse);
                 }
                 if (lines.join('\n') !== next) return;
               }
-              if (seen.size !== dependencies.size) return;
+              if (seen.size !== dependencies.size || [...seen.values()].some(use => !use.changed)) return;
               updateType = 'shared-sha-no-op';
             }
             if (wrapperPath || ['pre_commit', 'docker'].includes(ecosystem)) {
