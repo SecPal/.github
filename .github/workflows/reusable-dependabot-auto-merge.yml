@@ -56,6 +56,10 @@ on:
         required: false
         type: string
         default: ""
+      pip-plain-manifest-paths:
+        description: "Exact requirements files for a repository with required native installation checks"
+        type: string
+        default: "[]"
       pre-commit-path:
         description: "Optional exact .pre-commit-config.yaml path for authenticated hook updates"
         type: string
@@ -114,6 +118,7 @@ jobs:
           VERIFIED_DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
           WORKFLOW_PATHS: ${{ inputs.workflow-paths }}
           PIP_MANIFEST_PATH: ${{ inputs.pip-manifest-path }}
+          PIP_PLAIN_MANIFEST_PATHS: ${{ inputs.pip-plain-manifest-paths }}
           PRE_COMMIT_PATH: ${{ inputs.pre-commit-path }}
           DOCKER_RULES: ${{ inputs.docker-rules }}
         with:
@@ -150,11 +155,18 @@ jobs:
                 input = JSON.parse(STDIN.read)
                 config = YAML.safe_load(input.fetch('config'), permitted_classes: [], permitted_symbols: [], aliases: false)
                 raise 'unsupported config' unless config.fetch('version') == 2
-                directories = config.fetch('updates').select do |entry|
+                matching = config.fetch('updates').select do |entry|
                   entry.fetch('package-ecosystem') == input.fetch('ecosystem') &&
                     entry.fetch('target-branch', input.fetch('default_branch')) == input.fetch('target')
-                end.flat_map { |entry| entry.key?('directories') ? entry.fetch('directories') : [entry.fetch('directory')] }
-                print JSON.generate(directories)
+                end
+                directories = matching.flat_map { |entry| entry.key?('directories') ? entry.fetch('directories') : [entry.fetch('directory')] }
+                pip_groups = matching.flat_map do |entry|
+                  next [] unless input.fetch('ecosystem') == 'pip' && entry.key?('directories')
+                  entry.fetch('groups', {}).filter_map do |name, group|
+                    name if group['group-by'] == 'dependency-name' && group.fetch('applies-to', 'version-updates') == 'version-updates'
+                  end
+                end
+                print JSON.generate({ directories: directories, pipGroups: pip_groups })
               rescue StandardError
                 exit 1
               end
@@ -163,7 +175,7 @@ jobs:
               target: pr.base.ref, default_branch: context.payload.repository.default_branch }),
               encoding: 'utf8', env: { PATH: process.env.PATH }, timeout: 10000, maxBuffer: 1024 * 1024 });
             if (configured.status !== 0) return;
-            const directories = JSON.parse(configured.stdout);
+            const { directories, pipGroups } = JSON.parse(configured.stdout);
             // Exact paths only; unsupported globs and noncanonical paths fail closed.
             if (!Array.isArray(directories) || !directories.length || !directories.every(directory =>
                 typeof directory === 'string' && (directory === '/' ||
@@ -181,6 +193,12 @@ jobs:
             if (!Array.isArray(workflowPaths) || !workflowPaths.every(path =>
                 typeof path === 'string' && /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path))) return;
             const pipPath = process.env.PIP_MANIFEST_PATH;
+            const plainPaths = ecosystem === 'pip' ? JSON.parse(process.env.PIP_PLAIN_MANIFEST_PATHS || '[]') : [];
+            if (!Array.isArray(plainPaths) || (plainPaths.length &&
+                (pipPath || plainPaths.length !== new Set(plainPaths).size || plainPaths.length !== directories.length ||
+                 plainPaths.some(path => typeof path !== 'string' ||
+                   !/^requirements\/[a-z][a-z0-9-]*\/requirements\.txt$/.test(path) ||
+                   !prefixes.some(prefix => path === prefix + 'requirements.txt'))))) return;
             const rules = ecosystem === 'docker' ? JSON.parse(process.env.DOCKER_RULES || '[]') : [];
             if (!Array.isArray(rules) || !rules.every(rule => rule && Array.isArray(rule.paths))) return;
             const matchingRules = rules.filter(rule => rule.image === verifiedDependencies[0]?.dependencyName);
@@ -190,7 +208,8 @@ jobs:
               ? /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path) &&
                 directories.includes('/') && (!workflowPaths.length || workflowPaths.includes(path))
               : prefixes.some(prefix => ecosystem === 'pip'
-                ? path === pipPath && path.startsWith(prefix) && /^[A-Za-z0-9_.-]*requirements[A-Za-z0-9_.-]*\.txt$/.test(path.slice(prefix.length))
+                ? (plainPaths.includes(path) && path === prefix + 'requirements.txt') ||
+                  (path === pipPath && path.startsWith(prefix) && /^[A-Za-z0-9_.-]*requirements[A-Za-z0-9_.-]*\.txt$/.test(path.slice(prefix.length)))
                 : ecosystem === 'pre_commit' ? path === process.env.PRE_COMMIT_PATH && path === prefix + '.pre-commit-config.yaml'
                 : ecosystem === 'docker' ? path === prefix + 'Containerfile' && dockerRule?.paths?.includes(path)
                 : (manifests[ecosystem] || []).some(name => path === prefix + name)));
@@ -356,7 +375,58 @@ jobs:
                 }
               }
             }
-            if (ecosystem === 'pip') {
+            if (ecosystem === 'pip' && plainPaths.length) {
+              const [file] = files;
+              const [dependency] = verifiedDependencies;
+              if (files.length !== 1 || file.status !== 'modified' || file.previous_filename ||
+                  !/^[a-f0-9]{40}$/.test(file.sha) || commits[0].parents[0].sha !== pr.base.sha ||
+                  verifiedDependencies.length !== 1 || dependency.packageEcosystem !== 'pip' ||
+                  typeof dependency.dependencyGroup !== 'string' ||
+                  (dependency.dependencyGroup && !pipGroups.includes(dependency.dependencyGroup))) return;
+              const beforeTree = await treeAt(pr.base.sha), afterTree = await treeAt(expected);
+              if (!beforeTree || !afterTree) return;
+              const normalize = name => name.toLowerCase().replace(/[-_.]+/g, '-');
+              const pins = new Map(), includes = new Map();
+              const pin = /^([A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?)==((?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){2,3})(; python_version < "[1-9]\d*\.(?:0|[1-9]\d*)")?$/;
+              for (const path of plainPaths) {
+                const previous = beforeTree.get(path), next = afterTree.get(path);
+                const changed = path === file.filename;
+                if (previous?.mode !== '100644' || next?.mode !== '100644' ||
+                    next.sha !== (changed ? file.sha : previous.sha)) return;
+                const content = await readExact(path, pr.base.sha, previous.sha);
+                if (!content || /[^\x09\x0a\x20-\x7e]/.test(content) ||
+                    /^[ \t]*#.*(?:coding[:=]|\\[ \t]*$)/m.test(content)) return;
+                const lines = content.split('\n');
+                for (const [index, line] of lines.entries()) {
+                  if (!line.trim() || line.trimStart().startsWith('#')) continue;
+                  const include = /^-r \.\.\/([a-z][a-z0-9-]*)\/requirements\.txt$/.exec(line);
+                  if (include) {
+                    const target = `requirements/${include[1]}/requirements.txt`;
+                    if (includes.has(path) || !plainPaths.includes(target)) return;
+                    includes.set(path, target);
+                    continue;
+                  }
+                  const entry = pin.exec(line);
+                  if (!entry || pins.has(normalize(entry[1]))) return;
+                  pins.set(normalize(entry[1]), { path, lines, index, entry });
+                }
+              }
+              for (const path of plainPaths) {
+                const visited = new Set();
+                for (let current = path; current; current = includes.get(current)) {
+                  if (visited.has(current)) return;
+                  visited.add(current);
+                }
+              }
+              const target = pins.get(normalize(dependency.dependencyName));
+              if (target?.path !== file.filename || !numeric.test(dependency.newVersion) ||
+                  dependency.newVersion.startsWith('v')) return;
+              const [, name, version, marker = ''] = target.entry;
+              updateType = classify(version, dependency.newVersion);
+              if (!updateType || updateType !== dependency.updateType) return;
+              target.lines[target.index] = `${name}==${dependency.newVersion}${marker}`;
+              if (await readExact(file.filename, expected, file.sha) !== target.lines.join('\n')) return;
+            } else if (ecosystem === 'pip') {
               const [file] = files;
               const [dependency] = verifiedDependencies;
               if (files.length !== 1 || file.status !== 'modified' || file.previous_filename ||
@@ -419,6 +489,7 @@ jobs:
           DEPENDENCY_GROUP: ${{ steps.metadata.outputs.dependency-group }}
           MAINTAINER_CHANGES: ${{ steps.metadata.outputs.maintainer-changes }}
           UPDATE_TYPE_RAW: ${{ steps.source.outputs.update-type || steps.metadata.outputs.update-type }}
+          SOURCE_UPDATE_TYPE: ${{ steps.source.outputs.update-type }}
           UPDATED_DEPENDENCIES_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
           PACKAGE_ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
           PREVIOUS_VERSION: ${{ steps.metadata.outputs.previous-version }}
@@ -503,7 +574,9 @@ jobs:
           # fetch-metadata reports only the highest aggregate update type.
           # Verify every JSON member against the reviewed group/type contract;
           # unknown, unversioned, mixed, or mismatched groups fail closed.
-          if [[ "${PACKAGE_ECOSYSTEM}" != docker ]] && is_grouped_update && ! is_reviewed_semver_group; then
+          if [[ "${PACKAGE_ECOSYSTEM}" != docker ]] &&
+            [[ "${PACKAGE_ECOSYSTEM}" != pip || -z "${SOURCE_UPDATE_TYPE:-}" ]] &&
+            is_grouped_update && ! is_reviewed_semver_group; then
             echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
             echo "update-type=grouped-update" >> "${GITHUB_OUTPUT}"
             echo "❌ Not eligible: Dependabot group is not a reviewed homogeneous semver group"
