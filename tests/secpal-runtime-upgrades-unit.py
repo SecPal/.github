@@ -20,8 +20,8 @@ def php_row(line, security_until):
             f'<td>20 Nov 2025</td><td>31 Dec 2027</td><td>{security_until}</td></tr>')
 
 
-def php_release(version, sha="a" * 64):
-    return json.dumps({version: {"tags": ["security"], "source": [
+def php_release(version, sha="a" * 64, security=True):
+    return json.dumps({version: {"tags": ["security"] if security else [], "source": [
         {"filename": f"php-{version}.tar.gz", "sha256": sha},
     ]}})
 
@@ -75,7 +75,7 @@ class RuntimeUpgradeTests(unittest.TestCase):
         self.assertEqual(found[2]["variants"], [])
         self.assertEqual(found[3]["channel"], "mainline")
         self.assertIn("CVE-2040-12345 is also fixed by approved-line 1.30.8", found[3]["security"])
-        self.assertEqual(found[3]["candidate_only"], ["CVE-2040-12346"])
+        self.assertEqual(found[3]["security_signal"]["candidate_only_fixes"], ["CVE-2040-12346"])
         self.assertEqual(found[4]["channel"], "stable")
         self.assertTrue(monitor["ready"](found[4]))
 
@@ -95,6 +95,16 @@ class RuntimeUpgradeTests(unittest.TestCase):
         self.assertIn("security_advisories.html", report)
         self.assertIn("No advertised exact variant", report)
         self.assertNotIn("CLEAN", report)
+
+    def test_notifies_when_security_relevance_changes(self):
+        sources = self.sources()
+        earlier = self.collect(sources)
+        sources[PHP_RELEASE + "8.5"] = php_release("8.5.14", security=False)
+        advisories = monitor["NGINX_ADVISORIES"]
+        sources[advisories] = sources[advisories].replace("1.30.8+", "1.30.9+")
+        latest = self.collect(sources)
+        self.assertNotEqual(monitor["key"](earlier[0]), monitor["key"](latest[0]))
+        self.assertNotEqual(monitor["key"](earlier[3]), monitor["key"](latest[3]))
 
     def test_fails_closed_when_official_release_evidence_is_incomplete(self):
         for source, value in [

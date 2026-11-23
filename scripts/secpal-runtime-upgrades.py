@@ -171,6 +171,8 @@ def collect(containerfile, get=read, today=None):
                       if security else "Review the upstream release changelog for security fixes.")
                      + (f" Approved line security support ends {approved_php_support[1]}."
                         if approved_php_support else " The approved line is absent from the supported list."),
+            security_signal={"security_release": security,
+                             "approved_security_until": approved_php_support[1] if approved_php_support else None},
             advisories=changes, changes=changes,
             compatibility=f"https://www.php.net/manual/migration{branch.replace('.', '')}.php",
         ))
@@ -191,7 +193,7 @@ def collect(containerfile, get=read, today=None):
             support=f"Current upstream {channel.lower()} channel; upstream does not publish an EOL date here",
             security=(". ".join(security) + "." if security else
                       "Review published advisories for applicability and same-line alternatives."),
-            candidate_only=candidate_only,
+            security_signal={"same_line_fixes": backports, "candidate_only_fixes": candidate_only},
             changes=changes, compatibility=changes, advisories=NGINX_ADVISORIES,
         ))
     for row in opportunities:
@@ -209,8 +211,8 @@ def ready(row):
 def key(row):
     # Report actual line, support and compatibility milestones before repeating patch notices.
     fields = [row["runtime"], line(row["version"]), row["channel"], row["support"],
-              row["approved_variant"], ready(row), row.get("candidate_only", [])]
-    return sha256(json.dumps(fields).encode()).hexdigest()
+              row["approved_variant"], ready(row), row["security_signal"]]
+    return sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
 
 def render(rows):
