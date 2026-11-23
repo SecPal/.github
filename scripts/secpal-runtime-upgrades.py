@@ -218,6 +218,10 @@ def key(row):
 def render(rows):
     if not rows:
         return ""
+    qualification = (
+        "- Qualification to plan — native AMD64 and ARM64, FPM extensions and Composer on PHP, "
+        + "HTTP and proxy configuration on Nginx, and existing paired artifact-security checks."
+    )
     body = ["## Runtime upgrade opportunities", "",
             "Discovery evidence only. Runtime admission and publication use their existing gates.", ""]
     for row in rows:
@@ -232,8 +236,7 @@ def render(rows):
                      f"- Support — {row['support']}.",
                      f"- {row['security']} [Official security history]({row['advisories']})",
                      f"- [Release changes]({row['changes']}) · [Compatibility reference]({row['compatibility']})",
-                     "- Qualification to plan — native AMD64 and ARM64, FPM extensions and Composer on PHP, "
-                     "HTTP and proxy configuration on Nginx, and existing paired artifact-security checks.",
+                     qualification,
                      f"- Like-for-like variant {version + row['approved_variant']} on both architectures — "
                      + ("advertised." if ready(row) else "unavailable in the official image index.")])
         for tag, arch, commit in row["variants"]:
