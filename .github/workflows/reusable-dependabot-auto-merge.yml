@@ -51,6 +51,10 @@ on:
         required: false
         type: string
         default: "[]"
+      shared-sha-workflow-paths:
+        description: "Exact caller workflows eligible for independently verified no-op SecPal SHA updates"
+        type: string
+        default: "[]"
       pip-manifest-path:
         description: "Optional exact hash-locked requirements file for callers with required native qualification"
         required: false
@@ -121,6 +125,7 @@ jobs:
           ALLOWED_ECOSYSTEMS: ${{ inputs.allowed-ecosystems }}
           VERIFIED_DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
           WORKFLOW_PATHS: ${{ inputs.workflow-paths }}
+          SHARED_SHA_WORKFLOW_PATHS: ${{ inputs.shared-sha-workflow-paths }}
           PIP_MANIFEST_PATH: ${{ inputs.pip-manifest-path }}
           PIP_PLAIN_MANIFEST_PATHS: ${{ inputs.pip-plain-manifest-paths }}
           GRADLE_WRAPPER_PATH: ${{ inputs.gradle-wrapper-path }}
@@ -141,8 +146,13 @@ jobs:
             const ecosystem = process.env.PACKAGE_ECOSYSTEM;
             if (!process.env.ALLOWED_ECOSYSTEMS.split(',').includes(ecosystem)) return;
             const verifiedDependencies = JSON.parse(process.env.VERIFIED_DEPENDENCIES || 'null');
-            if (!Array.isArray(verifiedDependencies) || (ecosystem === 'github_actions' &&
-                verifiedDependencies.some(item => /^SecPal\/\.github(?:\/|$)/i.test(item.dependencyName)))) return;
+            if (!Array.isArray(verifiedDependencies) || !verifiedDependencies.length) return;
+            const sharedSyntax = /^SecPal\/\.github(?:\/|$)/i;
+            const shared = ecosystem === 'github_actions' &&
+              verifiedDependencies.some(item => sharedSyntax.test(item?.dependencyName));
+            const sharedPaths = shared ? JSON.parse(process.env.SHARED_SHA_WORKFLOW_PATHS || '[]') : [];
+            if (shared && (!Array.isArray(sharedPaths) || !sharedPaths.length ||
+                verifiedDependencies.some(item => !sharedSyntax.test(item?.dependencyName)))) return;
             // Branch-derived metadata is not path authorization. Read only the
             // accepted base configuration; never load code from the PR head.
             let config;
@@ -212,7 +222,8 @@ jobs:
             const [dockerRule] = matchingRules;
             const allowed = path => typeof path === 'string' && (ecosystem === 'github_actions'
               ? /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path) &&
-                directories.includes('/') && (!workflowPaths.length || workflowPaths.includes(path))
+                directories.includes('/') && (!workflowPaths.length || workflowPaths.includes(path)) &&
+                (!shared || (sharedPaths.includes(path) && path !== '.github/workflows/dependabot-auto-merge.yml'))
               : prefixes.some(prefix => ecosystem === 'pip'
                 ? (plainPaths.includes(path) && path === prefix + 'requirements.txt') ||
                   (path === pipPath && path.startsWith(prefix) && /^[A-Za-z0-9_.-]*requirements[A-Za-z0-9_.-]*\.txt$/.test(path.slice(prefix.length)))
@@ -244,9 +255,9 @@ jobs:
                     expected = verified[index]
                     dependency.is_a?(Hash) && expected.is_a?(Hash) &&
                       dependency['dependency-name'] == expected['dependencyName'] &&
-                      (input.fetch('ecosystem') == 'pre_commit' ||
+                      (%w[pre_commit shared_sha].include?(input.fetch('ecosystem')) ||
                         (types.include?(dependency['update-type']) && dependency['update-type'] == expected['updateType'])) &&
-                      (!%w[pip pre_commit docker gradle_wrapper].include?(input.fetch('ecosystem')) ||
+                      (!%w[pip pre_commit docker gradle_wrapper shared_sha].include?(input.fetch('ecosystem')) ||
                         (dependency['dependency-version'].is_a?(String) && dependency['dependency-version'] == expected['newVersion']))
                   end
                 print(valid ? JSON.generate(dependencies) : 'false')
@@ -254,7 +265,7 @@ jobs:
                 print 'false'
               end
             `], { input: JSON.stringify({ message: commits[0].commit.message,
-              verified: verifiedDependencies, ecosystem: wrapperPath ? 'gradle_wrapper' : ecosystem }),
+              verified: verifiedDependencies, ecosystem: shared ? 'shared_sha' : wrapperPath ? 'gradle_wrapper' : ecosystem }),
               encoding: 'utf8', env: { PATH: process.env.PATH }, timeout: 10000, maxBuffer: 1024 * 1024 });
             if (proof.status !== 0 || proof.stdout === 'false') return;
             const signedDependencies = JSON.parse(proof.stdout);
@@ -274,13 +285,127 @@ jobs:
               if (data.type !== 'file' || data.encoding !== 'base64' || !data.content || (blob && data.sha !== blob)) return null;
               return Buffer.from(data.content, 'base64').toString('utf8');
             };
-            const treeAt = async ref => {
-              const { data: commit } = await github.rest.git.getCommit({ owner, repo, commit_sha: ref });
-              const { data } = await github.rest.git.getTree({ owner, repo, tree_sha: commit.tree.sha, recursive: '1' });
+            const treeAt = async (ref, repository = { owner, repo }) => {
+              const { data: commit } = await github.rest.git.getCommit({ ...repository, commit_sha: ref });
+              if (commit.sha !== ref) return null;
+              const { data } = await github.rest.git.getTree({ ...repository, tree_sha: commit.tree.sha, recursive: '1' });
               return data.truncated === false ? new Map(data.tree.map(entry => [entry.path, entry])) : null;
             };
             let updateType;
             let policyRejection;
+            if (shared) {
+              const upstream = { owner: 'SecPal', repo: '.github' };
+              const prefix = 'SecPal/.github/';
+              const digest = /^[a-f0-9]{40}$/;
+              // This closed catalog binds each independently reviewed invocation
+              // to its executable and policy inputs. New implementations need review.
+              const closures = new Map([
+                ['.github/actions/trivy-repository-scan', [
+                  ['.github/actions/trivy-repository-scan/action.yml', 'f51119d1a316f9226df9f79dae76e0710118afbe'],
+                  ['scripts/secpal-trivy-repository-scan.py', '93849ae528f9a43e24e24d6db9bca52bff1263a5'],
+                  ['policies/trivy-repository-scan-v1.json', 'e735fd4c17d63d3ccdb4932c7eddae861cd4495d'],
+                  ['policies/trivy-repository-scan-ignore-v1.yaml', '2b0cecf85eaab8dcb8a4f7d0da5b7f776023ef6b'],
+                  ['policies/trivy-repository-secret-v1.yaml', '11600a6f598c88150e061b1e198b8cc4cbe97adf'],
+                ]],
+                ['.github/workflows/reusable-check-conflict-markers.yml', [
+                  ['.github/workflows/reusable-check-conflict-markers.yml', 'ffeb5573054a49b7c77ac51c92bb776ad973c6a3'],
+                ]],
+                ['.github/workflows/reusable-pr-size.yml', [
+                  ['.github/workflows/reusable-pr-size.yml', 'afba597541c543e0c12c2358bfce9c1f1c06695b'],
+                ]],
+              ]);
+              const dependencies = new Map();
+              for (const item of verifiedDependencies) {
+                const { dependencyName: name, newVersion, packageEcosystem } = item;
+                const closure = closures.get(name.slice(prefix.length));
+                if (!name.startsWith(prefix) || !closure || !digest.test(newVersion) ||
+                    packageEcosystem !== 'github_actions' || dependencies.has(name)) return;
+                dependencies.set(name, { ...item, closure });
+              }
+              if (commits[0].parents[0].sha !== pr.base.sha || files.some(file =>
+                  file.status !== 'modified' || file.previous_filename || !digest.test(file.sha))) return;
+              const { data: main } = await github.rest.repos.getBranch({ ...upstream, branch: 'main' });
+              if (main.name !== 'main' || main.protected !== true || !digest.test(main.commit?.sha)) return;
+              const trees = new Map();
+              const getTree = async ref => {
+                if (!trees.has(ref)) trees.set(ref, await treeAt(ref, upstream));
+                return trees.get(ref);
+              };
+              const isAncestor = async (ancestor, descendant) => {
+                if (ancestor === descendant) return true;
+                const { data } = await github.rest.repos.compareCommitsWithBasehead({
+                  ...upstream, basehead: ancestor + '...' + descendant, per_page: 1,
+                });
+                return data?.status === 'ahead' && data.merge_base_commit?.sha === ancestor;
+              };
+              const beforeTree = await treeAt(pr.base.sha), afterTree = await treeAt(expected);
+              if (!beforeTree || !afterTree) return;
+              const seen = new Set();
+              const validated = new Set();
+              for (const file of files) {
+                const oldEntry = beforeTree.get(file.filename), nextEntry = afterTree.get(file.filename);
+                if (oldEntry?.mode !== '100644' || nextEntry?.mode !== '100644' || nextEntry.sha !== file.sha) return;
+                const old = await readExact(file.filename, pr.base.sha, oldEntry.sha);
+                const next = await readExact(file.filename, expected, file.sha);
+                if (!old || !next || old === next) return;
+                // Parse only candidate uses nodes. Preserve all other caller bytes.
+                const parsed = require('node:child_process').spawnSync('ruby', ['-rjson', '-ryaml', '-e', String.raw`
+                  begin
+                    mapping = ->(node) do
+                      raise unless node.is_a?(Psych::Nodes::Mapping)
+                      pairs = node.children.each_slice(2).map do |key, value|
+                        raise unless key.is_a?(Psych::Nodes::Scalar)
+                        [key.value, value]
+                      end
+                      raise unless pairs.map(&:first).uniq.length == pairs.length
+                      pairs.to_h
+                    end
+                    documents = YAML.parse_stream(STDIN.read).children
+                    raise unless documents.length == 1
+                    jobs = mapping.call(documents.first.root).fetch('jobs')
+                    uses = mapping.call(jobs).values.flat_map do |job|
+                      values = mapping.call(job)
+                      steps = values['steps']
+                      raise if steps && !steps.is_a?(Psych::Nodes::Sequence)
+                      [values['uses'], *Array(steps&.children).map { |step| mapping.call(step)['uses'] }].compact
+                    end
+                    raise unless uses.all? { |node| node.is_a?(Psych::Nodes::Scalar) }
+                    print JSON.generate(uses.map { |node| [node.start_line, node.value] })
+                  rescue StandardError
+                    exit 1
+                  end
+                `], { input: old, encoding: 'utf8', env: { PATH: process.env.PATH },
+                  timeout: 10000, maxBuffer: 1024 * 1024 });
+                if (parsed.status !== 0) return;
+                const lines = old.split('\n');
+                for (const [index, value] of JSON.parse(parsed.stdout)) {
+                  const [name, oldRef] = value.split('@');
+                  const item = dependencies.get(name);
+                  if (!item || !digest.test(oldRef) || oldRef === item.newVersion) continue;
+                  if (value !== name + '@' + oldRef || (item.prevVersion && item.prevVersion !== oldRef) ||
+                      /^[ \t]*(?:-[ \t]+)?uses:[ \t]+(\S+)(?:[ \t]+#.*)?[ \t]*$/.exec(lines[index])?.[1] !== value) return;
+                  const identity = value + '...' + item.newVersion;
+                  if (!validated.has(identity)) {
+                    if (!await isAncestor(oldRef, item.newVersion) ||
+                        !await isAncestor(item.newVersion, main.commit.sha)) return;
+                    const previous = await getTree(oldRef), candidate = await getTree(item.newVersion);
+                    if (!previous || !candidate || !item.closure.every(([path, sha]) =>
+                        [previous.get(path), candidate.get(path)].every(entry =>
+                          entry?.mode === '100644' && entry.sha === sha))) return;
+                    const actionDirectory = name.slice(prefix.length);
+                    if (actionDirectory.startsWith('.github/actions/') &&
+                        [previous, candidate].some(tree => [...tree.keys()].some(path =>
+                          path.startsWith(actionDirectory + '/') && path !== actionDirectory + '/action.yml'))) return;
+                    validated.add(identity);
+                  }
+                  seen.add(name);
+                  lines[index] = lines[index].replace(value, name + '@' + item.newVersion);
+                }
+                if (lines.join('\n') !== next) return;
+              }
+              if (seen.size !== dependencies.size) return;
+              updateType = 'shared-sha-no-op';
+            }
             if (wrapperPath || ['pre_commit', 'docker'].includes(ecosystem)) {
               if (commits[0].parents[0].sha !== pr.base.sha || files.length !== signedDependencies.length ||
                   files.some(file => file.status !== 'modified' || file.previous_filename || !/^[a-f0-9]{40}$/.test(file.sha)) ||
@@ -624,7 +749,7 @@ jobs:
           # fetch-metadata reports only the highest aggregate update type.
           # Verify every JSON member against the reviewed group/type contract;
           # unknown, unversioned, mixed, or mismatched groups fail closed.
-          if [[ "${PACKAGE_ECOSYSTEM}" != docker ]] &&
+          if [[ "${PACKAGE_ECOSYSTEM}" != docker && "${SOURCE_UPDATE_TYPE:-}" != shared-sha-no-op ]] &&
             [[ "${PACKAGE_ECOSYSTEM}" != pip || -z "${SOURCE_UPDATE_TYPE:-}" ]] &&
             is_grouped_update && ! is_reviewed_semver_group; then
             echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
@@ -634,6 +759,15 @@ jobs:
           fi
 
           case "${UPDATE_TYPE_RAW}" in
+            shared-sha-no-op)
+              echo "update-type=shared-sha-no-op" >> "${GITHUB_OUTPUT}"
+              if [[ "${PACKAGE_ECOSYSTEM}" == github_actions && "${SOURCE_UPDATE_TYPE:-}" == shared-sha-no-op &&
+                ( "${PHASE}" == 1 || "${PHASE}" == 2 || "${PHASE}" == 3 ) ]]; then
+                echo "should-auto-merge=true" >> "${GITHUB_OUTPUT}"
+              else
+                echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
+              fi
+              ;;
             digest-refresh)
               echo "update-type=digest-refresh" >> "${GITHUB_OUTPUT}"
               if [[ "${PACKAGE_ECOSYSTEM}" == docker && ( "${PHASE}" == 2 || "${PHASE}" == 3 ) ]]; then
