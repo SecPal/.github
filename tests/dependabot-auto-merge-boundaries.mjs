@@ -189,7 +189,7 @@ async function verifySource(change = {}) {
     ...change.env,
   });
   try {
-    await new AsyncFunction("github", "context", "core", "require", sourceScript)(
+    await new AsyncFunction("github", "context", "core", "require", "fetch", sourceScript)(
       github,
       {
         repo: { owner: "SecPal", repo: "frontend" },
@@ -199,7 +199,8 @@ async function verifySource(change = {}) {
         },
       },
       { setOutput: (key, value) => Object.assign(output, { [key]: value }) },
-      createRequire(import.meta.url)
+      createRequire(import.meta.url),
+      change.fetch ?? (() => assert.fail("unexpected network request"))
     );
     return output[change.output ?? (change.classification ? "update-type" : "verified")];
   } finally {
@@ -675,6 +676,63 @@ test("an independently verified one-package pip group is eligible", () => {
       UPDATE_TYPE_RAW: "version-update:semver-minor",
     }),
     "true"
+  );
+});
+
+const wrapperPath = "android/gradle/wrapper/gradle-wrapper.properties";
+const checksumBefore = "b".repeat(64);
+const checksumAfter = "c".repeat(64);
+const wrapper = (version, checksum) =>
+  `distributionUrl=https\\://services.gradle.org/distributions/gradle-${version}-all.zip\n` +
+  `distributionSha256Sum=${checksum}\nvalidateDistributionUrl=true\n`;
+
+function gradleWrapper({ next = wrapper("9.9.2", checksumAfter), path = wrapperPath } = {}) {
+  return updateFixture(
+    "gradle",
+    "- package-ecosystem: gradle\n  directory: /android\n",
+    [[path, wrapper("9.9.1", checksumBefore), next]],
+    [
+      {
+        dependencyName: "gradle-wrapper",
+        newVersion: "9.9.2",
+        packageEcosystem: "gradle",
+        dependencyGroup: "",
+        updateType: "version-update:semver-patch",
+      },
+    ],
+    { GRADLE_WRAPPER_PATH: wrapperPath },
+    {
+      fetch: async (url, options) => {
+        assert.equal(options.redirect, "error");
+        const published = {
+          "https://downloads.gradle.org/distributions/gradle-9.9.1-all.zip.sha256": checksumBefore,
+          "https://downloads.gradle.org/distributions/gradle-9.9.2-all.zip.sha256": checksumAfter,
+        }[url];
+        assert.ok(published);
+        return { ok: true, text: async () => published + "\n" };
+      },
+    }
+  );
+}
+
+test("a signed Android Gradle wrapper patch matches both official checksums", async () => {
+  assert.equal(await verifySource(gradleWrapper()), "version-update:semver-patch");
+});
+
+test("Android wrapper admission rejects missing or incorrect checksums and out-of-scope edits", async () => {
+  for (const change of [
+    { next: wrapper("9.9.2", "") },
+    { next: wrapper("9.9.2", checksumBefore) },
+    { next: wrapper("9.9.2", checksumAfter).replace("true", "false") },
+    { next: wrapper("9.9.2", checksumAfter).replace("services.gradle.org", "example.org") },
+    { next: wrapper("9.9.2", checksumAfter) + `distributionSha256Sum=${checksumBefore}\n` },
+    { path: "android/build.gradle" },
+  ]) {
+    assert.equal(await verifySource(gradleWrapper(change)), undefined);
+  }
+  assert.equal(
+    await verifySource({ ...gradleWrapper(), fetch: async () => ({ ok: false }) }),
+    undefined
   );
 });
 

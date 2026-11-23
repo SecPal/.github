@@ -60,6 +60,10 @@ on:
         description: "Exact requirements files for a repository with required native installation checks"
         type: string
         default: "[]"
+      gradle-wrapper-path:
+        description: "Exact Gradle wrapper properties path for checksum-verified patches"
+        type: string
+        default: ""
       pre-commit-path:
         description: "Optional exact .pre-commit-config.yaml path for authenticated hook updates"
         type: string
@@ -119,6 +123,7 @@ jobs:
           WORKFLOW_PATHS: ${{ inputs.workflow-paths }}
           PIP_MANIFEST_PATH: ${{ inputs.pip-manifest-path }}
           PIP_PLAIN_MANIFEST_PATHS: ${{ inputs.pip-plain-manifest-paths }}
+          GRADLE_WRAPPER_PATH: ${{ inputs.gradle-wrapper-path }}
           PRE_COMMIT_PATH: ${{ inputs.pre-commit-path }}
           DOCKER_RULES: ${{ inputs.docker-rules }}
         with:
@@ -199,6 +204,7 @@ jobs:
                  plainPaths.some(path => typeof path !== 'string' ||
                    !/^requirements\/[a-z][a-z0-9-]*\/requirements\.txt$/.test(path) ||
                    !prefixes.some(prefix => path === prefix + 'requirements.txt'))))) return;
+            const wrapperPath = ecosystem === 'gradle' && process.env.GRADLE_WRAPPER_PATH;
             const rules = ecosystem === 'docker' ? JSON.parse(process.env.DOCKER_RULES || '[]') : [];
             if (!Array.isArray(rules) || !rules.every(rule => rule && Array.isArray(rule.paths))) return;
             const matchingRules = rules.filter(rule => rule.image === verifiedDependencies[0]?.dependencyName);
@@ -210,6 +216,7 @@ jobs:
               : prefixes.some(prefix => ecosystem === 'pip'
                 ? (plainPaths.includes(path) && path === prefix + 'requirements.txt') ||
                   (path === pipPath && path.startsWith(prefix) && /^[A-Za-z0-9_.-]*requirements[A-Za-z0-9_.-]*\.txt$/.test(path.slice(prefix.length)))
+                : wrapperPath ? path === wrapperPath && path === prefix + 'gradle/wrapper/gradle-wrapper.properties'
                 : ecosystem === 'pre_commit' ? path === process.env.PRE_COMMIT_PATH && path === prefix + '.pre-commit-config.yaml'
                 : ecosystem === 'docker' ? path === prefix + 'Containerfile' && dockerRule?.paths?.includes(path)
                 : (manifests[ecosystem] || []).some(name => path === prefix + name)));
@@ -239,7 +246,7 @@ jobs:
                       dependency['dependency-name'] == expected['dependencyName'] &&
                       (input.fetch('ecosystem') == 'pre_commit' ||
                         (types.include?(dependency['update-type']) && dependency['update-type'] == expected['updateType'])) &&
-                      (!%w[pip pre_commit docker].include?(input.fetch('ecosystem')) ||
+                      (!%w[pip pre_commit docker gradle_wrapper].include?(input.fetch('ecosystem')) ||
                         (dependency['dependency-version'].is_a?(String) && dependency['dependency-version'] == expected['newVersion']))
                   end
                 print(valid ? JSON.generate(dependencies) : 'false')
@@ -247,7 +254,7 @@ jobs:
                 print 'false'
               end
             `], { input: JSON.stringify({ message: commits[0].commit.message,
-              verified: verifiedDependencies, ecosystem }),
+              verified: verifiedDependencies, ecosystem: wrapperPath ? 'gradle_wrapper' : ecosystem }),
               encoding: 'utf8', env: { PATH: process.env.PATH }, timeout: 10000, maxBuffer: 1024 * 1024 });
             if (proof.status !== 0 || proof.stdout === 'false') return;
             const signedDependencies = JSON.parse(proof.stdout);
@@ -274,7 +281,7 @@ jobs:
             };
             let updateType;
             let policyRejection;
-            if (['pre_commit', 'docker'].includes(ecosystem)) {
+            if (wrapperPath || ['pre_commit', 'docker'].includes(ecosystem)) {
               if (commits[0].parents[0].sha !== pr.base.sha || files.length !== signedDependencies.length ||
                   files.some(file => file.status !== 'modified' || file.previous_filename || !/^[a-f0-9]{40}$/.test(file.sha)) ||
                   verifiedDependencies.some(dep => dep.packageEcosystem !== ecosystem)) return;
@@ -290,11 +297,51 @@ jobs:
                 const before = old.split('\n'), after = next.split('\n');
                 if (before.length !== after.length) return;
                 const changed = before.flatMap((line, index) => line === after[index] ? [] : [index]);
-                if (changed.length !== 1) return;
+                if (changed.length !== (wrapperPath ? 2 : 1)) return;
                 const [index] = changed;
-                edits.push({ before: before[index], after: after[index], file: old, index });
+                edits.push({ before: before[index], after: after[index], file: old, index, next });
               }
-              if (ecosystem === 'pre_commit') {
+              if (wrapperPath) {
+                const [dependency] = verifiedDependencies;
+                if (files.length !== 1 || dependency.dependencyName !== 'gradle-wrapper' ||
+                    dependency.dependencyGroup !== '') return;
+                const { file, next } = edits[0];
+                const before = file.split('\n');
+                const properties = new Map();
+                for (const [index, line] of before.entries()) {
+                  if (line === '' || /^#[ -~]*[^\\]$/.test(line)) continue;
+                  const property = /^(distributionBase|distributionPath|distributionUrl|distributionSha256Sum|networkTimeout|validateDistributionUrl|zipStoreBase|zipStorePath|retries|retryBackOffMs)=([!-~]+)$/.exec(line);
+                  if (!property || properties.has(property[1]) || property[2].endsWith('\\')) return;
+                  properties.set(property[1], { value: property[2], index });
+                }
+                const url = properties.get('distributionUrl'), checksum = properties.get('distributionSha256Sum');
+                const distribution = /^https\\:\/\/services\.gradle\.org\/distributions\/gradle-(\d+\.\d+\.\d+)-(bin|all)\.zip$/.exec(url?.value);
+                if (!distribution || !checksum || !numeric.test(dependency.newVersion) ||
+                    dependency.newVersion.startsWith('v')) return;
+                const [, previous, archiveType] = distribution;
+                updateType = classify(previous, dependency.newVersion);
+                if (updateType !== 'version-update:semver-patch' || dependency.updateType !== updateType) return;
+                const archive = version => `gradle-${version}-${archiveType}.zip`;
+                const officialChecksum = async version => {
+                  const response = await fetch(`https://downloads.gradle.org/distributions/${archive(version)}.sha256`, {
+                    redirect: 'error', signal: AbortSignal.timeout(10000),
+                  });
+                  if (!response.ok) return null;
+                  return /^([a-f0-9]{64})[\r\n]*$/.exec(await response.text())?.[1];
+                };
+                let oldHash, newHash;
+                try {
+                  [oldHash, newHash] = await Promise.all([
+                    officialChecksum(previous), officialChecksum(dependency.newVersion),
+                  ]);
+                } catch {
+                  return;
+                }
+                if (!oldHash || !newHash || oldHash !== checksum.value || oldHash === newHash) return;
+                before[url.index] = `distributionUrl=https\\://services.gradle.org/distributions/${archive(dependency.newVersion)}`;
+                before[checksum.index] = `distributionSha256Sum=${newHash}`;
+                if (before.join('\n') !== next) return;
+              } else if (ecosystem === 'pre_commit') {
                 const [dependency] = verifiedDependencies;
                 const upstream = /^https:\/\/github\.com\/([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+)$/.exec(dependency.dependencyName);
                 if (files.length !== 1 || dependency.dependencyGroup !== '' || !upstream) return;
