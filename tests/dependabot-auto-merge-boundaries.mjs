@@ -746,7 +746,9 @@ function sharedPin({ dependency = scannerAction, alter = (data) => data } = {}) 
   const full = `SecPal/.github/${dependency}`;
   const oldRef = "1".repeat(40),
     nextRef = "2".repeat(40);
-  const content = (ref) => `jobs:\n  quality:\n    steps:\n      - uses: ${full}@${ref} # main\n`;
+  const isReusableWorkflow = dependency.startsWith(".github/workflows/");
+  const content = (ref) =>
+    `jobs:\n  quality:\n${isReusableWorkflow ? "    uses:" : "    steps:\n      - uses:"} ${full}@${ref} # main\n`;
   const oldTree = {
     truncated: false,
     tree: [
@@ -758,6 +760,15 @@ function sharedPin({ dependency = scannerAction, alter = (data) => data } = {}) 
       ...scannerSources.map(([path, sha]) => ({ path, sha, mode: "100644" })),
     ],
   };
+  if (isReusableWorkflow) {
+    const blob = spawnSync(
+      "git",
+      ["rev-parse", `618d818048480b4386cdf82a8cbbc5195351faf1:${dependency}`],
+      { encoding: "utf8" }
+    );
+    assert.equal(blob.status, 0, blob.stderr);
+    oldTree.tree = [{ path: dependency, sha: blob.stdout.trim(), mode: "100644" }];
+  }
   const nextTree = structuredClone(oldTree);
   nextTree.tree.push({ path: "docs/changelog.md", sha: "4".repeat(40), mode: "100644" });
   return updateFixture(
@@ -819,6 +830,18 @@ test("a signed immutable shared pin can advance across unrelated upstream change
     "true"
   );
 });
+
+for (const dependency of [
+  ".github/workflows/reusable-check-conflict-markers.yml",
+  ".github/workflows/reusable-pr-size.yml",
+]) {
+  test(`authenticates the reviewed ${dependency} blob and rejects a changed workflow`, async () => {
+    const fixture = sharedPin({ dependency });
+    assert.equal(await verifySource(fixture), "shared-sha-no-op");
+    fixture.upstream.trees["2".repeat(40)].tree[0].sha = "7".repeat(40);
+    assert.equal(await verifySource(fixture), undefined);
+  });
+}
 
 test("shared SHA admission rejects transitive changes, missing ancestry, policy pins and extra caller edits", async () => {
   for (const fixture of [
