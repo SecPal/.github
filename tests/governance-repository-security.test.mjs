@@ -50,23 +50,21 @@ test("policy tooling has one scanner-recognized requirements manifest", () => {
   const reevaluation = yaml.load(
     readFileSync(".github/workflows/reusable-vulnerability-reevaluation.yml", "utf8")
   );
-  for (const name of ["scan", "triage_validation"]) {
-    const steps = reevaluation.jobs[name].steps;
-    const checkout = steps.findIndex((step) => step.with?.path === ".secpal-governance");
-    const install = steps.findIndex((step) => step.run?.includes("python3 -m pip install"));
-    assert.ok(checkout >= 0 && checkout < install, name);
-    assert.equal(
-      steps[checkout].with.repository,
-      "${{ fromJSON(toJSON(job)).workflow_repository }}"
-    );
-    assert.equal(steps[checkout].with.ref, "${{ fromJSON(toJSON(job)).workflow_sha }}");
-    const installs = steps[install].run
-      .split("\n")
-      .filter((line) => line.includes("python3 -m pip install"));
-    assert.deepEqual(installs, [
-      "python3 -m pip install --requirement .secpal-governance/" + manifest,
-    ]);
-  }
+  const scanSteps = reevaluation.jobs.scan.steps;
+  const checkout = scanSteps.findIndex((step) => step.with?.path === ".secpal-governance");
+  const install = scanSteps.findIndex((step) => step.run?.includes("python3 -m pip install"));
+  assert.ok(checkout >= 0 && checkout < install);
+  assert.equal(
+    scanSteps[checkout].with.repository,
+    "${{ fromJSON(toJSON(job)).workflow_repository }}"
+  );
+  assert.equal(scanSteps[checkout].with.ref, "${{ fromJSON(toJSON(job)).workflow_sha }}");
+  const installs = scanSteps[install].run
+    .split("\n")
+    .filter((line) => line.includes("python3 -m pip install"));
+  assert.deepEqual(installs, [
+    "python3 -m pip install --requirement .secpal-governance/" + manifest,
+  ]);
 });
 
 test("the existing required gate scans the exact source before candidate tooling", () => {

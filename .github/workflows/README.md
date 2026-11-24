@@ -37,10 +37,9 @@ for the contract and invocation example.
 
 `reusable-vulnerability-reevaluation.yml` verifies and re-evaluates one exact
 OCI index/platform subject with pinned Grype and Trivy, fresh vulnerability
-data, authoritative Syft SPDX association, central policy, bounded evidence,
-and caller-scoped deterministic triage. Credentialed access is closed to the
-authenticated caller's GHCR namespace, and issue mutation consumes policy
-output independently re-derived from retained native evidence. See
+data, authoritative Syft SPDX association, central policy, and bounded evidence.
+Credentialed access is limited to the authenticated caller's GHCR namespace.
+The Actions run reports the verdict after retaining evidence. See
 [`released-artifact-vulnerability-reevaluation.md`](../../docs/released-artifact-vulnerability-reevaluation.md)
 for exact inputs, permissions, daily/manual caller examples, evidence output,
 and fail-closed semantics.
