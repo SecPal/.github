@@ -24,7 +24,7 @@ SecPal maintainers
 
 ## Context
 
-SecPal need readable, consistent typography across application UI, public copy, generated documents, and contributor-facing materials. The shared standard must define typography direction without owning product-specific CSS files, font packaging, or exact implementation wiring.
+SecPal needs readable, consistent typography across application UI, public copy, generated documents, and contributor-facing materials. The shared standard must define typography direction without owning product-specific CSS files, font packaging, or exact implementation wiring.
 
 ## Decision
 

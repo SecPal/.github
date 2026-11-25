@@ -198,10 +198,9 @@ delivery.
 
 This contract delegates rather than duplicates established authority:
 
-- [BRAND-0007](adr/BRAND-0007-secpal-product-family-architecture.md) and the
-  active [Brand Architecture](brand/brand-architecture.md) own the current
-  SecPal product-family hierarchy. BRAND-0007 supersedes BRAND-0001 for current
-  product identity while preserving BRAND-0001 as historical evidence.
+- [BRAND-0007](adr/BRAND-0007-secpal-product-family-architecture.md) owns the
+  SecPal product-family hierarchy. The [brand guide](brand/brand-architecture.md)
+  applies it to repository and product surfaces.
 - [Naming](brand/naming.md) owns exact public names and capitalization.
 - [Slogans](brand/slogans.md) owns exact slogan and lockup presentation. The
   official SecPal slogan remains exactly `A guard's best friend`, and the
