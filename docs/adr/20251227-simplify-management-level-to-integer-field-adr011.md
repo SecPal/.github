@@ -25,10 +25,10 @@ SPDX-License-Identifier: CC0-1.0
 
 ### The Problem: Over-Engineering in Pre-1.0
 
-SecPal's initial implementation (ADR-009) used a separate `leadership_levels` table with full CRUD operations:
+SecPal's initial implementation used a separate `leadership_levels` table with full CRUD operations:
 
 ```sql
--- Old schema (ADR-009)
+-- Old schema
 CREATE TABLE leadership_levels (
     id UUID PRIMARY KEY,
     tenant_id BIGINT NOT NULL,
@@ -67,7 +67,7 @@ CREATE TABLE employees (
 1. ✅ Distinguish management from non-management employees (0 vs 1-255)
 2. ✅ Hierarchical access control (user can view employees at or below their level)
 3. ✅ Simple level assignment (no complex lifecycle management)
-4. ✅ Organizational scope filtering (ADR-009 still applies)
+4. ✅ Organizational scope filtering
 
 **What We Don't Need (Pre-1.0):**
 
@@ -137,7 +137,7 @@ class Employee extends Model
 }
 ```
 
-### Organizational Scopes (ADR-009 Preserved)
+### Organizational Scopes
 
 ```php
 // user_internal_organizational_scopes table
@@ -210,7 +210,7 @@ UserInternalOrganizationalScope::create([
 
 5. ✅ **Preserved Core Functionality:**
 
-   - Hierarchical access control still works (ADR-009)
+   - Hierarchical access control still works
    - Organizational scopes unchanged
    - Permission inheritance blocking unchanged
    - All 3029 tests passing
@@ -488,11 +488,9 @@ it('requires dual scopes to view all employees', function () {
 
 ## Related Decisions
 
-- **ADR-009:** Permission Inheritance Blocking & Leadership-Based Access Control
-
-  - Status: **Partially Updated** (organizational scopes preserved, LeadershipLevel model removed)
-  - Scope filtering logic unchanged (min/max viewable rank still works)
-  - Dual scope pattern still required for full access
+- Status: **Partially Updated** (organizational scopes preserved, LeadershipLevel model removed)
+- Scope filtering logic unchanged (min/max viewable rank still works)
+- Dual scope pattern still required for full access
 
 - **Epic #399:** Replace leadership_rank with management_level
   - Implementation: PRs #434 (Backend), #397 (Frontend)
@@ -569,7 +567,6 @@ ALTER TABLE employees
 ### Phase 2: Documentation ✅ **COMPLETED**
 
 - [x] Create ADR-011 (this document)
-- [x] Update ADR-009
 - [x] Update API documentation
 - [x] Update feature requirements
 - [x] Create migration guide (0.x.x → Post-1.0)
@@ -621,7 +618,7 @@ The LeadershipLevel model was over-engineered for our Pre-1.0 needs. By simplify
 - ✅ Reduced codebase by 5747 lines
 - ✅ Simplified schema and queries
 - ✅ Maintained all core functionality
-- ✅ Preserved organizational scope logic (ADR-009)
+- ✅ Preserved organizational scope logic
 - ✅ Future-proofed for Post-1.0 enhancements
 
 This decision aligns with YAGNI (You Aren't Gonna Need It) and demonstrates the value of Pre-1.0 flexibility. If custom level names become a hard requirement, we can add the `leadership_levels` table later without data loss.

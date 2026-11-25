@@ -944,43 +944,12 @@ Acceptance Criteria:
 - **API Versioning:** Semantic versioning with backward compatibility
 - **Documentation:** All features documented in user guides and API reference
 
-### Technical Architecture
+### Architecture authority
 
-**Closure Table Pattern:**
-
-SecPal uses the **Closure Table Pattern** for storing and querying hierarchical data efficiently:
-
-- **organizational_unit_closures:** Stores all ancestor-descendant relationships
-- **customer_closures:** Stores customer hierarchy relationships
-- **Advantages:**
-  - O(1) complexity for "all descendants" queries
-  - Simple to maintain with database triggers
-  - No recursive queries needed for common operations
-  - Works efficiently in SQLite (development) and PostgreSQL (production)
-
-**Two Independent Hierarchies:**
-
-1. **Internal Structure** (`organizational_units`):
-
-   - Security service company hierarchy (Holding → Region → Branch)
-   - For internal employees (Guards, Managers, Admins)
-   - Access control via `user_internal_organizational_scopes`
-
-2. **Customer Structure** (`customers`):
-   - External customer hierarchy (Corporate → Regional → Local)
-   - For customer users (Client role)
-   - Access control via `customer_user_accesses` + site-specific access mappings (`customer_user_object_accesses`)
-
-**RBAC Integration:**
-
-- **Hierarchical Scopes:** Users granted access to organizational unit or customer
-- **Include Descendants:** Configurable flag to include all child units/customers
-- **Fine-Grained Permissions:** Site-level and action-level permissions
-- **Policy Enforcement:** Laravel policies check both permissions and scopes
-
-**Implementation Reference:**
-
-See [ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies](https://github.com/SecPal/.github/blob/main/docs/adr/20251126-organizational-structure-hierarchy.md) for complete technical architecture.
+[ADR-014](adr/20260720-tenant-identity-access-model-adr014.md) defines the
+accepted tenant, establishment, customer, site and authorization model.
+The functional scenarios above describe operational needs. Use the current
+model for tenant isolation and scoped access.
 
 **Related Epic:**
 

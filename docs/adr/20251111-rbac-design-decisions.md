@@ -9,8 +9,6 @@ SPDX-License-Identifier: CC0-1.0
 
 **Date:** 2025-11-11
 
-**Last Updated:** 2025-12-21 (ADR-009: Leadership-Based Access Control)
-
 **Deciders:** @kevalyq
 
 **Supersession notice:** The absence of specially protected roles, roles as permission bundles, direct permissions alongside roles, and indefinite or time-limited assignments remain valid. [ADR-014](20260720-tenant-identity-access-model-adr014.md) replaces assignments directly to Users, User-centered pivot and API structures, explicit deny or override logic, permissions without applicable scope, and functional rights outside a TenantMembership. ADR-014 starts with allow-only authorization and deny-by-default. The historical content below is retained for context.
@@ -375,30 +373,15 @@ public function handle()
 - **Issue #108:** RBAC Phase 4 (implementation)
 - **Issues #137-140:** Phase 4 sub-issues
 - **ADR-004:** RBAC Architecture (Spatie + Temporal Extensions)
-- **ADR-007:** Organizational Structure Hierarchy (organizational scopes)
-- **ADR-009:** Permission Inheritance Blocking & Leadership-Based Access Control (extends RBAC with hierarchical access)
 - **PRs #109, #112, #113:** Phase 1 (temporal extensions)
 - **PRs #117, #118, #120:** Phase 2 (expiration logic)
 - **PR #121:** Phase 3 (API endpoints)
 
-### Leadership-Based Access Control (See ADR-009)
+### Authorization authority
 
-This ADR establishes the foundation for role-based access control. **No role has default privileges** and access is controlled exclusively through:
-
-1. **Permissions:** Spatie Laravel-Permission system (e.g., `employee.read`, `employee.update`)
-2. **Organizational Scopes:** Access to specific organizational units (ADR-007)
-3. **Leadership Level Filters:** Rank-based visibility control (ADR-009)
-
-**Note:** Predefined roles are just seeded permission bundles. They can be modified, deleted, or renamed like any other role, and none of them bypass the explicit permission-plus-scope model.
-
-ADR-009 extends this with:
-
-- **Leadership Levels:** Tenant-configurable hierarchical ranks (1=CEO, ascending)
-- **Horizontal Access Control:** Users cannot view peers or superiors
-- **Inheritance blocking:** Child organizational units can block permission inheritance from parent units
-- **Defense-in-depth:** Multiple validation layers prevent privilege escalation
-
-Direct permissions (Decision 2) can be restricted by organizational unit inheritance blocks, providing resource-specific access control aligned with GDPR need-to-know principles.
+Roles remain editable permission bundles. The effective permission, scope and
+validity checks are defined in
+[ADR-014](20260720-tenant-identity-access-model-adr014.md).
 
 ## References
 

@@ -15,12 +15,6 @@ SPDX-License-Identifier: CC0-1.0
 
 **Scope:** Cross-repository functional and technical baseline for the subsequent redesign
 
-**Supersedes:**
-
-- [ADR-007](20251126-organizational-structure-hierarchy.md)
-- [ADR-008](20251219-user-based-tenant-resolution.md)
-- [ADR-009](20251221-inheritance-blocking-and-leadership-access-control.md)
-
 **Partially supersedes:**
 
 - [ADR-004](20251108-rbac-spatie-temporal-extension.md)
