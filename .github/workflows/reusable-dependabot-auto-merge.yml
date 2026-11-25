@@ -589,12 +589,15 @@ jobs:
             if (ecosystem === 'pip' && plainPaths.length) {
               const [file] = files;
               const [dependency] = verifiedDependencies;
+              if (typeof dependency.dependencyName !== 'string') return;
+              const normalize = name => name.toLowerCase().replace(/[-_.]+/g, '-');
+              const name = normalize(dependency.dependencyName);
               const group = dependency.dependencyGroup;
               const count = verifiedDependencies.length;
               // Dependencies inherited by several directories can recur in the
               // signed metadata under the native `pip` group. The tree must
               // still contain exactly one verified canonical pin change.
-              const grouped = pipGroups.includes(group) ||
+              const grouped = pipGroups.some(configured => group === configured || group === `${configured}/${name}`) ||
                 (group === 'pip' && pipGroups.length === 1 && count > 1);
               if (files.length !== 1 || file.status !== 'modified' || file.previous_filename ||
                   !/^[a-f0-9]{40}$/.test(file.sha) || commits[0].parents[0].sha !== pr.base.sha ||
@@ -604,7 +607,6 @@ jobs:
                     item.prevVersion !== dependency.prevVersion || item.updateType !== dependency.updateType)) return;
               const beforeTree = await treeAt(pr.base.sha), afterTree = await treeAt(expected);
               if (!beforeTree || !afterTree) return;
-              const normalize = name => name.toLowerCase().replace(/[-_.]+/g, '-');
               const { dirname, join } = require('node:path').posix;
               const pins = new Map(), includes = new Map();
               const pin = /^([A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?)==([0-9.]+)(; python_version < "[1-9]\d*\.(?:0|[1-9]\d*)")?$/;
@@ -638,13 +640,13 @@ jobs:
                   visited.add(current);
                 }
               }
-              const target = pins.get(normalize(dependency.dependencyName));
+              const target = pins.get(name);
               if (target?.path !== file.filename) return;
-              const [, name, version, marker = ''] = target.entry;
+              const [, spelling, version, marker = ''] = target.entry;
               if ((count > 1 || dependency.prevVersion) && dependency.prevVersion !== version) return;
               updateType = classify(version, dependency.newVersion, pythonRelease);
               if (!updateType || updateType !== dependency.updateType) return;
-              target.lines[target.index] = `${name}==${dependency.newVersion}${marker}`;
+              target.lines[target.index] = `${spelling}==${dependency.newVersion}${marker}`;
               if (await readExact(file.filename, expected, file.sha) !== target.lines.join('\n')) return;
             } else if (ecosystem === 'pip') {
               const [file] = files;
