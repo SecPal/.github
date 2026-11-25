@@ -77,21 +77,12 @@ Tracked Work does not establish Active Implementation or a delivery promise.
 Missing or stale evidence requires a narrower truthful claim, as the status
 contract specifies.
 
-## Read proposed and historical material
+## Read proposed and partially superseded decisions
 
-The ADR index retains [Proposed](adr/README.md#proposed),
-[Partially Superseded](adr/README.md#partially-superseded), and
-[Superseded](adr/README.md#superseded) decisions. Proposed Guard Book
-[ADR-001](adr/20251027-event-sourcing-for-guard-book.md) and OpenTimestamp
-[ADR-002](adr/20251027-opentimestamp-for-audit-trail.md) are non-binding until
-Accepted. Offline-first [ADR-003](adr/20251027-offline-first-architecture.md) is
-Superseded by ADR-026; its original Proposed body is historical, never-Accepted
-evidence, not current offline architecture.
-
-Historical ADR bodies record decisions and proposals at their time. Current
-status, refinement, and supersession metadata determine binding scope: Partially
-Superseded decisions bind only in their retained scope; Superseded material is
-not current execution guidance. Git history, issues, PRs, and
-[deployment's historical records](https://github.com/SecPal/deployment#historical-evidence)
-remain discoverable evidence; they do not independently establish current
-authority or a current supported path.
+The [ADR index](adr/README.md) records the status of each decision. The proposed
+[Guard Book](adr/20251027-event-sourcing-for-guard-book.md) and
+[OpenTimestamp](adr/20251027-opentimestamp-for-audit-trail.md) decisions are
+non-binding. [ADR-026](adr/20261002-client-trust-offline-recovery-adr026.md)
+owns offline authorization and client recovery. Partially superseded decisions
+bind only in their retained scope. Git and GitHub keep earlier decisions and
+qualification records.

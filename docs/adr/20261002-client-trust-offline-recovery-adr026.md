@@ -13,8 +13,6 @@ SPDX-License-Identifier: CC0-1.0
 
 **Partially supersedes:** [ADR-012](20260406-single-app-android-distribution-and-private-provisioning-adr012.md)
 
-**Supersedes:** [ADR-003](20251027-offline-first-architecture.md)
-
 **Decision provenance:** This record accepts the client/trust and recovery
 rebaseline authorized under [#842](https://github.com/SecPal/.github/issues/842).
 Its date is the architecture record date. Acceptance establishes decision
@@ -23,12 +21,8 @@ platform qualification, or compliance.
 
 ## Context and authority reconciliation
 
-ADR-012 retained one Android package/signing identity and the same package for
-normal, Device Owner, and profile-owner operation after its provisioning surfaces
-were retired. ADR-003 remained Proposed and non-binding, with historical PWA,
-local CRUD, and synchronization examples requiring revalidation. Neither expresses
-the current separation of personal authentication, Work access, endpoint
-management, offline authority, and recovery.
+Personal authentication, Work access, endpoint management, offline authority
+and recovery require separate responsibility boundaries.
 
 This is one coherent architecture contract. It replaces ADR-012's single-package,
 single-signing, shared-version-line, and same-package-for-normal-and-DPC assumptions

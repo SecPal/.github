@@ -85,7 +85,7 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 
 ### Accepted
 
-- [ADR-026: Client Identity, Endpoint Trust, Offline Authorization, and Recovery](20261002-client-trust-offline-recovery-adr026.md) - 2026-10-02; partially supersedes ADR-012's single-package/signing/DPC assumptions and supersedes Proposed ADR-003 as the current offline architecture authority; acceptance is not implementation or platform qualification
+- [ADR-026: Client Identity, Endpoint Trust, Offline Authorization, and Recovery](20261002-client-trust-offline-recovery-adr026.md) - 2026-10-02; partially supersedes ADR-012's single-package/signing/DPC assumptions and owns offline architecture; acceptance is not implementation or platform qualification
 - [ADR-025: Employment, Working Time, Absence, and Compensation Authorities](20261002-employment-time-absence-compensation-adr025.md) - 2026-10-02; partially supersedes ADR-014's Employee contract projection and unresolved rehire boundary while retaining its identity, tenant integrity, access, and security authority
 - [BRAND-0007: SecPal Product Family Architecture](BRAND-0007-secpal-product-family-architecture.md) - 2026-09-20; supersedes BRAND-0001 as current product-family hierarchy authority without implying product implementation or availability
 - [ADR-024: Managed Operations Control Plane Authority and Trust Boundaries](20260906-managed-operations-control-plane-authority-adr024.md) - 2026-09-06; consumes ADR-023's ownership boundary without claiming control-plane implementation or production qualification
@@ -96,6 +96,7 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [ADR-019: Production Edge and Layered Security](20260824-production-edge-layered-security-adr019.md) - 2026-08-24; DIRECT and PROTECTED modes rebaselined under [#768](https://github.com/SecPal/.github/issues/768)
 - [ADR-018: Production Host and Container Runtime](20260824-production-host-container-runtime-adr018.md) - 2026-08-24; Managed FCOS/container refinement under [#1347](https://github.com/SecPal/.github/issues/1347)
 - [ADR-017: PostgreSQL 18 Canonical Database Baseline](20260824-postgresql-18-canonical-baseline-adr017.md) - 2026-08-24; Managed infrastructure-container refinement under [#1347](https://github.com/SecPal/.github/issues/1347)
+- [ADR-016: Native Work-Graph and Engineering Governance](20260824-native-work-graph-engineering-governance-adr016.md) - 2026-08-24; native issue planning and read-only resolution
 - [ADR-015: Global Identity Key Security](20260720-global-identity-key-security-adr015.md) - 2026-07-20
 - [BRAND-0002: Typography](BRAND-0002-typography.md) - 2026-06-13
 - [BRAND-0003: Navigation Pattern](BRAND-0003-navigation-pattern.md) - 2026-06-13
@@ -109,15 +110,12 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 
 ### Superseded
 
-- [ADR-003: Offline-First Architecture](20251027-offline-first-architecture.md) - 2025-10-27; superseded by [ADR-026](20261002-client-trust-offline-recovery-adr026.md); original Proposed body retained as historical, never-accepted implementation proposals
 - [BRAND-0001: Brand Architecture](BRAND-0001-brand-architecture.md) - 2026-06-13; superseded by [BRAND-0007](BRAND-0007-secpal-product-family-architecture.md) for the current product-family hierarchy while preserved as historical evidence
 - [ADR-009: Permission Inheritance Blocking & Leadership-Based Access Control](20251221-inheritance-blocking-and-leadership-access-control.md) - 2025-12-21; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-008: User-Based Tenant Resolution for Multi-Tenant Architecture](20251219-user-based-tenant-resolution.md) - 2025-12-19; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies](20251126-organizational-structure-hierarchy.md) - 2025-11-26; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 
 ### Partially Superseded
-
-- [ADR-016: Native Work-Graph and Engineering Governance](20260824-native-work-graph-engineering-governance-adr016.md) - 2026-08-24; native issue planning/read-only resolution retained; custom PR governance replaced by GitHub PRs, reviews and checks
 
 - [ADR-014: Tenant, Identity, Employee, and Access Model](20260720-tenant-identity-access-model-adr014.md) - 2026-07-20; employment projection, projection-derived lifecycle inputs, and unresolved rehire decisions replaced by [ADR-025](20261002-employment-time-absence-compensation-adr025.md); all other decisions remain binding
 - [BRAND-0004: Footer Wording](BRAND-0004-footer-wording.md) - 2026-06-13; GuardGuide-specific identity and mappings superseded by [BRAND-0007](BRAND-0007-secpal-product-family-architecture.md), with the two-line SecPal footer structure and legal/source rules retained

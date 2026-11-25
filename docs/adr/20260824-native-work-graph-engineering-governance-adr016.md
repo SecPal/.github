@@ -3,12 +3,7 @@ SPDX-License-Identifier: CC0-1.0 -->
 
 # ADR-016: Native Work-Graph and Engineering Governance
 
-**Status:** Partially superseded for delivery governance
-
-Native issue hierarchy, dependencies, order and useful read-only planning
-resolution remain supported under the [simplified planning contract](../work-graph-contract.md).
-Custom PR lifecycle, merge gates and delivery ceremony are retired. The original
-delivery-specific constraints below are retained as historical rationale.
+**Status:** Accepted for native issue planning
 **Date:** 2026-08-24
 **Decision authority:** SecPal maintainers
 
@@ -22,15 +17,13 @@ Issue-first planning needs one durable, GitHub-native model rather than competin
 
 ## Binding decision
 
-GitHub-native parent/sub-issue relations are authoritative containment; native dependencies are the only hard blockers; native sibling order is preferred, non-blocking order. Nodes are Epics, Sub-Epics, and leaves. Epics and Sub-Epics receive no implementation PR. A leaf carries one independently reviewable contract and at most one primary delivery PR.
+GitHub-native parent/sub-issue relationships own containment. A native dependency
+blocks only the work that actually requires it. Native sibling order gives a
+preference, and assignment does not claim execution.
 
-`READY`, `ACTIVE`, `DONE`, execution claims, deterministic `NEXT`, and closure semantics are defined normatively by [the work-graph contract](../work-graph-contract.md). A dependency is satisfied only when its target is closed `completed`; superseded work closes `not planned` and does not satisfy it. Missing, cyclic, malformed, or unresolvable graph input fails closed. Markdown/body/project-board graphs are non-authoritative mirrors.
-
-## Invariants and boundaries
-
-- Assignment is not an execution claim.
-- Issue-first planning remains binding; a Project board is a mirror only.
-- Containment is neither ordering nor blocking.
+The [work-graph contract](../work-graph-contract.md) defines read-only resolution
+and completion semantics. GitHub pull requests, reviews, checks and protection
+rules own delivery.
 
 ## Consequences
 
