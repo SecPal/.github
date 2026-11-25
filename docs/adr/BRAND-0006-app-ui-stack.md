@@ -23,7 +23,7 @@ SecPal maintainers
 
 ## Context
 
-SecPal and GuardGuide application surfaces need consistent component behavior, accessibility patterns, iconography expectations, styling vocabulary, and dark-mode support. Contributors also need clear boundaries between organization-wide design guidance and repository-local runtime implementation choices.
+SecPal application surfaces need consistent component behavior, accessibility patterns, iconography expectations, styling vocabulary, and dark-mode support. Contributors also need clear boundaries between organization-wide design guidance and repository-local runtime implementation choices.
 
 ## Decision
 

@@ -25,10 +25,6 @@ SecPal Assure and SecPal Visit belong to the family whether they operate
 standalone or integrate with the main SecPal product. Standalone capability does
 not make either product an independent brand outside the SecPal family.
 
-GuardGuide is retired from the current product strategy and active brand
-architecture. Historical references remain valid evidence of the former
-`GuardGuide by SecPal` hierarchy, but neither name is a current product brand.
-
 ## Status Boundary
 
 An approved name establishes strategic product identity, not implementation or
@@ -51,5 +47,4 @@ standalone operation, or integration topology does not create a brand identity.
 ## Authority
 
 [BRAND-0007](../adr/BRAND-0007-secpal-product-family-architecture.md)
-defines the current hierarchy and supersedes BRAND-0001 for that purpose.
-BRAND-0001 remains historical evidence.
+defines the current hierarchy.

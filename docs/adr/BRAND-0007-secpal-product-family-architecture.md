@@ -19,11 +19,8 @@ SecPal maintainers under the current human product decision recorded in #989
 
 ## Context
 
-BRAND-0001 established SecPal as a family and `GuardGuide by SecPal` as an
-endorsed standalone product. GuardGuide has since been retired from the current
-product strategy. The organization needs one current hierarchy that preserves
-that historical decision while establishing the approved SecPal, SecPal Assure,
-and SecPal Visit identities without implying implementation or availability.
+The organization needs one hierarchy for SecPal, SecPal Assure, and SecPal
+Visit, with separate evidence for implementation and availability claims.
 
 The organization-level audience has also broadened within a bounded category:
 SecPal remains for security and security-adjacent processes, but a customer need
@@ -51,12 +48,6 @@ Use the full specialist names where the family relationship is not already
 clear. Nearby references may use `Assure` and `Visit` only where the SecPal
 relationship is unambiguous. Do not invent abbreviations.
 
-GuardGuide is retired from the current product strategy and active brand
-architecture. `GuardGuide`, `GuardGuide by SecPal`, `VisitGuide`, and
-`VisitGuard` are not current product brands. GuardGuide's historical ADRs,
-commits, issues, releases, and changelog records remain truthful evidence of the
-former identity.
-
 SecPal Assure and SecPal Visit may be capable of standalone or integrated
 operation. Standalone capability does not make either an independent brand
 outside the SecPal family. Product naming, strategic identity, intended
@@ -74,25 +65,12 @@ screenshots, icons, distributable assets, implementation detail, and evidence
 of current status. A product identity does not require or imply a repository
 with the same name, and repository topology does not create a product brand.
 
-## Supersession
-
-This ADR supersedes BRAND-0001 as authority for the current product-family
-hierarchy. BRAND-0001 remains preserved as historical evidence of the former
-GuardGuide hierarchy.
-
-This ADR also succeeds and refines the portions of #762 that fixed the former
-organization-level audience and GuardGuide hierarchy. It does not reopen or
-rewrite #762. The stable integrated-system, user-value, foundation-first,
-pre-1.0, Open Source, self-hosting, and claim-integrity principles established
-there remain active in `docs/product-positioning.md`.
-
 ## Consequences
 
 ### Positive
 
 - One current authority names the organization, family, main product, and
   specialist products without artificial naming suffixes.
-- GuardGuide can remain truthful history without appearing as a current brand.
 - Standalone specialist-product direction is separated from independent brand
   identity and from implementation or availability claims.
 - Central rules and product-repository responsibilities remain distinct.
@@ -112,9 +90,7 @@ there remain active in `docs/product-positioning.md`.
      named `SecPal`.
 2. **Formalize `SecPal Suite`**
    - Rejected: `SecPal product family` is the approved umbrella semantics.
-3. **Keep GuardGuide as an active endorsed product**
-   - Rejected: GuardGuide is retired from the current product strategy.
-4. **Give standalone specialist products independent brands**
+3. **Give standalone specialist products independent brands**
    - Rejected: standalone capability does not change SecPal-family identity.
 
 ## Related
@@ -123,7 +99,5 @@ there remain active in `docs/product-positioning.md`.
 - [Brand Architecture](../brand/brand-architecture.md)
 - [Naming](../brand/naming.md)
 - [Public Status Semantics](../public-status-semantics.md)
-- [BRAND-0001: Brand Architecture](BRAND-0001-brand-architecture.md)
 - [Issue #989](https://github.com/SecPal/.github/issues/989)
-- [Historical issue #762](https://github.com/SecPal/.github/issues/762)
 - [Status-semantics issue #763](https://github.com/SecPal/.github/issues/763)

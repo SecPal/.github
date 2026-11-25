@@ -24,11 +24,11 @@ SecPal maintainers
 
 ## Context
 
-SecPal and GuardGuide application surfaces need a consistent shell model for product identity, global destinations, local context, and dense operational work areas. The shared design standard should guide navigation decisions without prescribing route trees, breakpoints, or component APIs for product repositories.
+SecPal application surfaces need a consistent shell model for product identity, global destinations, local context, and dense operational work areas. The shared design standard should guide navigation decisions without prescribing route trees, breakpoints, or component APIs for product repositories.
 
 ## Decision
 
-Top navigation is the default application shell for SecPal and GuardGuide. The standard desktop pattern includes a persistent topbar, optional breadcrumb or context bar, full-width work area, and local module tabs where a route has peer views. Mobile keeps the topbar as the shell anchor and moves secondary navigation into sheets.
+Top navigation is the default application shell for SecPal. The standard desktop pattern includes a persistent topbar, optional breadcrumb or context bar, full-width work area, and local module tabs where a route has peer views. Mobile keeps the topbar as the shell anchor and moves secondary navigation into sheets.
 
 A permanent left sidebar is not the shared default. Product repositories may document focused exceptions for specialist surfaces with a clear workflow need.
 
