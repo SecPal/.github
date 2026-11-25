@@ -605,6 +605,7 @@ jobs:
               const beforeTree = await treeAt(pr.base.sha), afterTree = await treeAt(expected);
               if (!beforeTree || !afterTree) return;
               const normalize = name => name.toLowerCase().replace(/[-_.]+/g, '-');
+              const { dirname, join } = require('node:path').posix;
               const pins = new Map(), includes = new Map();
               const pin = /^([A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?)==([0-9.]+)(; python_version < "[1-9]\d*\.(?:0|[1-9]\d*)")?$/;
               for (const path of plainPaths) {
@@ -620,7 +621,7 @@ jobs:
                   if (!line.trim() || line.trimStart().startsWith('#')) continue;
                   const include = /^-r \.\.\/([a-z][a-z0-9-]*)\/requirements\.txt$/.exec(line);
                   if (include) {
-                    const target = `requirements/${include[1]}/requirements.txt`;
+                    const target = join(dirname(path), '..', include[1], 'requirements.txt');
                     if (includes.has(path) || !plainPaths.includes(target)) return;
                     includes.set(path, target);
                     continue;

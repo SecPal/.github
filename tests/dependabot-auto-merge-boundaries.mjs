@@ -716,6 +716,18 @@ test("authenticates a canonical Python pin directly under requirements", async (
   }
 });
 
+test("rejects a root Python include resolving outside the approved manifests", async () => {
+  const path = "requirements/requirements.txt";
+  const fixture = deploymentPipChange({
+    path,
+    before: {
+      [path]: "-r ../quality/requirements.txt\nPyYAML==6.0.2\n",
+      "requirements/quality/requirements.txt": "reuse==6.1.2\n",
+    },
+  });
+  assert.equal(await verifySource(fixture), undefined);
+});
+
 test("Deployment pip qualifies stable two-component pins without confusing version aliases", async () => {
   const change = {
     path: "requirements/quality/requirements.txt",
