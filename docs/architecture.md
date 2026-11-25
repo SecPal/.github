@@ -77,12 +77,6 @@ Tracked Work does not establish Active Implementation or a delivery promise.
 Missing or stale evidence requires a narrower truthful claim, as the status
 contract specifies.
 
-## Read proposed and partially superseded decisions
+## Decision scope
 
-The [ADR index](adr/README.md) records the status of each decision. The proposed
-[Guard Book](adr/20251027-event-sourcing-for-guard-book.md) and
-[OpenTimestamp](adr/20251027-opentimestamp-for-audit-trail.md) decisions are
-non-binding. [ADR-026](adr/20261002-client-trust-offline-recovery-adr026.md)
-owns offline authorization and client recovery. Partially superseded decisions
-bind only in their retained scope. Git and GitHub keep earlier decisions and
-qualification records.
+Partially superseded decisions bind only in the scope retained by the [ADR index](adr/README.md).

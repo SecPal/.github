@@ -98,7 +98,6 @@ SecPal requires a **legally compliant, tamper-proof audit trail** for all user a
 ### Current Situation
 
 - **✅ Exists:** `RoleAssignmentLog` (immutable RBAC audit trail)
-- **✅ Planned:** OpenTimestamp integration (ADR-002, Guard Book Events)
 - **❌ Missing:** General activity logging for all user actions
 - **❌ Missing:** Scoped access control for logs
 - **❌ Missing:** Tamper-proof chaining mechanism
@@ -1201,7 +1200,6 @@ test('hash chain detects injection attacks', function () {
 
 ## Related ADRs
 
-- **ADR-002:** OpenTimestamp for Audit Trail (integrates with anchored audit-log batches)
 - **ADR-005:** RBAC Design Decisions (role changes are logged)
 - **ADR-007:** Organizational Structure Hierarchy (scope-based log access)
 - **ADR-008:** User-Based Tenant Resolution (tenant isolation for logs)

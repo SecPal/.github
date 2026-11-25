@@ -447,11 +447,8 @@ If targeting alarm response market, additional requirements:
 
 - [CLA and commercial relicensing review](cla-commercial-relicensing-review.md)
 - Issue #46: Legal Review of CLA and Commercial Licenses
-- ADR-001: Event Sourcing (ensures BewachV §10 retention)
-- ADR-002: OpenTimestamp (provides tamper-proof evidence)
-- [ADR-026](adr/20261002-client-trust-offline-recovery-adr026.md): accepted offline authorization
-  and recovery boundaries; supersedes historical Proposed ADR-003 and establishes
-  neither a no-data-loss guarantee nor legal compliance.
+- [ADR-010](adr/20251221-activity-logging-audit-trail-strategy.md): application audit trail.
+- [ADR-026](adr/20261002-client-trust-offline-recovery-adr026.md): offline authorization and client recovery.
 - `ideas-backlog.md`: GDPR "right to erasure" research
 
 ---

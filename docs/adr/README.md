@@ -60,7 +60,7 @@ What other options did we evaluate?
 ## Related
 
 - Issue #123
-- ADR-002
+- ADR-026
 - [External link](https://example.com)
 ```
 
@@ -70,7 +70,7 @@ Most ADR files are named: `YYYYMMDD-short-descriptive-title.md`
 
 Examples:
 
-- `20251027-event-sourcing-for-guard-book.md`
+- `20261002-client-trust-offline-recovery-adr026.md`
 - `20251028-postgresql-temporal-tables.md`
 - `20251030-digital-signature-strategy.md`
 
@@ -102,11 +102,6 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [BRAND-0003: Navigation Pattern](BRAND-0003-navigation-pattern.md) - 2026-06-13
 - [BRAND-0006: App UI Stack Ownership](BRAND-0006-app-ui-stack.md) - 2026-06-13
 - [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15; issue-first planning remains active, optional board automation retired under #1217
-
-### Proposed
-
-- [ADR-001: Event Sourcing for Guard Book Entries](20251027-event-sourcing-for-guard-book.md) - 2025-10-27; revalidation required before acceptance
-- [ADR-002: OpenTimestamp for Audit Trail](20251027-opentimestamp-for-audit-trail.md) - 2025-10-27; revalidation required before acceptance
 
 ### Superseded
 
