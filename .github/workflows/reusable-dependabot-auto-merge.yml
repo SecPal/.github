@@ -203,7 +203,8 @@ jobs:
               composer: ['composer.json', 'composer.lock'],
               bundler: ['Gemfile', 'Gemfile.lock'],
               gradle: ['build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts',
-                'variables.gradle', 'gradle/libs.versions.toml', 'app/build.gradle', 'app/build.gradle.kts'],
+                'variables.gradle', 'gradle/libs.versions.toml', 'app/build.gradle', 'app/build.gradle.kts',
+                'app/gradle.lockfile', 'dpc/build.gradle', 'dpc/gradle.lockfile'],
             };
             const workflowPaths = JSON.parse(process.env.WORKFLOW_PATHS || '[]');
             if (!Array.isArray(workflowPaths) || !workflowPaths.every(path =>
@@ -213,9 +214,16 @@ jobs:
             if (!Array.isArray(plainPaths) || (plainPaths.length &&
                 (pipPath || plainPaths.length !== new Set(plainPaths).size || plainPaths.length !== directories.length ||
                  plainPaths.some(path => typeof path !== 'string' ||
-                   !/^requirements\/[a-z][a-z0-9-]*\/requirements\.txt$/.test(path) ||
+                   !/^requirements\/(?:[a-z][a-z0-9-]*\/)?requirements\.txt$/.test(path) ||
                    !prefixes.some(prefix => path === prefix + 'requirements.txt'))))) return;
-            const wrapperPath = ecosystem === 'gradle' && process.env.GRADLE_WRAPPER_PATH;
+            const isWrapper = ecosystem === 'gradle' &&
+              verifiedDependencies.some(dependency => dependency?.dependencyName === 'gradle-wrapper');
+            const wrapperPath = isWrapper && process.env.GRADLE_WRAPPER_PATH;
+            if (isWrapper && !wrapperPath) return;
+            if (ecosystem === 'gradle' && !isWrapper && verifiedDependencies.some(dependency =>
+                dependency?.packageEcosystem !== ecosystem || typeof dependency.newVersion !== 'string' ||
+                !/^(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){1,3}$/.test(dependency.newVersion) ||
+                (dependency.newVersion.startsWith('0.') && dependency.updateType !== 'version-update:semver-patch'))) return;
             const rules = ecosystem === 'docker' ? JSON.parse(process.env.DOCKER_RULES || '[]') : [];
             if (!Array.isArray(rules) || !rules.every(rule => rule && Array.isArray(rule.paths))) return;
             const matchingRules = rules.filter(rule => rule.image === verifiedDependencies[0]?.dependencyName);
@@ -258,15 +266,17 @@ jobs:
                       dependency['dependency-name'] == expected['dependencyName'] &&
                       (%w[pre_commit shared_sha].include?(input.fetch('ecosystem')) ||
                         (types.include?(dependency['update-type']) && dependency['update-type'] == expected['updateType'])) &&
-                      (!%w[pip pre_commit docker gradle_wrapper shared_sha].include?(input.fetch('ecosystem')) ||
-                        (dependency['dependency-version'].is_a?(String) && dependency['dependency-version'] == expected['newVersion']))
+                      (!%w[pip pre_commit docker gradle gradle_wrapper shared_sha].include?(input.fetch('ecosystem')) ||
+                        (dependency['dependency-version'].is_a?(String) && dependency['dependency-version'] == expected['newVersion'])) &&
+                      (!input.fetch('plain_pip') || dependency.fetch('dependency-group', '') == expected['dependencyGroup'])
                   end
                 print(valid ? JSON.generate(dependencies) : 'false')
               rescue StandardError
                 print 'false'
               end
             `], { input: JSON.stringify({ message: commits[0].commit.message,
-              verified: verifiedDependencies, ecosystem: shared ? 'shared_sha' : wrapperPath ? 'gradle_wrapper' : ecosystem }),
+              verified: verifiedDependencies, ecosystem: shared ? 'shared_sha' : wrapperPath ? 'gradle_wrapper' : ecosystem,
+              plain_pip: plainPaths.length > 0 }),
               encoding: 'utf8', env: { PATH: process.env.PATH }, timeout: 10000, maxBuffer: 1024 * 1024 });
             if (proof.status !== 0 || proof.stdout === 'false') return;
             const signedDependencies = JSON.parse(proof.stdout);
@@ -292,6 +302,16 @@ jobs:
               const { data } = await github.rest.git.getTree({ ...repository, tree_sha: commit.tree.sha, recursive: '1' });
               return data.truncated === false ? new Map(data.tree.map(entry => [entry.path, entry])) : null;
             };
+            if (ecosystem === 'gradle' && !isWrapper) {
+              if (commits[0].parents[0].sha !== pr.base.sha || files.some(file =>
+                file.status !== 'modified' || file.previous_filename || !/^[a-f0-9]{40}$/.test(file.sha))) return;
+              const before = await treeAt(pr.base.sha), after = await treeAt(expected);
+              if (!before || !after || files.some(file => {
+                const old = before.get(file.filename), next = after.get(file.filename);
+                return old?.mode !== '100644' || next?.mode !== '100644' ||
+                  old.sha === next.sha || next.sha !== file.sha;
+              })) return;
+            }
             let updateType;
             let policyRejection;
             if (shared) {
@@ -569,14 +589,23 @@ jobs:
             if (ecosystem === 'pip' && plainPaths.length) {
               const [file] = files;
               const [dependency] = verifiedDependencies;
+              const group = dependency.dependencyGroup;
+              const count = verifiedDependencies.length;
+              // Dependencies inherited by several directories can recur in the
+              // signed metadata under the native `pip` group. The tree must
+              // still contain exactly one verified canonical pin change.
+              const grouped = pipGroups.includes(group) ||
+                (group === 'pip' && pipGroups.length === 1 && count > 1);
               if (files.length !== 1 || file.status !== 'modified' || file.previous_filename ||
                   !/^[a-f0-9]{40}$/.test(file.sha) || commits[0].parents[0].sha !== pr.base.sha ||
-                  verifiedDependencies.length !== 1 || dependency.packageEcosystem !== 'pip' ||
-                  typeof dependency.dependencyGroup !== 'string' ||
-                  (dependency.dependencyGroup && !pipGroups.includes(dependency.dependencyGroup))) return;
+                  (group !== '' && !grouped) || (count > 1 && (!grouped || count > plainPaths.length)) ||
+                  verifiedDependencies.some(item => item.packageEcosystem !== 'pip' || item.dependencyGroup !== group ||
+                    item.dependencyName !== dependency.dependencyName || item.newVersion !== dependency.newVersion ||
+                    item.prevVersion !== dependency.prevVersion || item.updateType !== dependency.updateType)) return;
               const beforeTree = await treeAt(pr.base.sha), afterTree = await treeAt(expected);
               if (!beforeTree || !afterTree) return;
               const normalize = name => name.toLowerCase().replace(/[-_.]+/g, '-');
+              const { dirname, join } = require('node:path').posix;
               const pins = new Map(), includes = new Map();
               const pin = /^([A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?)==([0-9.]+)(; python_version < "[1-9]\d*\.(?:0|[1-9]\d*)")?$/;
               for (const path of plainPaths) {
@@ -592,7 +621,7 @@ jobs:
                   if (!line.trim() || line.trimStart().startsWith('#')) continue;
                   const include = /^-r \.\.\/([a-z][a-z0-9-]*)\/requirements\.txt$/.exec(line);
                   if (include) {
-                    const target = `requirements/${include[1]}/requirements.txt`;
+                    const target = join(dirname(path), '..', include[1], 'requirements.txt');
                     if (includes.has(path) || !plainPaths.includes(target)) return;
                     includes.set(path, target);
                     continue;
@@ -612,6 +641,7 @@ jobs:
               const target = pins.get(normalize(dependency.dependencyName));
               if (target?.path !== file.filename) return;
               const [, name, version, marker = ''] = target.entry;
+              if ((count > 1 || dependency.prevVersion) && dependency.prevVersion !== version) return;
               updateType = classify(version, dependency.newVersion, pythonRelease);
               if (!updateType || updateType !== dependency.updateType) return;
               target.lines[target.index] = `${name}==${dependency.newVersion}${marker}`;
@@ -657,7 +687,7 @@ jobs:
             }
             const after = await read();
             if (after.head.sha !== expected || after.base.sha !== pr.base.sha || after.state !== 'open') return;
-            if (updateType || policyRejection) {
+            if (updateType || policyRejection || ecosystem === 'gradle') {
               const { data: ref } = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
               if (ref.object?.type !== 'commit' || ref.object.sha !== pr.base.sha) return;
             }
