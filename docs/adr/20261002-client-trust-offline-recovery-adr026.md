@@ -36,11 +36,8 @@ that every new application identity is published through every channel or that
 identities share a release/version line. Release realization remains separate.
 Completed Epic #586's provisioning retirement remains effective and is not reopened.
 
-ADR-003 is Superseded as the offline architecture source. Its original Proposed
-status, date, body, PWA-first sequencing, IndexedDB/Dexie/Workbox, local-first CRUD,
-background sync, and LWW/conflict examples remain historical proposals. None is
-made binding by this record. Both predecessors retain their historical bodies;
-explicit notices define the surviving authority.
+This decision owns offline architecture. Storage, synchronization and conflict
+resolution remain subject to the trust boundaries below.
 
 [ADR-014](20260720-tenant-identity-access-model-adr014.md) retains global User,
 TenantMembership, explicit access, tenant integrity and identity lifecycle
@@ -170,9 +167,8 @@ approved personal device; actual revocation removes its server-side authority.
 
 ### Offline-first and authenticated state
 
-**Offline-first is Accepted as a product and architecture requirement.** It does
-not promise every operation offline or accept ADR-003's implementation examples.
-Permitted local operations are bounded by the relevant authenticated authority.
+**Offline-first is an accepted product and architecture requirement.** The
+relevant authenticated authority bounds permitted local operations.
 
 - **Online:** use current authenticated server authority.
 - **Offline:** use the latest mutually known authenticated authority.
@@ -367,15 +363,13 @@ consume this authority separately; neither is absorbed here.
 
 1. **Keep one application/signing identity across USER, WORK and DPC.** Rejected:
    it collapses the accepted client-family and policy-controller boundaries.
-2. **Keep offline authority dependent on Proposed ADR-003 or accept its examples.**
-   Rejected: a product requirement needs accepted trust semantics without freezing
-   unvalidated storage, sync, or conflict implementations.
+2. **Fix storage, sync and conflict implementations in this decision.** Rejected:
+   select and validate these implementations against the accepted trust semantics.
 3. **Use a global offline timeout as remote revocation or sync before checking.**
    Rejected: neither proves current offline authority; uploading before
    reauthorization violates the server trust boundary.
-4. **Rewrite historical ADR bodies or split this model among overlapping ADRs.**
-   Rejected: explicit supersession preserves history and one current owner for
-   this coherent architecture contract.
+4. **Split this model among overlapping ADRs.** Rejected: one owner preserves
+   consistent trust and recovery boundaries.
 5. **Provide support/superadmin takeover or one-Tenant global recovery.** Rejected:
    it bypasses scoped recovery and global identity separation.
 
