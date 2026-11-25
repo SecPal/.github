@@ -494,7 +494,7 @@ assert_mode_conflict repeated-mode --apply --apply
 # Retired and substituted repositories must fail before any provider call.
 # Operations is private with independently owned protection, outside this
 # public required-check inventory.
-for unsupported_repository in operations GuardGuide guardguide.de Assure Visit does-not-exist; do
+for unsupported_repository in operations Assure Visit does-not-exist; do
   for operation in --print-payload --print-review-payload --apply --apply-review-baseline; do
     unsupported_log="$TMP_DIR/$unsupported_repository-${operation#--}.log"
     set +e

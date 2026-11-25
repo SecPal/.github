@@ -116,10 +116,9 @@ strict plain-AGPL baseline as other migrated managed repositories.
 - the migrated `SecPal/deployment` identity accepts plain-AGPL runtime and
   review instructions, is reported explicitly, and rejects the obsolete
   attribution expression;
-- API, frontend-with-Composer, historical GuardGuide, and `guardguide.de` fixtures exercise
-  trusted repository identity, path-local fallback detection, and legacy type
-  hints so ambient identity and misleading manifest values cannot select
-  another repository's licensing policy;
+- API, frontend-with-Composer, and Astro fixtures exercise trusted repository
+  identity and path-local detection so ambient identity and misleading
+  manifests cannot select another repository's licensing policy;
 - missing, empty, malformed UTF-8, unlicensed, invalid Markdown, malformed
   frontmatter, and oversized instructions fail;
 - focused overlays are optional but structurally validated when present;

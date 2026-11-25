@@ -6,7 +6,7 @@
 # plus the PR #488 Copilot review findings.
 #
 # The script is intentionally scoped to enforcing the secpal.* namespace
-# split. Historical non-secpal fixtures (e.g. guardguide.de) must NOT be
+# split. Non-secpal fixtures must NOT be
 # flagged here and supply no live repository membership. This test
 # locks in the following guarantees so neither the banner nor any of the
 # surrounding documentation can drift back to claiming the gate covers
@@ -83,8 +83,8 @@ if ! grep -Fq 'Scope: enforces the secpal.* namespace split only' "$SCRIPT"; the
   exit 1
 fi
 
-if ! grep -Fq 'guardguide.de' "$SCRIPT"; then
-  echo "scripts/check-domains.sh must call out guardguide.de as out of scope" >&2
+if ! grep -Fq 'Out of scope: non-secpal domains' "$SCRIPT"; then
+  echo "scripts/check-domains.sh must call out non-secpal domains as out of scope" >&2
   exit 1
 fi
 
@@ -117,8 +117,8 @@ if ! grep -Fq 'Scope (intentional limit)' "$README"; then
   exit 1
 fi
 
-if ! grep -Fq 'guardguide.de' "$README"; then
-  echo "scripts/README.md must mention guardguide.de as the historical out-of-scope example" >&2
+if ! grep -Fq 'Non-`secpal` domains are out of scope' "$README"; then
+  echo "scripts/README.md must describe non-secpal domains as out of scope" >&2
   exit 1
 fi
 
@@ -152,7 +152,7 @@ if grep -Fq "$bad_public_domain" "$CHANGELOG"; then
   exit 1
 fi
 
-# 5. Behavioural check: guardguide.de references pass, unapproved secpal.* fails.
+# 5. Behavioural check: customer.example references pass, unapproved secpal.* fails.
 workspace=""
 ctx_workspace=""
 tracked_workspace=""
@@ -174,11 +174,11 @@ workspace="$(mktemp -d "${TMPDIR:-/tmp}/check-domains.XXXXXX")"
 mkdir -p "$workspace/scripts"
 cp "$SCRIPT" "$workspace/scripts/check-domains.sh"
 
-cat >"$workspace/guardguide.md" <<'EOF'
-# GuardGuide notes
+cat >"$workspace/domain-fixture.md" <<'EOF'
+# Domain scope fixture
 
-Production homepage: https://guardguide.de
-Marketing redirect: https://www.guardguide.de
+Production homepage: https://customer.example
+Marketing redirect: https://www.customer.example
 
 Approved SecPal hosts used in examples:
 - https://secpal.app
@@ -196,7 +196,7 @@ EOF
 printf '%s\n' \
   "Owned public domain: https://$approved_public_io" \
   "Approved reverse-DNS identifier: $approved_reverse_identifier" \
-  >>"$workspace/guardguide.md"
+  >>"$workspace/domain-fixture.md"
 
 set +e
 (
@@ -212,9 +212,9 @@ if [ "$_rc" -ne 0 ] || ! grep -Fq 'Domain Policy Check PASSED' "$workspace/outpu
   exit 1
 fi
 
-if grep -F 'guardguide' "$workspace/output.txt" | grep -qiEv 'out of scope|governed by|namespace'; then
+if grep -F 'customer.example' "$workspace/output.txt" | grep -qiEv 'out of scope|governed by|namespace'; then
   cat "$workspace/output.txt"
-  echo "check-domains.sh must not flag guardguide.de as a violation" >&2
+  echo "check-domains.sh must not flag customer.example as a violation" >&2
   exit 1
 fi
 

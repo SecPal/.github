@@ -76,7 +76,7 @@ Examples:
 
 Focused ADR series for a specific domain may use a domain-prefix plus four-digit number when the series is added as a documented set. The domain prefix avoids collisions with the numeric `ADR-NNN` identifiers used by the date-prefixed series:
 
-- `BRAND-0001-brand-architecture.md`
+- `BRAND-0007-secpal-product-family-architecture.md`
 - `BRAND-0002-typography.md`
 
 ## Index
@@ -87,7 +87,7 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 
 - [ADR-026: Client Identity, Endpoint Trust, Offline Authorization, and Recovery](20261002-client-trust-offline-recovery-adr026.md) - 2026-10-02; owns client identity, endpoint trust and offline architecture; acceptance is not implementation or platform qualification
 - [ADR-025: Employment, Working Time, Absence, and Compensation Authorities](20261002-employment-time-absence-compensation-adr025.md) - 2026-10-02; owns employment and working-time, absence and compensation authorities
-- [BRAND-0007: SecPal Product Family Architecture](BRAND-0007-secpal-product-family-architecture.md) - 2026-09-20; supersedes BRAND-0001 as current product-family hierarchy authority without implying product implementation or availability
+- [BRAND-0007: SecPal Product Family Architecture](BRAND-0007-secpal-product-family-architecture.md) - 2026-09-20; owns the product-family hierarchy and its claim boundary
 - [ADR-024: Managed Operations Control Plane Authority and Trust Boundaries](20260906-managed-operations-control-plane-authority-adr024.md) - 2026-09-06; consumes ADR-023's ownership boundary without claiming control-plane implementation or production qualification
 - [ADR-023: Public Self-Hosting vs Private Managed Operations Boundary](20260824-public-self-hosting-private-managed-operations-adr023.md) - 2026-08-24; ownership boundary clarified under [#748](https://github.com/SecPal/.github/issues/748)
 - [ADR-022: Deployment Topology Evolution and High Availability](20260824-deployment-topology-high-availability-adr022.md) - 2026-08-24; local HA, Managed capability profiles, and controlled cross-provider continuity refined under [#843](https://github.com/SecPal/.github/issues/843)
@@ -100,13 +100,14 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [ADR-015: Global Identity Key Security](20260720-global-identity-key-security-adr015.md) - 2026-07-20
 - [BRAND-0002: Typography](BRAND-0002-typography.md) - 2026-06-13
 - [BRAND-0003: Navigation Pattern](BRAND-0003-navigation-pattern.md) - 2026-06-13
+- [BRAND-0004: Footer Wording](BRAND-0004-footer-wording.md) - 2026-06-13; owns the two-line SecPal footer and the per-surface license and source-link rules
+- [BRAND-0005: Page Titles](BRAND-0005-page-titles.md) - 2026-06-13; owns the content-first title pattern and separator
 - [BRAND-0006: App UI Stack Ownership](BRAND-0006-app-ui-stack.md) - 2026-06-13
 - [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15; issue-first planning remains active, optional board automation retired under #1217
 - [ADR-012: Android Distribution](20260406-single-app-android-distribution-and-private-provisioning-adr012.md) - 2026-04-06; distribution routes, release tracks, artifact metadata and download surfaces
 
 ### Superseded
 
-- [BRAND-0001: Brand Architecture](BRAND-0001-brand-architecture.md) - 2026-06-13; superseded by [BRAND-0007](BRAND-0007-secpal-product-family-architecture.md) for the current product-family hierarchy while preserved as historical evidence
 - [ADR-009: Permission Inheritance Blocking & Leadership-Based Access Control](20251221-inheritance-blocking-and-leadership-access-control.md) - 2025-12-21; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-008: User-Based Tenant Resolution for Multi-Tenant Architecture](20251219-user-based-tenant-resolution.md) - 2025-12-19; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies](20251126-organizational-structure-hierarchy.md) - 2025-11-26; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
@@ -114,8 +115,6 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 ### Partially Superseded
 
 - [ADR-014: Tenant, Identity, Employee, and Access Model](20260720-tenant-identity-access-model-adr014.md) - 2026-07-20; owns identity, tenant integrity and access; employment authority is defined in [ADR-025](20261002-employment-time-absence-compensation-adr025.md)
-- [BRAND-0004: Footer Wording](BRAND-0004-footer-wording.md) - 2026-06-13; GuardGuide-specific identity and mappings superseded by [BRAND-0007](BRAND-0007-secpal-product-family-architecture.md), with the two-line SecPal footer structure and legal/source rules retained
-- [BRAND-0005: Page Titles](BRAND-0005-page-titles.md) - 2026-06-13; former product-name rules superseded by [BRAND-0007](BRAND-0007-secpal-product-family-architecture.md), with the content-first title pattern retained
 - [ADR-011: Simplify Management Level from Model to Integer Field](20251227-simplify-management-level-to-integer-field-adr011.md) - 2025-12-27; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-010: Activity Logging & Audit Trail Strategy](20251221-activity-logging-audit-trail-strategy.md) - 2025-12-24; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
 - [ADR-005: RBAC Design Decisions](20251111-rbac-design-decisions.md) - 2025-11-11; partially superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)

@@ -28,9 +28,6 @@ Use these names exactly in public and contributor-facing materials.
 - `Assure` and `Visit` are acceptable in nearby references only where the SecPal
   relationship remains unambiguous.
 - Do not abbreviate the approved product names.
-- Do not use or revive `GuardGuide`, `GuardGuide by SecPal`, `VisitGuide`, or
-  `VisitGuard` as current product brands. Preserve those strings where needed
-  for truthful historical or technical evidence.
 - Follow domain terminology rules from `docs/brand/terminology.md` for concepts
   such as customer locations and role names.
 - Keep repository names, package names, domains, and code identifiers in their

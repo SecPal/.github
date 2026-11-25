@@ -58,18 +58,12 @@ raise SystemExit(
 PY
 }
 
-# Historical GuardGuide classification supports archived instruction roots and
-# generic classifier fixtures; it does not enroll repositories in live tooling.
 detect_repo_type() {
     local repository_name="${1:-}"
 
     case "$repository_name" in
         api)
             printf '%s\n' api
-            return
-            ;;
-        GuardGuide)
-            printf '%s\n' guardguide
             return
             ;;
         frontend)
@@ -88,7 +82,7 @@ detect_repo_type() {
             printf '%s\n' contracts
             return
             ;;
-        guardguide.de|secpal.app)
+        secpal.app)
             printf '%s\n' website
             return
             ;;
@@ -109,13 +103,6 @@ detect_repo_type() {
     if [ -f composer.json ] \
         && composer_package_is composer.json secpal/api; then
         printf '%s\n' api
-    elif [ "$(basename "$PWD")" = "GuardGuide" ]; then
-        printf '%s\n' guardguide
-    elif { [ -f composer.json ] \
-            && grep -qiE '"name"[[:space:]]*:[[:space:]]*"([^"/]*/)?guardguide"' composer.json; } \
-        || { [ -f package.json ] \
-            && grep -qiE '"name"[[:space:]]*:[[:space:]]*"([^"/]*/)?guardguide"' package.json; }; then
-        printf '%s\n' guardguide
     elif [ -f capacitor.config.ts ] || [ -d android/app/src ]; then
         printf '%s\n' android
     elif [ -f astro.config.mjs ]; then
