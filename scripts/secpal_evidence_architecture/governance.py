@@ -5,7 +5,7 @@
 
 The canonical semantics remain in ``docs/evidence-architecture-contract.md``.
 This module owns only the closed declaration interface and deterministic hard
-projection used by Polyscope and repository preflight callers.
+projection used by repository preflight callers.
 """
 
 from __future__ import annotations

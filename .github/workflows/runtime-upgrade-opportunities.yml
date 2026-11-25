@@ -45,12 +45,22 @@ jobs:
 
       - name: Read official release, support and image metadata
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           state="$RUNNER_TEMP/runtime-upgrades"
           mkdir -p "$state"
+          api_sha="$(gh api repos/SecPal/api/branches/main \
+            --jq 'select(.name == "main" and .protected == true) | .commit.sha')"
+          [[ "$api_sha" =~ ^[a-f0-9]{40}$ ]]
+          for component in php-fpm nginx; do
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/SecPal/api/contents/docker/$component/Containerfile?ref=$api_sha"
+            printf '\n'
+          done > "$state/api-containerfiles"
           python3 -I scripts/secpal-runtime-upgrades.py scan \
-            containers/polyscope-php/Containerfile > "$state/upstream.json"
+            "$state/api-containerfiles" > "$state/upstream.json"
           python3 -I scripts/secpal-runtime-upgrades.py report "$state/upstream.json" \
             > "$state/report.md"
           if [[ -s "$state/report.md" ]]; then

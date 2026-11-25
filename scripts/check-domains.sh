@@ -50,7 +50,7 @@ if command -v git >/dev/null 2>&1 \
         echo "Tracked files inside the gitignored agent scratch directory '.context/':"
         printf '  %s\n' "${tracked_context_paths[@]}"
         echo ""
-        echo ".context/ is meant to be gitignored scratch space for Polyscope-managed"
+        echo ".context/ is meant to be gitignored scratch space for"
         echo "workspaces. Never use 'git add --force' on .context/ content — move the"
         echo "file to a tracked path instead so the domain policy gate (and CI) can"
         echo "inspect it. See SecPal/.github#489."
@@ -59,7 +59,7 @@ if command -v git >/dev/null 2>&1 \
 fi
 
 # --exclude-dir=".context" skips any directory named exactly ".context" at
-# any recursion depth. Polyscope-managed workspaces use .context/ as a
+# any recursion depth. Development workspaces use .context/ as a
 # gitignored scratch directory for throwaway agent files (PR body drafts,
 # notes, etc.) that never reach CI — so the local gate must not flag them
 # either (see SecPal/.github#489). The git-tracking guard above closes the
