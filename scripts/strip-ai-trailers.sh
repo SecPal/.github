@@ -5,7 +5,6 @@
 # commit-msg hook: strip Co-authored-by trailers added by AI coding agents.
 #
 # Install as .git/hooks/commit-msg (executable) or symlink to this file.
-# Polyscope provisioning installs it automatically in every managed worktree.
 #
 # Patterns stripped (case-insensitive match on the email address or username):
 #   Co-authored-by: Cursor …<cursoragent@cursor.com>

@@ -93,10 +93,6 @@ suite:
 ./scripts/preflight.sh
 ```
 
-This script is deliberately not attached to every `git push`; Polyscope exposes
-one `All Checks` action for intentional full validation without repeating it on
-push.
-
 **What the preflight script checks:**
 
 - Code formatting (Prettier)

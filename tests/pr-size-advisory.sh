@@ -131,7 +131,7 @@ EOF
   done
 
 # Focused stand-ins: these fixtures test preflight wiring, not architecture semantics.
-  for suite in secpal-evidence-architecture polyscope-evidence-architecture; do
+  for suite in secpal-evidence-architecture; do
     cat >"$repository/tests/$suite.py" <<'EOF'
 import os
 from pathlib import Path

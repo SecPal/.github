@@ -39,7 +39,7 @@ class EvidenceArchitectureGovernanceTests(unittest.TestCase):
         for step in steps:
             self.assertNotIn("if", step)
             self.assertNotIn("continue-on-error", step)
-        for suite in ("secpal-evidence-architecture", "polyscope-evidence-architecture", "evidence-architecture-governance"):
+        for suite in ("secpal-evidence-architecture", "evidence-architecture-governance"):
             self.assertTrue(any(f"python3 tests/{suite}.py" in step.get("run", "") for step in steps))
 
     def test_distinct_gate_is_unconditional_and_runs_real_enforcement(self) -> None:

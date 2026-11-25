@@ -30,7 +30,7 @@
 #      the exact private database service identity pass; an unapproved secpal.*
 #      host, adjacent reverse-DNS namespace, and another internal identity fail.
 #   6. The gate skips the gitignored agent scratch directory `.context/` so
-#      Polyscope-managed workspaces can stash PR body drafts and other
+#      Development workspaces can stash PR body drafts and other
 #      throwaway notes that quote forbidden hosts verbatim without tripping
 #      the local gate (CI never sees `.context/` because it is gitignored).
 #      Tracked content with the same string still fails so the exclusion is
@@ -56,8 +56,8 @@ bad_development_suffix="${domain_namespace}.dev.example"
 bad_direct_development="foo.${domain_namespace}.dev"
 approved_public_io="${domain_namespace}.io"
 approved_repository_remote="https://github.com/SecPal/${domain_namespace}.app.git"
-approved_reverse_identifier="io.${domain_namespace}.polyscope.preview"
-bad_reverse_identifier="dev.${domain_namespace}.polyscope.preview"
+approved_reverse_identifier="io.${domain_namespace}.workspace.preview"
+bad_reverse_identifier="dev.${domain_namespace}.workspace.preview"
 reverse_identifier_as_host="io.${domain_namespace}.attacker.example"
 libre_application_identifier="app.${domain_namespace}.libre"
 dpc_application_identifier="io.${domain_namespace}.dpc"

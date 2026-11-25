@@ -117,33 +117,6 @@ updates:
     pull-request-branch-name:
       separator: "-"
 
-  # Docker - Polyscope PHP image references
-  - package-ecosystem: "docker"
-    directory: "/containers/polyscope-php"
-    schedule:
-      interval: "daily"
-      time: "04:00"
-      timezone: "Europe/Berlin"
-    # Routine runtime proposals use PATCH versions. New lines are reported by
-    # SecPal/.github's Runtime Upgrade Opportunities workflow for review.
-    ignore:
-      - dependency-name: "library/php"
-        update-types: ["version-update:semver-minor", "version-update:semver-major"]
-      - dependency-name: "library/nginx"
-        update-types: ["version-update:semver-minor", "version-update:semver-major"]
-    commit-message:
-      prefix: "chore"
-      include: "scope"
-    labels:
-      - "dependencies"
-      - "docker"
-      - "dependabot"
-    open-pull-requests-limit: 10
-    rebase-strategy: "auto"
-    target-branch: "main"
-    pull-request-branch-name:
-      separator: "-"
-
   # pip - Vulnerability policy tooling
   - package-ecosystem: "pip"
     directory: "/requirements"

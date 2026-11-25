@@ -134,7 +134,7 @@ fi
 
 grep -Fq 'Directory not found: android' "$warning_output"
 grep -Fq 'Skipped (missing directory): 1 repositories' "$warning_output"
-grep -Fq '.github/scripts/install-polyscope-rollout.sh' "$warning_output"
+grep -Fq 'Use an assigned Herdr checkout' "$warning_output"
 grep -Fq 'All Git hooks have been successfully installed' "$warning_output"
 
 warning_expected_hooks=$(( ${#warning_present_repos[@]} * 2 ))

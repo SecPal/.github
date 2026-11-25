@@ -15,6 +15,8 @@ remain defined in `docs/evidence-architecture-contract.md`.
 
 ## Scope and Safety
 
+- Use the assigned Herdr checkout and the [workspace lifecycle](WORKSPACE_SETUP.md)
+  for product development on `secpal.dev`.
 - Inspect `git status --short --branch` and the relevant repository context
   before writing. Preserve existing changes and never overwrite work you do not
   own.

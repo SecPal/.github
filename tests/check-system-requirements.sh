@@ -11,7 +11,7 @@ sandbox="$(mktemp -d "${TMPDIR:-/tmp}/check-system-requirements.XXXXXX")"
 trap 'rm -rf "$sandbox"' EXIT
 
 workspace="$sandbox/workspace"
-sdk_root="$workspace/polyscope-android-sdk"
+sdk_root="$workspace/android-sdk"
 test_home="$workspace/home"
 mkdir -p \
   "$workspace/.github/scripts" \
@@ -186,8 +186,7 @@ run_check() {
     PATH="$workspace/bin" \
       HOME="$test_home" \
       JAVA_HOME="" \
-      POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
-      ANDROID_SDK_ROOT="" \
+      ANDROID_SDK_ROOT="$sdk_root" \
       ANDROID_HOME="" \
       TEST_NODE_VERSION="${TEST_NODE_VERSION:-$canonical_node_version}" \
       /bin/bash ./scripts/check-system-requirements.sh "$@"
@@ -234,8 +233,7 @@ if ! (
   PATH="$workspace/bin" \
     HOME="$test_home" \
     JAVA_HOME="$java_home_dir" \
-    POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
-    ANDROID_SDK_ROOT="" \
+    ANDROID_SDK_ROOT="$sdk_root" \
     ANDROID_HOME="" \
     TEST_JAVA_VERSION="17.0.12" \
     TEST_JAVAC_VERSION="17.0.12" \
@@ -269,8 +267,7 @@ if (
   PATH="$workspace/bin" \
     HOME="$test_home" \
     JAVA_HOME="$java_runtime_only_dir" \
-    POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
-    ANDROID_SDK_ROOT="" \
+    ANDROID_SDK_ROOT="$sdk_root" \
     ANDROID_HOME="" \
     TEST_JAVA_VERSION="17.0.12" \
     TEST_JAVAC_VERSION="17.0.12" \
@@ -294,8 +291,7 @@ if (
   PATH="$workspace/bin" \
     HOME="$test_home" \
     JAVA_HOME="$java_home_stale_dir" \
-    POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
-    ANDROID_SDK_ROOT="" \
+    ANDROID_SDK_ROOT="$sdk_root" \
     ANDROID_HOME="" \
     TEST_JAVA_VERSION="21.0.11" \
     TEST_JAVAC_VERSION="21.0.11" \
@@ -316,8 +312,7 @@ if ! (
   PATH="$workspace/bin" \
     HOME="$test_home" \
     JAVA_HOME="" \
-    POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
-    ANDROID_SDK_ROOT="" \
+    ANDROID_SDK_ROOT="$sdk_root" \
     ANDROID_HOME="" \
     TEST_JAVA_VERSION_OUTPUT=$'picked up JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8\nopenjdk version "21.0.11"' \
     TEST_JAVAC_VERSION="21.0.11" \
@@ -337,8 +332,7 @@ if (
   PATH="$workspace/bin" \
     HOME="$test_home" \
     JAVA_HOME="" \
-    POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
-    ANDROID_SDK_ROOT="" \
+    ANDROID_SDK_ROOT="$sdk_root" \
     ANDROID_HOME="" \
     TEST_JAVA_VERSION_EXIT_CODE=127 \
     /bin/bash ./scripts/check-system-requirements.sh --repo=android
@@ -359,8 +353,7 @@ if (
   PATH="$workspace/bin" \
     HOME="$test_home" \
     JAVA_HOME="" \
-    POLYSCOPE_ANDROID_SDK_ROOT="$sdk_root" \
-    ANDROID_SDK_ROOT="" \
+    ANDROID_SDK_ROOT="$sdk_root" \
     ANDROID_HOME="" \
     TEST_JAVAC_VERSION_EXIT_CODE=127 \
     /bin/bash ./scripts/check-system-requirements.sh --repo=android

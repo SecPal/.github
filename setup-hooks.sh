@@ -13,7 +13,7 @@ WORKSPACE_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$WORKSPACE_ROOT"
 
 REPOS=("api" "frontend" "contracts" "android" "secpal.app" ".github")
-ROLLOUT_HINT="Run .github/scripts/install-polyscope-rollout.sh (or sync via Polyscope) to provision missing SecPal repositories."
+ROLLOUT_HINT="Use an assigned Herdr checkout or clone the missing repository before installing its hooks."
 SUCCESS_COUNT=0
 REMOVED_PRE_PUSH_COUNT=0
 FAILED_REPOS=()

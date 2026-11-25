@@ -559,7 +559,7 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
 
   print_section "Java & Android SDK"
 
-  android_sdk_dir="${POLYSCOPE_ANDROID_SDK_ROOT:-${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}}"
+  android_sdk_dir="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
   java_bin="$(resolve_java_tool java || true)"
   javac_bin="$(resolve_javac_for_java "$java_bin" || true)"
   sdkmanager_bin="$(resolve_android_sdk_tool sdkmanager "$android_sdk_dir" || true)"
@@ -616,7 +616,7 @@ if [ -z "$REPO_FILTER" ] || [ "$REPO_FILTER" = "android" ]; then
     OK_COUNT=$((OK_COUNT + 1))
   else
     echo -e "${RED}✗${NC} Android SDK directory ${RED}(incomplete or not found)${NC}"
-    echo -e "  ${YELLOW}→${NC} Install the Android SDK under $android_sdk_dir with platform-tools and cmdline-tools/latest, or export POLYSCOPE_ANDROID_SDK_ROOT/ANDROID_SDK_ROOT/ANDROID_HOME"
+    echo -e "  ${YELLOW}→${NC} Install the Android SDK under $android_sdk_dir with platform-tools and cmdline-tools/latest, or export ANDROID_SDK_ROOT or ANDROID_HOME"
     CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
   fi
 

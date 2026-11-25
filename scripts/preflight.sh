@@ -300,7 +300,6 @@ python3 -I scripts/secpal-evidence-architecture.py --repository-root . --reposit
   exit 1
 }
 python3 tests/secpal-evidence-architecture.py || exit 1
-python3 tests/polyscope-evidence-architecture.py || exit 1
 
 run_postgresql_18_baseline_governance
 
@@ -313,56 +312,11 @@ if [ -f tests/sync-required-checks.sh ]; then
   }
 fi
 
-if [ -f tests/polyscope-state-audit.sh ]; then
-  bash tests/polyscope-state-audit.sh || {
-    echo "" >&2
-    echo "❌ Polyscope state audit regression test failed!" >&2
-    echo "Fix scripts/audit-polyscope-state.py before continuing." >&2
-    exit 1
-  }
-fi
-
 python3 -m unittest tests/secpal-work-graph-unit.py
 python3 -m unittest tests/secpal-work-graph-adapter.py
 python3 -m unittest tests/secpal-work-graph-audit.py
 python3 -m unittest tests/secpal-trivy-repository-scan-unit.py
 python3 -m unittest tests/secpal-trivy-action-archive.py
-
-for preview_test in \
-  tests/run-polyscope-api-tests.py \
-  tests/polyscope-postgresql-socket-proxy.py \
-  tests/cleanup-polyscope-container-preview.py \
-  tests/render-polyscope-container-nginx.py \
-  tests/refresh-polyscope-container-preview.py \
-  tests/run-polyscope-container-preview.py \
-  tests/install-polyscope-container-preview.py; do
-  if [ -f "$preview_test" ]; then
-    python3 "$preview_test" || {
-      echo "" >&2
-      echo "❌ Polyscope container-preview regression test failed: $preview_test" >&2
-      echo "Keep the preview router, database bridge, and installer fail-closed." >&2
-      exit 1
-    }
-  fi
-done
-
-if [ -f tests/polyscope-clone-reaper.sh ]; then
-  bash tests/polyscope-clone-reaper.sh || {
-    echo "" >&2
-    echo "❌ Polyscope clone reaper regression test failed!" >&2
-    echo "Keep scripts/reap-polyscope-clones.py conservative: database allowlist, grace period, locks, and live processes must all protect clone roots." >&2
-    exit 1
-  }
-fi
-
-if [ -f tests/polyscope-rollout.sh ]; then
-  bash tests/polyscope-rollout.sh || {
-    echo "" >&2
-    echo "❌ Polyscope rollout regression test failed!" >&2
-    echo "Fix scripts/polyscope-rollout.py or scripts/install-polyscope-rollout.sh before continuing." >&2
-    exit 1
-  }
-fi
 
 if [ -f tests/license-compatibility.sh ]; then
   bash tests/license-compatibility.sh || {

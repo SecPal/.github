@@ -378,7 +378,7 @@ function dockerFixture(
   }));
   return updateFixture(
     "docker",
-    "- package-ecosystem: docker\n  directories: [/, /docker/php-fpm, /docker/nginx, /containers/polyscope-php]\n",
+    "- package-ecosystem: docker\n  directories: [/, /docker/php-fpm, /docker/nginx]\n",
     changes,
     dependencies,
     { DOCKER_RULES: JSON.stringify([{ image, paths, line, suffix, digestRefresh, enforceLine }]) }
@@ -469,16 +469,15 @@ test("approved Nginx patches pass while both mainline and future stable releases
       "library/nginx",
       true
     );
-  for (const path of ["docker/nginx/Containerfile", "containers/polyscope-php/Containerfile"]) {
-    assert.equal(await verifySource(scenario("1.30.8", path)), "version-update:semver-patch");
-    for (const version of ["1.31.10", "1.32.0", "2.0.0"]) {
-      const fixture = scenario(version, path);
-      assert.equal(await verifySource(fixture), undefined);
-      assert.match(
-        await verifySource({ ...fixture, output: "policy-rejection" }),
-        /outside the supported release line/
-      );
-    }
+  const path = "docker/nginx/Containerfile";
+  assert.equal(await verifySource(scenario("1.30.8", path)), "version-update:semver-patch");
+  for (const version of ["1.31.10", "1.32.0", "2.0.0"]) {
+    const fixture = scenario(version, path);
+    assert.equal(await verifySource(fixture), undefined);
+    assert.match(
+      await verifySource({ ...fixture, output: "policy-rejection" }),
+      /outside the supported release line/
+    );
   }
 });
 
@@ -1276,10 +1275,7 @@ test("caller reconciles label, draft and target changes", () => {
   const caller = yaml.load(readFileSync(".github/workflows/dependabot-auto-merge.yml", "utf8"));
   assert.equal(caller.jobs["auto-merge"].if, undefined);
   assert.equal(caller.jobs["auto-merge"].with.phase, "2");
-  assert.equal(
-    caller.jobs["auto-merge"].with["allowed-ecosystems"],
-    "github_actions,pre_commit,docker"
-  );
+  assert.equal(caller.jobs["auto-merge"].with["allowed-ecosystems"], "github_actions,pre_commit");
   assert.equal(caller.jobs["auto-merge"].with["pre-commit-path"], ".pre-commit-config.yaml");
   assert.deepEqual(JSON.parse(caller.jobs["auto-merge"].with["shared-sha-workflow-paths"]), [
     ".github/workflows/daily-repository-security.yml",
