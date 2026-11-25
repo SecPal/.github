@@ -35,35 +35,16 @@ payroll, or user-interface detail.
 
 ## Relationship to ADR-014 and ADR-015
 
-This ADR partially supersedes ADR-014 **only** where it:
+This ADR owns Employee → EmploymentPeriod → EmploymentTermsVersion and its
+time-dependent employment basis. An Employee can have successive non-overlapping
+EmploymentPeriods. Employment terms take effect through immutable versions.
 
-- defines the Employee as the authoritative contract projection, including the
-  binding-boundaries table, the Employee/contract section, the domain diagram
-  and its explanation;
-- applies future amendments by mutating that projection on their effective date;
-- derives membership employment bases and lifecycle reevaluation from that
-  projection, including the user-deletion diagram;
-- rejects a separate employment-period concept or leaves rehire and several
-  employment periods unresolved, including open detail decision 8; or
-- repeats those assumptions in the API, Contracts, and test impact inventory.
-
-Those decisions are replaced by Employee → EmploymentPeriod →
-EmploymentTermsVersion and the time-dependent basis evaluation below. The
-rejection of **overlapping employment periods for one Employee** remains: rehire
-history does not authorize simultaneous employment contracts in that record.
-All other ADR-014 decisions remain binding, including Tenant/TenantKey identity,
-global User, TenantMembership, explicit access assignment, scope and validity,
-tenant integrity, establishment history, encryption, retention, invitation,
-active-context, and identity-deletion boundaries. The membership-state priority
-and identity lifecycle locking remain unchanged; only the employment authority
-they consume changes.
-
-The new working-time, absence, leave, and compensation boundaries refine that
-baseline. ADR-014 remains the owner of its retained identity/access/security
-invariants; this ADR owns the replacement employment and added domain boundaries.
-Its historical body and original decision date remain preserved. References to
-its superseded projection are historical, including implementation inventories;
-they are not a second current architecture authority.
+ADR-014 continues to own Tenant/TenantKey identity, global User, TenantMembership,
+explicit access assignment, scope and validity, tenant integrity, establishment
+history, encryption, retention, invitation, active context, and identity deletion.
+Membership-state priority and identity lifecycle locking remain in ADR-014 and
+consume the employment basis defined here. This ADR also owns working time,
+absence, leave and compensation boundaries.
 
 [ADR-015](20260720-global-identity-key-security-adr015.md) continues to own Global
 Identity Key security without modification or reopening.

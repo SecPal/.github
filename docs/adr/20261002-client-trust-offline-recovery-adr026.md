@@ -11,7 +11,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Decision authority:** SecPal Product and Domain Owner
 
-**Partially supersedes:** [ADR-012](20260406-single-app-android-distribution-and-private-provisioning-adr012.md)
+**Distribution:** [ADR-012](20260406-single-app-android-distribution-and-private-provisioning-adr012.md)
 
 **Decision provenance:** This record accepts the client/trust and recovery
 rebaseline authorized under [#842](https://github.com/SecPal/.github/issues/842).
@@ -24,17 +24,10 @@ platform qualification, or compliance.
 Personal authentication, Work access, endpoint management, offline authority
 and recovery require separate responsibility boundaries.
 
-This is one coherent architecture contract. It replaces ADR-012's single-package,
-single-signing, shared-version-line, and same-package-for-normal-and-DPC assumptions
-where they conflict with the USER/WORK model below. ADR-012 still owns compatible
-distribution decisions: Play Store, GitHub Releases, Obtainium and direct APK
-routes; Play-native updates for Play installs; `apk.secpal.app` for artifacts,
-checksums and machine-readable release metadata; Stable/Beta tracks and metadata
-paths; `secpal.app/android` as the human-facing landing surface; and the prohibition
-on long-lived secrets in public distribution artifacts. These routes do not imply
-that every new application identity is published through every channel or that
-identities share a release/version line. Release realization remains separate.
-Completed Epic #586's provisioning retirement remains effective and is not reopened.
+[ADR-012](20260406-single-app-android-distribution-and-private-provisioning-adr012.md)
+defines distribution routes, release tracks, artifact metadata, the public
+landing surface and protection of release artifacts. Each identity follows
+the client and signing boundaries below. Release realization is separate.
 
 This decision owns offline architecture. Storage, synchronization and conflict
 resolution remain subject to the trust boundaries below.
