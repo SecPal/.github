@@ -117,6 +117,7 @@ jobs:
       update-type: ${{ steps.check.outputs.update-type }}
       policy-rejection: ${{ steps.source.outputs.policy-rejection }}
       verified-base: ${{ steps.source.outputs.base }}
+      workflow-write: ${{ steps.source.outputs.workflow-write }}
     steps:
       - name: Dependabot metadata
         id: metadata
@@ -709,6 +710,9 @@ jobs:
             }
             if (updateType) core.setOutput('update-type', updateType);
             core.setOutput('base', pr.base.sha);
+            core.setOutput('workflow-write', files.some(file =>
+              file.filename.startsWith('.github/workflows/') ||
+              file.previous_filename?.startsWith('.github/workflows/')) ? 'true' : 'false');
             core.setOutput('verified', 'true');
 
       - name: Check PR metadata
@@ -967,6 +971,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
+          permission-workflows: ${{ needs.check-eligibility.outputs.workflow-write == 'true' && 'write' || '' }}
 
       - name: Enable auto-merge
         if: steps.enrollment.outputs.required == 'true'

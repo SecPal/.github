@@ -1449,6 +1449,29 @@ test("publisher repositories revoke stale App and legacy bot requests while pres
   }
 });
 
+test("only verified workflow-file changes request workflow write", async () => {
+  assert.equal(await verifySource({ output: "workflow-write" }), "false");
+  const workflowChange = {
+    env: {
+      ALLOWED_ECOSYSTEMS: "github_actions",
+      PACKAGE_ECOSYSTEM: "github_actions",
+      WORKFLOW_PATHS: '[".github/workflows/quality.yml",".github/workflows/local-integration.yml"]',
+    },
+    files: [".github/workflows/quality.yml", ".github/workflows/local-integration.yml"].map(
+      (filename) => ({ filename })
+    ),
+    output: "workflow-write",
+  };
+  assert.equal(await verifySource(workflowChange), "true");
+  assert.equal(
+    await verifySource({
+      ...workflowChange,
+      files: [{ filename: ".github/workflows/cloud-janitor.yml" }],
+    }),
+    undefined
+  );
+});
+
 test("publisher enrollment limits the installation token to the current repository and protected merge", () => {
   const steps = workflow.jobs["auto-merge"].steps;
   const app = steps.find((step) => step.id === "merger-app");
@@ -1456,7 +1479,11 @@ test("publisher enrollment limits the installation token to the current reposito
   assert.equal(app.with.repositories, "${{ github.event.repository.name }}");
   assert.equal(app.with["permission-contents"], "write");
   assert.equal(app.with["permission-pull-requests"], "write");
-  assert.equal(Object.keys(app.with).filter((name) => name.startsWith("permission-")).length, 2);
+  assert.equal(
+    app.with["permission-workflows"],
+    "${{ needs.check-eligibility.outputs.workflow-write == 'true' && 'write' || '' }}"
+  );
+  assert.equal(Object.keys(app.with).filter((name) => name.startsWith("permission-")).length, 3);
   const enable = steps.find((step) => step.name === "Enable auto-merge");
   assert.match(enable.run, /secpal-dependabot-merger/);
   assert.match(enable.run, /GH_TOKEN="\$merge_token" gh pr merge/);
