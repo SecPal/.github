@@ -96,14 +96,13 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [ADR-019: Production Edge and Layered Security](20260824-production-edge-layered-security-adr019.md) - 2026-08-24; DIRECT and PROTECTED modes rebaselined under [#768](https://github.com/SecPal/.github/issues/768)
 - [ADR-018: Production Host and Container Runtime](20260824-production-host-container-runtime-adr018.md) - 2026-08-24; Managed FCOS/container refinement under [#1347](https://github.com/SecPal/.github/issues/1347)
 - [ADR-017: PostgreSQL 18 Canonical Database Baseline](20260824-postgresql-18-canonical-baseline-adr017.md) - 2026-08-24; Managed infrastructure-container refinement under [#1347](https://github.com/SecPal/.github/issues/1347)
-- [ADR-016: Native Work-Graph and Engineering Governance](20260824-native-work-graph-engineering-governance-adr016.md) - 2026-08-24; native issue planning and read-only resolution
+- [ADR-016: Native Work-Graph and Engineering Governance](20260824-native-work-graph-engineering-governance-adr016.md) - 2026-08-24; owns issue-first planning, native relationships and read-only resolution
 - [ADR-015: Global Identity Key Security](20260720-global-identity-key-security-adr015.md) - 2026-07-20
 - [BRAND-0002: Typography](BRAND-0002-typography.md) - 2026-06-13
 - [BRAND-0003: Navigation Pattern](BRAND-0003-navigation-pattern.md) - 2026-06-13
 - [BRAND-0004: Footer Wording](BRAND-0004-footer-wording.md) - 2026-06-13; owns the two-line SecPal footer and the per-surface license and source-link rules
 - [BRAND-0005: Page Titles](BRAND-0005-page-titles.md) - 2026-06-13; owns the content-first title pattern and separator
 - [BRAND-0006: App UI Stack Ownership](BRAND-0006-app-ui-stack.md) - 2026-06-13
-- [ADR-013: Issue-First Planning Governance And Optional Project Board Mirror](20260415-issue-first-planning-governance-adr013.md) - 2026-04-15; issue-first planning remains active, optional board automation retired under #1217
 - [ADR-012: Android Distribution](20260406-single-app-android-distribution-and-private-provisioning-adr012.md) - 2026-04-06; distribution routes, release tracks, artifact metadata and download surfaces
 
 ### Superseded
