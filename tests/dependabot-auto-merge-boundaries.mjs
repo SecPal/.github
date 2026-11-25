@@ -1299,7 +1299,9 @@ test("caller reconciles label, draft and target changes", () => {
 test("enrollment requires a successful protected safety check from this run and head", () => {
   const step = workflow.jobs["auto-merge"].steps.find((step) => step.name === "Enable auto-merge");
   const head = "a".repeat(40);
+  const base = "b".repeat(40);
   const completed = {
+    databaseId: 1,
     name: "auto-merge / Dependabot Source Safety",
     status: "COMPLETED",
     conclusion: "SUCCESS",
@@ -1308,21 +1310,37 @@ test("enrollment requires a successful protected safety check from this run and 
   };
   const otherRun = {
     ...completed,
-    detailsUrl: "https://github.com/SecPal/test/actions/runs/41/job/1",
+    databaseId: 2,
+    detailsUrl: "https://github.com/SecPal/test/actions/runs/42/job/2",
   };
-  const page = (nodes, { headRefOid = head, oid = head } = {}) => ({
+  const page = (nodes, { headRefOid = head, oid = head, baseRefOid = base } = {}) => ({
     data: {
       repository: {
         pullRequest: {
           headRefOid,
+          baseRefOid,
+          baseRefName: "main",
+          state: "OPEN",
+          isDraft: false,
           commits: { nodes: [{ commit: { oid, statusCheckRollup: { contexts: { nodes } } } }] },
         },
       },
     },
   });
 
-  for (const [pages, expected, lookupExit = 0] of [
+  for (const [pages, expected, lookupExit = 0, delayed = false] of [
     [[page([completed])], true],
+    [[page([completed])], true, 0, true],
+    [[page([otherRun, completed])], true],
+    [
+      [
+        page([
+          { ...completed, detailsUrl: "https://github.com/SecPal/test/actions/runs/41/job/1" },
+        ]),
+      ],
+      false,
+    ],
+    [[page([completed], { baseRefOid: "c".repeat(40) })], false],
     [[page([otherRun]), page([completed])], true],
     [[page([])], false],
     [[page([otherRun])], false],
@@ -1337,12 +1355,18 @@ test("enrollment requires a successful protected safety check from this run and 
     const dir = mkdtempSync(join(tmpdir(), "dependabot-enrollment-"));
     try {
       const record = join(dir, "merged");
+      writeFileSync(join(dir, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
       writeFileSync(
         join(dir, "gh"),
         [
           "#!/bin/sh",
           'case "$1:$2" in',
           "  api:graphql)",
+          '    if [ "$DELAYED" = true ] && [ ! -e "$RECORD.lookup" ]; then',
+          '      touch "$RECORD.lookup"',
+          '      printf "%s" "$PENDING_CHECKS"',
+          "      exit 0",
+          "    fi",
           '    case " $* " in *" --slurp "*) ;; *) exit 2 ;; esac',
           '    case " $* " in',
           '      *" --paginate "*\'after: $endCursor\'*) printf "%s" "$CHECKS" ;;',
@@ -1361,6 +1385,8 @@ test("enrollment requires a successful protected safety check from this run and 
           ...process.env,
           PATH: `${dir}:${process.env.PATH}`,
           CHECKS: JSON.stringify(pages),
+          PENDING_CHECKS: JSON.stringify([page([otherRun])]),
+          DELAYED: String(delayed),
           FIRST_PAGE: JSON.stringify(pages.slice(0, 1)),
           LOOKUP_EXIT: String(lookupExit),
           RECORD: record,
@@ -1371,6 +1397,9 @@ test("enrollment requires a successful protected safety check from this run and 
           PR_NUMBER: "1",
           MERGE_METHOD: "squash",
           EXPECTED_HEAD: head,
+          EXPECTED_BASE: base,
+          SAFETY_CHECK_ID: "1",
+          GITHUB_STEP_SUMMARY: join(dir, "summary"),
         },
         encoding: "utf8",
       });

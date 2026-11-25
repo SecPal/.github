@@ -109,6 +109,7 @@ jobs:
       should-auto-merge: ${{ steps.check.outputs.should-auto-merge }}
       update-type: ${{ steps.check.outputs.update-type }}
       policy-rejection: ${{ steps.source.outputs.policy-rejection }}
+      verified-base: ${{ steps.source.outputs.base }}
     steps:
       - name: Dependabot metadata
         id: metadata
@@ -665,6 +666,7 @@ jobs:
               return;
             }
             if (updateType) core.setOutput('update-type', updateType);
+            core.setOutput('base', pr.base.sha);
             core.setOutput('verified', 'true');
 
       - name: Check PR metadata
@@ -838,6 +840,8 @@ jobs:
       # GitHub requires repository write access to disable auto-merge.
       contents: write
       pull-requests: write
+    outputs:
+      check-run-id: ${{ steps.identity.outputs.check-run-id }}
     steps:
       - name: Reconcile automated enrollment against this exact head
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -875,6 +879,12 @@ jobs:
               throw new Error(process.env.POLICY_REJECTION);
             }
 
+      - name: Record the native safety check identity
+        id: identity
+        env:
+          CHECK_RUN_ID: ${{ job.check_run_id }}
+        run: printf 'check-run-id=%s\n' "$CHECK_RUN_ID" >> "$GITHUB_OUTPUT"
+
   # Enrollment is informational; branch protection owns quality admission.
   auto-merge:
     name: Enable Auto-Merge
@@ -904,26 +914,39 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           MERGE_METHOD: ${{ inputs.merge-method }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE: ${{ needs.check-eligibility.outputs.verified-base }}
+          SAFETY_CHECK_ID: ${{ needs.source-safety.outputs.check-run-id }}
         run: |
           set -euo pipefail
-          # Query only check fields available to the checks-read token, including on private repositories.
-          checks=$(gh api graphql --paginate --slurp \
-            -f owner="${GITHUB_REPOSITORY%%/*}" -f repository="${GITHUB_REPOSITORY#*/}" -F number="$PR_NUMBER" \
-            -f query='
-              query($owner: String!, $repository: String!, $number: Int!, $endCursor: String) {
-                repository(owner: $owner, name: $repository) {
-                  pullRequest(number: $number) {
-                    headRefOid
-                    commits(last: 1) {
-                      nodes {
-                        commit {
-                          oid
-                          statusCheckRollup {
-                            contexts(first: 100, after: $endCursor) {
-                              pageInfo { hasNextPage endCursor }
-                              nodes {
-                                ... on CheckRun {
-                                  name status conclusion detailsUrl isRequired(pullRequestNumber: $number)
+          reject() {
+            printf '%s\n' "$1" | tee -a "$GITHUB_STEP_SUMMARY" >&2
+            exit 1
+          }
+          [[ "$SAFETY_CHECK_ID" =~ ^[1-9][0-9]*$ && "$EXPECTED_BASE" =~ ^[a-f0-9]{40}$ ]] ||
+            reject 'The verified base or native Source Safety check identity is missing.'
+
+          # The completed job can take time to appear in GitHub's PR check rollup.
+          # Retry only absent or pending evidence for the exact check this run produced.
+          delay=2
+          for attempt in 1 2 3 4 5; do
+            checks=$(gh api graphql --paginate --slurp \
+              -f owner="${GITHUB_REPOSITORY%%/*}" -f repository="${GITHUB_REPOSITORY#*/}" -F number="$PR_NUMBER" \
+              -f query='
+                query($owner: String!, $repository: String!, $number: Int!, $endCursor: String) {
+                  repository(owner: $owner, name: $repository) {
+                    pullRequest(number: $number) {
+                      headRefOid baseRefOid baseRefName state isDraft
+                      commits(last: 1) {
+                        nodes {
+                          commit {
+                            oid
+                            statusCheckRollup {
+                              contexts(first: 100, after: $endCursor) {
+                                pageInfo { hasNextPage endCursor }
+                                nodes {
+                                  ... on CheckRun {
+                                    databaseId name status conclusion detailsUrl isRequired(pullRequestNumber: $number)
+                                  }
                                 }
                               }
                             }
@@ -932,18 +955,37 @@ jobs:
                       }
                     }
                   }
-                }
-              }')
-          # Require this run's unique successful safety check on the exact current head.
-          jq -e --arg head "$EXPECTED_HEAD" --arg run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/job/" '
-            map(.data.repository.pullRequest) |
-            if length > 0 and all(.[]; .headRefOid == $head and .commits.nodes[0].commit.oid == $head) then
-              [.[] | .commits.nodes[0].commit.statusCheckRollup.contexts.nodes[] |
-                select(.isRequired == true and .name == "auto-merge / Dependabot Source Safety" and
-                  ((.detailsUrl // "") | startswith($run)))] |
-              length == 1 and .[0].status == "COMPLETED" and .[0].conclusion == "SUCCESS"
-            else false end
-          ' <<< "$checks"
+                }') || reject 'GitHub could not read the required Source Safety check.'
+            check_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/job/${SAFETY_CHECK_ID}"
+            result=$(jq -er --arg head "$EXPECTED_HEAD" --arg base "$EXPECTED_BASE" \
+              --arg id "$SAFETY_CHECK_ID" --arg url "$check_url" '
+              map(.data.repository.pullRequest) |
+              if length == 0 or any(.[]; .headRefOid != $head or .baseRefOid != $base or
+                  .baseRefName != "main" or .state != "OPEN" or .isDraft != false or
+                  .commits.nodes[0].commit.oid != $head) then "changed"
+              else
+                [.[] | .commits.nodes[0].commit.statusCheckRollup.contexts.nodes[]? |
+                  select((.databaseId | tostring) == $id)] |
+                if length == 0 then "pending"
+                elif length != 1 or .[0].isRequired != true or
+                  .[0].name != "auto-merge / Dependabot Source Safety" or .[0].detailsUrl != $url then "invalid"
+                elif .[0].status != "COMPLETED" then "pending"
+                elif .[0].conclusion == "SUCCESS" then "verified"
+                else "invalid" end
+              end
+            ' <<< "$checks") || reject 'GitHub returned invalid Source Safety check evidence.'
+            case "$result" in
+              verified) break ;;
+              changed) reject 'The PR head, base or state changed after Source Safety verification.' ;;
+              invalid) reject "Check $SAFETY_CHECK_ID is not the unique successful required Source Safety check." ;;
+            esac
+            if [[ "$attempt" != 5 ]]; then
+              sleep "$delay"
+              delay=$((delay * 2))
+            fi
+          done
+          [[ "$result" == verified ]] ||
+            reject "GitHub did not report a completed required Source Safety check ($SAFETY_CHECK_ID) within the retry window."
           echo "🤖 Enabling auto-merge..."
           echo "PR: ${PR_URL}"
           echo "Update type: ${{ needs.check-eligibility.outputs.update-type }}"
