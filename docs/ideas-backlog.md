@@ -72,43 +72,7 @@ For maximum legal compliance, cryptographic operations (signatures, checksums) c
 
 **Related:**
 
-- ADR-001 mentions digital signatures
 - Future ADR needed for signature strategy
-
----
-
-### Decision Made: OpenTimestamp (Blockchain-Based)
-
-**Status:** ✅ **DECIDED** - See ADR-002
-
-**Context:**
-German law requires provable timestamps for guard book records (BewachV §10).
-
-**Decision:**
-Use **OpenTimestamp** instead of traditional RFC 3161 TSA for cost-effective, decentralized timestamping.
-
-**Rationale:**
-
-- ✅ Zero recurring costs (vs. €0.01-0.10/timestamp with TSA)
-- ✅ Bitcoin blockchain as trust anchor (long-term verifiable)
-- ✅ No vendor lock-in
-- ⚠️ Not eIDAS "qualified timestamp" (but sufficient for BewachV §10)
-
-**Next Steps:**
-
-- Legal review confirms acceptability (Issue #46)
-- Implement in Phase 3 of Event Sourcing (ADR-001)
-
-**Alternative (Hybrid Approach):**
-If legal review requires eIDAS compliance, we could use:
-
-- OpenTimestamp for bulk events (cost-effective)
-- RFC 3161 qualified timestamps for critical events only (shift handovers, legal disputes)
-
-**Related:**
-
-- ADR-002: OpenTimestamp for Audit Trail
-- legal-compliance.md: BewachV requirements
 
 ---
 
@@ -140,10 +104,6 @@ Currently architecting for single organization. Future possibility: SaaS for mul
 - Pricing model (per user, per shift, per entry?)
 - Free tier vs. paid-only?
 - Self-hosted option vs. cloud-only?
-
-**Related:**
-
-- ADR-001 mentions "Multi-tenancy: Separate event stores per organization?"
 
 ---
 
@@ -1261,7 +1221,6 @@ Security companies must provide uniforms and equipment to employees. With multip
 
 **Next Actions:**
 
-- Move Event Sourcing idea → ADR-001 ✅ Done
 - Review this doc every 3 months
 - Create GitHub Issues for "Now" or "Soon" priorities
 - **NEW:** BWR-Integration → reopen only through a dedicated repo-local issue if additional scope appears

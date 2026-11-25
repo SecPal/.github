@@ -220,27 +220,21 @@ This contract delegates rather than duplicates established authority:
   human-readable Open Source wording within their respective scopes.
 - [ADR-014](adr/20260720-tenant-identity-access-model-adr014.md) retains the
   accepted tenant, global identity, membership, explicit access, and security
-  boundaries. [ADR-025](adr/20261002-employment-time-absence-compensation-adr025.md) partially
-  supersedes its Employee contract projection and unresolved rehire decisions
-  with the accepted Employee → EmploymentPeriod → EmploymentTermsVersion model
-  and working-time, absence, leave, and compensation boundaries. This authority
-  comes from the accepted ADR, not positioning prose. Acceptance establishes no
-  implementation, availability, migration completion, or legal compliance;
-  unresolved details remain with their owning decisions.
+  boundaries. [ADR-025](adr/20261002-employment-time-absence-compensation-adr025.md)
+  owns Employee → EmploymentPeriod → EmploymentTermsVersion along with working
+  time, absence, leave, and compensation.
 - [ADR-023](adr/20260824-public-self-hosting-private-managed-operations-adr023.md)
   remains the accepted public-self-hosting and private-managed-operations
   boundary.
 - [ADR-026](adr/20261002-client-trust-offline-recovery-adr026.md) owns USER/WORK client
   identities, endpoint trust, accepted offline-first authorization, personal-device
-  approval and user recovery. It partially supersedes ADR-012's shared application,
-  signing and DPC assumptions and supersedes the never-accepted Proposed ADR-003.
+  approval and user recovery.
   Its client families are trust boundaries, not new product brands. Acceptance
   establishes no implementation, availability, platform qualification or compliance.
-- The ADR index currently keeps
-  [ADR-001](adr/20251027-event-sourcing-for-guard-book.md)
-  and [ADR-002](adr/20251027-opentimestamp-for-audit-trail.md) Proposed and
-  non-binding. Positioning language MUST NOT promote their unresolved decisions
-  into accepted architecture or implemented capability.
+- Guard Book development must preserve a traceable record and correction history.
+  Capture verifiable evidence of time and integrity where the applicable
+  requirements call for it. Implementation decisions belong to the owning
+  product work.
 
 References to any accepted ADR describe decision authority only. They MUST NOT
 be represented as evidence that the accepted architecture is implemented,

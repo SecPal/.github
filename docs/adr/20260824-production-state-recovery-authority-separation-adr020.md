@@ -7,47 +7,10 @@ SPDX-License-Identifier: CC0-1.0 -->
 **Date:** 2026-08-24
 **Decision authority:** SecPal maintainers
 
-**Decision provenance:** This ADR records architecture decisions deliberately
-adopted during the August 2026 rebaseline. 2026-08-24 is the durable ADR record
-date, not an assertion that the original ADR pull request first made those
-decisions. The 2026-09-06 refinement under
-[#843](https://github.com/SecPal/.github/issues/843) reconciles recovery and
-Managed storage authority with the September 2026 production architecture. It
-retains the original text below as historical evidence and replaces only the
-conflicting current baseline; it is not a successor ADR or an implementation
-plan.
+**Refinement:** [#843](https://github.com/SecPal/.github/issues/843) defines the
+current Managed storage and failure-class-specific recovery boundaries.
 
-## Context
-
-Durable state, recovery proof, and cryptographic custody must remain explicit and separable.
-
-## Original August 2026 binding decision (historical evidence)
-
-This section preserves the original accepted baseline. Where it differs from
-the current binding refinement below, the refinement controls current
-architecture.
-
-PostgreSQL is authoritative for relational/session/queue/cache state; private application files are distinct authoritative state. Container writable layers are never authoritative. Single topology uses durable host storage outside containers; HA uses provider-neutral shared durable object storage through the application abstraction.
-
-Backup is not HA and replication is not backup. PostgreSQL backup/WAL uses
-off-cluster, asynchronous Barman with one canonical external continuous WAL
-stream; it is never a synchronous-commit participant. Loss of WAL continuity
-invalidates the recovery chain until a new valid base anchor exists. Private
-files in single topology use Borg with encrypted compatible remote storage;
-Borg never backs up live PGDATA. Permanent-HA shared object-storage durability
-or replication is not backup and requires an independent recovery-copy
-contract. A topology-independent **Recovery Set** couples database restore
-identity, private-file/object generation, crypto authority
-generations/fingerprints, and schema/app/deployment/recovery-format provenance.
-Correctness requires an isolated fresh-environment restore drill. Missing
-recovery-critical authority fails; no replacement is auto-generated.
-
-The engineering objectives are PostgreSQL DR RPO <= 2 minutes, private
-file/object RPO <= 15 minutes, valid Recovery Set <= 15 minutes, and standard
-single-node service recovery RTO <= 2 hours. They are engineering objectives,
-not customer SLA promises.
-
-## Current binding refinement
+## Binding decision
 
 PostgreSQL state, authoritative Private Objects, live storage, replication,
 backup, retention, and RecoverySet are distinct truths. Container writable
@@ -55,8 +18,7 @@ layers are never authoritative. Managed authoritative Private Objects are
 off-host in `MANAGED_SINGLE`, `MANAGED_HA`, and `MANAGED_CONTINUITY` through one
 provider-neutral ObjectStorageContract. Object Storage durability or
 replication is not Object Backup; an independent topology-neutral Object Backup
-contract protects the canonical stored encrypted bytes. The old Managed
-`single = local private files + Borg` baseline is no longer current.
+contract protects the canonical stored encrypted bytes.
 
 Self-hosted deployments retain implementation flexibility. A self-hosted
 single-node deployment may use a durable local object adapter and Borg or an
@@ -64,11 +26,11 @@ equivalent independent remote recovery copy only when it preserves the same
 application/object semantics, keeps authoritative data outside container
 writable layers, and satisfies the independent recovery contract. A local path
 or Borg repository is not a Managed application-storage authority and must not
-become a product-level storage assumption.
+become a product-level storage assumption. Borg does not protect live PGDATA.
 
 Barman is the canonical PostgreSQL 18 base-backup and continuous-WAL recovery
-layer. Managed deployments may use a shared remote, reproducibly replaceable
-Barman service while retaining deployment-specific identities, namespaces,
+layer. Each deployment keeps one authoritative external continuous WAL stream.
+Managed deployments may use a shared remote, reproducibly replaceable Barman service while retaining deployment-specific identities, namespaces,
 credentials, and recovery state. Barman remains asynchronous and outside normal
 PostgreSQL synchronous commit and the application request path. These are
 separate operational truths:
