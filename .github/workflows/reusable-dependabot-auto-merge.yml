@@ -177,9 +177,11 @@ jobs:
                 end
                 directories = matching.flat_map { |entry| entry.key?('directories') ? entry.fetch('directories') : [entry.fetch('directory')] }
                 pip_groups = matching.flat_map do |entry|
-                  next [] unless input.fetch('ecosystem') == 'pip' && entry.key?('directories')
+                  next [] unless input.fetch('ecosystem') == 'pip'
                   entry.fetch('groups', {}).filter_map do |name, group|
-                    name if group['group-by'] == 'dependency-name' && group.fetch('applies-to', 'version-updates') == 'version-updates'
+                    next unless group['group-by'] == 'dependency-name' &&
+                      group.fetch('applies-to', 'version-updates') == 'version-updates'
+                    { name: name, multipleDirectories: entry.key?('directories') }
                   end
                 end
                 print JSON.generate({ directories: directories, pipGroups: pip_groups })
@@ -597,8 +599,9 @@ jobs:
               // Dependencies inherited by several directories can recur in the
               // signed metadata under the native `pip` group. The tree must
               // still contain exactly one verified canonical pin change.
-              const grouped = pipGroups.some(configured => group === configured || group === `${configured}/${name}`) ||
-                (group === 'pip' && pipGroups.length === 1 && count > 1);
+              const grouped = pipGroups.some(configured =>
+                group === configured.name || group === `${configured.name}/${name}`) ||
+                (group === 'pip' && pipGroups.length === 1 && pipGroups[0].multipleDirectories && count > 1);
               if (files.length !== 1 || file.status !== 'modified' || file.previous_filename ||
                   !/^[a-f0-9]{40}$/.test(file.sha) || commits[0].parents[0].sha !== pr.base.sha ||
                   (group !== '' && !grouped) || (count > 1 && (!grouped || count > plainPaths.length)) ||

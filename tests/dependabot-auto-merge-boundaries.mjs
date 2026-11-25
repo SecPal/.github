@@ -681,6 +681,16 @@ test("binds the native per-dependency group to the canonical package name", asyn
   ]) {
     assert.equal(await verifySource(deploymentPipChange({ ...update, group })), expected);
   }
+  const single = deploymentPipChange({
+    ...update,
+    group: "deployment-python/reuse",
+    before: { [update.path]: `${update.oldPin}\n` },
+  });
+  single.config = single.config.replace(
+    "  directories:\n    - /requirements/quality\n",
+    "  directory: /requirements/quality\n"
+  );
+  assert.equal(await verifySource(single), update.updateType);
 });
 
 test("authenticates only homogeneous signed repeats from configured pip grouping", async () => {
