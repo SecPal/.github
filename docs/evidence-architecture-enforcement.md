@@ -23,9 +23,7 @@ python3 -I scripts/secpal-evidence-architecture.py \
 Before the owning caller dispatches a costly external operation, add `--dispatch`.
 That mode requires a declaration and nonempty operation inventory. It performs
 read-only admission and never dispatches anything. The caller must stop on a
-nonzero result. The Polyscope instruction-root boundary invokes the same owner
-for source roots, provisioned worktrees and direct worktree actions. Declaration
-evidence is freshly checked even when the AI-instruction result was cached.
+nonzero result.
 
 Managed bundle mode uses `--managed-workspace-root` and repeated
 `--managed-repository` names. It additionally rejects duplicate invariant owners
@@ -33,9 +31,7 @@ across the supplied managed scope. Registration-only repositories without an
 active runtime instruction surface are outside automation admission.
 `--managed-worktree NAME=ROOT` replaces exactly one named source with its actual
 active worktree, retaining the other declared owners and agreement paths.
-Managed dispatch admission requires that exact worktree selection. Generated
-Polyscope setup and API runtime guards carry the maintained managed scope;
-direct API operations require dispatch admission before invoking their operation.
+Managed dispatch admission requires that exact worktree selection.
 
 Each repository input and final report is bounded to 64 KiB. The internal bulk
 Markdown transport and pooled pure source material are bounded to 1 MiB.
@@ -44,7 +40,6 @@ JSON keys, nonfinite numbers, unknown fields, symlinks, nonregular files and pat
 traversal fail closed. Findings retain closed diagnostic codes and fixed facts;
 they do not retain source code, case inputs, stdout, stderr or environment values.
 Python executes in isolated mode with a regular, explicitly owned package.
-Both installers require a successful package/parser smoke test before activation.
 The parser consumes an absolute Node executable from installed system tooling
 or the maintained GitHub hosted Node cache, ignoring other caller PATH entries.
 Its complete declared dependency closure must resolve inside the owning

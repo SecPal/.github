@@ -112,7 +112,7 @@ architecture decision adds one.
   two complementary layers (SecPal/.github#489). Layer one is the
   **grep exclusion** `--exclude-dir=".context"`, which skips every directory
   named exactly `.context/` at any depth (alongside `.git/`, `node_modules/`,
-  and `vendor/`). Polyscope-managed workspaces use `.context/` to pass
+  and `vendor/`). Development workspaces use `.context/` to pass
   throwaway files between agents and the `gh` CLI (PR body drafts, scratch
   notes, etc.) that never reach CI, so the local gate must not flag them
   either. Layer two is the **tracking-aware guard**: before grep runs, the
@@ -173,7 +173,7 @@ bash scripts/audit-closed-epics.sh --org SecPal --repo .github --repo api
 
 Validates the local toolchain baseline for the managed SecPal repositories,
 including the Android-specific Java/SDK requirements that direct Gradle and
-Polyscope-provisioned workspaces need.
+Development workspaces need.
 
 **Usage:**
 
@@ -320,7 +320,7 @@ See `.github/workflows/validate-ai-instructions.yml`
 
 **Repository Identity:**
 
-Canonical GitHub and Polyscope callers supply trusted repository identity via
+Canonical GitHub callers supply trusted repository identity via
 `GITHUB_REPOSITORY` or `SECPAL_REPOSITORY_NAME`. Content-based detection remains
 a local compatibility fallback and does not select production policy when a
 trusted identity is available. Repository-path mode clears ambient identity and
@@ -383,258 +383,6 @@ original six-repository scope and does not manage Deployment's review settings.
 - `0`: Payload printed or sync applied successfully
 - `2`: Usage error, unknown repository, or missing dependency
 
-### `audit-polyscope-state.py`
-
-Audits the local Polyscope runtime state for repository/clone drift, stale
-worktree directories, clone-local config hygiene, and over-retained SQLite
-backups.
-
-**Usage:**
-
-```bash
-# Audit the real local Polyscope state
-python3 scripts/audit-polyscope-state.py
-
-# Audit a custom Polyscope home and print JSON findings
-python3 scripts/audit-polyscope-state.py --polyscope-home /tmp/test-polyscope --json
-```
-
-**What It Checks:**
-
-1. Repository IDs in `polyscope.db` that do not have a matching clone root
-2. Clone roots that no longer belong to any registered repository
-3. Clone subdirectories that are not valid Git worktrees
-4. Valid Git worktrees that are not registered in the `worktrees` table
-5. Registered worktrees whose on-disk path no longer exists
-6. Worktree rows referencing a `repo_id` that is missing from `repositories`
-7. Registered worktrees missing clone-local `polyscope.local.json`, drifting from the repo-root config, or where Git would still track `polyscope.local.json` (the check uses `git check-ignore` so commented (`#`), negated (`!`), or look-alike (`.bak`) entries in `info/exclude` are not mistaken for effective coverage, and per-worktree gitdirs of linked worktrees are followed automatically)
-8. `polyscope.db.backup-*` files beyond the configured retention count
-
-**Exit Codes:**
-
-- `0`: No findings
-- `1`: One or more findings detected
-- `2`: Usage error or missing dependency/state
-
-### `reap-polyscope-clones.py`
-
-Conservatively reclaims orphaned Polyscope repository clone roots and
-unregistered worktree directories. It protects every repository root and every
-active `worktrees.path` currently registered in `polyscope.db`, waits seven days
-by default, and skips candidates with lock files or active processes. An active
-worktree at a clone-root level is never scanned for children; otherwise, only
-its immediate non-hidden child directories can be worktree candidates.
-Immediately before deletion the reaper revalidates the database while holding a
-write-reservation transaction and atomically detaches the candidate through a
-pinned, non-symlink parent-directory handle, so concurrent registration or a
-parent-path replacement cannot redirect recursive deletion. Quarantines live at
-the clone-root level so a later run can finish cleanup after an interruption.
-The reaper revalidates candidates after process inspection before measuring
-dry-run storage, and rejects symlinks and paths outside the configured clone
-root.
-
-**Usage:**
-
-```bash
-# Inspect eligible orphan roots and potential reclaimed space
-python3 scripts/reap-polyscope-clones.py --dry-run
-
-# Reap an isolated fixture or non-default Polyscope location
-python3 scripts/reap-polyscope-clones.py --polyscope-home /tmp/polyscope --clone-root /tmp/polyscope/clones --grace-period 14d
-```
-
-The rollout installer enables `polyscope-clone-reaper.timer`, which runs the
-reaper daily after startup. The reaper prints reclaimed bytes and supports
-`--json` for operational reporting.
-
-### `secpal-polyscope-workspace.py`
-
-The existing trusted coordinator uses `ensure --repo SecPal/<repo> --issue <n>`
-before dispatching an already authorized delivery. It reuses an exact active
-workspace, including pending source/evidence, or creates one through native
-Polyscope. No additional NEW approval is required. The native workspace ID
-returned by read-back is used for subsequent `exec --workspace-id <id>` calls.
-Issue-bound `exec` without an ID performs this setup automatically. Native
-creation supports an issue or a PR binding; combined selectors require an existing
-exact native mapping and fail before creation when that capability is unavailable.
-Native creation has no authenticated immutable SHA-pin capability; an explicit
-SHA is therefore rejected before new issue or PR workspace creation. Existing workspaces can be SHA-checked.
-
-`resolve` never writes. Plan-only sessions use read-only resolution; setup belongs
-to the trusted coordinator outside that sandbox. Unknown, paused, shared or
-mismatched ownership is a technical blocker, never permission to replace or reset
-a workspace. Native issue self-assignment retains its existing authority.
-
-The system installer maintains the existing `/usr/local/bin/secpal-polyscope-workspace`
-entry and WebSocket bridge, with the already selected `--node-bin` runtime
-pinned in the installed coordinator. There is one native entry, without a
-second user-checkout executable. The stdin bridge is installed before the
-coordinator at a distinct path, so in-flight legacy argv calls retain their old
-bridge during cutover. Its old inactive file can be removed only after live
-acceptance and confirmation that no old invocation still needs it. No new credentials, daemon, workspace registry or cleanup
-authority are introduced. Workspace setup reads parent/dependency facts directly through the authenticated
-GitHub API and executes no source from a registered repository path. Full work
-planning continues to use the existing read-only WorkGraph resolver. The existing `POLYSCOPE_HOME`,
-`POLYSCOPE_CLONE_ROOT` and `POLYSCOPE_API_BASE` settings are consumed directly;
-the API/bridge remains restricted to the configured loopback origin; ambient
-proxies and API redirects cannot replace that authority. Dispatch
-requires the existing executable managed Git wrapper through
-`POLYSCOPE_GIT_BIN_DIR` before setup/execution; missing installation fails closed. Direct Git commands,
-including absolute Git paths, use that wrapper. Admission uses system Git with
-Git override variables removed from its child environment; dispatch also clears
-Git's native repository-local/configuration overrides while preserving identity
-and transport settings. Every effective fetch/push URL must match the expected
-repository. Admission preserves the index and does not run repository status
-hooks or claim that pending work is clean. Issue
-and PR metadata reach the bridge through stdin, never process arguments.
-
-A serialized create uses a durable in-flight fence in its lock file. After a
-lost/ambiguous response, native registration must establish the outcome before
-another create; do not delete the fence or retry blindly. Pending setup failures
-remain explicit technical blockers until native read-back establishes a usable
-workspace. A repository-scoped native rejection and independent absence read-back
-clear only that failed attempt, allowing a later corrected request. No existing workspace is deleted or modified to recover setup.
-
-### `install-polyscope-rollout.sh`
-
-Installs the unprivileged SecPal Polyscope rollout systemd units that keep
-registered workspace clones, prompts, and preview config in sync. Run this
-from the workspace root when `setup-hooks.sh` reports a managed repo as
-**skipped (missing directory)** so the rollout-managed workspace can sync back
-to the expected repository set.
-
-**Usage:**
-
-```bash
-POLYSCOPE_SERVER_SCOPE=system bash .github/scripts/install-polyscope-rollout.sh
-```
-
-After qualifying an existing-installation migration as described in
-[`docs/polyscope-isolated-development.md`](../docs/polyscope-isolated-development.md),
-run `install-polyscope-system-components.sh` as the administrator with Polyscope
-quiesced. This user installer runs only as the dedicated `polyscope` account,
-never root, `secpal` or independent `codex`. It does not call sudo or require a
-host-Nginx capability; legacy Nginx override variables are rejected.
-
-Both startup scopes publish execution-free canonical configuration and use
-`--container-preview` for the existing rootless route refresh. Startup and
-routine commands explicitly name the same configured database, clone root and
-provision lock. A held provision lock lets startup return without waiting; the
-in-flight metadata reconciliation performs that same final refresh. A
-system-scope installation requires the reviewed dedicated-account drop-in.
-Canonical cleanup remains bound to `/home/polyscope/.polyscope/{clones,polyscope.db}`
-and the dedicated user's own systemd units; it cannot manage another user's bus.
-Retire the old account's workers before moving data or installing the new source.
-
-The path unit deliberately ignores the broad SQLite WAL stream so ordinary
-Polyscope activity cannot create a provisioning loop; the main database,
-generated configs and periodic timer remain metadata convergence inputs.
-
-`--source-script` accepts a custom rollout implementation only as part of a
-complete source bundle: the script must be executable, have the constrained
-`polyscope_nginx.py` library and executable nginx helper beside it, and have an
-executable `validate-ai-instructions.sh` sibling plus the canonical js-yaml
-verifier with the committed npm validator dependencies installed. The installer
-loads the pinned parser and verifies its required API before any installation
-writes, then watches the runtime files and npm lock state for rollout changes
-and dependency-install recovery.
-
-After installation, the existing user-level rollout/provision services, path
-units and three-minute fallback timer reconcile native registration and management
-metadata. `--provision-worktrees` retains that installed trigger but its candidate
-provisioning callback is empty: manifest changes and missing markers never run
-npm, Composer, application bootstrap, hooks, database setup or builds as the
-service. No new API runtime units or native setup/run/archive actions are emitted.
-All canonical repositories, including registration-only roots and skip-config
-callers, receive an atomic execution-free override with ignored-file copying
-disabled. Generated configuration is excluded in canonical Git metadata; symlinked
-`.git` entries are rejected. Canonical roots must remain outside development write
-grants. Native registrations keep their physical deletion paths, and existing
-explicit alias helpers remain available without automatic candidate setup.
-
-On the existing canonical clone-root/database pair, management reconciliation
-first retires legacy API runtime units through `reconcile_api_runtime_units({})`.
-The empty desired set only stops/disables/removes old managed units. No start,
-restart, enable or worker creation is allowed. Failed stops retain their unit files
-for retry and prevent native registration/preview refresh from resuming; later
-independent stale units are still attempted by the existing reconciler. Unrelated
-services and UID1001's isolated toolchain remain outside that ownership. Operators
-must account for those planned worker stops during the separately authorized
-installation; a source merge performs no live stop.
-
-Host preview reconciliation still reads active native workspace registrations and
-withdraws stale grants using the existing ACL helper. It preserves established
-active preview access during Nginx install/reinstall, grants no new access and
-fails before route installation on native-read or ACL errors. Container previews
-do not acquire host Nginx ACLs. The paired clone reaper remains conservative about
-native registrations, locks and processes. Explicit instruction/API helper entry
-points retain their validation and isolation checks but are not generated native
-service actions. Dependency installation, builds and tests belong to the
-unprivileged isolated development identity.
-
-The provision service retains its existing three-second event coalescing, shared
-lock, timeout and path/timer contract. Canonical config publication is idempotent,
-so an unchanged output cannot endlessly trigger its own watcher. Before activation,
-close native script-start/creation inputs and drain old loaded setup/refresh
-processes; cleanup of legacy API units does not stop unrelated old interpreters or
-previews consuming writable trees. Follow the bounded installation and rollback
-contract in `docs/polyscope-isolated-development.md`. No rollback may restore the
-unsafe executor while an unprivileged write grant exists.
-
-### `install-polyscope-system-components.sh`
-
-Installs the root-owned system components and dedicated-account server drop-in.
-The administrator must first qualify the existing data/path/credential transition
-and quiesce Polyscope. This is not a database mover. Do not install candidate
-sources before their regular protected acceptance.
-
-The installer verifies that `/home/polyscope` exists and belongs to the dedicated
-account; systemd uses that existing home, not an uncreated `work` subdirectory.
-It resolves Node.js, verifies that the service can execute it, and checks the
-canonical executable rollout, committed lockfile and pinned validator dependencies
-under `/home/polyscope/code/SecPal/.github/` before writing components. Use
-`--node-bin` with an absolute executable path when root cannot discover it.
-The service always names its dedicated database and clone root explicitly.
-
-The retired `secpal-polyscope-nginx` sudoers file is removed, never restored by
-recovery. A failed installation stops the service before restoring programs and
-does not restore the former account's drop-in or restart it. If stopping fails,
-programs remain intact for administrative recovery. No service receives a
-privileged shell, interpreter, Nginx helper or general command delegation.
-
-`DESTDIR=/path scripts/install-polyscope-system-components.sh --stage-only`
-renders a disposable packaging fixture without root or a local service account.
-Its UID1002 runtime is the documented packaging default; actual installation
-resolves the dedicated account. Staging does not start services or migrate data.
-
-The retained helper below is a legacy administrator-only diagnostic contract,
-not an authorization to recreate the removed service sudo rules or use it as
-the dedicated account's preview backend.
-
-The installed `/usr/local/libexec/secpal-polyscope-nginx-apply` accepts only no
-arguments (apply) or `--check` (non-mutating boundary check). It reads the fixed
-mode-`0600`, `secpal`-owned JSON manifest, rejects links, unsafe ownership,
-unknown fields, non-loopback upstreams, invalid ports, and unsafe repository
-identifiers, then renders one fixed nginx target internally. The exact
-root-owned manifest library is checked before it is imported. Activation is
-atomic; `nginx -t` precedes reload, and validation or reload failure restores
-the prior configuration. Root may invoke the retained helper directly for its legacy manifest contract;
-service invocations are no longer authorized by sudoers. The existing identity
-checks are not a grant and must not be turned back into one.
-
-Legacy host-Nginx renderer upgrades and retired-hostname tombstones remain
-administrator diagnostics only. They are not part of the dedicated account's
-metadata or rootless preview activation.
-
-After both installation steps, verify the steady state:
-
-```bash
-systemctl --user is-active polyscope-rollout-sync.path
-systemctl --user is-active polyscope-worktree-provision.path
-systemctl --user is-active polyscope-worktree-provision.timer
-systemctl --user is-active polyscope-clone-reaper.timer
-```
-
 ### `setup-hooks.sh`
 
 Installs pre-commit and commit-msg hooks across every managed SecPal repo
@@ -645,8 +393,8 @@ SecPal-managed full-preflight `pre-push` symlinks without touching custom hooks.
 
 - Repos that are **missing on disk** are surfaced as a soft warning (separate
   summary line) and the script still exits `0` when every other repo's hooks
-  installed cleanly. Run `.github/scripts/install-polyscope-rollout.sh` (or
-  sync via Polyscope) to recover the rollout-managed workspace state.
+  installed cleanly. Use an assigned Herdr checkout or clone the missing
+  repository before installing its hooks.
 - Managed repo paths that exist but are **not directories** are treated as real
   failures because they indicate a corrupted workspace layout, not a repo that
   simply has not been synced yet.

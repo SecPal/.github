@@ -28,7 +28,8 @@ SecPal is the operations software for German private security services. Everythi
 
 ## Multi-Repository Workspace Setup
 
-For setting up a local development environment with all repositories, see [WORKSPACE_SETUP.md](WORKSPACE_SETUP.md).
+Use the assigned Herdr repository tabs for product development on `secpal.dev`.
+See the [workspace setup](WORKSPACE_SETUP.md) for the private preview lifecycle.
 
 ## Development Setup
 
@@ -110,7 +111,7 @@ Install the pre-commit hooks:
 
 ```
 
-Polyscope rollout and the workspace-level `setup-hooks.sh` also remove only the
+The workspace-level `setup-hooks.sh` also removes only the
 legacy SecPal-managed `pre-push` symlink to `scripts/preflight.sh`. Custom
 repository hooks and regular hook files are preserved.
 
@@ -191,66 +192,6 @@ frontmatter, and the runtime discovery ceiling. It intentionally does not
 require textual equality, mirror declarations, copied overlays, inheritance
 markers, or arbitrary policy keywords. See
 [`docs/VALIDATION_SYSTEM.md`](docs/VALIDATION_SYSTEM.md) for the full contract.
-
-#### Polyscope Operational Installation
-
-Polyscope uses the dedicated `polyscope` account, its own home and rootless
-container storage. The independent `codex` and application accounts receive no
-Polyscope access. None of these accounts receives sudo. Existing mixed-account
-installations require the bounded data/path/credential migration in
-[`docs/polyscope-isolated-development.md`](docs/polyscope-isolated-development.md)
-before applying this installer contract; a new data directory does not relocate
-registered workspaces.
-
-After that qualification, the administrator quiesces the old service and uses
-`scripts/install-polyscope-system-components.sh`. The installer verifies the
-canonical `/home/polyscope/code/SecPal/.github/` toolchain, renders the dedicated
-account and existing home as its working directory, and removes the retired
-Nginx sudo grant. The `polyscope` account uses
-`scripts/install-polyscope-rollout.sh` for its own user units. Generated metadata
-commands name the dedicated database and clone root explicitly and use the
-existing `--container-preview` backend. Host Nginx changes remain administrator
-operations; neither installer asks the service account for Nginx privileges.
-Failed installation stays stopped and cannot restore the old sudo boundary.
-
-For the separately authorized
-[preview cutover](containers/polyscope-php/README.md#live-cutover), the existing
-rootless installer runs under `polyscope` with that user's XDG runtime and user bus:
-
-```bash
-bash ./scripts/install-polyscope-container-preview.sh
-```
-
-The installer requires the verified PHP and Nginx images, initialized Polyscope
-database, PostgreSQL socket and a clone root already labelled
-`container_file_t`. It creates a dedicated rootless Podman network for the
-database proxy and API preview backends, and rejects foreign network members.
-It installs the PHP, Composer and isolated API test wrappers. The proxy retains
-the narrow SELinux exception for its Unix socket. Nginx and PHP-FPM retain
-container labels and read-only roots. Existing managed files and service state
-are backed up before installation and restored if activation fails.
-
-Pass `--container-preview` to the existing rollout command to reconcile preview
-routing with canonical native registrations. Nginx serves the registered public
-roots through the authenticated edge. API routes require the admission marker
-in the worktree's `public/` directory. Each admitted API workspace gets a
-dedicated PHP-FPM container and private socket. Withdrawing admission returns
-HTTP 503 immediately. Route reconciliation runs without setup or background
-workers. The dedicated refresh service retries route updates and reports
-convergence failures. See the [development image guide](containers/polyscope-php/README.md)
-for qualification and the separately authorized preview cutover.
-
-Every generated workspace setup is one fail-closed shell unit: canonical
-instruction validation must succeed before the complete native setup sequence,
-and any later setup failure stops all remaining commands. The external
-provisioner considers only active worktrees registered in the Polyscope
-database. It preserves their physical paths as the authoritative deletion
-identity and tracks stable aliases separately for bounded cleanup. Unregistered
-clone directories remain solely under the conservative seven-day clone-reaper
-policy. Provision events are serialized and briefly coalesced so SQLite bursts
-cannot permanently fail the path unit. See
-[`scripts/README.md`](scripts/README.md) for installation and verification
-details.
 
 ## Build & Test Commands
 
@@ -405,31 +346,3 @@ All CLA signatures are stored centrally in a secure database (Azure Europe, GDPR
 ---
 
 For full license information, see the [LICENSES](LICENSES/) directory.
-
-### Native container preview admission
-
-The workspace coordinator supports Polyscope's native multi-repository groups
-by authenticating the entire registered group before admitting its issue/PR-bound
-root. Every child must reference that root, all membership lists must agree, all
-members must be active and exclusively owned by the group, and outside references
-or independent child issue/PR bindings reject admission. Linked children cannot
-be selected as independent execution roots. Existing creation fences are reconciled
-against native registration; never recreate a group to work around a failed receipt.
-
-PHP and Composer container wrappers preserve piped stdin without allocating a TTY.
-The fixed application roles `queue`, `scheduler` and `pail` use
-`--run-api-runtime-worktree --runtime-role <role>`. That entry point validates
-the actual source/worktree runtime baseline and every declared architecture claim,
-then derives the command from the owned role map. It accepts no arbitrary shell
-command. These ordinary application services do not collect or grade external
-qualification evidence and therefore do not assert dispatch qualification.
-Arbitrary `--run-api-worktree` commands and prepare/bootstrap/refresh qualification
-paths retain their existing Evidence Architecture dispatch requirements.
-
-Run the routine provisioner with `--container-preview` on container-preview hosts.
-That explicit backend selection preserves worktree setup and persistent API
-readiness reconciliation, skips host nginx probing/rendering/ACL activation, and
-refreshes `polyscope-preview-refresh.service` through the user service manager.
-It cannot be combined with nginx activation flags. The default remains the
-legacy nginx backend; omitting a refresh flag does not disable its canonical
-reconciliation.

@@ -33,8 +33,7 @@ targets are preserved.
 ## Validation Workflow
 
 Run the smallest relevant validation while iterating. Before handoff, use the
-single Polyscope `All Checks` action when the change warrants a complete local
-pass. The repository preflight remains available as an explicit command:
+repository preflight when the change warrants a complete local pass:
 
 ```bash
 ./scripts/preflight.sh
@@ -80,10 +79,10 @@ Run `.github/setup-hooks.sh` from the workspace. The script removes the old
 managed symlink conservatively. If the hook is a regular file or points
 somewhere else, it is custom and must be reviewed by that repository's owner.
 
-### A Focused Check Passes but All Checks Fails
+### A Focused Check Passes but Preflight Fails
 
 Treat the complete run as the handoff gate: reproduce the specific failure,
-fix it, rerun the smallest affected check, and then rerun `All Checks` once.
+fix it, rerun the smallest affected check, and then rerun preflight once.
 Do not add another automatic full-suite invocation to compensate.
 
 ## Optional Workflow Lint
