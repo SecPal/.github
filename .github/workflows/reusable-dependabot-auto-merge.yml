@@ -81,6 +81,13 @@ on:
         required: false
         default: "squash"
         type: string
+      publisher-events:
+        description: "Use the scoped SecPal merger App for repositories with downstream push workflows"
+        default: false
+        type: boolean
+    secrets:
+      dependabot-merger-private-key:
+        required: false
 
 # Enrollment uses no Actions cache; prevent cache access across the reusable call.
 cache-mode: none
@@ -110,6 +117,7 @@ jobs:
       update-type: ${{ steps.check.outputs.update-type }}
       policy-rejection: ${{ steps.source.outputs.policy-rejection }}
       verified-base: ${{ steps.source.outputs.base }}
+      workflow-write: ${{ steps.source.outputs.workflow-write }}
     steps:
       - name: Dependabot metadata
         id: metadata
@@ -702,6 +710,9 @@ jobs:
             }
             if (updateType) core.setOutput('update-type', updateType);
             core.setOutput('base', pr.base.sha);
+            core.setOutput('workflow-write', files.some(file =>
+              file.filename.startsWith('.github/workflows/') ||
+              file.previous_filename?.startsWith('.github/workflows/')) ? 'true' : 'false');
             core.setOutput('verified', 'true');
 
       - name: Check PR metadata
@@ -885,6 +896,7 @@ jobs:
             ${{ needs.check-eligibility.result == 'success' &&
                 needs.check-eligibility.outputs.should-auto-merge == 'true' && inputs.merge-method == 'squash' }}
           POLICY_REJECTION: ${{ needs.check-eligibility.outputs.policy-rejection }}
+          PUBLISHER_EVENTS: ${{ inputs.publisher-events }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -899,14 +911,19 @@ jobs:
               }
               return pr;
             };
+            const legacy = 'github-actions[bot]';
+            const merger = 'secpal-dependabot-merger[bot]';
+            const managed = new Set([legacy, merger]);
+            const wanted = process.env.PUBLISHER_EVENTS === 'true' ? merger : legacy;
             const pr = await read();
-            if (pr.user.login === 'dependabot[bot]' &&
-                pr.auto_merge?.enabled_by.login === 'github-actions[bot]' &&
-                (process.env.ELIGIBLE !== 'true' || !pr.labels.some(label => label.name === 'dependencies') ||
+            const enrolledBy = pr.auto_merge?.enabled_by.login;
+            if (pr.user.login === 'dependabot[bot]' && managed.has(enrolledBy) &&
+                (enrolledBy !== wanted || process.env.ELIGIBLE !== 'true' ||
+                  !pr.labels.some(label => label.name === 'dependencies') ||
                   pr.base.ref !== 'main' || pr.draft || pr.auto_merge.merge_method !== 'squash')) {
               await github.graphql('mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }',
                 { id: pr.node_id });
-              if ((await read()).auto_merge?.enabled_by.login === 'github-actions[bot]') {
+              if (managed.has((await read()).auto_merge?.enabled_by.login)) {
                 throw new Error('Unsafe automated enrollment is still active');
               }
             }
@@ -941,10 +958,28 @@ jobs:
             core.setOutput('required', pr.auto_merge === null &&
               pr.labels.some(label => label.name === 'dependencies') ? 'true' : 'false');
 
+      - name: Mint a token for the current publisher repository
+        if: >-
+          steps.enrollment.outputs.required == 'true' && inputs.publisher-events &&
+          contains(fromJSON('["SecPal/api","SecPal/frontend","SecPal/secpal.app"]'), github.repository)
+        id: merger-app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          app-id: ${{ vars.DEPENDABOT_MERGER_APP_ID }}
+          private-key: ${{ secrets.dependabot-merger-private-key }}
+          owner: SecPal
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: ${{ needs.check-eligibility.outputs.workflow-write == 'true' && 'write' || '' }}
+
       - name: Enable auto-merge
         if: steps.enrollment.outputs.required == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISHER_EVENTS: ${{ inputs.publisher-events }}
+          MERGER_APP: ${{ steps.merger-app.outputs.app-slug }}
+          MERGER_TOKEN: ${{ steps.merger-app.outputs.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           MERGE_METHOD: ${{ inputs.merge-method }}
@@ -1027,10 +1062,16 @@ jobs:
           echo "Merge method: ${MERGE_METHOD}"
           echo "Phase: ${{ inputs.phase }}"
 
-          # Enable auto-merge with configured merge strategy
+          merge_token="$GH_TOKEN"
+          if [[ "${PUBLISHER_EVENTS:-false}" == true ]]; then
+            [[ "${MERGER_APP:-}" == secpal-dependabot-merger && -n "${MERGER_TOKEN:-}" ]] ||
+              reject 'The scoped SecPal merger App token is missing or belongs to another App.'
+            merge_token="$MERGER_TOKEN"
+          fi
+          # The workflow token reads required checks; the selected identity enrolls the PR.
           case "${MERGE_METHOD}" in
             squash)
-              gh pr merge --auto --squash --match-head-commit "${EXPECTED_HEAD}" "${PR_URL}"
+              GH_TOKEN="$merge_token" gh pr merge --auto --squash --match-head-commit "${EXPECTED_HEAD}" "${PR_URL}"
               ;;
             *)
               echo "❌ Invalid merge method: ${MERGE_METHOD}"

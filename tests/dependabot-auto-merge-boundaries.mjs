@@ -1411,6 +1411,84 @@ test("queued automation is revoked when eligibility changes, while manual reques
   delete process.env.ELIGIBLE;
 });
 
+test("publisher repositories revoke stale App and legacy bot requests while preserving eligible App requests", async () => {
+  const script = workflow.jobs["source-safety"].steps[0].with.script;
+  const head = "a".repeat(40);
+  for (const [owner, eligible, revoke] of [
+    ["secpal-dependabot-merger[bot]", "false", true],
+    ["secpal-dependabot-merger[bot]", "true", false],
+    ["github-actions[bot]", "true", true],
+    ["aroviqen", "false", false],
+  ]) {
+    let revoked = false;
+    const pr = {
+      head: { sha: head },
+      base: { ref: "main" },
+      state: "open",
+      node_id: "PR_1",
+      user: { login: "dependabot[bot]" },
+      labels: [{ name: "dependencies" }],
+      auto_merge: { enabled_by: { login: owner }, merge_method: "squash" },
+    };
+    const environment = { ELIGIBLE: eligible, PUBLISHER_EVENTS: "true" };
+    const github = {
+      rest: { pulls: { get: async () => ({ data: revoked ? { ...pr, auto_merge: null } : pr }) } },
+      graphql: async () => {
+        revoked = true;
+      },
+    };
+    await new AsyncFunction("github", "context", "process", script)(
+      github,
+      {
+        repo: { owner: "SecPal", repo: "frontend" },
+        payload: { pull_request: { number: 1, head: { sha: head } } },
+      },
+      { env: environment }
+    );
+    assert.equal(revoked, revoke, owner);
+  }
+});
+
+test("only verified workflow-file changes request workflow write", async () => {
+  assert.equal(await verifySource({ output: "workflow-write" }), "false");
+  const workflowChange = {
+    env: {
+      ALLOWED_ECOSYSTEMS: "github_actions",
+      PACKAGE_ECOSYSTEM: "github_actions",
+      WORKFLOW_PATHS: '[".github/workflows/quality.yml",".github/workflows/local-integration.yml"]',
+    },
+    files: [".github/workflows/quality.yml", ".github/workflows/local-integration.yml"].map(
+      (filename) => ({ filename })
+    ),
+    output: "workflow-write",
+  };
+  assert.equal(await verifySource(workflowChange), "true");
+  assert.equal(
+    await verifySource({
+      ...workflowChange,
+      files: [{ filename: ".github/workflows/cloud-janitor.yml" }],
+    }),
+    undefined
+  );
+});
+
+test("publisher enrollment limits the installation token to the current repository and protected merge", () => {
+  const steps = workflow.jobs["auto-merge"].steps;
+  const app = steps.find((step) => step.id === "merger-app");
+  assert.match(app.if, /steps.enrollment.outputs.required == 'true'.*inputs.publisher-events/);
+  assert.equal(app.with.repositories, "${{ github.event.repository.name }}");
+  assert.equal(app.with["permission-contents"], "write");
+  assert.equal(app.with["permission-pull-requests"], "write");
+  assert.equal(
+    app.with["permission-workflows"],
+    "${{ needs.check-eligibility.outputs.workflow-write == 'true' && 'write' || '' }}"
+  );
+  assert.equal(Object.keys(app.with).filter((name) => name.startsWith("permission-")).length, 3);
+  const enable = steps.find((step) => step.name === "Enable auto-merge");
+  assert.match(enable.run, /secpal-dependabot-merger/);
+  assert.match(enable.run, /GH_TOKEN="\$merge_token" gh pr merge/);
+});
+
 test("caller reconciles label, draft and target changes", () => {
   const caller = yaml.load(readFileSync(".github/workflows/dependabot-auto-merge.yml", "utf8"));
   assert.equal(caller.jobs["auto-merge"].if, undefined);
@@ -1471,9 +1549,20 @@ test("enrollment requires a successful protected safety check from this run and 
     },
   });
 
-  for (const [pages, expected, lookupExit = 0, delayed = false] of [
+  for (const [
+    pages,
+    expected,
+    lookupExit = 0,
+    delayed = false,
+    useApp = false,
+    app = "",
+    token = "",
+  ] of [
     [[page([completed])], true],
     [[page([completed])], true, 0, true],
+    [[page([completed])], true, 0, false, true, "secpal-dependabot-merger", "app-token"],
+    [[page([completed])], false, 0, false, true, "other-app", "app-token"],
+    [[page([completed])], false, 0, false, true, "secpal-dependabot-merger"],
     [[page([otherRun, completed])], true],
     [
       [
@@ -1505,6 +1594,7 @@ test("enrollment requires a successful protected safety check from this run and 
           "#!/bin/sh",
           'case "$1:$2" in',
           "  api:graphql)",
+          '    [ "$GH_TOKEN" = workflow-token ] || exit 5',
           '    if [ "$DELAYED" = true ] && [ ! -e "$RECORD.lookup" ]; then',
           '      touch "$RECORD.lookup"',
           '      printf "%s" "$PENDING_CHECKS"',
@@ -1517,7 +1607,7 @@ test("enrollment requires a successful protected safety check from this run and 
           "    esac",
           '    exit "$LOOKUP_EXIT" ;;',
           "  pr:checks) exit 4 ;;",
-          '  pr:merge) printf "merge" > "$RECORD" ;;',
+          '  pr:merge) printf "%s" "$GH_TOKEN" > "$RECORD" ;;',
           "  *) exit 1 ;;",
           "esac",
         ].join("\n"),
@@ -1527,6 +1617,10 @@ test("enrollment requires a successful protected safety check from this run and 
         env: {
           ...process.env,
           PATH: `${dir}:${process.env.PATH}`,
+          GH_TOKEN: "workflow-token",
+          PUBLISHER_EVENTS: String(useApp),
+          MERGER_APP: app,
+          MERGER_TOKEN: token,
           CHECKS: JSON.stringify(pages),
           PENDING_CHECKS: JSON.stringify([page([otherRun])]),
           DELAYED: String(delayed),
@@ -1547,7 +1641,10 @@ test("enrollment requires a successful protected safety check from this run and 
         encoding: "utf8",
       });
       assert.equal(result.status === 0, expected, result.stdout + result.stderr);
-      assert.equal(readFileSync(record, { encoding: "utf8", flag: "a+" }) === "merge", expected);
+      assert.equal(
+        readFileSync(record, { encoding: "utf8", flag: "a+" }),
+        expected ? (useApp ? token : "workflow-token") : ""
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

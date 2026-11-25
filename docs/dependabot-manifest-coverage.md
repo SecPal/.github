@@ -26,6 +26,30 @@ The guard is designed to detect these failures:
 It parses repository files as data and never executes repository dependency
 code.
 
+## Publisher event delivery
+
+Manifest coverage checks configuration. The required Dependabot Source Safety
+check and the native auto-merge request govern integration separately.
+
+For API, Frontend and the website, callers that set `publisher-events: true`
+use the private organization App `secpal-dependabot-merger` so GitHub can emit
+the regular protected-main push event. Install it in exactly those three
+repositories with Contents, Pull requests and Workflows read/write, and
+automatic Metadata read. GitHub requires Workflows permission to merge changes
+to workflow files. Leave webhooks, user authorization and branch-protection bypasses
+disabled. Give the selected repositories the Actions variable
+`DEPENDABOT_MERGER_APP_ID` and the Actions secret
+`DEPENDABOT_MERGER_PRIVATE_KEY`, and pass the secret explicitly to the callee.
+Keep the private key out of Dependabot secrets and untrusted pull-request jobs.
+
+The trusted enrollment job mints a short-lived token scoped to the calling
+repository. It requests Workflows write only for a verified workflow-file
+change. The normal workflow token reads required check evidence. Source
+Safety reconciles enrollment by either known automation identity and leaves
+operator requests alone. Verify a real delayed merge at the exact merge SHA
+before marking downstream delivery as proven.
+[Delivery tracking issue](https://github.com/SecPal/.github/issues/1431)
+
 ## Discovery and catalog authority
 
 Discovery uses `git ls-files -z`, so only version-controlled source state is
