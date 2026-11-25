@@ -21,7 +21,7 @@ SPDX-License-Identifier: CC0-1.0
 **In Progress:** Phase 4 (Retention & Archiving)
 **Pending:** Phases 5-6 (Controller/Policy/Frontend/Documentation)
 
-**Supersession notice:** Retention-driven audit logging, tamper-evident integrity, retention controls, and comprehensive audit coverage remain valid. [ADR-014](20260720-tenant-identity-access-model-adr014.md) replaces User-based Tenant resolution, Organizational Unit log scoping, inheritance blocking, and ADR-007/ADR-008/ADR-009-based access dependencies with active TenantMembership context and effective permission, scope, and validity authorization. The historical content below is retained for context.
+**Supersession notice:** Retention-driven audit logging, tamper-evident integrity, retention controls, and comprehensive audit coverage remain valid. [ADR-014](20260720-tenant-identity-access-model-adr014.md) replaces User-based Tenant resolution, Organizational Unit log scoping, inheritance blocking, and hierarchy-based access dependencies with active TenantMembership context and effective permission, scope, and validity authorization. The historical content below is retained for context.
 
 **Historical-example notice (2026-08-24):** Any examples below using
 `users.tenant_id`, `OrganizationalUnit` authorization, inheritance blocking, or
@@ -69,14 +69,13 @@ SecPal requires a **legally compliant, tamper-proof audit trail** for all user a
    - All CRUD operations on critical data (employees, contracts, salaries)
    - Authentication events (login, logout, failed attempts)
    - Permission changes (role assignments, scope modifications)
-   - Emergency access (breaking glass, ADR-009)
+   - Emergency access events where applicable
    - Data exports and reports
 
-2. **Organizational Scope Isolation:**
+2. **Tenant and Scope Isolation:**
 
-   - Regional subsidiaries see only their logs
-   - Parent organizations cannot access blocked subsidiary logs
-   - Respects inheritance blocking (ADR-009)
+   - Restrict audit-log access to the active tenant and effective permission, scope and validity.
+   - Apply the authorization boundary in [ADR-014](20260720-tenant-identity-access-model-adr014.md).
 
 3. **Tamper-Proof Evidence:**
 
@@ -1201,9 +1200,7 @@ test('hash chain detects injection attacks', function () {
 ## Related ADRs
 
 - **ADR-005:** RBAC Design Decisions (role changes are logged)
-- **ADR-007:** Organizational Structure Hierarchy (scope-based log access)
-- **ADR-008:** User-Based Tenant Resolution (tenant isolation for logs)
-- **ADR-009:** Permission Inheritance Blocking & Leadership-Based Access Control (emergency access is logged)
+- [ADR-014](20260720-tenant-identity-access-model-adr014.md) defines current tenant and access authority.
 
 ---
 

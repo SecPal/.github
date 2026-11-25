@@ -63,24 +63,10 @@ fi
 # either (see SecPal/.github#489). The git-tracking guard above closes the
 # `git add --force` bypass so this exclusion can only skip genuinely
 # untracked scratch files; violations in any tracked path still fail.
-historical_evidence_paths=(
-    "docs/feature-requirements.md"
-    "docs/adr/20251219-user-based-tenant-resolution.md"
-)
-
-# These exact files are an archived planning record and a superseded ADR. They
-# may quote historical identifiers as evidence, but that evidence never creates
-# current domain authority. Keep this registry exact: no directory, ADR, marker,
-# or wildcard-based exception is permitted.
+# This exact planning record can quote historical identifiers as evidence.
+# Every other path uses the current domain policy.
 is_historical_evidence_path() {
-    local path="${1#./}"
-    local historical_path
-    for historical_path in "${historical_evidence_paths[@]}"; do
-        if [ "$path" = "$historical_path" ]; then
-            return 0
-        fi
-    done
-    return 1
+    [ "${1#./}" = "docs/feature-requirements.md" ]
 }
 
 matches=$(grep -r -n -E "secpal\.[A-Za-z0-9.-]+" \

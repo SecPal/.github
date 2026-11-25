@@ -105,12 +105,6 @@ Focused ADR series for a specific domain may use a domain-prefix plus four-digit
 - [BRAND-0006: App UI Stack Ownership](BRAND-0006-app-ui-stack.md) - 2026-06-13
 - [ADR-012: Android Distribution](20260406-single-app-android-distribution-and-private-provisioning-adr012.md) - 2026-04-06; distribution routes, release tracks, artifact metadata and download surfaces
 
-### Superseded
-
-- [ADR-009: Permission Inheritance Blocking & Leadership-Based Access Control](20251221-inheritance-blocking-and-leadership-access-control.md) - 2025-12-21; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
-- [ADR-008: User-Based Tenant Resolution for Multi-Tenant Architecture](20251219-user-based-tenant-resolution.md) - 2025-12-19; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
-- [ADR-007: Flexible Organizational Structure & Multi-Level Hierarchies](20251126-organizational-structure-hierarchy.md) - 2025-11-26; superseded by [ADR-014](20260720-tenant-identity-access-model-adr014.md)
-
 ### Partially Superseded
 
 - [ADR-014: Tenant, Identity, Employee, and Access Model](20260720-tenant-identity-access-model-adr014.md) - 2026-07-20; owns identity, tenant integrity and access; employment authority is defined in [ADR-025](20261002-employment-time-absence-compensation-adr025.md)

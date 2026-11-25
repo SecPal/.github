@@ -349,9 +349,8 @@ if [ "$domain_policy_regression_failures" -ne 0 ]; then
   exit 1
 fi
 
-# Historical evidence is intentionally path-bound. These two files preserve
-# retired planning and superseded-ADR context; every other Markdown path stays
-# subject to the active namespace policy.
+# Historical evidence is intentionally path-bound. The planning record is the
+# only exception; every other Markdown path uses the active policy.
 historical_workspace="$(mktemp -d "${TMPDIR:-/tmp}/check-domains-historical.XXXXXX")"
 mkdir -p "$historical_workspace/scripts" "$historical_workspace/docs/adr"
 cp "$SCRIPT" "$historical_workspace/scripts/check-domains.sh"
@@ -362,8 +361,6 @@ historical_wildcard="*.""secpal"".dev"
 
 printf 'Historical planning evidence: %s\n' "$historical_employee" \
   >"$historical_workspace/docs/feature-requirements.md"
-printf 'Historical alternatives: %s and %s\n' "$historical_tenant" "$historical_wildcard" \
-  >"$historical_workspace/docs/adr/20251219-user-based-tenant-resolution.md"
 
 historical_regression_failures=0
 assert_historical_policy_case() {
@@ -396,7 +393,7 @@ assert_historical_policy_case() {
   fi
 }
 
-assert_historical_policy_case "the two exact historical paths" accept "$historical_employee"
+assert_historical_policy_case "the exact historical planning path" accept "$historical_employee"
 
 printf 'Current content: %s\n' "$historical_employee" >"$historical_workspace/current.md"
 assert_historical_policy_case "an ordinary current Markdown file" reject "$historical_employee"
