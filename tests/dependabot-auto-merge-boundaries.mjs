@@ -619,6 +619,7 @@ function deploymentPipChange({
   after = "PyYAML==6.0.3",
   version = "6.0.3",
   dependencyName = "pyyaml",
+  updateType = "version-update:semver-patch",
   oldPin = "PyYAML==6.0.2",
   path = "requirements/qualification/requirements.txt",
 } = {}) {
@@ -642,7 +643,7 @@ function deploymentPipChange({
       prevVersion: oldPin.split("==")[1].split(";")[0],
       packageEcosystem: "pip",
       dependencyGroup: group,
-      updateType: "version-update:semver-patch",
+      updateType,
     })),
     { PIP_PLAIN_MANIFEST_PATHS: JSON.stringify(paths) }
   );
@@ -662,6 +663,34 @@ test("authenticates an exact Deployment pip update to an included canonical pin"
   for (const group of ["", "deployment-python"]) {
     assert.equal(await verifySource(deploymentPipChange({ group })), "version-update:semver-patch");
   }
+});
+
+test("binds the native per-dependency group to the canonical package name", async () => {
+  const update = {
+    path: "requirements/quality/requirements.txt",
+    dependencyName: "reuse",
+    oldPin: "reuse==6.1.2",
+    after: "reuse==6.3.0",
+    version: "6.3.0",
+    updateType: "version-update:semver-minor",
+  };
+  for (const [group, expected] of [
+    ["deployment-python/reuse", update.updateType],
+    ["deployment-python/pyyaml", undefined],
+    ["other/reuse", undefined],
+  ]) {
+    assert.equal(await verifySource(deploymentPipChange({ ...update, group })), expected);
+  }
+  const single = deploymentPipChange({
+    ...update,
+    group: "deployment-python/reuse",
+    before: { [update.path]: `${update.oldPin}\n` },
+  });
+  single.config = single.config.replace(
+    "  directories:\n    - /requirements/quality\n",
+    "  directory: /requirements/quality\n"
+  );
+  assert.equal(await verifySource(single), update.updateType);
 });
 
 test("authenticates only homogeneous signed repeats from configured pip grouping", async () => {
