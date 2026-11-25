@@ -661,6 +661,30 @@ test("authenticates an exact Deployment pip update to an included canonical pin"
   }
 });
 
+test("authenticates a canonical Python pin directly under requirements", async () => {
+  const path = "requirements/requirements.txt";
+  const metadata = {
+    dependencyName: "jsonschema",
+    newVersion: "4.26.0",
+    packageEcosystem: "pip",
+    dependencyGroup: "",
+    updateType: "version-update:semver-minor",
+  };
+  for (const [after, expected] of [
+    ["jsonschema==4.26.0\nattrs==26.1.0\n", "version-update:semver-minor"],
+    ["jsonschema==4.26.0\nattrs==26.2.0\n", undefined],
+  ]) {
+    const fixture = updateFixture(
+      "pip",
+      "- package-ecosystem: pip\n  directory: /requirements\n",
+      [[path, "jsonschema==4.25.1\nattrs==26.1.0\n", after]],
+      [metadata],
+      { PIP_PLAIN_MANIFEST_PATHS: JSON.stringify([path]) }
+    );
+    assert.equal(await verifySource(fixture), expected);
+  }
+});
+
 test("Deployment pip qualifies stable two-component pins without confusing version aliases", async () => {
   const change = {
     path: "requirements/quality/requirements.txt",
@@ -849,6 +873,34 @@ function sharedPin({ dependency = scannerAction, alter = (data) => data, duplica
     }
   );
 }
+
+test("a configured wrapper preserves Gradle module and lockfile admission", async () => {
+  for (const [path, version, expected] of [
+    ["android/dpc/build.gradle", "1.2.4", "true"],
+    ["android/dpc/gradle.lockfile", "1.2.4", "true"],
+    ["android/app/gradle.lockfile", "1.2.4", "true"],
+    ["android/dpc/build.gradle", "1.2.4-rc1", "false"],
+    [wrapperPath, "1.2.4", "false"],
+    ["android/other/build.gradle", "1.2.4", "false"],
+  ]) {
+    const fixture = updateFixture(
+      "gradle",
+      "- package-ecosystem: gradle\n  directory: /android\n",
+      [[path, "fixture:1.2.3\n", `fixture:${version}\n`]],
+      [
+        {
+          dependencyName: "org.example:fixture",
+          newVersion: version,
+          packageEcosystem: "gradle",
+          dependencyGroup: "",
+          updateType: "version-update:semver-patch",
+        },
+      ],
+      { GRADLE_WRAPPER_PATH: wrapperPath }
+    );
+    assert.equal(await verifySource({ ...fixture, output: "verified" }), expected);
+  }
+});
 
 test("a signed Android Gradle wrapper patch matches both official checksums", async () => {
   assert.equal(await verifySource(gradleWrapper()), "version-update:semver-patch");
