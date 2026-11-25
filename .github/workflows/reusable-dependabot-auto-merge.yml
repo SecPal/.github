@@ -664,7 +664,7 @@ jobs:
             }
             const after = await read();
             if (after.head.sha !== expected || after.base.sha !== pr.base.sha || after.state !== 'open') return;
-            if (updateType || policyRejection) {
+            if (updateType || policyRejection || ecosystem === 'gradle') {
               const { data: ref } = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
               if (ref.object?.type !== 'commit' || ref.object.sha !== pr.base.sha) return;
             }

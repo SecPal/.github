@@ -875,7 +875,7 @@ function sharedPin({ dependency = scannerAction, alter = (data) => data, duplica
 }
 
 test("a configured wrapper preserves Gradle module and lockfile admission", async () => {
-  for (const [path, version, expected, kind = "patch"] of [
+  for (const [path, version, expected, kind = "patch", protectedHead] of [
     ["android/dpc/build.gradle", "1.2.4", "true"],
     ["android/dpc/gradle.lockfile", "1.2.4", "true"],
     ["android/app/gradle.lockfile", "1.2.4", "true"],
@@ -886,6 +886,7 @@ test("a configured wrapper preserves Gradle module and lockfile admission", asyn
     ["android/dpc/build.gradle", "1..4", "false"],
     [wrapperPath, "1.2.4", "false"],
     ["android/other/build.gradle", "1.2.4", "false"],
+    ["android/dpc/build.gradle", "1.2.4", "false", "patch", "e".repeat(40)],
   ]) {
     const fixture = updateFixture(
       "gradle",
@@ -902,7 +903,7 @@ test("a configured wrapper preserves Gradle module and lockfile admission", asyn
       ],
       { GRADLE_WRAPPER_PATH: wrapperPath }
     );
-    assert.equal(await verifySource({ ...fixture, output: "verified" }), expected);
+    assert.equal(await verifySource({ ...fixture, output: "verified", protectedHead }), expected);
   }
 });
 
