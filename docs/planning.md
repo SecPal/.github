@@ -33,5 +33,7 @@ owns relationship and delivery semantics.
 | Shared governance, cross-repository planning and architecture | `.github`    |
 
 Public roadmap content uses a curated subset of issues and milestones suitable
-for publication. Contributors use English for GitHub communication and follow
-the repository's instructions for code and documentation.
+for publication. Follow the repository's instructions for code and documentation.
+
+Signed commit verification is enforced by CI.
+English-only GitHub communication remains reviewer-enforced for now.
