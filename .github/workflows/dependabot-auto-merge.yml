@@ -49,7 +49,7 @@ jobs:
     with:
       # Phase 2: Verified PATCH and MINOR updates; Source Safety must be required
       phase: "2"
-      allowed-ecosystems: "github_actions,pre_commit"
+      allowed-ecosystems: "github_actions,npm_and_yarn,pre_commit"
       pre-commit-path: ".pre-commit-config.yaml"
       shared-sha-workflow-paths: >-
         [".github/workflows/daily-repository-security.yml",".github/workflows/quality.yml"]

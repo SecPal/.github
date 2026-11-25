@@ -7,12 +7,7 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status
 
-**Partially Superseded by BRAND-0007**
-
-The two-line footer structure, SecPal wording, separator, localization, license,
-and per-surface source-link decisions remain current. BRAND-0007 retires the
-GuardGuide identity, so the GuardGuide-specific footer, slogan, domain, and
-source mappings below are historical rather than active guidance.
+**Accepted**
 
 ## Date
 
@@ -30,13 +25,11 @@ Without a fixed pattern, each product surface would re-invent small but visible 
 
 ## Decision
 
-SecPal and GuardGuide use a fixed two-line footer on every AGPL-licensed public surface.
+SecPal uses a fixed two-line footer on every AGPL-licensed public surface.
 
 **Footer line 1 — brand attribution:** `Powered by <Product> – <Slogan>`, linked to the brand's homepage.
 
 - SecPal: `Powered by SecPal – A guard's best friend`, linked to `https://secpal.app`.
-- GuardGuide: `Powered by GuardGuide – A guard's source of truth`, linked to `https://guardguide.de`.
-- Each surface uses its own brand. The GuardGuide footer says `Powered by GuardGuide`, not `Powered by SecPal`, because the footer line targets GuardGuide's own homepage.
 - The separator between brand and slogan is the en-dash `–` (U+2013) with one space on each side. Hyphen-minus (`-`, U+002D) and em dash (`—`, U+2014) are not allowed.
 - The `Powered by` prefix and the slogan are never translated.
 
@@ -46,8 +39,6 @@ SecPal and GuardGuide use a fixed two-line footer on every AGPL-licensed public 
 - The Source Code label is linked **per surface** to the canonical public source repository that backs the surface rendering the footer:
   - SecPal platform/suite (org-level page): `https://github.com/SecPal` (the SecPal organization is used because no single repository backs the platform as a whole).
   - SecPal landing page (`secpal.app`): `https://github.com/SecPal/secpal.app`.
-  - GuardGuide product app: `https://github.com/SecPal/GuardGuide`.
-  - GuardGuide marketing site (`guardguide.de`): `https://github.com/SecPal/guardguide.de`.
   - Surfaces added in the future follow the same per-surface rule.
 - The Source Code label is the canonical local term for "source code" in the page's language: English `Source Code`, German `Quellcode`, and the canonical local term in every other supported locale. Do not use abbreviated or informal forms such as `Source`, `Quelle`, or `Quelltext`. The link target does not change with locale.
 - The separator between the two labels is the vertical bar `|` (U+007C) with one space on each side. Other separator characters and missing spaces are not allowed.
@@ -77,7 +68,7 @@ A text-first standard (with the `|` separator visible as a character, and icons 
 
 - Product repositories must preserve the approved AGPL words, the approved slogan, the en-dash separator, the `|` line-2 separator and its surrounding spaces, the link targets, and the language rules exactly, even when adapting visual layout, responsive wrapping, or optional icons.
 - Commercial deployments still need repository-local license wording that matches the actual agreement.
-- Existing public surfaces may need copy-only updates to adopt the two-line layout, the `Powered by <own brand>` self-attribution, the en-dash lockup, the corrected GuardGuide slogan, the `|` separator with surrounding spaces, and the canonical localized Source Code label.
+- Existing public surfaces may need copy-only updates to adopt the two-line layout, the `Powered by <own brand>` self-attribution, the en-dash lockup, the `|` separator with surrounding spaces, and the canonical localized Source Code label.
 
 ## Alternatives Considered
 
@@ -87,15 +78,9 @@ A text-first standard (with the `|` separator visible as a character, and icons 
 2. **Use only SPDX license identifiers in footers**
    - Pro: precise and scanner-friendly
    - Contra: less readable as public brand copy
-3. **One shared `Powered by SecPal` line on every product footer (including GuardGuide)**
-   - Pro: highlights the SecPal platform on every surface
-   - Contra: mismatched the line-1 link target (each footer line should point at its own brand's homepage and source) and removed each product's own signature from its own footer
-4. **Prescribe a specific icon system in the `.github` standard**
+3. **Prescribe a specific icon system in the `.github` standard**
    - Pro: visually identical line 2 across every product
    - Contra: forces every product repository to adopt one icon library and breaks text-only contexts such as plain-text README footers, generated PDFs, and screen-reader transcripts; icons are kept as an optional product-level visual addition instead
-5. **One brand-level Source Code link for every SecPal-family surface (one URL for SecPal, one URL for GuardGuide)**
-   - Pro: only two URLs to remember
-   - Contra: links footers away from the surface a reader is actually visiting — applying it on the `guardguide.de` marketing site (its own repository) would link to the unrelated GuardGuide product app source, undermining the AGPL source-attribution purpose of the footer; the per-surface rule keeps every footer pointing at its own source
 
 ## Related
 

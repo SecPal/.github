@@ -98,14 +98,8 @@ architecture decision adds one.
 **Scope (intentional limit):**
 
 - The match regex is `secpal\.[A-Za-z0-9.-]+`, so only `secpal.*` strings are
-  ever inspected. Non-`secpal` domains are out of scope by design — even when
-  they belong to SecPal. The historical `guardguide.de` fixture still proves
-  that matcher boundary.
-- Non-`secpal` hosts need their own policy guards; the historical
-  `guardguide.de` example from SecPal/.github#483 supplies no live repository
-  membership. Such hosts
-  are not first-class entries here. Adding them to this allowlist would be
-  inert because the matcher never sees them.
+  ever inspected. Non-`secpal` domains are out of scope even when SecPal owns
+  them. Those hosts require their own policy guards.
 - Treat the banner's "Forbidden" list as "forbidden `secpal.*` variants",
   not "every non-SecPal domain on the internet".
 - The scan protects the gitignored agent scratch directory `.context/` with
