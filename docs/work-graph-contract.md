@@ -6,7 +6,7 @@ SPDX-License-Identifier: CC0-1.0
 # SecPal Native WorkGraph Planning And GitHub Delivery
 
 WorkGraph organizes issue-first work using GitHub's existing relationship storage.
-GitHub PR checks validate code. Planning does not require a custom PR lifecycle.
+GitHub PR checks validate delivery.
 
 This document normatively incorporates `docs/evidence-architecture-contract.md`
 for evidence pipelines and external systems. That contract directly owns invariant
@@ -138,10 +138,6 @@ Preserve existing SSH signing and GitHub verification of every PR commit. Reuse
 successful validation until relevant changes invalidate it. Production,
 cryptographic, release and external qualification requirements remain owned by
 their technical contracts and executable gates.
-
-Custom PR lifecycle authority, merge gates, routine receipts, publication journals
-and historical recovery procedures are retired. Historical Git/GitHub records
-remain evidence of past work and impose no delivery ceremony on new PRs.
 
 Related guidance: [planning](planning.md), [epics](EPIC_WORKFLOW.md),
 [engineering principles](development-principles.md) and

@@ -7,7 +7,7 @@ SPDX-License-Identifier: CC0-1.0
 
 **Purpose:** Historical business-context archive from SecPal's early planning phase.
 
-**Status:** Archived for active planning as of 2026-04-15. Do not add new planning content here. Active planning lives in GitHub Issues, milestones, and ADRs as defined in `docs/planning.md` and ADR-013.
+**Status:** Archived for active planning as of 2026-04-15. Do not add new planning content here. Active planning lives in GitHub Issues, milestones, and ADRs as defined in `docs/planning.md` and ADR-016.
 
 **Preserved For:** Historical context, legacy references, and extracting explicitly reactivated slices into repository-local issues or ADRs.
 

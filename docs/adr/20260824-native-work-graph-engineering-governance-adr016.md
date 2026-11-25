@@ -17,6 +17,11 @@ Issue-first planning needs one durable, GitHub-native model rather than competin
 
 ## Binding decision
 
+GitHub Issues own current work and deferred follow-up. Milestones group
+release and roadmap intent, labels classify work, and ADRs record durable
+architecture decisions. The public roadmap uses a curated, public-safe subset
+of issue and milestone information.
+
 GitHub-native parent/sub-issue relationships own containment. A native dependency
 blocks only the work that actually requires it. Native sibling order gives a
 preference, and assignment does not claim execution.
@@ -34,4 +39,4 @@ or implementation convenience.
 
 ## Relationships
 
-Refines ADR-013; it does not supersede ADR-013. Source: [#668](https://github.com/SecPal/.github/issues/668), [#717](https://github.com/SecPal/.github/issues/717).
+Issue-first planning was accepted in [#354](https://github.com/SecPal/.github/issues/354). Its native relationships and engineering boundaries were refined in [#668](https://github.com/SecPal/.github/issues/668) and [#717](https://github.com/SecPal/.github/issues/717).
