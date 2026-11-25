@@ -267,14 +267,16 @@ jobs:
                       (%w[pre_commit shared_sha].include?(input.fetch('ecosystem')) ||
                         (types.include?(dependency['update-type']) && dependency['update-type'] == expected['updateType'])) &&
                       (!%w[pip pre_commit docker gradle gradle_wrapper shared_sha].include?(input.fetch('ecosystem')) ||
-                        (dependency['dependency-version'].is_a?(String) && dependency['dependency-version'] == expected['newVersion']))
+                        (dependency['dependency-version'].is_a?(String) && dependency['dependency-version'] == expected['newVersion'])) &&
+                      (!input.fetch('plain_pip') || dependency.fetch('dependency-group', '') == expected['dependencyGroup'])
                   end
                 print(valid ? JSON.generate(dependencies) : 'false')
               rescue StandardError
                 print 'false'
               end
             `], { input: JSON.stringify({ message: commits[0].commit.message,
-              verified: verifiedDependencies, ecosystem: shared ? 'shared_sha' : wrapperPath ? 'gradle_wrapper' : ecosystem }),
+              verified: verifiedDependencies, ecosystem: shared ? 'shared_sha' : wrapperPath ? 'gradle_wrapper' : ecosystem,
+              plain_pip: plainPaths.length > 0 }),
               encoding: 'utf8', env: { PATH: process.env.PATH }, timeout: 10000, maxBuffer: 1024 * 1024 });
             if (proof.status !== 0 || proof.stdout === 'false') return;
             const signedDependencies = JSON.parse(proof.stdout);
@@ -300,6 +302,16 @@ jobs:
               const { data } = await github.rest.git.getTree({ ...repository, tree_sha: commit.tree.sha, recursive: '1' });
               return data.truncated === false ? new Map(data.tree.map(entry => [entry.path, entry])) : null;
             };
+            if (ecosystem === 'gradle' && !isWrapper) {
+              if (commits[0].parents[0].sha !== pr.base.sha || files.some(file =>
+                file.status !== 'modified' || file.previous_filename || !/^[a-f0-9]{40}$/.test(file.sha))) return;
+              const before = await treeAt(pr.base.sha), after = await treeAt(expected);
+              if (!before || !after || files.some(file => {
+                const old = before.get(file.filename), next = after.get(file.filename);
+                return old?.mode !== '100644' || next?.mode !== '100644' ||
+                  old.sha === next.sha || next.sha !== file.sha;
+              })) return;
+            }
             let updateType;
             let policyRejection;
             if (shared) {
@@ -577,11 +589,19 @@ jobs:
             if (ecosystem === 'pip' && plainPaths.length) {
               const [file] = files;
               const [dependency] = verifiedDependencies;
+              const group = dependency.dependencyGroup;
+              const count = verifiedDependencies.length;
+              // Dependencies inherited by several directories can recur in the
+              // signed metadata under the native `pip` group. The tree must
+              // still contain exactly one verified canonical pin change.
+              const grouped = pipGroups.includes(group) ||
+                (group === 'pip' && pipGroups.length === 1 && count > 1);
               if (files.length !== 1 || file.status !== 'modified' || file.previous_filename ||
                   !/^[a-f0-9]{40}$/.test(file.sha) || commits[0].parents[0].sha !== pr.base.sha ||
-                  verifiedDependencies.length !== 1 || dependency.packageEcosystem !== 'pip' ||
-                  typeof dependency.dependencyGroup !== 'string' ||
-                  (dependency.dependencyGroup && !pipGroups.includes(dependency.dependencyGroup))) return;
+                  (group !== '' && !grouped) || (count > 1 && (!grouped || count > plainPaths.length)) ||
+                  verifiedDependencies.some(item => item.packageEcosystem !== 'pip' || item.dependencyGroup !== group ||
+                    item.dependencyName !== dependency.dependencyName || item.newVersion !== dependency.newVersion ||
+                    item.prevVersion !== dependency.prevVersion || item.updateType !== dependency.updateType)) return;
               const beforeTree = await treeAt(pr.base.sha), afterTree = await treeAt(expected);
               if (!beforeTree || !afterTree) return;
               const normalize = name => name.toLowerCase().replace(/[-_.]+/g, '-');
@@ -620,6 +640,7 @@ jobs:
               const target = pins.get(normalize(dependency.dependencyName));
               if (target?.path !== file.filename) return;
               const [, name, version, marker = ''] = target.entry;
+              if ((count > 1 || dependency.prevVersion) && dependency.prevVersion !== version) return;
               updateType = classify(version, dependency.newVersion, pythonRelease);
               if (!updateType || updateType !== dependency.updateType) return;
               target.lines[target.index] = `${name}==${dependency.newVersion}${marker}`;

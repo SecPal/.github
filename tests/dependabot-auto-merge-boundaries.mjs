@@ -234,11 +234,14 @@ const admissionHead = "a".repeat(40);
 const admissionBlob = "f".repeat(40);
 
 function updateFixture(ecosystem, config, changes, dependencies, env, extra = {}) {
-  const signed = dependencies.map(({ dependencyName, newVersion, updateType }) => ({
-    "dependency-name": dependencyName,
-    "dependency-version": newVersion,
-    ...(updateType ? { "update-type": updateType } : {}),
-  }));
+  const signed = dependencies.map(
+    ({ dependencyName, newVersion, updateType, dependencyGroup }) => ({
+      "dependency-name": dependencyName,
+      "dependency-version": newVersion,
+      ...(updateType ? { "update-type": updateType } : {}),
+      ...(dependencyGroup ? { "dependency-group": dependencyGroup } : {}),
+    })
+  );
   const commit = botCommit(`Update.\n\n---\n${yaml.dump({ "updated-dependencies": signed })}...\n`);
   commit.parents = [{ sha: admissionBase }];
   const encoded = (content) => ({
@@ -611,6 +614,7 @@ const deploymentPins = {
 
 function deploymentPipChange({
   group = "",
+  repeats = 1,
   before = deploymentPins,
   after = "PyYAML==6.0.3",
   version = "6.0.3",
@@ -632,15 +636,14 @@ function deploymentPipChange({
     "pip",
     config,
     [[path, before[path], before[path].replace(oldPin, after)]],
-    [
-      {
-        dependencyName,
-        newVersion: version,
-        packageEcosystem: "pip",
-        dependencyGroup: group,
-        updateType: "version-update:semver-patch",
-      },
-    ],
+    Array.from({ length: repeats }, () => ({
+      dependencyName,
+      newVersion: version,
+      prevVersion: oldPin.split("==")[1].split(";")[0],
+      packageEcosystem: "pip",
+      dependencyGroup: group,
+      updateType: "version-update:semver-patch",
+    })),
     { PIP_PLAIN_MANIFEST_PATHS: JSON.stringify(paths) }
   );
   for (const manifest of paths) {
@@ -659,6 +662,34 @@ test("authenticates an exact Deployment pip update to an included canonical pin"
   for (const group of ["", "deployment-python"]) {
     assert.equal(await verifySource(deploymentPipChange({ group })), "version-update:semver-patch");
   }
+});
+
+test("authenticates only homogeneous signed repeats from configured pip grouping", async () => {
+  const fixture = deploymentPipChange({ group: "pip", repeats: 4 });
+  assert.equal(await verifySource(fixture), "version-update:semver-patch");
+  for (const candidate of [
+    deploymentPipChange({ group: "pip" }),
+    deploymentPipChange({ repeats: 4 }),
+    deploymentPipChange({ group: "pip", repeats: 6 }),
+    { ...fixture, config: fixture.config.split("  groups:")[0] },
+  ]) {
+    assert.equal(await verifySource(candidate), undefined);
+  }
+  const wrongGroup = structuredClone(fixture);
+  wrongGroup.commits[0].commit.message = wrongGroup.commits[0].commit.message.replace(
+    "dependency-group: pip",
+    "dependency-group: other"
+  );
+  assert.equal(await verifySource(wrongGroup), undefined);
+  const mixed = structuredClone(fixture);
+  const metadata = JSON.parse(mixed.env.VERIFIED_DEPENDENCIES);
+  metadata[1].dependencyName = "reuse";
+  mixed.env.VERIFIED_DEPENDENCIES = JSON.stringify(metadata);
+  mixed.commits[0].commit.message = mixed.commits[0].commit.message.replace(
+    /(- dependency-name: pyyaml[\s\S]*?)- dependency-name: pyyaml/,
+    "$1- dependency-name: reuse"
+  );
+  assert.equal(await verifySource(mixed), undefined);
 });
 
 test("authenticates a canonical Python pin directly under requirements", async () => {
@@ -875,7 +906,7 @@ function sharedPin({ dependency = scannerAction, alter = (data) => data, duplica
 }
 
 test("a configured wrapper preserves Gradle module and lockfile admission", async () => {
-  for (const [path, version, expected, kind = "patch", protectedHead] of [
+  for (const [path, version, expected, kind = "patch", protectedHead, fileChange] of [
     ["android/dpc/build.gradle", "1.2.4", "true"],
     ["android/dpc/gradle.lockfile", "1.2.4", "true"],
     ["android/app/gradle.lockfile", "1.2.4", "true"],
@@ -887,6 +918,15 @@ test("a configured wrapper preserves Gradle module and lockfile admission", asyn
     [wrapperPath, "1.2.4", "false"],
     ["android/other/build.gradle", "1.2.4", "false"],
     ["android/dpc/build.gradle", "1.2.4", "false", "patch", "e".repeat(40)],
+    ["android/app/gradle.lockfile", "1.2.4", "false", "patch", undefined, { status: "added" }],
+    [
+      "android/app/gradle.lockfile",
+      "1.2.4",
+      "false",
+      "patch",
+      undefined,
+      { status: "renamed", previous_filename: "android/dpc/gradle.lockfile" },
+    ],
   ]) {
     const fixture = updateFixture(
       "gradle",
@@ -903,6 +943,8 @@ test("a configured wrapper preserves Gradle module and lockfile admission", asyn
       ],
       { GRADLE_WRAPPER_PATH: wrapperPath }
     );
+    fixture.manifests[path][admissionBase].sha = "c".repeat(40);
+    Object.assign(fixture.files[0], fileChange);
     assert.equal(await verifySource({ ...fixture, output: "verified", protectedHead }), expected);
   }
 });
