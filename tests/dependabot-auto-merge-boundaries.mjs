@@ -875,11 +875,15 @@ function sharedPin({ dependency = scannerAction, alter = (data) => data, duplica
 }
 
 test("a configured wrapper preserves Gradle module and lockfile admission", async () => {
-  for (const [path, version, expected] of [
+  for (const [path, version, expected, kind = "patch"] of [
     ["android/dpc/build.gradle", "1.2.4", "true"],
     ["android/dpc/gradle.lockfile", "1.2.4", "true"],
     ["android/app/gradle.lockfile", "1.2.4", "true"],
     ["android/dpc/build.gradle", "1.2.4-rc1", "false"],
+    ["android/dpc/build.gradle", "0.2.4", "true"],
+    ["android/dpc/build.gradle", "0.3.0", "false", "minor"],
+    ["android/dpc/build.gradle", "01.2.4", "false"],
+    ["android/dpc/build.gradle", "1..4", "false"],
     [wrapperPath, "1.2.4", "false"],
     ["android/other/build.gradle", "1.2.4", "false"],
   ]) {
@@ -893,7 +897,7 @@ test("a configured wrapper preserves Gradle module and lockfile admission", asyn
           newVersion: version,
           packageEcosystem: "gradle",
           dependencyGroup: "",
-          updateType: "version-update:semver-patch",
+          updateType: `version-update:semver-${kind}`,
         },
       ],
       { GRADLE_WRAPPER_PATH: wrapperPath }
