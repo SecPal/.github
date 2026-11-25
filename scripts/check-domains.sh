@@ -4,8 +4,7 @@
 
 # Domain Policy Enforcement Script
 # Scope: enforces the secpal.* namespace split only (match regex:
-#   secpal\.[A-Za-z0-9.-]+). Non-secpal domains (e.g. the historical
-#   guardguide.de fixture) are intentionally out of scope here.
+#   secpal\.[A-Za-z0-9.-]+). Non-secpal domains are outside this policy.
 # ZERO TOLERANCE for unapproved secpal.* values or deprecated .app web hosts.
 
 set -euo pipefail
@@ -19,8 +18,7 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}=== Domain Policy Check ===${NC}"
 echo "Scope: enforces the secpal.* namespace split only (match regex: secpal\\.[A-Za-z0-9.-]+)."
-echo "Out of scope: non-secpal domains, including the historical guardguide.de fixture,"
-echo "are intentionally not inspected here; current hosts need their own policy guards."
+echo "Out of scope: non-secpal domains need their own policy guards."
 echo "Public hosts: secpal.app, apk.secpal.app, secpal.io"
 echo "Development/preview hosts: secpal.dev, api.secpal.dev, app.secpal.dev, preview.secpal.dev, and approved *.preview.secpal.dev identities"
 echo "Private internal service identities: db.secpal.internal (exact only)"
@@ -244,7 +242,7 @@ else
     echo "  - Exact inline-code identifiers: app.secpal.libre and io.secpal.dpc"
     echo "  - Deprecated web host: api.secpal.app"
     echo "  - FORBIDDEN secpal.* variants include every other secpal.internal name and unknown values"
-    echo "  - Non-secpal domains (e.g. the historical guardguide.de fixture) are out of scope; current hosts need their own policy guards."
+    echo "  - Non-secpal domains are out of scope; current hosts need their own policy guards."
     echo ""
     echo "Fix these violations before committing."
     exit 1

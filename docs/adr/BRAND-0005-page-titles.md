@@ -7,11 +7,7 @@ SPDX-License-Identifier: CC0-1.0
 
 ## Status
 
-**Partially Superseded by BRAND-0007**
-
-The content-first title order and en-dash separator remain current. BRAND-0007
-supersedes the product-name rule and GuardGuide examples below; active titles
-use the current naming authority.
+**Accepted**
 
 ## Date
 
@@ -29,11 +25,11 @@ Browser titles and generated document titles appear in tabs, bookmarks, search r
 
 Page and document titles identify the current content first, then the product, using a spaced en dash between title parts. The shared patterns are `<Page title> – <Product>`, `<Entity name> – <Section> – <Product>`, and `<Product>` when no stable page or entity title exists.
 
-Product names must match the brand standards, including `GuardGuide by SecPal` unless the owning repository documents a route-specific exception.
+Use the product names in the [naming standard](../brand/naming.md).
 
 ## Rationale
 
-Content-first titles are easier to scan in browser tabs and histories, while the final product segment keeps the SecPal or GuardGuide context visible.
+Content-first titles are easier to scan in browser tabs and histories, while the final product segment keeps the product context visible.
 
 ## Consequences
 

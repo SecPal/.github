@@ -24,11 +24,11 @@ SecPal maintainers
 
 ## Context
 
-SecPal and GuardGuide need readable, consistent typography across application UI, public copy, generated documents, and contributor-facing materials. The shared standard must define typography direction without owning product-specific CSS files, font packaging, or exact implementation wiring.
+SecPal need readable, consistent typography across application UI, public copy, generated documents, and contributor-facing materials. The shared standard must define typography direction without owning product-specific CSS files, font packaging, or exact implementation wiring.
 
 ## Decision
 
-Inter is the primary and only default typeface for SecPal and GuardGuide surfaces. Shared standards allow weights `400`, `500`, `600`, and `700`, avoid a default display font, avoid global OpenType character variants such as `cv11`, and keep typography scales restrained for operational interfaces.
+Inter is the primary and only default typeface for SecPal surfaces. Shared standards allow weights `400`, `500`, `600`, and `700`, avoid a default display font, avoid global OpenType character variants such as `cv11`, and keep typography scales restrained for operational interfaces.
 
 Product repositories own font hosting, fallback stacks, CSS implementation, platform-specific syntax, and documented exceptions.
 

@@ -67,11 +67,6 @@ and may serve a broader security-adjacent audience than the main product. Where
 the SecPal relationship is already unambiguous, nearby references may use
 `Assure` and `Visit`.
 
-GuardGuide is retired from the current SecPal product strategy and active brand
-architecture. `GuardGuide`, `GuardGuide by SecPal`, `VisitGuide`, and
-`VisitGuard` are not current product brands. Historical GuardGuide commits,
-issues, ADRs, and changelog entries remain truthful historical evidence.
-
 ### Integrated-System Direction
 
 The main SecPal product is intended as an integrated system spanning
@@ -180,10 +175,6 @@ implemented, released, generally available, deployed, integrated, or
 production-ready. Standalone or integrated operation describes permitted
 product direction, not current runtime evidence.
 
-Likewise, GuardGuide's removal from current brand authority does not erase its
-historical implementation or delivery evidence. Historical evidence does not
-restore GuardGuide as a current product identity.
-
 The detailed vocabulary, admissible evidence, and downgrade rules are defined
 by the [Public Status Semantics](public-status-semantics.md) established under
 [#763](https://github.com/SecPal/.github/issues/763). Public authors MUST use
@@ -239,24 +230,6 @@ This contract delegates rather than duplicates established authority:
 References to any accepted ADR describe decision authority only. They MUST NOT
 be represented as evidence that the accepted architecture is implemented,
 deployed, production-ready, or operationally verified.
-
-## Successor and Historical Positioning
-
-This contract was originally established under completed
-[#762](https://github.com/SecPal/.github/issues/762). The successor decision in
-[#989](https://github.com/SecPal/.github/issues/989) refines #762 where the
-current human product decision changed the organization-level audience,
-product-family hierarchy, and GuardGuide status. Issue #762 remains historical
-evidence and its still-valid principles continue here.
-
-Completed [#340](https://github.com/SecPal/.github/issues/340) and
-[#344](https://github.com/SecPal/.github/issues/344) also remain preserved
-historical positioning evidence. Their rollout and evidence are not erased.
-
-The sentence `Everything the day-to-day operation needs — in one system that
-just works.` remains superseded as active organization-wide positioning. Its
-early aspiration is understandable in historical context, but current use can
-imply feature completeness and maturity that SecPal does not claim.
 
 ## Prohibited Public-Positioning Overclaims
 

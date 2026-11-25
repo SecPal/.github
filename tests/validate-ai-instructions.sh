@@ -378,14 +378,6 @@ GITHUB_REPOSITORY=SecPal/.github \
 grep -qF 'Repository Type: api' "$ambient_github_api_output"
 grep -qF 'All tests passed' "$ambient_github_api_output"
 
-api_named_guardguide_repo="$workspace/api-path-heuristic/GuardGuide"
-copy_valid_repo "$detected_api_repo" "$api_named_guardguide_repo"
-api_named_guardguide_output="$workspace/api-named-guardguide.output"
-bash "$VALIDATOR" "$api_named_guardguide_repo" \
-    >"$api_named_guardguide_output" 2>&1
-grep -qF 'Repository Type: api' "$api_named_guardguide_output"
-grep -qF 'All tests passed' "$api_named_guardguide_output"
-
 untrusted_api_manifest_repo="$workspace/untrusted-api-manifest"
 copy_valid_repo "$valid_repo" "$untrusted_api_manifest_repo"
 printf '{"name":"secpal/api"}\n' >"$untrusted_api_manifest_repo/composer.json"
@@ -426,21 +418,12 @@ non_api_override_output="$workspace/non-api-override.output"
 grep -qF 'Repository Type: frontend' "$non_api_override_output"
 grep -qF 'All tests passed' "$non_api_override_output"
 
-detected_guardguide_repo="$workspace/detected-guardguide"
-copy_valid_repo "$valid_repo" "$detected_guardguide_repo"
-printf '{"name":"secpal/guardguide"}\n' \
-    >"$detected_guardguide_repo/composer.json"
-detected_guardguide_output="$workspace/detected-guardguide.output"
-bash "$VALIDATOR" "$detected_guardguide_repo" \
-    >"$detected_guardguide_output" 2>&1
-grep -qF 'Repository Type: guardguide' "$detected_guardguide_output"
-
-detected_website_repo="$workspace/detected-guardguide-website"
+detected_website_repo="$workspace/detected-website"
 copy_valid_repo "$valid_repo" "$detected_website_repo"
-printf '{"name":"secpal/guardguide.de"}\n' \
+printf '{"name":"secpal/secpal.app"}\n' \
     >"$detected_website_repo/package.json"
 printf 'export default {};\n' >"$detected_website_repo/astro.config.mjs"
-detected_website_output="$workspace/detected-guardguide-website.output"
+detected_website_output="$workspace/detected-website.output"
 bash "$VALIDATOR" "$detected_website_repo" \
     >"$detected_website_output" 2>&1
 grep -qF 'Repository Type: website' "$detected_website_output"
