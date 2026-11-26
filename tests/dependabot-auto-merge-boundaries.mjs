@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 SecPal Contributors
 // SPDX-License-Identifier: MIT
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -124,6 +125,12 @@ async function verifySource(change = {}) {
   const github = {
     rest: {
       git: {
+        getBlob: async ({ file_sha }) => {
+          const content =
+            change.upstream.blobs?.[file_sha] ??
+            spawnSync("git", ["cat-file", "blob", file_sha], { encoding: "utf8" }).stdout;
+          return { data: { sha: file_sha, encoding: "base64", content: Buffer.from(content).toString("base64") } };
+        },
         getCommit: async ({ commit_sha }) => ({
           data: { sha: commit_sha, tree: { sha: commit_sha } },
         }),
@@ -156,6 +163,10 @@ async function verifySource(change = {}) {
       },
       repos: {
         getBranch: async ({ owner, repo, branch }) => {
+          if (repo === "frontend") {
+            assert.equal(branch, "main");
+            return { data: { name: "main", protected: change.protectedBase ?? true, commit: { sha: pr.base.sha } } };
+          }
           assert.deepEqual(
             { owner, repo, branch },
             { owner: "SecPal", repo: ".github", branch: "main" }
@@ -933,7 +944,7 @@ function sharedPin({ dependency = scannerAction, alter = (data) => data, duplica
         dependencyGroup: "",
       },
     ],
-    { SHARED_SHA_WORKFLOW_PATHS: JSON.stringify([sharedCaller]) },
+    { VERIFIER_REVISION: oldRef },
     {
       upstream: {
         branch: { name: "main", protected: true, commit: { sha: nextRef } },
@@ -1027,6 +1038,7 @@ test("a signed immutable shared pin can advance across unrelated upstream change
 for (const dependency of [
   ".github/workflows/reusable-check-conflict-markers.yml",
   ".github/workflows/reusable-pr-size.yml",
+  ".github/workflows/reusable-reuse.yml",
 ]) {
   test(`authenticates the reviewed ${dependency} blob and rejects a changed workflow`, async () => {
     const fixture = sharedPin({ dependency });
@@ -1101,16 +1113,91 @@ test("shared SHA admission rejects transitive changes, missing ancestry, policy 
       });
     },
     (fixture) => {
-      fixture.env.SHARED_SHA_WORKFLOW_PATHS = "[]";
-    },
-    (fixture) => {
-      fixture.env.WORKFLOW_PATHS = '[".github/workflows/local.yml"]';
+      fixture.protectedBase = false;
     },
   ]) {
     const fixture = sharedPin();
     mutate(fixture);
     assert.equal(await verifySource(fixture), undefined);
   }
+});
+
+function addSharedBlob(fixture, path, content, ref = "1".repeat(40)) {
+  const sha = createHash("sha1").update(`blob ${Buffer.byteLength(content)}\0`).update(content).digest("hex");
+  (fixture.upstream.blobs ??= {})[sha] = content;
+  const tree = fixture.upstream.trees[ref].tree;
+  const entry = tree.find((entry) => entry.path === path);
+  if (entry) entry.sha = sha;
+  else tree.push({ path, sha, mode: "100644" });
+}
+
+test("one signed group can advance multiple components outside the legacy caller allowlists", async () => {
+  const reuse = ".github/workflows/reusable-reuse.yml";
+  const prettier = ".github/workflows/reusable-prettier.yml";
+  const fixture = sharedPin({ dependency: reuse });
+  fixture.env.WORKFLOW_PATHS = '[".github/workflows/other.yml"]';
+  const oldRef = "1".repeat(40);
+  const newRef = "2".repeat(40);
+  for (const ref of [oldRef, newRef]) {
+    addSharedBlob(fixture, prettier, "jobs: {}\n", ref);
+    const manifest = fixture.manifests[sharedCaller][ref === oldRef ? admissionBase : admissionHead];
+    const caller = Buffer.from(manifest.content, "base64").toString("utf8")
+      + `  format:\n    uses: SecPal/.github/${prettier}@${ref} # main\n`;
+    manifest.content = Buffer.from(caller).toString("base64");
+  }
+  const metadata = JSON.parse(fixture.env.VERIFIED_DEPENDENCIES);
+  metadata.push({ ...metadata[0], dependencyName: `SecPal/.github/${prettier}` });
+  fixture.env.VERIFIED_DEPENDENCIES = JSON.stringify(metadata);
+  fixture.commits[0].commit.message = `Update.\n\n---\n${yaml.dump({
+    "updated-dependencies": metadata.map((item) => ({
+      "dependency-name": item.dependencyName, "dependency-version": item.newVersion,
+    })),
+  })}...\n`;
+  assert.equal(await verifySource({ ...fixture, output: "shared-classification" }), "VERIFIED_NO_OP");
+});
+
+test("shared SHA classification distinguishes changed inputs, authority and incomplete closures", async () => {
+  const ai = ".github/workflows/reusable-ai-instructions.yml";
+  const newRef = "2".repeat(40);
+  for (const changed of ["scripts/validate-ai-instructions.sh", "package-lock.json"]) {
+    const fixture = sharedPin({ dependency: ai });
+    for (const ref of ["1".repeat(40), newRef]) {
+      for (const path of ["package.json", "package-lock.json", "scripts/validate-ai-instructions.sh"]) {
+        addSharedBlob(fixture, path, `reviewed ${path}`, ref);
+      }
+    }
+    addSharedBlob(fixture, changed, "different", newRef);
+    assert.equal(await verifySource({ ...fixture, output: "shared-classification" }), "IMPLEMENTATION_CHANGED");
+  }
+  const scanner = sharedPin();
+  addSharedBlob(scanner, "policies/trivy-repository-scan-v1.json", "changed policy", newRef);
+  assert.equal(await verifySource({ ...scanner, output: "shared-classification" }), "AUTHORITY_CHANGED");
+  const reuse = ".github/workflows/reusable-reuse.yml";
+  const permission = sharedPin({ dependency: reuse });
+  addSharedBlob(permission, reuse, "jobs: {}\npermissions: write-all\n", newRef);
+  assert.equal(await verifySource({ ...permission, output: "shared-classification" }), "AUTHORITY_CHANGED");
+
+  for (const [dependency, expected] of [
+    [".github/workflows/reusable-dependabot-auto-merge.yml", "AUTHORITY_CHANGED"],
+    [".github/workflows/reusable-ai-instructions.yml", "UNVERIFIABLE"],
+  ]) {
+    assert.equal(await verifySource({ ...sharedPin({ dependency }), output: "shared-classification" }), expected);
+  }
+});
+
+test("unchanged wrapping workflow cannot hide a changed same-commit nested workflow", async () => {
+  const wrapper = ".github/workflows/reusable-reuse.yml";
+  const child = ".github/workflows/reusable-node-lint.yml";
+  const fixture = sharedPin({ dependency: wrapper });
+  const oldRef = "1".repeat(40);
+  const newRef = "2".repeat(40);
+  for (const ref of [oldRef, newRef]) {
+    addSharedBlob(fixture, wrapper, `jobs:\n  child:\n    uses: ./${child}\n`, ref);
+    addSharedBlob(fixture, child, "jobs: {}\n", ref);
+  }
+  assert.equal(await verifySource(fixture), "shared-sha-no-op");
+  addSharedBlob(fixture, child, 'jobs: {}\nname: Changed\n', newRef);
+  assert.equal(await verifySource({ ...fixture, output: "shared-classification" }), "IMPLEMENTATION_CHANGED");
 });
 
 const pipPath = "docker/python/opentimestamps-requirements.txt";

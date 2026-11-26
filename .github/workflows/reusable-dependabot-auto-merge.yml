@@ -52,7 +52,7 @@ on:
         type: string
         default: "[]"
       shared-sha-workflow-paths:
-        description: "Exact caller workflows eligible for independently verified no-op SecPal SHA updates"
+        description: "Deprecated compatibility input. Internal updates are verified from the exact caller diff."
         type: string
         default: "[]"
       pip-manifest-path:
@@ -134,7 +134,7 @@ jobs:
           ALLOWED_ECOSYSTEMS: ${{ inputs.allowed-ecosystems }}
           VERIFIED_DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
           WORKFLOW_PATHS: ${{ inputs.workflow-paths }}
-          SHARED_SHA_WORKFLOW_PATHS: ${{ inputs.shared-sha-workflow-paths }}
+          VERIFIER_REVISION: ${{ fromJSON(toJSON(job)).workflow_sha }}
           PIP_MANIFEST_PATH: ${{ inputs.pip-manifest-path }}
           PIP_PLAIN_MANIFEST_PATHS: ${{ inputs.pip-plain-manifest-paths }}
           GRADLE_WRAPPER_PATH: ${{ inputs.gradle-wrapper-path }}
@@ -159,9 +159,10 @@ jobs:
             const sharedSyntax = /^SecPal\/\.github(?:\/|$)/i;
             const shared = ecosystem === 'github_actions' &&
               verifiedDependencies.some(item => sharedSyntax.test(item?.dependencyName));
-            const sharedPaths = shared ? JSON.parse(process.env.SHARED_SHA_WORKFLOW_PATHS || '[]') : [];
-            if (shared && (!Array.isArray(sharedPaths) || !sharedPaths.length ||
-                verifiedDependencies.some(item => !sharedSyntax.test(item?.dependencyName)))) return;
+            if (shared) {
+              core.setOutput('shared-classification', 'UNVERIFIABLE');
+              if (verifiedDependencies.some(item => !sharedSyntax.test(item?.dependencyName))) return;
+            }
             // Branch-derived metadata is not path authorization. Read only the
             // accepted base configuration; never load code from the PR head.
             let config;
@@ -241,8 +242,7 @@ jobs:
             const [dockerRule] = matchingRules;
             const allowed = path => typeof path === 'string' && (ecosystem === 'github_actions'
               ? /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path) &&
-                directories.includes('/') && (!workflowPaths.length || workflowPaths.includes(path)) &&
-                (!shared || (sharedPaths.includes(path) && path !== '.github/workflows/dependabot-auto-merge.yml'))
+                directories.includes('/') && (shared || !workflowPaths.length || workflowPaths.includes(path))
               : prefixes.some(prefix => ecosystem === 'pip'
                 ? (plainPaths.includes(path) && path === prefix + 'requirements.txt') ||
                   (path === pipPath && path.startsWith(prefix) && /^[A-Za-z0-9_.-]*requirements[A-Za-z0-9_.-]*\.txt$/.test(path.slice(prefix.length)))
@@ -310,7 +310,7 @@ jobs:
               const { data: commit } = await github.rest.git.getCommit({ ...repository, commit_sha: ref });
               if (commit.sha !== ref) return null;
               const { data } = await github.rest.git.getTree({ ...repository, tree_sha: commit.tree.sha, recursive: '1' });
-              return data.truncated === false ? new Map(data.tree.map(entry => [entry.path, entry])) : null;
+              return data?.truncated === false ? new Map(data.tree.map(entry => [entry.path, entry])) : null;
             };
             if (ecosystem === 'gradle' && !isWrapper) {
               if (commits[0].parents[0].sha !== pr.base.sha || files.some(file =>
@@ -324,55 +324,169 @@ jobs:
             }
             let updateType;
             let policyRejection;
+            let sharedClassification;
             if (shared) {
               const upstream = { owner: 'SecPal', repo: '.github' };
               const prefix = 'SecPal/.github/';
               const digest = /^[a-f0-9]{40}$/;
-              // This closed catalog binds each independently reviewed invocation
-              // to its executable and policy inputs. New implementations need review.
-              const closures = new Map([
-                ['.github/actions/trivy-repository-scan', [
-                  ['.github/actions/trivy-repository-scan/action.yml', 'f51119d1a316f9226df9f79dae76e0710118afbe'],
-                  ['scripts/secpal-trivy-repository-scan.py', '93849ae528f9a43e24e24d6db9bca52bff1263a5'],
-                  ['policies/trivy-repository-scan-v1.json', 'e735fd4c17d63d3ccdb4932c7eddae861cd4495d'],
-                  ['policies/trivy-repository-scan-ignore-v1.yaml', '2b0cecf85eaab8dcb8a4f7d0da5b7f776023ef6b'],
-                  ['policies/trivy-repository-secret-v1.yaml', '11600a6f598c88150e061b1e198b8cc4cbe97adf'],
-                ]],
-                ['.github/workflows/reusable-check-conflict-markers.yml', [
-                  ['.github/workflows/reusable-check-conflict-markers.yml', 'ffeb5573054a49b7c77ac51c92bb776ad973c6a3'],
-                ]],
-                ['.github/workflows/reusable-pr-size.yml', [
-                  ['.github/workflows/reusable-pr-size.yml', 'afba597541c543e0c12c2358bfce9c1f1c06695b'],
-                ]],
+              const workflowPath = /^\.github\/workflows\/[a-z0-9_-]+\.ya?ml$/;
+              const actionPath = /^\.github\/actions\/(?:[a-z0-9_-]+\/)*[a-z0-9_-]+$/;
+              const authorityWorkflow = '.github/workflows/reusable-dependabot-auto-merge.yml';
+              const callerAuthority = '.github/workflows/dependabot-auto-merge.yml';
+              const scanner = '.github/actions/trivy-repository-scan';
+              const workflows = '.github/workflows/reusable-';
+              const npmFiles = ['package.json', 'package-lock.json'];
+              // Compare the reviewed execution roots directly. The immutable
+              // verifier tree binds each root to the reviewed implementation.
+              const bound = new Map([
+                [scanner, ['scripts/secpal-trivy-repository-scan.py',
+                  'policies/trivy-repository-scan-v1.json',
+                  'policies/trivy-repository-scan-ignore-v1.yaml',
+                  'policies/trivy-repository-secret-v1.yaml']],
+                [workflows + 'markdown-lint.yml', npmFiles],
+                [workflows + 'ai-instructions.yml', [...npmFiles, 'scripts/validate-ai-instructions.sh']],
+                [workflows + 'dependabot-manifest-coverage.yml', [...npmFiles,
+                  'scripts/secpal-dependabot-manifest-coverage.mjs',
+                  'policies/dependabot-manifest-catalog-v1.json']],
               ]);
+              const callerOnly = new Set([
+                'actionlint', 'check-conflict-markers', 'license-compatibility', 'node-build',
+                'node-lint', 'node-test', 'php-lint', 'php-stan', 'pr-size', 'prettier', 'reuse',
+              ].map(name => workflows + name + '.yml'));
+              const classes = ['VERIFIED_NO_OP', 'IMPLEMENTATION_CHANGED', 'AUTHORITY_CHANGED', 'UNVERIFIABLE'];
+              const combine = (left, right) => classes[Math.max(classes.indexOf(left), classes.indexOf(right))];
               const dependencies = new Map();
               for (const item of verifiedDependencies) {
                 const { dependencyName: name, newVersion, packageEcosystem } = item;
-                const closure = closures.get(name.slice(prefix.length));
-                if (!name.startsWith(prefix) || !closure || !digest.test(newVersion) ||
-                    packageEcosystem !== 'github_actions' || dependencies.has(name)) return;
-                dependencies.set(name, { ...item, closure });
+                const path = name.slice(prefix.length);
+                if (!name.startsWith(prefix) || (!workflowPath.test(path) && !actionPath.test(path)) ||
+                    !digest.test(newVersion) || packageEcosystem !== 'github_actions' || dependencies.has(name)) return;
+                dependencies.set(name, { ...item, path });
               }
               if (commits[0].parents[0].sha !== pr.base.sha || files.some(file =>
                   file.status !== 'modified' || file.previous_filename || !digest.test(file.sha))) return;
               const { data: main } = await github.rest.repos.getBranch({ ...upstream, branch: 'main' });
               if (main.name !== 'main' || main.protected !== true || !digest.test(main.commit?.sha)) return;
+              const { data: callerMain } = repo === upstream.repo && owner === upstream.owner
+                ? { data: main } : await github.rest.repos.getBranch({ owner, repo, branch: 'main' });
+              if (callerMain.name !== 'main' || callerMain.protected !== true ||
+                  callerMain.commit?.sha !== pr.base.sha) return;
               const trees = new Map();
+              const ancestry = new Map();
               const getTree = async ref => {
-                if (!trees.has(ref)) trees.set(ref, await treeAt(ref, upstream));
+                if (!trees.has(ref)) trees.set(ref, treeAt(ref, upstream));
                 return trees.get(ref);
               };
               const isAncestor = async (ancestor, descendant) => {
                 if (ancestor === descendant) return true;
-                const { data } = await github.rest.repos.compareCommitsWithBasehead({
-                  ...upstream, basehead: ancestor + '...' + descendant, per_page: 1,
-                });
-                return data?.status === 'ahead' && data.merge_base_commit?.sha === ancestor;
+                const basehead = ancestor + '...' + descendant;
+                if (!ancestry.has(basehead)) {
+                  const { data } = await github.rest.repos.compareCommitsWithBasehead({ ...upstream, basehead, per_page: 1 });
+                  ancestry.set(basehead, data?.status === 'ahead' && data.merge_base_commit?.sha === ancestor);
+                }
+                return ancestry.get(basehead);
+              };
+              const verifier = process.env.VERIFIER_REVISION;
+              if (!digest.test(verifier) || !await isAncestor(verifier, main.commit.sha)) return;
+              const reviewed = await getTree(verifier);
+              if (!reviewed) return;
+              const same = (left, right) => left?.mode === right?.mode && left?.sha === right?.sha;
+              const regular = entry => ['100644', '100755'].includes(entry?.mode) && digest.test(entry.sha);
+              const inspect = async sha => {
+                const { data } = await github.rest.git.getBlob({ ...upstream, file_sha: sha });
+                if (data.sha !== sha || data.encoding !== 'base64' || !data.content) return null;
+                const content = Buffer.from(data.content, 'base64');
+                const parsed = require('node:child_process').spawnSync('ruby', ['-rjson', '-ryaml', '-e', String.raw`
+                  begin
+                    doc = YAML.safe_load(STDIN.read, permitted_classes: [], permitted_symbols: [], aliases: false)
+                    authority = []
+                    uses = if doc.key?('runs')
+                      raise unless doc.fetch('runs').fetch('using') == 'composite'
+                      doc.fetch('runs').fetch('steps').filter_map { |step| step['uses'] }
+                    else
+                      authority << doc['permissions'] << (doc['on'] || doc[true])&.dig('workflow_call', 'secrets')
+                      doc.fetch('jobs').values.flat_map do |job|
+                        authority << job.values_at('permissions', 'secrets', 'environment')
+                        [job['uses'], *job.fetch('steps', []).filter_map { |step| step['uses'] }].compact
+                      end
+                    end
+                    raise unless uses.all? { |use| use.is_a?(String) }
+                    print JSON.generate({ uses: uses, authority: authority })
+                  rescue StandardError
+                    exit 1
+                  end
+                `], { input: content, encoding: 'utf8', env: { PATH: process.env.PATH },
+                  timeout: 10000, maxBuffer: 1024 * 1024 });
+                if (parsed.status !== 0) return null;
+                return {
+                  ...JSON.parse(parsed.stdout),
+                  credentials: /\bsecrets\s*[.\[]|ACTIONS_ID_TOKEN_REQUEST|create-github-app-token/i.test(content.toString('utf8')),
+                };
+              };
+              const compareClosure = async (path, revisions, parents = new Set()) => {
+                if (path === authorityWorkflow || path === workflows + 'vulnerability-reevaluation.yml') {
+                  return 'AUTHORITY_CHANGED';
+                }
+                if (parents.has(path)) return 'UNVERIFIABLE';
+                const inputPaths = bound.get(path);
+                if (!inputPaths && !callerOnly.has(path)) return 'UNVERIFIABLE';
+                const action = actionPath.test(path);
+                const implementation = action ? path + '/action.yml' : path;
+                const required = [implementation, ...(inputPaths || [])];
+                const all = new Set(required);
+                if (inputPaths?.includes('package-lock.json')) {
+                  all.add('.npmrc');
+                  all.add('npm-shrinkwrap.json');
+                }
+                if (action) {
+                  for (const tree of [reviewed, ...revisions]) {
+                    for (const name of tree.keys()) {
+                      if (name.startsWith(path + '/')) all.add(name);
+                    }
+                  }
+                  if (all.has(path + '/action.yaml')) return 'UNVERIFIABLE';
+                }
+                for (const tree of revisions) {
+                  if (!required.every(name => regular(tree.get(name))) ||
+                      [...all].some(name => tree.has(name) && !regular(tree.get(name)))) return 'UNVERIFIABLE';
+                }
+                const changed = [...all].filter(name =>
+                  revisions.some(tree => !same(revisions[0].get(name), tree.get(name))));
+                if (changed.length) {
+                  if (changed.some(name => name.startsWith('policies/')) ||
+                      path === scanner || path === workflows + 'dependabot-manifest-coverage.yml') return 'AUTHORITY_CHANGED';
+                  if (changed.includes(implementation)) {
+                    const implementations = await Promise.all(revisions.map(tree => inspect(tree.get(implementation).sha)));
+                    if (implementations.some(component => !component)) return 'UNVERIFIABLE';
+                    const authority = JSON.stringify(implementations[0].authority);
+                    if (implementations.some(component =>
+                      component.credentials || JSON.stringify(component.authority) !== authority)) return 'AUTHORITY_CHANGED';
+                  }
+                  return 'IMPLEMENTATION_CHANGED';
+                }
+                // Changing a binding's execution roots requires an independent
+                // review, even when the proposed SHA retains that binding.
+                if ([...all].some(name => !same(reviewed.get(name), revisions[0].get(name)))) return 'UNVERIFIABLE';
+                const component = await inspect(reviewed.get(implementation).sha);
+                if (!component) return 'UNVERIFIABLE';
+                let result = 'VERIFIED_NO_OP';
+                for (const use of component.uses) {
+                  const sameRevision = use.startsWith('$/') ||
+                    (use.startsWith('./') && workflowPath.test(use.slice(2)));
+                  if (sameRevision) {
+                    result = combine(result, await compareClosure(use.slice(2), revisions, new Set([...parents, path])));
+                  } else if (!/^[a-z0-9_.-]+\/[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)*@[a-f0-9]{40}$/i.test(use) &&
+                             !/^docker:\/\/[^\s]+@sha256:[a-f0-9]{64}$/.test(use)) {
+                    return 'UNVERIFIABLE';
+                  }
+                }
+                return result;
               };
               const beforeTree = await treeAt(pr.base.sha), afterTree = await treeAt(expected);
               if (!beforeTree || !afterTree) return;
               const seen = new Map();
               const validated = new Set();
+              let result = 'VERIFIED_NO_OP';
               const useLine = /^[ \t]*(?:-[ \t]+)?uses:[ \t]+(\S+)(?:[ \t]+#.*)?[ \t]*$/;
               for (const file of files) {
                 const oldEntry = beforeTree.get(file.filename), nextEntry = afterTree.get(file.filename);
@@ -431,25 +545,19 @@ jobs:
                     if (!await isAncestor(oldRef, item.newVersion) ||
                         !await isAncestor(item.newVersion, newRef) ||
                         !await isAncestor(newRef, main.commit.sha)) return;
-                    const actionDirectory = name.slice(prefix.length);
-                    for (const ref of new Set([oldRef, item.newVersion, newRef])) {
-                      const tree = await getTree(ref);
-                      if (!tree || !item.closure.every(([path, sha]) => {
-                        const entry = tree.get(path);
-                        return entry?.mode === '100644' && entry.sha === sha;
-                      })) return;
-                      if (actionDirectory.startsWith('.github/actions/') &&
-                          [...tree.keys()].some(path =>
-                            path.startsWith(actionDirectory + '/') && path !== actionDirectory + '/action.yml')) return;
-                    }
+                    const revisions = await Promise.all([...new Set([oldRef, item.newVersion, newRef])].map(getTree));
+                    if (revisions.some(tree => !tree)) return;
+                    result = combine(result, await compareClosure(item.path, revisions));
                     validated.add(identity);
                   }
                   lines[index] = lines[index].replace(value, proposedUse);
                 }
                 if (lines.join('\n') !== next) return;
+                if (file.filename === callerAuthority) result = combine(result, 'AUTHORITY_CHANGED');
               }
               if (seen.size !== dependencies.size || [...seen.values()].some(use => !use.changed)) return;
-              updateType = 'shared-sha-no-op';
+              sharedClassification = result;
+              if (result === 'VERIFIED_NO_OP') updateType = 'shared-sha-no-op';
             }
             if (wrapperPath || ['pre_commit', 'docker'].includes(ecosystem)) {
               if (commits[0].parents[0].sha !== pr.base.sha || files.length !== signedDependencies.length ||
@@ -700,9 +808,13 @@ jobs:
             }
             const after = await read();
             if (after.head.sha !== expected || after.base.sha !== pr.base.sha || after.state !== 'open') return;
-            if (updateType || policyRejection || ecosystem === 'gradle') {
+            if (updateType || policyRejection || shared || ecosystem === 'gradle') {
               const { data: ref } = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
               if (ref.object?.type !== 'commit' || ref.object.sha !== pr.base.sha) return;
+            }
+            if (shared) {
+              core.setOutput('shared-classification', sharedClassification);
+              if (sharedClassification !== 'VERIFIED_NO_OP') return;
             }
             if (policyRejection) {
               core.setOutput('policy-rejection', policyRejection);
@@ -719,6 +831,7 @@ jobs:
         id: check
         env:
           SOURCE_VERIFIED: ${{ steps.source.outputs.verified }}
+          SHARED_CLASSIFICATION: ${{ steps.source.outputs.shared-classification }}
           PR_LABELS: ${{ steps.source.outputs.labels }}
           PHASE: ${{ inputs.phase }}
           METADATA_STEP_OUTCOME: ${{ steps.metadata.outcome }}
@@ -797,7 +910,11 @@ jobs:
           if [[ "${SOURCE_VERIFIED}" != "true" ]]; then
             echo "should-auto-merge=false" >> "${GITHUB_OUTPUT}"
             echo "update-type=unverified-source" >> "${GITHUB_OUTPUT}"
-            echo "Not eligible: source identity or changed paths could not be verified"
+            if [[ -n "${SHARED_CLASSIFICATION:-}" ]]; then
+              echo "Not eligible under shared component policy: ${SHARED_CLASSIFICATION}"
+            else
+              echo "Not eligible: source identity or changed paths could not be verified"
+            fi
             exit 0
           fi
 

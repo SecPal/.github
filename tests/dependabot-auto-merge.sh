@@ -320,7 +320,7 @@ printf '%s\n' "$dependabot_config_json" | node -e '
     (entry) => entry["package-ecosystem"] === "github-actions" && entry.directory === "/",
   );
   const groups = githubActions?.groups;
-  const workflowPattern = "SecPal/.github/.github/workflows/*";
+  const sharedComponentPattern = "SecPal/.github/*";
 
   function sameValues(actual, expected) {
     return Array.isArray(actual) &&
@@ -329,7 +329,6 @@ printf '%s\n' "$dependabot_config_json" | node -e '
   }
 
   const requiredGroups = [
-    "shared-workflow-pins",
     "github-actions-patch",
     "github-actions-minor",
     "github-actions-major",
@@ -338,15 +337,14 @@ printf '%s\n' "$dependabot_config_json" | node -e '
     throw new Error("GitHub Actions Dependabot groups must include every reviewed classification");
   }
 
-  if (!sameValues(groups["shared-workflow-pins"].patterns, [workflowPattern]) ||
-      Object.hasOwn(groups["shared-workflow-pins"], "update-types")) {
-    throw new Error("Unversioned shared workflow pins must use their own non-semver group");
+  if (Object.keys(groups).length !== requiredGroups.length) {
+    throw new Error("Shared actions and workflows must receive independent proposals");
   }
 
   for (const updateType of ["patch", "minor", "major"]) {
     const group = groups["github-actions-" + updateType];
     if (!sameValues(group.patterns, ["*"]) ||
-        !sameValues(group["exclude-patterns"], [workflowPattern]) ||
+        !sameValues(group["exclude-patterns"], [sharedComponentPattern]) ||
         !sameValues(group["update-types"], [updateType])) {
       throw new Error(
         "GitHub Actions " + updateType +
