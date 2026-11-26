@@ -80,6 +80,52 @@ The setup script installs locked dependencies and checks the pre-commit hooks.
 The host provides a Contracts pre-push hook for linked worktrees. Running the
 hook directly executes the same preflight as a push without publishing a branch.
 
+### API PHP validation
+
+For API work, substitute your open issue number and assignment name:
+
+```bash
+secpal-order new php-2637-qualification --repo api --issue 2637
+secpal-order resume php-2637-qualification
+```
+
+In the API tab, use the provisioned PHP 8.4 and Composer commands. The first
+locked install needs network access for package downloads:
+
+```bash
+composer validate --strict
+secpal-order php php-2637-qualification --online -- composer install \
+  --no-interaction --no-progress --prefer-dist
+composer check-platform-reqs
+./scripts/setup-pre-commit.sh
+```
+
+Use the repository's preflight to run the complete local validation, including
+the parallel and serial suites:
+
+```bash
+PREFLIGHT_RUN_TESTS=1 ./scripts/preflight.sh
+```
+
+For focused runs, use commands such as `php artisan test --filter=ExampleTest`
+or `vendor/bin/pint --test --dirty`. Git, repository hooks and SSH signing run
+in the Herdr tab. PHP and its child processes use the development image, which
+contains Composer and ripgrep and sets a 512 MiB CLI limit. The host-managed
+recipe and installed image ID are recorded alongside `secpal-order`.
+
+PHP commands use a disposable PostgreSQL 18 instance on a private internal
+Podman network. The temporary test role can create test databases without
+superuser rights. The instance has no published ports and is removed when the
+command exits or is interrupted. Composer runs without a database. The explicit
+`--online` option enables package downloads for Composer only.
+
+Run one PHP command at a time in each assignment. Different assignments can run
+independently. If the runner is killed before it can clean up, the next PHP
+command or `secpal-order finish` retries its cleanup. Review generated files
+before releasing the worktree.
+
+### Android toolchain
+
 Android Gradle work needs Java 21 and a discoverable Android SDK with
 `adb` and `sdkmanager`. Set `ANDROID_SDK_ROOT` or `ANDROID_HOME` if the SDK is
 outside `~/Android/Sdk`. Verify the toolchain with
