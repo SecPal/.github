@@ -22,6 +22,21 @@ and fails closed on unavailable, stale, or malformed scanner evidence. See
 [`trivy-repository-scanning.md`](../../docs/trivy-repository-scanning.md) for the
 closed caller interface and immutable invocation example.
 
+### Dependabot shared component updates
+
+Dependabot proposes each SecPal component independently, including the workflow
+that controls auto-merge. Full commit SHAs remain the executable references.
+The admission workflow compares Git trees for the consumer's current SHA, the
+signed proposal and the actual replacement. It checks the complete reviewed
+execution scope, including bound scripts, package files, policies and
+same-commit nested calls. Components with an unsupported execution scope
+require review.
+
+A verified no-op can enter native auto-merge. Implementation or authority
+changes go through independent review and the existing required checks.
+Changes to the auto-merge workflow or its caller require independent source
+review even when the proposed pin would preserve the implementation.
+
 ### Dependabot manifest coverage
 
 `reusable-dependabot-manifest-coverage.yml` runs the shared, deterministic

@@ -14,35 +14,27 @@ updates:
       interval: "daily"
       time: "04:00"
       timezone: "Europe/Berlin"
+    # Let Dependabot update each SecPal component independently, including merge authority.
     groups:
-      # These refs intentionally track a branch commit rather than a release,
-      # so Dependabot cannot assign them a semantic update type. Give them a
-      # readable title while keeping them on the manual-review path.
-      shared-workflow-pins:
-        patterns:
-          - "SecPal/.github/.github/workflows/*"
-      # Keep each versioned action group semver-homogeneous. The reusable
-      # auto-merge workflow verifies the group, ecosystem, and every member's
-      # update type before trusting the classification.
       github-actions-patch:
         patterns:
           - "*"
         exclude-patterns:
-          - "SecPal/.github/.github/workflows/*"
+          - "SecPal/.github/*"
         update-types:
           - "patch"
       github-actions-minor:
         patterns:
           - "*"
         exclude-patterns:
-          - "SecPal/.github/.github/workflows/*"
+          - "SecPal/.github/*"
         update-types:
           - "minor"
       github-actions-major:
         patterns:
           - "*"
         exclude-patterns:
-          - "SecPal/.github/.github/workflows/*"
+          - "SecPal/.github/*"
         update-types:
           - "major"
     commit-message:
