@@ -66,9 +66,10 @@ validation fixtures.
 - Keep GitHub Actions groups semver-homogeneous and use distinct PATCH, MINOR,
   and MAJOR group identifiers so titles and automation preserve the update
   class. Verify every grouped metadata entry before auto-merge and exclude
-  unversioned shared-workflow commit pins from those groups. Shared SHA changes
-  require independent review unless the accepted caller and verifier prove an
-  effective no-op across the invoked code and its reviewed dependencies.
+  shared-component pins from those groups. Shared release updates require the
+  protected verifier to authenticate the exact stable release and compare the
+  invoked implementation and its relevant dependencies. Merge authority stays
+  independently reviewed.
 - A Dependabot auto-merge caller may use pull_request_target for its explicitly
   scoped write token only when it executes immutable reviewed code and never
   checks out or runs pull-request-controlled content.

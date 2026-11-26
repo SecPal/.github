@@ -129,7 +129,13 @@ async function verifySource(change = {}) {
           const content =
             change.upstream.blobs?.[file_sha] ??
             spawnSync("git", ["cat-file", "blob", file_sha], { encoding: "utf8" }).stdout;
-          return { data: { sha: file_sha, encoding: "base64", content: Buffer.from(content).toString("base64") } };
+          return {
+            data: {
+              sha: file_sha,
+              encoding: "base64",
+              content: Buffer.from(content).toString("base64"),
+            },
+          };
         },
         getCommit: async ({ commit_sha }) => ({
           data: { sha: commit_sha, tree: { sha: commit_sha } },
@@ -162,10 +168,17 @@ async function verifySource(change = {}) {
         }),
       },
       repos: {
+        getReleaseByTag: async ({ tag }) => ({ data: change.releases?.[tag] }),
         getBranch: async ({ owner, repo, branch }) => {
           if (repo === "frontend") {
             assert.equal(branch, "main");
-            return { data: { name: "main", protected: change.protectedBase ?? true, commit: { sha: pr.base.sha } } };
+            return {
+              data: {
+                name: "main",
+                protected: change.protectedBase ?? true,
+                commit: { sha: pr.base.sha },
+              },
+            };
           }
           assert.deepEqual(
             { owner, repo, branch },
@@ -228,7 +241,12 @@ async function verifySource(change = {}) {
         },
       },
       { setOutput: (key, value) => Object.assign(output, { [key]: value }) },
-      createRequire(import.meta.url),
+      (name) => {
+        const module = createRequire(import.meta.url)(name);
+        return name === "node:child_process" && change.releaseAttestation
+          ? { ...module, execFileSync: change.releaseAttestation }
+          : module;
+      },
       change.fetch ?? (() => assert.fail("unexpected network request"))
     );
     return output[change.output ?? (change.classification ? "update-type" : "verified")];
@@ -901,13 +919,19 @@ const scannerSources = [
   ["policies/trivy-repository-secret-v1.yaml", "11600a6f598c88150e061b1e198b8cc4cbe97adf"],
 ];
 
-function sharedPin({ dependency = scannerAction, alter = (data) => data, duplicateRef } = {}) {
+function sharedPin({
+  dependency = scannerAction,
+  alter = (data) => data,
+  duplicateRef,
+  release = false,
+} = {}) {
   const full = `SecPal/.github/${dependency}`;
   const oldRef = "1".repeat(40),
     nextRef = "2".repeat(40);
   const isReusableWorkflow = dependency.startsWith(".github/workflows/");
+  const annotation = (ref) => (release ? (ref === oldRef ? "v1.1.0" : "v1.1.1") : "main");
   const content = (ref) =>
-    `jobs:\n  quality:\n${isReusableWorkflow ? "    uses:" : "    steps:\n      - uses:"} ${full}@${ref} # main\n`;
+    `jobs:\n  quality:\n${isReusableWorkflow ? "    uses:" : "    steps:\n      - uses:"} ${full}@${ref} # ${annotation(ref)}\n`;
   const oldTree = {
     truncated: false,
     tree: [
@@ -1123,7 +1147,10 @@ test("shared SHA admission rejects transitive changes, missing ancestry, policy 
 });
 
 function addSharedBlob(fixture, path, content, ref = "1".repeat(40)) {
-  const sha = createHash("sha1").update(`blob ${Buffer.byteLength(content)}\0`).update(content).digest("hex");
+  const sha = createHash("sha1")
+    .update(`blob ${Buffer.byteLength(content)}\0`)
+    .update(content)
+    .digest("hex");
   (fixture.upstream.blobs ??= {})[sha] = content;
   const tree = fixture.upstream.trees[ref].tree;
   const entry = tree.find((entry) => entry.path === path);
@@ -1140,9 +1167,11 @@ test("one signed group can advance multiple components outside the legacy caller
   const newRef = "2".repeat(40);
   for (const ref of [oldRef, newRef]) {
     addSharedBlob(fixture, prettier, "jobs: {}\n", ref);
-    const manifest = fixture.manifests[sharedCaller][ref === oldRef ? admissionBase : admissionHead];
-    const caller = Buffer.from(manifest.content, "base64").toString("utf8")
-      + `  format:\n    uses: SecPal/.github/${prettier}@${ref} # main\n`;
+    const manifest =
+      fixture.manifests[sharedCaller][ref === oldRef ? admissionBase : admissionHead];
+    const caller =
+      Buffer.from(manifest.content, "base64").toString("utf8") +
+      `  format:\n    uses: SecPal/.github/${prettier}@${ref} # main\n`;
     manifest.content = Buffer.from(caller).toString("base64");
   }
   const metadata = JSON.parse(fixture.env.VERIFIED_DEPENDENCIES);
@@ -1150,10 +1179,14 @@ test("one signed group can advance multiple components outside the legacy caller
   fixture.env.VERIFIED_DEPENDENCIES = JSON.stringify(metadata);
   fixture.commits[0].commit.message = `Update.\n\n---\n${yaml.dump({
     "updated-dependencies": metadata.map((item) => ({
-      "dependency-name": item.dependencyName, "dependency-version": item.newVersion,
+      "dependency-name": item.dependencyName,
+      "dependency-version": item.newVersion,
     })),
   })}...\n`;
-  assert.equal(await verifySource({ ...fixture, output: "shared-classification" }), "VERIFIED_NO_OP");
+  assert.equal(
+    await verifySource({ ...fixture, output: "shared-classification" }),
+    "VERIFIED_NO_OP"
+  );
 });
 
 test("shared SHA classification distinguishes changed inputs, authority and incomplete closures", async () => {
@@ -1162,26 +1195,157 @@ test("shared SHA classification distinguishes changed inputs, authority and inco
   for (const changed of ["scripts/validate-ai-instructions.sh", "package-lock.json"]) {
     const fixture = sharedPin({ dependency: ai });
     for (const ref of ["1".repeat(40), newRef]) {
-      for (const path of ["package.json", "package-lock.json", "scripts/validate-ai-instructions.sh"]) {
+      for (const path of [
+        "package.json",
+        "package-lock.json",
+        "scripts/validate-ai-instructions.sh",
+      ]) {
         addSharedBlob(fixture, path, `reviewed ${path}`, ref);
       }
     }
     addSharedBlob(fixture, changed, "different", newRef);
-    assert.equal(await verifySource({ ...fixture, output: "shared-classification" }), "IMPLEMENTATION_CHANGED");
+    assert.equal(
+      await verifySource({ ...fixture, output: "shared-classification" }),
+      "IMPLEMENTATION_CHANGED"
+    );
   }
   const scanner = sharedPin();
   addSharedBlob(scanner, "policies/trivy-repository-scan-v1.json", "changed policy", newRef);
-  assert.equal(await verifySource({ ...scanner, output: "shared-classification" }), "AUTHORITY_CHANGED");
+  assert.equal(
+    await verifySource({ ...scanner, output: "shared-classification" }),
+    "AUTHORITY_CHANGED"
+  );
   const reuse = ".github/workflows/reusable-reuse.yml";
   const permission = sharedPin({ dependency: reuse });
   addSharedBlob(permission, reuse, "jobs: {}\npermissions: write-all\n", newRef);
-  assert.equal(await verifySource({ ...permission, output: "shared-classification" }), "AUTHORITY_CHANGED");
+  assert.equal(
+    await verifySource({ ...permission, output: "shared-classification" }),
+    "AUTHORITY_CHANGED"
+  );
 
   for (const [dependency, expected] of [
     [".github/workflows/reusable-dependabot-auto-merge.yml", "AUTHORITY_CHANGED"],
     [".github/workflows/reusable-ai-instructions.yml", "UNVERIFIABLE"],
   ]) {
-    assert.equal(await verifySource({ ...sharedPin({ dependency }), output: "shared-classification" }), expected);
+    assert.equal(
+      await verifySource({ ...sharedPin({ dependency }), output: "shared-classification" }),
+      expected
+    );
+  }
+});
+
+function qualifiedSharedRelease(dependency = ".github/workflows/reusable-markdown-lint.yml") {
+  const fixture = sharedPin({ dependency, release: true });
+  const oldRef = "1".repeat(40),
+    nextRef = "2".repeat(40);
+  fixture.releases = Object.fromEntries(
+    [oldRef, nextRef].map((ref, index) => [
+      `v1.1.${index}`,
+      {
+        id: index + 20,
+        tag_name: `v1.1.${index}`,
+        immutable: true,
+        draft: false,
+        prerelease: false,
+        target_commitish: ref,
+      },
+    ])
+  );
+  fixture.refs = Object.fromEntries(
+    Object.values(fixture.releases).map((release) => [
+      `SecPal/.github/tags/${release.tag_name}`,
+      { type: "commit", sha: release.target_commitish },
+    ])
+  );
+  fixture.releaseAttestation = (binary, args) => {
+    assert.equal(binary, "gh");
+    const release = fixture.releases[args[2]];
+    return JSON.stringify({
+      verificationResult: {
+        statement: {
+          predicateType: "https://in-toto.io/attestation/release/v0.2",
+          predicate: {
+            repository: "SecPal/.github",
+            tag: release.tag_name,
+            databaseId: String(release.id),
+          },
+          subject: [
+            {
+              uri: `pkg:github/SecPal/.github@${release.tag_name}`,
+              digest: { sha1: release.target_commitish },
+            },
+          ],
+        },
+      },
+    });
+  };
+  for (const ref of [oldRef, nextRef]) {
+    addSharedBlob(fixture, dependency, "permissions: { contents: read }\njobs: {}\n", ref);
+    if (dependency.endsWith("markdown-lint.yml")) {
+      addSharedBlob(fixture, "package.json", "reviewed package manifest", ref);
+      addSharedBlob(fixture, "package-lock.json", "reviewed dependency lock", ref);
+    }
+  }
+  return fixture;
+}
+
+test("a release with an attested exact SHA can adopt a compatible dependency implementation change", async () => {
+  const fixture = qualifiedSharedRelease();
+  addSharedBlob(fixture, "package-lock.json", "accepted dependency update", "2".repeat(40));
+  assert.equal(
+    await verifySource({ ...fixture, output: "update-type" }),
+    "version-update:semver-patch"
+  );
+  assert.equal(
+    await verifySource({ ...fixture, output: "shared-classification" }),
+    "IMPLEMENTATION_CHANGED"
+  );
+  assert.equal(await verifySource({ ...fixture, output: "verified" }), "true");
+});
+
+test("an immutable release cannot confer merge authority or justify a no-op", async () => {
+  const fixture = qualifiedSharedRelease();
+  assert.equal(await verifySource({ ...fixture, output: "verified" }), "false");
+  addSharedBlob(
+    fixture,
+    ".github/workflows/reusable-markdown-lint.yml",
+    "permissions: { contents: write }\njobs: {}\n",
+    "2".repeat(40)
+  );
+  assert.equal(
+    await verifySource({ ...fixture, output: "shared-classification" }),
+    "AUTHORITY_CHANGED"
+  );
+  assert.equal(await verifySource({ ...fixture, output: "verified" }), "false");
+  const authority = qualifiedSharedRelease(".github/workflows/reusable-dependabot-auto-merge.yml");
+  assert.equal(
+    await verifySource({ ...authority, output: "shared-classification" }),
+    "AUTHORITY_CHANGED"
+  );
+  assert.equal(await verifySource({ ...authority, output: "verified" }), "false");
+});
+
+test("a release with a missing or mismatched attestation, tag, or immutability fails closed", async () => {
+  for (const mutate of [
+    (fixture) => {
+      fixture.releases["v1.1.1"].immutable = false;
+    },
+    (fixture) => {
+      fixture.refs["SecPal/.github/tags/v1.1.1"].sha = "7".repeat(40);
+    },
+    (fixture) => {
+      fixture.releaseAttestation = () => {
+        throw new Error("no attestation");
+      };
+    },
+    (fixture) => {
+      fixture.releaseAttestation = () => "{}";
+    },
+  ]) {
+    const fixture = qualifiedSharedRelease();
+    addSharedBlob(fixture, "package-lock.json", "accepted dependency update", "2".repeat(40));
+    mutate(fixture);
+    assert.equal(await verifySource({ ...fixture, output: "verified" }), "false");
   }
 });
 
@@ -1196,8 +1360,11 @@ test("unchanged wrapping workflow cannot hide a changed same-commit nested workf
     addSharedBlob(fixture, child, "jobs: {}\n", ref);
   }
   assert.equal(await verifySource(fixture), "shared-sha-no-op");
-  addSharedBlob(fixture, child, 'jobs: {}\nname: Changed\n', newRef);
-  assert.equal(await verifySource({ ...fixture, output: "shared-classification" }), "IMPLEMENTATION_CHANGED");
+  addSharedBlob(fixture, child, "jobs: {}\nname: Changed\n", newRef);
+  assert.equal(
+    await verifySource({ ...fixture, output: "shared-classification" }),
+    "IMPLEMENTATION_CHANGED"
+  );
 });
 
 const pipPath = "docker/python/opentimestamps-requirements.txt";
