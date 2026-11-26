@@ -223,8 +223,8 @@ if grep -qE "^[[:space:]]+if:.*github\.actor == 'dependabot\[bot\]'" "$CALLER_WO
   exit 1
 fi
 
-grep -qE '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@[0-9a-f]{40}[[:space:]]+#[[:space:]]+main$' "$CALLER_WORKFLOW" || {
-  echo "Dependabot caller workflow must keep auto-merge decisions on a reviewed immutable reusable workflow revision documented as main." >&2
+grep -qE '^    uses: SecPal/\.github/\.github/workflows/reusable-dependabot-auto-merge\.yml@[0-9a-f]{40}[[:space:]]+#[[:space:]]+(main|v[0-9]+\.[0-9]+\.[0-9]+)$' "$CALLER_WORKFLOW" || {
+  echo "Dependabot caller workflow must keep auto-merge decisions on a reviewed immutable reusable workflow revision annotated with its source revision or release version." >&2
   exit 1
 }
 
@@ -244,7 +244,7 @@ git -C "$REPO_ROOT" merge-base --is-ancestor "$caller_revision" "$main_revision"
 if awk '
   /^  auto-merge:$/ { in_job = 1; next }
   in_job && /^  [[:alnum:]_-]+:$/ { in_job = 0 }
-  in_job && /^[[:space:]]+uses: SecPal\/\.github\/\.github\/workflows\/reusable-dependabot-auto-merge\.yml@[0-9a-f]{40}[[:space:]]+#[[:space:]]+main$/ {
+  in_job && /^[[:space:]]+uses: SecPal\/\.github\/\.github\/workflows\/reusable-dependabot-auto-merge\.yml@[0-9a-f]{40}[[:space:]]+#[[:space:]]+(main|v[0-9]+\.[0-9]+\.[0-9]+)$/ {
     reusable_job = 1
   }
   in_job && /^[[:space:]]+timeout-minutes:/ { has_timeout = 1 }

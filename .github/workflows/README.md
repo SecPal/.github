@@ -40,10 +40,13 @@ Leave those pins on their current qualified release until the component changes.
 
 The already pinned protected verifier compares the consumer's exact signed diff
 and the relevant Git trees. It authenticates the immutable GitHub Release, its
-tag and commit, and its native release attestation for both pins. Compatible
-implementation changes to reviewed read-only closures can enroll in native
+tag and commit, and its native release attestation for both pins. The caller allows read-only
+attestation access for this verification. Compatible
+implementation changes to reviewed read-only workflow closures can enroll in native
 auto-merge under the caller's policy. The consumer's required checks still
-decide whether GitHub can merge. A qualified release with an unchanged closure
+decide whether GitHub can merge. Composite actions inherit the calling job’s
+authority. The repository scanner stays in the security-sensitive review scope.
+A qualified release with an unchanged closure
 does not enroll. During migration the existing legacy no-op policy applies to
 unannotated pins.
 

@@ -1945,7 +1945,11 @@ test("native required-check lookup has only the necessary read scopes", () => {
   assert.equal(workflow.permissions.checks, "read");
   assert.equal(workflow.permissions.statuses, "read");
   const eligibility = workflow.jobs["check-eligibility"].permissions;
-  assert.deepEqual(eligibility, { contents: "read", "pull-requests": "read" });
+  assert.deepEqual(eligibility, {
+    contents: "read",
+    "pull-requests": "read",
+    attestations: "read",
+  });
 });
 
 test("callers remaining in phase one still refuse minor enrollment", () => {
