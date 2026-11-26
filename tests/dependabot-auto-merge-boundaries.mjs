@@ -1763,6 +1763,7 @@ test("caller reconciles label, draft and target changes", () => {
     "pull-requests": "write",
     checks: "read",
     statuses: "read",
+    attestations: "read",
   });
   for (const event of ["labeled", "unlabeled", "edited", "converted_to_draft"]) {
     assert.ok(caller.on.pull_request_target.types.includes(event), `missing ${event}`);
