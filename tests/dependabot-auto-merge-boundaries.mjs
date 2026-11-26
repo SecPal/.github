@@ -1588,10 +1588,7 @@ test("caller reconciles label, draft and target changes", () => {
     "requirements/requirements.txt",
   ]);
   assert.equal(caller.jobs["auto-merge"].with["pre-commit-path"], ".pre-commit-config.yaml");
-  assert.deepEqual(JSON.parse(caller.jobs["auto-merge"].with["shared-sha-workflow-paths"]), [
-    ".github/workflows/daily-repository-security.yml",
-    ".github/workflows/quality.yml",
-  ]);
+  assert.equal(Object.hasOwn(caller.jobs["auto-merge"].with, "shared-sha-workflow-paths"), false);
   assert.equal(caller.concurrency["cancel-in-progress"], true);
   assert.equal(caller["cache-mode"], "none");
   assert.deepEqual(caller.permissions, {
