@@ -98,7 +98,6 @@ permissions:
   pull-requests: write
   checks: read
   statuses: read
-  attestations: read
 
 jobs:
   # Determine if this PR is eligible for auto-merge

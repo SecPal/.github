@@ -1944,6 +1944,7 @@ test("a stale eligible run cannot enroll after the live dependencies label is re
 test("native required-check lookup has only the necessary read scopes", () => {
   assert.equal(workflow.permissions.checks, "read");
   assert.equal(workflow.permissions.statuses, "read");
+  assert.equal(workflow.permissions.attestations, undefined);
   const eligibility = workflow.jobs["check-eligibility"].permissions;
   assert.deepEqual(eligibility, {
     contents: "read",
