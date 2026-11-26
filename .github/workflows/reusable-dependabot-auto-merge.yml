@@ -11,6 +11,7 @@
 #     pull-requests: write
 #     checks: read
 #     statuses: read
+#     attestations: read
 #   jobs:
 #     auto-merge:
 #       uses: SecPal/.github/.github/workflows/reusable-dependabot-auto-merge.yml@<trusted-commit-sha>
@@ -112,6 +113,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      attestations: read
     outputs:
       should-auto-merge: ${{ steps.check.outputs.should-auto-merge }}
       update-type: ${{ steps.check.outputs.update-type }}

@@ -56,8 +56,24 @@ if [[ -z "$changes" ]]; then
 fi
 printf '%s\n' "$changes"
 
+existing=$(gh api "repos/$repo/git/matching-refs/tags/$tag" --jq ".[] | select(.ref == \"refs/tags/$tag\") | .ref")
+if [[ -n "$existing" ]]; then
+  echo "Ref $existing already exists. Publish with a new version tag." >&2
+  exit 1
+fi
+
 gh release create "$tag" -R "$repo" --target "$sha" --latest \
   --title "SecPal shared components $tag" --notes-file "$notes"
 gh api "repos/$repo/releases/tags/$tag" --jq ".immutable and .target_commitish == \"$sha\"" | grep -qx true
 [[ "$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object | select(.type == "commit").sha')" == "$sha" ]]
-gh release verify "$tag" -R "$repo"
+# An immutable release can be visible before its attestation is available.
+for attempt in 1 2 3 4 5; do
+  if gh release verify "$tag" -R "$repo"; then
+    exit 0
+  fi
+  if [[ "$attempt" != 5 ]]; then
+    sleep 5
+  fi
+done
+echo "Release $tag is public. Recheck its attestation before adopting it." >&2
+exit 1
