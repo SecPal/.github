@@ -114,6 +114,6 @@ remain defined in `docs/evidence-architecture-contract.md`.
   values in source, logs, fixtures, or generated output.
 - Preserve explicit security boundaries, least authority, reproducible
   dependencies, and fail-closed behavior when changing governance automation.
-- This repository is not release-versioned; keep any governance changelog
-  chronological and keep shared contracts compatible until proven callers have
-  migrated.
+- Keep the governance changelog chronological. Publish the shared workflows
+  and actions on the [shared component release line](.github/workflows/README.md#dependabot-shared-component-updates)
+  and keep shared contracts compatible until callers have migrated.

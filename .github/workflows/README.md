@@ -24,18 +24,57 @@ closed caller interface and immutable invocation example.
 
 ### Dependabot shared component updates
 
-Dependabot proposes each SecPal component independently, including the workflow
-that controls auto-merge. Full commit SHAs remain the executable references.
-The admission workflow compares Git trees for the consumer's current SHA, the
-signed proposal and the actual replacement. It checks the complete reviewed
-execution scope, including bound scripts, package files, policies and
-same-commit nested calls. Components with an unsupported execution scope
-require review.
+[SecPal/.github#540](https://github.com/SecPal/.github/issues/540) defines one
+technical SemVer line for the shared workflows and actions. The first qualified
+release is [v1.1.0](https://github.com/SecPal/.github/releases/tag/v1.1.0).
+The historical `v1` tag predates this policy. Pin each shared dependency to the
+full release commit SHA and include the exact version as a same-line
+`# v1.1.0` comment. Use the same version convention for all eight repositories.
 
-A verified no-op can enter native auto-merge. Implementation or authority
-changes go through independent review and the existing required checks.
-Changes to the auto-merge workflow or its caller require independent source
-review even when the proposed pin would preserve the implementation.
+Dependabot proposes each shared component independently. It uses Git tags for
+version discovery and can fall back to a branch head when a pinned SHA has no
+matching tag. Check GitHub's actual jobs during rollout. Treat the version
+comment as a claim until the verifier confirms it against the immutable release.
+A shared version can advance while an individual component stays unchanged.
+Leave those pins on their current qualified release until the component changes.
+
+The already pinned protected verifier compares the consumer's exact signed diff
+and the relevant Git trees. It authenticates the immutable GitHub Release, its
+tag and commit, and its native release attestation for both pins. Compatible
+implementation changes to reviewed read-only closures can enroll in native
+auto-merge under the caller's policy. The consumer's required checks still
+decide whether GitHub can merge. A qualified release with an unchanged closure
+does not enroll. During migration the existing legacy no-op policy applies to
+unannotated pins.
+
+Keep the merge workflow, its caller, and security-sensitive authority changes
+on the independently reviewed path. The already trusted verifier never admits
+an `AUTHORITY_CHANGED` proposal for automatic enrollment. Record the exact
+released SHA, affected component and consuming scope on the protected adoption
+PR, and use the existing maintainer review and merge path.
+
+#### Publication
+
+Organization owners publish with the existing administrative GitHub CLI from
+an isolated checkout. The repository restricts numeric version tag creation
+to organization owners. Create the tag in the native release publication
+operation so there is no pre-existing unpublished version tag.
+
+Review the consumer-visible closure delta from the preceding verified release
+first. Check the exported workflow or action, the exact nested calls, scripts,
+runtime manifests, schemas and policies it loads, and the scope of any
+authority changes. Release only when this review identifies an actual
+consumer-visible change. Pin refreshes in the repository's local callers and
+unrelated documentation do not qualify. Keep the authority caller pinned to
+the separately accepted revision.
+
+Run `scripts/publish-shared-components.sh VERSION SHA NOTES_FILE` from the
+canonical repository. The notes should identify the accepted changes and their
+consumer scope. The command requires a signed protected-main merge with green
+required checks, rejects a candidate without a shared-source delta, and
+verifies the resulting GitHub attestation and exact tag/commit binding. Use a
+patch for compatible fixes, a minor for compatible additions, and a major for
+breaking changes.
 
 ### Dependabot manifest coverage
 

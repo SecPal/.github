@@ -134,6 +134,7 @@ jobs:
           ALLOWED_ECOSYSTEMS: ${{ inputs.allowed-ecosystems }}
           VERIFIED_DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
           WORKFLOW_PATHS: ${{ inputs.workflow-paths }}
+          GH_TOKEN: ${{ github.token }}
           VERIFIER_REVISION: ${{ fromJSON(toJSON(job)).workflow_sha }}
           PIP_MANIFEST_PATH: ${{ inputs.pip-manifest-path }}
           PIP_PLAIN_MANIFEST_PATHS: ${{ inputs.pip-plain-manifest-paths }}
@@ -329,6 +330,7 @@ jobs:
               const upstream = { owner: 'SecPal', repo: '.github' };
               const prefix = 'SecPal/.github/';
               const digest = /^[a-f0-9]{40}$/;
+              const releaseVersion = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
               const workflowPath = /^\.github\/workflows\/[a-z0-9_-]+\.ya?ml$/;
               const actionPath = /^\.github\/actions\/(?:[a-z0-9_-]+\/)*[a-z0-9_-]+$/;
               const authorityWorkflow = '.github/workflows/reusable-dependabot-auto-merge.yml';
@@ -360,7 +362,7 @@ jobs:
                 const { dependencyName: name, newVersion, packageEcosystem } = item;
                 const path = name.slice(prefix.length);
                 if (!name.startsWith(prefix) || (!workflowPath.test(path) && !actionPath.test(path)) ||
-                    !digest.test(newVersion) || packageEcosystem !== 'github_actions' || dependencies.has(name)) return;
+                    (!digest.test(newVersion) && !releaseVersion.test(newVersion)) || packageEcosystem !== 'github_actions' || dependencies.has(name)) return;
                 dependencies.set(name, { ...item, path });
               }
               if (commits[0].parents[0].sha !== pr.base.sha || files.some(file =>
@@ -390,6 +392,31 @@ jobs:
               if (!digest.test(verifier) || !await isAncestor(verifier, main.commit.sha)) return;
               const reviewed = await getTree(verifier);
               if (!reviewed) return;
+              const verifiedReleases = new Map();
+              const verifyRelease = async (tag, sha) => {
+                if (verifiedReleases.has(tag)) return verifiedReleases.get(tag) === sha;
+                try {
+                  const { data: release } = await github.rest.repos.getReleaseByTag({ ...upstream, tag });
+                  if (release.tag_name !== tag || release.target_commitish !== sha || release.immutable !== true ||
+                      release.draft !== false || release.prerelease !== false) return false;
+                  const { data: ref } = await github.rest.git.getRef({ ...upstream, ref: 'tags/' + tag });
+                  if (ref.object?.type !== 'commit' || ref.object.sha !== sha) return false;
+                  const repoName = upstream.owner + '/' + upstream.repo;
+                  const result = require('node:child_process').execFileSync('gh',
+                    ['release', 'verify', tag, '--repo', repoName, '--format', 'json'],
+                    { encoding: 'utf8', timeout: 30000, maxBuffer: 1024 * 1024 });
+                  const statement = JSON.parse(result).verificationResult?.statement;
+                  const subject = statement?.subject?.filter(subject => subject.uri === 'pkg:github/' + repoName + '@' + tag);
+                  if (statement?.predicateType !== 'https://in-toto.io/attestation/release/v0.2' ||
+                      statement.predicate?.repository !== repoName || statement.predicate.tag !== tag ||
+                      statement.predicate.databaseId !== String(release.id) ||
+                      subject?.length !== 1 || subject[0].digest?.sha1 !== sha) return false;
+                  verifiedReleases.set(tag, sha);
+                  return true;
+                } catch {
+                  return false;
+                }
+              };
               const same = (left, right) => left?.mode === right?.mode && left?.sha === right?.sha;
               const regular = entry => ['100644', '100755'].includes(entry?.mode) && digest.test(entry.sha);
               const inspect = async sha => {
@@ -400,18 +427,25 @@ jobs:
                   begin
                     doc = YAML.safe_load(STDIN.read, permitted_classes: [], permitted_symbols: [], aliases: false)
                     authority = []
+                    read_only = false
                     uses = if doc.key?('runs')
                       raise unless doc.fetch('runs').fetch('using') == 'composite'
                       doc.fetch('runs').fetch('steps').filter_map { |step| step['uses'] }
                     else
-                      authority << doc['permissions'] << (doc['on'] || doc[true])&.dig('workflow_call', 'secrets')
-                      doc.fetch('jobs').values.flat_map do |job|
+                      call = (doc['on'] || doc[true])&.fetch('workflow_call', nil)
+                      authority << doc['permissions'] << call
+                      read_permissions = ->(value) { value == 'read-all' || value.is_a?(Hash) && value.values.all? { |v| %w[read none].include?(v) } }
+                      jobs = doc.fetch('jobs').values
+                      read_only = read_permissions.call(doc['permissions']) && jobs.all? do |job|
+                        !job['secrets'] && !job['environment'] && (!job.key?('permissions') || read_permissions.call(job['permissions']))
+                      end
+                      jobs.flat_map do |job|
                         authority << job.values_at('permissions', 'secrets', 'environment')
                         [job['uses'], *job.fetch('steps', []).filter_map { |step| step['uses'] }].compact
                       end
                     end
                     raise unless uses.all? { |use| use.is_a?(String) }
-                    print JSON.generate({ uses: uses, authority: authority })
+                    print JSON.generate({ uses: uses, authority: authority, readOnly: read_only })
                   rescue StandardError
                     exit 1
                   end
@@ -423,7 +457,7 @@ jobs:
                   credentials: /\bsecrets\s*[.\[]|ACTIONS_ID_TOKEN_REQUEST|create-github-app-token/i.test(content.toString('utf8')),
                 };
               };
-              const compareClosure = async (path, revisions, parents = new Set()) => {
+              const compareClosure = async (path, revisions, qualified, parents = new Set()) => {
                 if (path === authorityWorkflow || path === workflows + 'vulnerability-reevaluation.yml') {
                   return 'AUTHORITY_CHANGED';
                 }
@@ -452,34 +486,35 @@ jobs:
                 }
                 const changed = [...all].filter(name =>
                   revisions.some(tree => !same(revisions[0].get(name), tree.get(name))));
-                if (changed.length) {
-                  if (changed.some(name => name.startsWith('policies/')) ||
-                      path === scanner || path === workflows + 'dependabot-manifest-coverage.yml') return 'AUTHORITY_CHANGED';
-                  if (changed.includes(implementation)) {
-                    const implementations = await Promise.all(revisions.map(tree => inspect(tree.get(implementation).sha)));
-                    if (implementations.some(component => !component)) return 'UNVERIFIABLE';
-                    const authority = JSON.stringify(implementations[0].authority);
-                    if (implementations.some(component =>
-                      component.credentials || JSON.stringify(component.authority) !== authority)) return 'AUTHORITY_CHANGED';
-                  }
-                  return 'IMPLEMENTATION_CHANGED';
+                if (changed.some(name => name.startsWith('policies/')) ||
+                    (changed.length && (path === scanner || path === workflows + 'dependabot-manifest-coverage.yml'))) {
+                  return 'AUTHORITY_CHANGED';
                 }
-                // Changing a binding's execution roots requires an independent
-                // review, even when the proposed SHA retains that binding.
-                if ([...all].some(name => !same(reviewed.get(name), revisions[0].get(name)))) return 'UNVERIFIABLE';
-                const component = await inspect(reviewed.get(implementation).sha);
-                if (!component) return 'UNVERIFIABLE';
-                let result = 'VERIFIED_NO_OP';
-                for (const use of component.uses) {
+                if (!changed.length && !qualified && [...all].some(name => !same(reviewed.get(name), revisions[0].get(name)))) {
+                  return 'UNVERIFIABLE';
+                }
+                const components = await Promise.all([...new Set(revisions.map(tree => tree.get(implementation).sha))].map(inspect));
+                if (components.some(component => !component)) return 'UNVERIFIABLE';
+                const authority = JSON.stringify(components[0].authority);
+                if (changed.length && components.some(component => component.credentials ||
+                    (qualified && !component.readOnly) || JSON.stringify(component.authority) !== authority)) {
+                  return 'AUTHORITY_CHANGED';
+                }
+                let result = changed.length ? 'IMPLEMENTATION_CHANGED' : 'VERIFIED_NO_OP';
+                for (const use of new Set(components.flatMap(component => component.uses))) {
                   const sameRevision = use.startsWith('$/') ||
                     (use.startsWith('./') && workflowPath.test(use.slice(2)));
                   if (sameRevision) {
-                    result = combine(result, await compareClosure(use.slice(2), revisions, new Set([...parents, path])));
+                    result = combine(result, await compareClosure(use.slice(2), revisions, qualified, new Set([...parents, path])));
                   } else if (!/^[a-z0-9_.-]+\/[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)*@[a-f0-9]{40}$/i.test(use) &&
                              !/^docker:\/\/[^\s]+@sha256:[a-f0-9]{64}$/.test(use)) {
                     return 'UNVERIFIABLE';
                   }
                 }
+                // An unchanged privileged parent must also be independently reviewed
+                // when a nested workflow changes its executed implementation.
+                if (qualified && result === 'IMPLEMENTATION_CHANGED' &&
+                    components.some(component => component.credentials || !component.readOnly)) return 'AUTHORITY_CHANGED';
                 return result;
               };
               const beforeTree = await treeAt(pr.base.sha), afterTree = await treeAt(expected);
@@ -487,7 +522,8 @@ jobs:
               const seen = new Map();
               const validated = new Set();
               let result = 'VERIFIED_NO_OP';
-              const useLine = /^[ \t]*(?:-[ \t]+)?uses:[ \t]+(\S+)(?:[ \t]+#.*)?[ \t]*$/;
+              const useLine = /^([ \t]*(?:-[ \t]+)?uses:[ \t]+)(\S+)(?:([ \t]+# )(.*?))?([ \t]*)$/;
+              let releaseUpdate;
               for (const file of files) {
                 const oldEntry = beforeTree.get(file.filename), nextEntry = afterTree.get(file.filename);
                 if (oldEntry?.mode !== '100644' || nextEntry?.mode !== '100644' || nextEntry.sha !== file.sha) return;
@@ -528,36 +564,49 @@ jobs:
                   const [name, oldRef] = value.split('@');
                   const item = dependencies.get(name);
                   if (!item) continue;
-                  const proposedUse = useLine.exec(nextLines[index])?.[1];
+                  const before = useLine.exec(lines[index]);
+                  const after = useLine.exec(nextLines[index]);
+                  const proposedUse = after?.[2];
                   const newRef = proposedUse?.split('@')[1];
                   const prior = seen.get(name);
                   if (!digest.test(oldRef) || !digest.test(newRef) ||
                       value !== name + '@' + oldRef || proposedUse !== name + '@' + newRef ||
-                      useLine.exec(lines[index])?.[1] !== value || (prior && prior.ref !== newRef)) return;
+                      before?.[2] !== value || (prior && prior.ref !== newRef)) return;
                   seen.set(name, { ref: newRef, changed: prior?.changed || oldRef !== newRef });
                   if (oldRef === newRef) continue;
-                  if (oldRef === item.newVersion || (item.prevVersion && item.prevVersion !== oldRef)) return;
+                  const oldTag = before[4], newTag = after[4];
+                  const qualified = releaseVersion.test(oldTag) || releaseVersion.test(newTag);
+                  if (qualified) {
+                    if (dependencies.size !== 1 || !releaseVersion.test(oldTag) || !releaseVersion.test(newTag) ||
+                        ![newRef, newTag].includes(item.newVersion) ||
+                        (item.prevVersion && ![oldRef, oldTag].includes(item.prevVersion))) return;
+                    releaseUpdate = classify(oldTag, newTag);
+                    if (!releaseUpdate || !await verifyRelease(oldTag, oldRef) || !await verifyRelease(newTag, newRef)) return;
+                    lines[index] = before[1] + proposedUse + before[3] + newTag + before[5];
+                  } else {
+                    if (!digest.test(item.newVersion) || oldRef === item.newVersion ||
+                        (item.prevVersion && item.prevVersion !== oldRef)) return;
+                    lines[index] = lines[index].replace(value, proposedUse);
+                  }
                   const identity = value + '...' + newRef;
                   if (!validated.has(identity)) {
-                    // GitHub can retain the signed first proposal's metadata even
-                    // after Dependabot updates the exact signed Git tree. Verify
-                    // every mentioned revision and its ordered protected ancestry.
-                    if (!await isAncestor(oldRef, item.newVersion) ||
-                        !await isAncestor(item.newVersion, newRef) ||
+                    const proposed = qualified ? newRef : item.newVersion;
+                    if (!await isAncestor(oldRef, proposed) || !await isAncestor(proposed, newRef) ||
                         !await isAncestor(newRef, main.commit.sha)) return;
-                    const revisions = await Promise.all([...new Set([oldRef, item.newVersion, newRef])].map(getTree));
+                    const revisions = await Promise.all([...new Set([oldRef, proposed, newRef])].map(getTree));
                     if (revisions.some(tree => !tree)) return;
-                    result = combine(result, await compareClosure(item.path, revisions));
+                    result = combine(result, await compareClosure(item.path, revisions, qualified));
                     validated.add(identity);
                   }
-                  lines[index] = lines[index].replace(value, proposedUse);
                 }
-                if (lines.join('\n') !== next) return;
+                if (lines.join('\n') !== next ||
+                    (releaseUpdate && workflowPaths.length && !workflowPaths.includes(file.filename))) return;
                 if (file.filename === callerAuthority) result = combine(result, 'AUTHORITY_CHANGED');
               }
               if (seen.size !== dependencies.size || [...seen.values()].some(use => !use.changed)) return;
               sharedClassification = result;
-              if (result === 'VERIFIED_NO_OP') updateType = 'shared-sha-no-op';
+              if (result === 'IMPLEMENTATION_CHANGED') updateType = releaseUpdate;
+              if (!releaseUpdate && result === 'VERIFIED_NO_OP') updateType = 'shared-sha-no-op';
             }
             if (wrapperPath || ['pre_commit', 'docker'].includes(ecosystem)) {
               if (commits[0].parents[0].sha !== pr.base.sha || files.length !== signedDependencies.length ||
@@ -814,7 +863,7 @@ jobs:
             }
             if (shared) {
               core.setOutput('shared-classification', sharedClassification);
-              if (sharedClassification !== 'VERIFIED_NO_OP') return;
+              if (!updateType) return;
             }
             if (policyRejection) {
               core.setOutput('policy-rejection', policyRejection);
