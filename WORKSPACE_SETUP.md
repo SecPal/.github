@@ -89,8 +89,11 @@ secpal-order new php-2637-qualification --repo api --issue 2637
 secpal-order resume php-2637-qualification
 ```
 
-In the API tab, use the provisioned PHP 8.4 and Composer commands. The first
-locked install needs network access for package downloads:
+The API tab puts assignment-specific `php` and `composer` launchers on
+`PATH`. Both invoke the installed `secpal-order` PHP runner. In this tab,
+`command -v php composer` resolves both commands under
+`fullstack-previews/on-demand/api-bin`. The first locked install needs network
+access for package downloads:
 
 ```bash
 composer validate --strict
@@ -100,18 +103,20 @@ composer check-platform-reqs
 ./scripts/setup-pre-commit.sh
 ```
 
-Use the repository's preflight to run the complete local validation, including
-the parallel and serial suites:
+Run the repository's complete preflight from the API tab. Git and Node run
+in the tab, and the preflight inherits the launchers for its Composer and PHP
+subprocesses, including the parallel and serial test suites:
 
 ```bash
 PREFLIGHT_RUN_TESTS=1 ./scripts/preflight.sh
 ```
 
 For focused runs, use commands such as `php artisan test --filter=ExampleTest`
-or `vendor/bin/pint --test --dirty`. Git, repository hooks and SSH signing run
-in the Herdr tab. PHP and its child processes use the development image, which
-contains Composer and ripgrep and sets a 512 MiB CLI limit. The host-managed
-recipe and installed image ID are recorded alongside `secpal-order`.
+or `vendor/bin/pint --test --dirty` in the API tab. Pint's PHP shebang
+resolves the same launcher. Repository hooks and SSH signing run in the tab.
+Inside the development image, PHP and its child processes have Composer and
+ripgrep on `PATH` and inherit a 512 MiB CLI limit. The host-managed recipe
+and installed image ID are recorded alongside `secpal-order`.
 
 PHP commands use a disposable PostgreSQL 18 instance on a private internal
 Podman network. The temporary test role can create test databases without
