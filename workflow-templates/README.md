@@ -46,5 +46,5 @@ This directory contains reusable GitHub Actions workflow templates for SecPal re
 - [CLA Document](../CLA.md)
 - [CLA Assistant Service](https://cla-assistant.io/)
 - [CLA Assistant Documentation](https://github.com/cla-assistant/cla-assistant)
-- [Dual-Licensing Documentation](../README.md#licensing)
+- [SecPal licensing policy](../docs/licensing-policy.md)
 - [Contributing Guidelines](../CONTRIBUTING.md)

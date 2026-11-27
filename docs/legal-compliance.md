@@ -78,4 +78,3 @@ training. [NIS2 Directive](https://eur-lex.europa.eu/eli/dir/2022/2555/oj)
 ## Related
 
 - [CLA and commercial relicensing review](cla-commercial-relicensing-review.md)
-- [Product requirements](feature-requirements.md)

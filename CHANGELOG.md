@@ -9,6 +9,14 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-27 - Consolidate Organization Documentation
+
+- Route contributors to maintained setup, validation and licensing guidance and
+  route architecture readers to current repository contracts.
+- Retire the old planning archives, the feature form that required those
+  archives, and a completed audit-review checklist. Earlier planning and review
+  material remains available in [Git history](https://github.com/SecPal/.github/tree/c90c2c215064838382a65e1592a7b700605b7c52/docs).
+
 ## 2026-11-27 - Rebaseline the GitHub Organization Profile
 
 - Publish the organization profile at GitHub's supported path, with links to
