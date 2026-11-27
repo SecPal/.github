@@ -14,7 +14,10 @@ Find current architecture authority and technical contract owners in the [archit
 
 ## About SecPal
 
-SecPal is the operations software for German private security services. Everything the day-to-day operation needs — in one system that just works.
+SecPal develops open-source software for physical, organizational and personnel
+security, primarily for security service providers, professional security
+operations and their customers. See the [product positioning](docs/product-positioning.md)
+for the product family, current direction and hosting model.
 
 ## Repositories
 
