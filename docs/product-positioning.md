@@ -29,9 +29,11 @@ not assert that every intended product or capability is implemented.
 
 ### Organization and Product-Family Positioning
 
-SecPal develops software for security and security-adjacent processes. Its
-customers do not have to be legally classified as security companies. A German
-surface may express the same guardrail as:
+SecPal develops open-source software for physical, organizational and personnel
+security and related processes. The principal audience is security service
+providers, professional security operations and their customers. Its customers
+do not have to be legally classified as security companies. A German surface may
+express the same guardrail as:
 
 > SecPal entwickelt Software für Sicherheits- und sicherheitsnahe Prozesse.
 > Unsere Kunden müssen deshalb nicht zwingend Sicherheitsunternehmen sein.
@@ -148,14 +150,13 @@ These principles do not establish that SecPal is community-driven, has a large
 community, or has broad adoption. They do not imply that every repository or
 internal project in the SecPal organization must be public.
 
-ADR-023 preserves the distinction: private managed customer and fleet
-inventory, commercial policy, customer-specific orchestration, and other
-accepted managed-operations responsibilities may remain separate. Those private
-responsibilities do not make SecPal public product software non-open-source,
-and private managed operations MUST NOT become a hidden technical dependency
-for independent operation. Licensing and Open Source wording remain subject to
-the [SecPal Licensing Policy](licensing-policy.md) and existing repository and
-file-specific license authorities.
+Self-hosting and SecPal Managed are intended to offer the same product
+functionality. Under ADR-023, Managed adds hosting services and may keep customer
+and fleet inventory, commercial policy and customer-specific orchestration
+private. Private managed operations MUST NOT become a hidden technical
+dependency for independent operation. Licensing and Open Source wording remain
+subject to the [SecPal Licensing Policy](licensing-policy.md) and existing
+repository and file-specific license authorities.
 
 ## Product Identity and Status Semantics
 
@@ -193,6 +194,14 @@ Mutable decisions MUST remain free to evolve through their owning product,
 domain, architecture, implementation, and planning processes. Public wording
 MUST NOT convert them into permanent positioning commitments or guaranteed
 delivery.
+
+### Current Direction
+
+SecPal currently prioritizes personnel and site management, followed by the
+guard book and working-time capture as separate domains. Guard tours and
+scheduling follow according to operational need. SecPal Assure and SecPal Visit
+are intended to follow incrementally. These priorities describe product
+direction and can change as needs and evidence develop.
 
 ## Relationship to Existing Authorities
 

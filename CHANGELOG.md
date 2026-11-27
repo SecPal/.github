@@ -9,6 +9,11 @@ Log of notable changes to SecPal organization defaults (newest first).
 
 ---
 
+## 2026-11-27 - Rebaseline the GitHub Organization Profile
+
+- Publish the organization profile at GitHub's supported path, with links to
+  maintained documentation and the current SecPal product-family positioning.
+
 ## 2026-11-22 - Protect Polyscope Preview Environment Files
 
 - Create and replace API preview `.env` files atomically with owner-only access.
