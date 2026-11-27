@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 SecPal
+# SPDX-FileCopyrightText: 2025-2026 SecPal
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 name: ✨ Feature Request
@@ -73,20 +73,6 @@ body:
       required: true
 
   - type: dropdown
-    id: feature-status
-    attributes:
-      label: Current Status
-      description: Where is this feature in the planning process?
-      options:
-        - "💡 Idea (just brainstorming)"
-        - "📋 Backlog (needs specification)"
-        - "📄 Specified (documented in feature-requirements.md)"
-        - "🎯 Ready for Development"
-      default: 0
-    validations:
-      required: true
-
-  - type: dropdown
     id: willingness
     attributes:
       label: Willingness to Contribute
@@ -112,7 +98,7 @@ body:
     id: additional
     attributes:
       label: Additional Context
-      description: Add any other context, mockups, or examples about the feature request
+      description: Link related GitHub issues or accepted decisions and include any relevant examples
     validations:
       required: false
 

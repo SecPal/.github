@@ -5,20 +5,13 @@ SPDX-License-Identifier: CC0-1.0
 
 # SecPal architecture navigation
 
-Start with the [ADR index](adr/README.md) for current architecture status, then
-read the individual decisions and their refinement or supersession notices.
-The index and individual ADRs own architecture status and content. This page
-only routes readers to those authorities and repository-owned contracts.
-
-For product direction, use [product positioning](product-positioning.md); for
-current product-family identity, use
-[BRAND-0007](adr/BRAND-0007-secpal-product-family-architecture.md).
+Start with the [ADR index](adr/README.md) and the individual decisions'
+refinement or supersession notices. For the SecPal product family and current
+direction, see [product positioning](product-positioning.md).
 
 ## Find the architecture authority
 
-The routes below group responsibilities rather than delivery order. Consult the
-[canonical index](adr/README.md#index) for the complete corpus and current status;
-these routes do not maintain a second status catalog.
+The [ADR index](adr/README.md#index) lists the complete corpus and current status.
 
 | Responsibility                                    | Decisions to read                                                                                                                                                                                                                                                                                                                                                                                        |
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -32,51 +25,19 @@ these routes do not maintain a second status catalog.
 | Engineering governance                            | [Native GitHub planning and delivery](work-graph-contract.md); ADR-016 owns issue-first planning and native governance.                                                                                                                                                                                                                                                                                  |
 | Evidence pipelines and external-system validation | [Evidence and external-system architecture contract](evidence-architecture-contract.md).                                                                                                                                                                                                                                                                                                                 |
 
-ADR-015 through ADR-026 define the accepted decisions. Implementation,
-platform qualification and production operation each require their own
-evidence, including for ADR-024's Managed Operations Control Plane.
-
 ## Find implementation and contract owners
 
-Repository-owned contracts describe supported implementation and procedures
-within the accepted architecture. Follow their current evidence and owning work
-before making implementation or operational claims.
-
-| Responsibility                                                                                                       | Maintained owner and entry point                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Integration, self-hosting, production deployment, security integration, backup, recovery, updates, and qualification | [SecPal/deployment](https://github.com/SecPal/deployment#readme), its [architecture scope](https://github.com/SecPal/deployment/blob/main/docs/architecture/scope.md), and [integration contract](https://github.com/SecPal/deployment/blob/main/docs/quadlet-integration.md). The documentation rebaseline [#127](https://github.com/SecPal/deployment/issues/127) is completed; maintained docs distinguish delivered integration from accepted production architecture and remaining work. |
-| Public HTTP API                                                                                                      | [SecPal/contracts](https://github.com/SecPal/contracts#readme) owns the exact public API contract where applicable.                                                                                                                                                                                                                                                                                                                                                                           |
-| API application and image/container requirements                                                                     | [SecPal/api](https://github.com/SecPal/api#readme) owns implementation and repository-local documentation. Its deployment/container documentation rebaseline [#1453](https://github.com/SecPal/api/issues/1453) remains open; older guidance must be read against current ADRs and deployment contracts.                                                                                                                                                                                      |
-| Application UI and Android/native behavior                                                                           | [SecPal/frontend](https://github.com/SecPal/frontend#readme) and [SecPal/android](https://github.com/SecPal/android#readme) own their implementations and local contracts; ADR-026 acceptance does not prove client behavior delivered.                                                                                                                                                                                                                                                       |
-| SecPal Managed orchestration and policy                                                                              | Private SecPal/operations owns the managed delta under public [ADR-023](adr/20260824-public-self-hosting-private-managed-operations-adr023.md) and [ADR-024](adr/20260906-managed-operations-control-plane-authority-adr024.md).                                                                                                                                                                                                                                                              |
-
-Under ADR-023, public repositories own the portable technical capabilities and
-contracts required for independent operation and self-hosting. SecPal Managed
-adds private customer/fleet/commercial policy and orchestration, consuming those
-public contracts. Private Managed artifacts must not become a hidden technical
-dependency for independent operation. This ownership decision does not claim
-that every public capability or private managed system is already implemented.
+| Responsibility                                    | Maintained owner                                                                                                                                                                                                                       |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Integration, portable self-hosting and deployment | [SecPal/deployment](https://github.com/SecPal/deployment#readme) and its [architecture scope](https://github.com/SecPal/deployment/blob/main/docs/architecture/scope.md)                                                               |
+| Public HTTP API                                   | [SecPal/contracts](https://github.com/SecPal/contracts#readme)                                                                                                                                                                         |
+| API implementation and runtime inputs             | [SecPal/api](https://github.com/SecPal/api#readme) and its [production boundary](https://github.com/SecPal/api/blob/main/docs/deployment.md)                                                                                           |
+| Browser application and Android integration       | [SecPal/frontend](https://github.com/SecPal/frontend#readme) and [SecPal/android](https://github.com/SecPal/android#readme)                                                                                                            |
+| Managed hosting orchestration and policy          | Private SecPal/operations consumes public deployment contracts under [ADR-023](adr/20260824-public-self-hosting-private-managed-operations-adr023.md) and [ADR-024](adr/20260906-managed-operations-control-plane-authority-adr024.md) |
 
 ## Read status and evidence separately
 
-The [public status and truth contract](public-status-semantics.md) owns claim
-classification and evidence requirements. Its classes are independent dimensions:
-Accepted Architecture does not establish Implemented in Source; source
-implementation does not establish Operationally / Externally Verified; verification
-does not establish deployment; Deployed to Development / Test does not establish
-Production Deployment or Production Operation. Even Production Deployment alone
-does not establish Production Operation.
-
-Architecture recorded through [#695](https://github.com/SecPal/.github/issues/695)
-and [#717](https://github.com/SecPal/.github/issues/717), including the ownership
-refinement [#748](https://github.com/SecPal/.github/issues/748), is distinct from
-implementation and qualification tracked beneath the current native work graph,
-including [#747](https://github.com/SecPal/.github/issues/747). Follow owning
-issues and current repository evidence for that state. An open issue or Planned /
-Tracked Work does not establish Active Implementation or a delivery promise.
-Missing or stale evidence requires a narrower truthful claim, as the status
-contract specifies.
-
-## Decision scope
-
-Partially superseded decisions bind only in the scope retained by the [ADR index](adr/README.md).
+Use the [public status and truth contract](public-status-semantics.md) to
+distinguish accepted architecture, delivered source, deployed environments and
+operational qualification. For delivery, follow the current issues and evidence
+in the owning repository.
