@@ -126,7 +126,7 @@ export function validateWorkflowDocument(workflow, canonicalMajor, source) {
 }
 
 export function validateDocumentation(contents, source, canonicalMajor) {
-  if (source === "CHANGELOG.md" || source.startsWith("docs/audits/")) return [];
+  if (source.startsWith("docs/audits/")) return [];
   const selectedMajors = new Set(
     NODE_DOCUMENTATION_SELECTORS.flatMap((pattern) =>
       [...contents.matchAll(pattern)].map((match) => Number(match[1]))

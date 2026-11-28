@@ -3,7 +3,8 @@
 
 ## Description
 
-<!-- Describe the problem and resulting behavior in English. Link related issues when useful. -->
+<!-- Give the PR a title that names the delivered change. Describe the resulting behavior and applicable
+     user, API, operator or security impact in English. Link related issues when useful. -->
 
 ## Validation
 
@@ -11,4 +12,4 @@
 
 ## Rollout
 
-<!-- Describe deployment or security implications when applicable. -->
+<!-- Describe breaking changes, migration steps, and deployment or security implications when applicable. -->
