@@ -1045,7 +1045,10 @@ jobs:
           esac
 
   source-safety:
-    name: Dependabot Source Safety
+    # GitHub lets skipped required jobs pass. Use a different check name for
+    # terminal events so their result cannot satisfy a reopened PR's gate.
+    name: >-
+      ${{ github.event.pull_request.state == 'closed' && 'Closed Pull Request' || 'Dependabot Source Safety' }}
     needs: check-eligibility
     if: ${{ always() }}
     runs-on: ubuntu-latest
@@ -1068,14 +1071,34 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
-            const pull_number = context.payload.pull_request.number;
-            const expected = context.payload.pull_request.head.sha;
+            const eventPr = context.payload.pull_request;
+            const pull_number = eventPr?.number;
+            const expected = eventPr?.head?.sha;
+            const unavailable = 'Current PR enrollment identity is unavailable or changed';
+            if (!Number.isSafeInteger(pull_number) || pull_number <= 0 ||
+                !/^[a-f0-9]{40}$/.test(expected ?? '') ||
+                !['open', 'closed'].includes(eventPr?.state)) {
+              throw new Error(unavailable);
+            }
             const read = async () => {
               const pr = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
-              if (pr.head.sha !== expected || pr.state !== 'open' ||
-                  !Object.hasOwn(pr, 'auto_merge') || !Array.isArray(pr.labels) ||
+              if (pr?.number !== pull_number || pr.head?.sha !== expected) {
+                throw new Error(unavailable);
+              }
+              if (pr.state === 'closed' && eventPr.state === 'open' && typeof pr.merged === 'boolean') {
+                throw new Error('Pull request closed during Source Safety reconciliation');
+              }
+              if (pr.state !== eventPr.state) throw new Error(unavailable);
+              if (pr.state === 'closed') {
+                if (typeof pr.merged !== 'boolean' ||
+                    (eventPr.merged !== undefined && pr.merged !== eventPr.merged)) {
+                  throw new Error(unavailable);
+                }
+                return pr;
+              }
+              if (!Object.hasOwn(pr, 'auto_merge') || !Array.isArray(pr.labels) ||
                   (pr.auto_merge && !pr.auto_merge.enabled_by?.login)) {
-                throw new Error('Current PR enrollment identity is unavailable or changed');
+                throw new Error(unavailable);
               }
               return pr;
             };
@@ -1083,12 +1106,17 @@ jobs:
             const merger = 'secpal-dependabot-merger[bot]';
             const managed = new Set([legacy, merger]);
             const wanted = process.env.PUBLISHER_EVENTS === 'true' ? merger : legacy;
-            const pr = await read();
-            const enrolledBy = pr.auto_merge?.enabled_by.login;
-            if (pr.user.login === 'dependabot[bot]' && managed.has(enrolledBy) &&
+            let pr = await read();
+            if (pr.state === 'closed') return;
+            const needsRevocation = (pr) => {
+              const enrolledBy = pr.auto_merge?.enabled_by.login;
+              return pr.user.login === 'dependabot[bot]' && managed.has(enrolledBy) &&
                 (enrolledBy !== wanted || process.env.ELIGIBLE !== 'true' ||
                   !pr.labels.some(label => label.name === 'dependencies') ||
-                  pr.base.ref !== 'main' || pr.draft || pr.auto_merge.merge_method !== 'squash')) {
+                  pr.base.ref !== 'main' || pr.draft || pr.auto_merge.merge_method !== 'squash');
+            };
+            if (needsRevocation(pr)) pr = await read();
+            if (needsRevocation(pr)) {
               await github.graphql('mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }',
                 { id: pr.node_id });
               if (managed.has((await read()).auto_merge?.enabled_by.login)) {
@@ -1101,6 +1129,7 @@ jobs:
 
       - name: Record the native safety check identity
         id: identity
+        if: github.event.pull_request.state == 'open'
         env:
           CHECK_RUN_ID: ${{ job.check_run_id }}
         run: printf 'check-run-id=%s\n' "$CHECK_RUN_ID" >> "$GITHUB_OUTPUT"
@@ -1110,7 +1139,9 @@ jobs:
     name: Enable Auto-Merge
     runs-on: ubuntu-latest
     needs: [check-eligibility, source-safety]
-    if: needs.check-eligibility.outputs.should-auto-merge == 'true'
+    if: >-
+      needs.check-eligibility.outputs.should-auto-merge == 'true' &&
+      needs.source-safety.outputs.check-run-id != ''
     timeout-minutes: 20
     steps:
       - name: Preserve existing operator enrollment

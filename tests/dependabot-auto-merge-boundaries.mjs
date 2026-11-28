@@ -1628,6 +1628,7 @@ test("queued automation is revoked when eligibility changes, while manual reques
     let mutations = 0;
     const request = (login) => (login ? { enabled_by: { login }, merge_method: "squash" } : null);
     const pr = {
+      number: 1,
       head: { sha: head },
       base: { ref: mainTarget ? "main" : "release" },
       state: "open",
@@ -1652,7 +1653,7 @@ test("queued automation is revoked when eligibility changes, while manual reques
         repo: { owner: "SecPal", repo: "frontend" },
         payload: {
           repository: { default_branch: "main" },
-          pull_request: { number: 1, head: { sha: head } },
+          pull_request: { number: 1, state: "open", head: { sha: head } },
         },
       });
     if (expected) await run();
@@ -1676,6 +1677,7 @@ test("publisher repositories revoke stale App and legacy bot requests while pres
   ]) {
     let revoked = false;
     const pr = {
+      number: 1,
       head: { sha: head },
       base: { ref: "main" },
       state: "open",
@@ -1695,7 +1697,7 @@ test("publisher repositories revoke stale App and legacy bot requests while pres
       github,
       {
         repo: { owner: "SecPal", repo: "frontend" },
-        payload: { pull_request: { number: 1, head: { sha: head } } },
+        payload: { pull_request: { number: 1, state: "open", head: { sha: head } } },
       },
       { env: environment }
     );
@@ -2018,6 +2020,7 @@ test("the required source-safety check blocks the verified policy rejection", as
   const script = safety.steps[0].with.script;
   const head = "a".repeat(40);
   const pr = {
+    number: 1,
     head: { sha: head },
     base: { ref: "main" },
     state: "open",
@@ -2033,7 +2036,7 @@ test("the required source-safety check blocks the verified policy rejection", as
   const run = () =>
     new AsyncFunction("github", "context", script)(github, {
       repo: { owner: "SecPal", repo: "frontend" },
-      payload: { pull_request: { number: 1, head: { sha: head } } },
+      payload: { pull_request: { number: 1, state: "open", head: { sha: head } } },
     });
   process.env.POLICY_REJECTION = policyRejection;
   try {
@@ -2043,4 +2046,75 @@ test("the required source-safety check blocks the verified policy rejection", as
   } finally {
     delete process.env.POLICY_REJECTION;
   }
+});
+
+test("closed PR events use a distinct check and perform no enrollment work", async () => {
+  const safety = workflow.jobs["source-safety"];
+  const head = "a".repeat(40);
+  const event = { number: 1, state: "closed", head: { sha: head } };
+  const pr = { ...event, merged: false };
+  const run = () =>
+    new AsyncFunction("github", "context", "process", safety.steps[0].with.script)(
+      {
+        rest: { pulls: { get: async () => ({ data: pr }) } },
+        graphql: async () => assert.fail("closed PR must never mutate enrollment"),
+      },
+      {
+        repo: { owner: "SecPal", repo: "frontend" },
+        payload: { pull_request: event },
+      },
+      { env: { POLICY_REJECTION: "prior open-PR result" } }
+    );
+  await run();
+  pr.merged = true;
+  await run();
+  event.merged = false;
+  await assert.rejects(run(), /enrollment identity is unavailable or changed/);
+  delete event.merged;
+  pr.state = "open";
+  await assert.rejects(run(), /enrollment identity is unavailable or changed/);
+  pr.state = "closed";
+  pr.head = { sha: "b".repeat(40) };
+  await assert.rejects(run(), /enrollment identity is unavailable or changed/);
+  assert.match(
+    safety.name,
+    /github\.event\.pull_request\.state == 'closed' && 'Closed Pull Request' \|\| 'Dependabot Source Safety'/
+  );
+  assert.equal(safety.steps[1].if, "github.event.pull_request.state == 'open'");
+  assert.match(workflow.jobs["auto-merge"].if, /needs\.source-safety\.outputs\.check-run-id != ''/);
+});
+
+test("an open PR that closes before reconciliation grants no Source Safety result", async () => {
+  const safety = workflow.jobs["source-safety"];
+  const head = "a".repeat(40);
+  const event = { number: 1, state: "open", head: { sha: head } };
+  const pr = {
+    ...event,
+    base: { ref: "main" },
+    node_id: "PR_1",
+    user: { login: "dependabot[bot]" },
+    labels: [{ name: "dependencies" }],
+    auto_merge: { enabled_by: { login: "github-actions[bot]" }, merge_method: "squash" },
+  };
+  let reads = 0;
+  const github = {
+    rest: {
+      pulls: {
+        get: async () => ({ data: reads++ ? { ...pr, state: "closed", merged: true } : pr }),
+      },
+    },
+    graphql: async () => assert.fail("do not mutate after the PR closes"),
+  };
+  const run = () =>
+    new AsyncFunction("github", "context", "process", safety.steps[0].with.script)(
+      github,
+      {
+        repo: { owner: "SecPal", repo: "frontend" },
+        payload: { pull_request: event },
+      },
+      { env: { ELIGIBLE: "false" } }
+    );
+  await assert.rejects(run(), /closed during Source Safety reconciliation/);
+  delete event.state;
+  await assert.rejects(run(), /enrollment identity is unavailable or changed/);
 });
