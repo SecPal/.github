@@ -132,8 +132,10 @@ and installed image ID are recorded alongside `secpal-order`.
 PHP commands use a disposable PostgreSQL 18 instance on a private internal
 Podman network. The temporary test role can create test databases without
 superuser rights. The instance has no published ports and is removed when the
-command exits or is interrupted. Composer runs without a database. The explicit
-`--online` option enables package downloads for Composer only.
+command exits or is interrupted. In full-stack worktrees, the runner mounts an
+empty, read-only file over an existing `.env` inside the container. Composer
+runs without a database. The explicit `--online` option enables package
+downloads for Composer only.
 
 Run one PHP command at a time in each assignment. Different assignments can run
 independently. If the runner is killed before it can clean up, the next PHP
