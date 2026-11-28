@@ -50,11 +50,19 @@ The `secpal` profile provisions API and frontend worktrees and a database behind
   repository-only assignment keeps its checkout and consumes no preview slot.
 - `secpal-order start NAME` republishes a stopped preview. Use `resume` for a
   repository-only assignment.
-- From the requesting Herdr workspace, run `secpal-order finish NAME` after
-  required validation and protected GitHub delivery. It retains dirty work,
-  unpublished commits, open PRs, and ignored local files. Review any ignored
-  files before removing generated dependencies such as `node_modules`. A clean
-  task that never changed its baseline can also be released.
+- Run `secpal-order finish NAME` from the requesting Herdr workspace as soon as
+  validation and protected source delivery are complete. For changed repository
+  assignments, finish verifies the signed merge and completed issue closure.
+  It retains dirty work, unpublished commits, open PRs, and ignored local files.
+  Review ignored files before removing generated dependencies such as
+  `node_modules`. An unused clean assignment can also be released.
+- OCI qualification, publication, and deployment continue through their own
+  workflows and admission gates. Pending or failed downstream workflows keep
+  their recorded outcomes. Before finishing, retain required evidence outside
+  the assignment and resolve any remaining dependency on its files or runtime.
+- For interrupted work, use `resume` to recover the assignment or `stop` to
+  release preview capacity while keeping the work. If cleanup fails, address
+  the reported problem and retry `finish` from the requesting workspace.
 
 Use local Codex on `840G11` for separately authorized infrastructure administration.
 
