@@ -66,6 +66,32 @@ The `secpal` profile provisions API and frontend worktrees and a database behind
 
 Use local Codex on `840G11` for separately authorized infrastructure administration.
 
+### Administrative delivery reassociation
+
+Use this procedure for an already delivered repository assignment whose
+original issue differs from the completed delivery issue in another SecPal
+repository. Run both commands from the requesting Herdr workspace.
+
+```bash
+secpal-order reassociate-delivery NAME \
+  --delivery-issue 'SecPal/OWNER#NUMBER' --pr 'SecPal/CHECKOUT#NUMBER' \
+  --merge MERGE_SHA --reconciliation-comment COMMENT_ID
+secpal-order finish NAME
+```
+
+The reconciliation comment belongs on the original issue and must be an
+unedited comment by a repository administrator. Its table must uniquely identify
+the PR in the first column, the qualified delivery issue in the second, and
+the protected merge SHA in backticks in the third. The delivery issue must be
+closed as completed. Its GitHub timeline must already reference that exact PR
+by the time of the merge.
+
+Both commands verify the branch and delivered source, GitHub signatures,
+required PR checks, and post-merge source validation. Open PRs, unpublished
+changes, and remaining local evidence keep the workspace. The reassociation
+preserves the assignment ID, checkout, and original issue. If interrupted,
+repeat the same command and then use the regular `finish` retry.
+
 ## Repository checks
 
 Read the target checkout's `AGENTS.md`. For local checkouts, install the
