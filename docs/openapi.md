@@ -43,7 +43,7 @@ This document outlines the OpenAPI conventions and standards used across SecPal 
 
 - **URI versioning:** `/api/v1/...`, `/api/v2/...`
 - Maintain backward compatibility within major versions
-- Document breaking changes in changelog
+- Describe breaking changes and required migration steps in the owning PR
 
 **Accepted breaking-baseline exception:** An accepted ADR may explicitly define a coordinated breaking 0.x baseline. Within that ADR's scope, its migration rules override the compatibility and deprecation guidance in this document. [ADR-014](adr/20260720-tenant-identity-access-model-adr014.md) requires obsolete Tenant, identity, Employee, and access schemas and endpoints to be removed without compatibility paths, transitional schemas, dual writes, or deprecated aliases. Outside an explicit accepted exception, the compatibility rules continue to apply.
 

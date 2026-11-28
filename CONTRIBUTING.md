@@ -40,9 +40,15 @@ their respective checks.
 
 Follow [issue-first planning](docs/planning.md) and the
 [native WorkGraph contract](docs/work-graph-contract.md). Every PR must address exactly ONE logical topic.
-Use the PR template, link the issue the PR completes, and state validation
-results. Follow the target repository's test guidance and deliver through
-GitHub reviews, required checks and protected merge.
+Use a PR title that names the delivered change. In the description, explain
+the resulting behavior and applicable user, API, operator or security impact.
+Call out breaking changes and required migration steps when applicable. Use
+the PR template, link the issue the PR completes, and state validation results.
+Follow the target repository's test guidance and deliver through GitHub reviews,
+required checks and protected merge.
+
+For an official release, curate release notes from the included merged PRs and
+exact component revisions. Use GitHub's release-note generation where useful.
 
 ### PR size recommendation
 

@@ -41,4 +41,3 @@
 .yamllint.yml export-ignore
 tests/ export-ignore
 docs/ export-ignore
-CHANGELOG.md export-ignore

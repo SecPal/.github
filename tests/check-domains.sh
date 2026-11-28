@@ -21,21 +21,17 @@
 #      claim the script only scans tracked files (it greps the working
 #      tree, untracked files included) so contributors do not develop the
 #      wrong mental model.
-#   4. CHANGELOG.md does not contain a literal unapproved namespace host,
-#      even when describing the regression fixture;
-#      such hosts only ever live inside the test's own temporary workspace
-#      so the prose cannot accidentally trip the gate after a reword.
-#   5. Behaviour matches the documented classification: existing public and
+#   4. Behaviour matches the documented classification: existing public and
 #      development hosts, secpal.io, the io.secpal.* reverse-DNS namespace, and
 #      the exact private database service identity pass; an unapproved secpal.*
 #      host, adjacent reverse-DNS namespace, and another internal identity fail.
-#   6. The gate skips the gitignored agent scratch directory `.context/` so
+#   5. The gate skips the gitignored agent scratch directory `.context/` so
 #      Development workspaces can stash PR body drafts and other
 #      throwaway notes that quote forbidden hosts verbatim without tripping
 #      the local gate (CI never sees `.context/` because it is gitignored).
 #      Tracked content with the same string still fails so the exclusion is
 #      not a free pass (see SecPal/.github#489).
-#   7. Defense in depth against a `git add --force` bypass: because
+#   6. Defense in depth against a `git add --force` bypass: because
 #      `grep --exclude-dir` is git-tracking-unaware, force-adding
 #      `.context/forced.md` would otherwise let a committed forbidden host
 #      slip past the gate. The script fails loudly whenever any path inside
@@ -48,7 +44,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/check-domains.sh"
 README="$REPO_ROOT/scripts/README.md"
-CHANGELOG="$REPO_ROOT/CHANGELOG.md"
 domain_namespace="sec""pal"
 bad_public_domain="${domain_namespace}.xyz"
 bad_internal_domain="cache.${domain_namespace}.internal"
@@ -69,11 +64,6 @@ fi
 
 if [ ! -f "$README" ]; then
   echo "Missing scripts/README.md" >&2
-  exit 1
-fi
-
-if [ ! -f "$CHANGELOG" ]; then
-  echo "Missing CHANGELOG.md" >&2
   exit 1
 fi
 
@@ -117,7 +107,7 @@ if ! grep -Fq 'Scope (intentional limit)' "$README"; then
   exit 1
 fi
 
-if ! grep -Fq 'Non-`secpal` domains are out of scope' "$README"; then
+if ! grep -Fq "Non-\`secpal\` domains are out of scope" "$README"; then
   echo "scripts/README.md must describe non-secpal domains as out of scope" >&2
   exit 1
 fi
@@ -143,16 +133,7 @@ if ! grep -Fq '.context' "$README"; then
   exit 1
 fi
 
-# 4. CHANGELOG.md must not contain a literal unapproved secpal.* host even
-# in its prose. The regression fixture lives in the test's own temporary
-# workspace so the changelog entry cannot accidentally trip the gate after
-# a reword (PR #488 review thread on CHANGELOG.md:21).
-if grep -Fq "$bad_public_domain" "$CHANGELOG"; then
-  echo "CHANGELOG.md must not contain literal unapproved secpal.* hosts; keep fixtures runtime-constructed" >&2
-  exit 1
-fi
-
-# 5. Behavioural check: customer.example references pass, unapproved secpal.* fails.
+# 4. Behavioural check: customer.example references pass, unapproved secpal.* fails.
 workspace=""
 ctx_workspace=""
 tracked_workspace=""
@@ -474,7 +455,7 @@ if ! grep -Fq "$bad_public_domain" "$workspace/output.txt"; then
   exit 1
 fi
 
-# 6. Behavioural check: the gitignored agent scratch directory `.context/`
+# 5. Behavioural check: the gitignored agent scratch directory `.context/`
 # must be skipped (positive case) while tracked content with the same
 # string still fails (negative case). Use a fresh workspace so the previous
 # regression.md fixture cannot mask either result.
@@ -552,7 +533,7 @@ if ! grep -Fq 'regression.md' "$ctx_workspace/output.txt"; then
   exit 1
 fi
 
-# 7. Defense-in-depth: `--exclude-dir=".context"` is git-tracking-unaware,
+# 6. Defense-in-depth: `--exclude-dir=".context"` is git-tracking-unaware,
 # so a `git add --force` on `.context/forced.md` could otherwise let a
 # committed forbidden host slip past the gate. Inside a git workspace the
 # script must therefore fail loudly the moment any path under `.context/`

@@ -95,12 +95,10 @@ remain defined in `docs/evidence-architecture-contract.md`.
 - Do not add AI attribution, generated-by wording, or AI co-author trailers
   unless the task specifically concerns documenting AI tooling behavior.
 
-## Changelog and Tracking
+## Pull Requests and Tracking
 
-- Update a product `CHANGELOG.md` only when a change materially affects users,
-  a public API or contract, security behavior, deployment or operators,
-  releases, or significant reliability or performance behavior. Governance
-  changes may be recorded in this repository's own changelog when useful.
+- Follow the [pull request guidance](CONTRIBUTING.md#pull-requests) so the
+  delivered change and its relevant impact are clear in the PR.
 - Create an out-of-scope issue only when the finding is technically proven,
   material, not already tracked, unsuitable for a small in-scope fix, and can
   be expressed with concrete acceptance criteria.
@@ -114,6 +112,6 @@ remain defined in `docs/evidence-architecture-contract.md`.
   values in source, logs, fixtures, or generated output.
 - Preserve explicit security boundaries, least authority, reproducible
   dependencies, and fail-closed behavior when changing governance automation.
-- Keep the governance changelog chronological. Publish the shared workflows
-  and actions on the [shared component release line](.github/workflows/README.md#dependabot-shared-component-updates)
+- Publish shared workflows and actions on the
+  [shared component release line](.github/workflows/README.md#dependabot-shared-component-updates)
   and keep shared contracts compatible until callers have migrated.

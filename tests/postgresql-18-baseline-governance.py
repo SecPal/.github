@@ -36,7 +36,6 @@ SAFE_EVIDENCE_SUFFIXES = frozenset(
         "is an intentionally negative-test example",
         "is an unrelated example, not runtime guidance",
         "is immutable release history only",
-        "is changelog history only",
     }
 )
 
@@ -158,7 +157,6 @@ class PostgreSQL18BaselineGovernanceTest(unittest.TestCase):
             "PG16 is an intentionally negative-test example.",
             "PostgreSQL 17 is an unrelated example, not runtime guidance.",
             "PostgreSQL 16 is immutable release history only.",
-            "Postgres 17 is changelog history only.",
             "`PostgreSQL 16` is historical evidence only.",
             "PostgreSQL version 16 is historical evidence only.",
             "Postgres major 17 is a migration-specific fixture.",

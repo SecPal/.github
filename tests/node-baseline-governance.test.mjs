@@ -137,14 +137,6 @@ test("active documentation must agree while historical evidence remains allowed"
     CANONICAL_DIAGNOSTIC
   );
   assert.deepEqual(
-    validateDocumentation(
-      "The project previously used Node.js 22.x.",
-      "CHANGELOG.md",
-      CANONICAL_MAJOR
-    ),
-    []
-  );
-  assert.deepEqual(
     validateDocumentation("Node.js 22 was observed.", "docs/audits/old.md", CANONICAL_MAJOR),
     []
   );

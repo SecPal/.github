@@ -130,15 +130,13 @@ class PreflightFixtureTest(unittest.TestCase):
 EOF
   done
 
-# Focused stand-ins: these fixtures test preflight wiring, not architecture semantics.
-  for suite in secpal-evidence-architecture; do
-    cat >"$repository/tests/$suite.py" <<'EOF'
+  # Focused stand-ins: these fixtures test preflight wiring, not architecture semantics.
+  cat >"$repository/tests/secpal-evidence-architecture.py" <<'EOF'
 import os
 from pathlib import Path
 with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
     log.write(Path(__file__).stem + "\n")
 EOF
-  done
   cat >"$repository/scripts/secpal-evidence-architecture.py" <<'EOF'
 import os
 with open(os.environ["TEST_LOG"], "a", encoding="utf-8") as log:
@@ -666,10 +664,6 @@ assert_not_contains \
   "$REPO_ROOT/scripts/sync-labels.sh" \
   "large-pr-approved" \
   "the obsolete size-override label must be removed from managed label definitions"
-assert_contains \
-  "$REPO_ROOT/CHANGELOG.md" \
-  "Make Pull Request Size Reporting Advisory" \
-  "the governance changelog must record the advisory reporting change"
 
 if [ "$failures" -ne 0 ]; then
   echo "tests/pr-size-advisory.sh: $failures regression assertion(s) failed." >&2
