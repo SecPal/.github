@@ -89,9 +89,20 @@ secpal-order new php-2637-qualification --repo api --issue 2637
 secpal-order resume php-2637-qualification
 ```
 
-The API tab puts assignment-specific `php` and `composer` launchers on
-`PATH`. Both invoke the installed `secpal-order` PHP runner. In this tab,
-`command -v php composer` resolves both commands under
+The assigned `api` tab puts assignment-specific `php` and `composer` launchers
+on `PATH`. Both invoke the installed `secpal-order` PHP runner, which checks the
+live Herdr tab and the registered SecPal API worktree.
+
+For an existing `secpal` full-stack assignment, stop its preview before
+repository-local validation. Resume the assignment and open its `api` tab.
+If the shell lacks the launchers, including after a shell restart, load them
+in that tab:
+
+```bash
+api_env=$(secpal-order php-env NAME) && eval "$api_env"
+```
+
+`command -v php composer` should resolve both commands under
 `fullstack-previews/on-demand/api-bin`. The first locked install needs network
 access for package downloads:
 
@@ -121,13 +132,16 @@ and installed image ID are recorded alongside `secpal-order`.
 PHP commands use a disposable PostgreSQL 18 instance on a private internal
 Podman network. The temporary test role can create test databases without
 superuser rights. The instance has no published ports and is removed when the
-command exits or is interrupted. Composer runs without a database. The explicit
-`--online` option enables package downloads for Composer only.
+command exits or is interrupted. In full-stack worktrees, the runner mounts an
+empty, read-only file over an existing `.env` inside the container. Composer
+runs without a database. The explicit `--online` option enables package
+downloads for Composer only.
 
 Run one PHP command at a time in each assignment. Different assignments can run
 independently. If the runner is killed before it can clean up, the next PHP
-command or `secpal-order finish` retries its cleanup. Review generated files
-before releasing the worktree.
+command, preview start or assignment finish retries its cleanup. A preview
+start or assignment finish is rejected while PHP validation is active. Review
+generated files before releasing the worktree.
 
 ### Android toolchain
 
