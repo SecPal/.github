@@ -47,6 +47,26 @@ def check_writer():
     return repository, commit
 
 
+def verify_frontend_writer(repository, commit):
+    run, attempt = (os.environ.get(key, "") for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"))
+    if (os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"
+            or not re.fullmatch(r"[1-9][0-9]{0,17}", run)
+            or not re.fullmatch(r"[1-9][0-9]{0,5}", attempt)):
+        raise reevaluation.ContractError("PUBLISHER_WRITER_INVOCATION")
+    prefix = f"repos/{repository}"
+    workflow = gh_get(f"{prefix}/actions/workflows/publish-container.yml")
+    writer = gh_get(f"{prefix}/actions/runs/{run}/attempts/{attempt}")
+    origin, head = writer["repository"], writer["head_repository"]
+    if (workflow["path"] != WORKFLOW or writer["workflow_id"] != workflow["id"]
+            or writer["path"] not in (WORKFLOW, WORKFLOW + "@main")
+            or origin["full_name"] != repository or head["full_name"] != repository
+            or origin["id"] != head["id"] or writer["head_sha"] != commit
+            or writer["head_branch"] != "main" or writer["event"] != "workflow_dispatch"
+            or writer["status"] != "in_progress" or writer["id"] != int(run)
+            or writer["run_attempt"] != int(attempt)):
+        raise reevaluation.ContractError("PUBLISHER_WRITER_INVOCATION")
+
+
 def extract(archive, destination):
     with zipfile.ZipFile(archive) as packed:
         files = packed.infolist()
@@ -63,6 +83,7 @@ def extract(archive, destination):
 
 def restore(root, run, attempt):
     repository, commit = check_writer()
+    producer = commit
     slug = repository.split("/")[1]
     if str(run) == os.environ.get("GITHUB_RUN_ID"):
         raise reevaluation.ContractError("PUBLISHER_PRODUCER_MUST_PRECEDE_WRITER")
@@ -73,11 +94,13 @@ def restore(root, run, attempt):
         jobs = {"Attest unpublished API deployment candidate", "Repository Security / Accept API Repository Security",
                 *(f"Build native API candidates / Native API ({arch})" for arch in ARCHES)}
     else:
+        verify_frontend_writer(repository, commit)
+        producer = gh_get(f"repos/{repository}/actions/runs/{run}/attempts/{attempt}")["head_sha"]
         candidate = f"frontend-pre-registry-{suffix}"
         jobs = {"Qualify both exact unpublished OCI subjects", "Repository Security / Repository Security",
                 *(f"Build native Frontend candidates / Native frontend ({arch})" for arch in ARCHES)}
     artifacts = reevaluation.observe_retained_publisher(repository, commit, run, attempt,
-        native | {candidate}, jobs, get=gh_get)
+        native | {candidate}, jobs, get=gh_get, producer_source=producer)
     retained = root / "retained"
     with tempfile.TemporaryDirectory(prefix="publisher-archive-") as folder:
         archive = Path(folder) / "artifact.zip"
@@ -104,14 +127,14 @@ def restore(root, run, attempt):
         try:
             verified = json.loads(subprocess.check_output([
                 "gh", "attestation", "verify", str(path), "--bundle", str(bundle), "--repo", repository,
-                "--signer-workflow", f"{repository}/{WORKFLOW}", "--signer-digest", commit, "--source-ref",
-                "refs/heads/main", "--source-digest", commit, "--deny-self-hosted-runners", "--format", "json",
+                "--signer-workflow", f"{repository}/{WORKFLOW}", "--signer-digest", producer, "--source-ref",
+                "refs/heads/main", "--source-digest", producer, "--deny-self-hosted-runners", "--format", "json",
             ], timeout=120, stderr=subprocess.DEVNULL))
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             raise reevaluation.ContractError("PUBLISHER_PRODUCER_ATTESTATION") from error
         reevaluation.verify_retained_publisher_attestation(verified, path, repository, run, attempt)
     reevaluation._write_json(retained / "producer.json", {
-        "repository": repository, "source_commit": commit, "run_id": str(run), "run_attempt": str(attempt),
+        "repository": repository, "source_commit": producer, "run_id": str(run), "run_attempt": str(attempt),
         "workflow": WORKFLOW,
         "artifacts": {name: {"id": artifact["id"], "digest": artifact["digest"]} for name, artifact in artifacts.items()},
     })
@@ -159,13 +182,13 @@ def bound_platform(folder, subject, config_digest, spdx_digest, material):
 
 
 def snapshot(root, vex_root):
-    repository, commit = check_writer()
+    repository, writer = check_writer()
     retained = root / "retained"
     read = reevaluation._read_json
     producer = read(retained / "producer.json")
-    if {"repository": producer["repository"], "commit": producer["source_commit"]} != {
-        "repository": repository, "commit": commit,
-    }:
+    commit = producer["source_commit"]
+    if (producer["repository"] != repository or not re.fullmatch(r"[a-f0-9]{40}", commit)
+            or (repository == "SecPal/api" and commit != writer)):
         raise reevaluation.ContractError("PUBLISHER_RETAINED_SOURCE")
     material = reevaluation.risk_policy_material(vex_root)
     module, _, policy, _ = material
@@ -253,8 +276,17 @@ def snapshot(root, vex_root):
 
 def observe(evidence, vex_root):
     repository, commit = check_writer()
-    if evidence["source"] != {"repository": repository, "commit": commit}:
+    source = evidence["source"]
+    if source["repository"] != repository or (repository == "SecPal/api" and source["commit"] != commit):
         raise reevaluation.ContractError("PUBLISHER_ADMISSION_SOURCE")
+    if repository == "SecPal/frontend":
+        producer = evidence["evidence"]["producer"]
+        if (producer["repository"] != repository or producer["source_commit"] != source["commit"]
+                or producer["workflow"] != WORKFLOW or producer["run_id"] == os.environ.get("GITHUB_RUN_ID")):
+            raise reevaluation.ContractError("PUBLISHER_ADMISSION_SOURCE")
+        verify_frontend_writer(repository, commit)
+        if source["commit"] != commit:
+            reevaluation.verify_frontend_producer_source(source["commit"], commit, get=gh_get)
     # Read the accepted source independently of the retained producer.
     branch = gh_get(f"repos/{repository}/branches/main")
     if (branch["protected"] is not True or branch["commit"]["sha"] != commit
